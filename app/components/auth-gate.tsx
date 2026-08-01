@@ -3,6 +3,7 @@
 import {
   ArrowRight,
   CheckCircle2,
+  MailCheck,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -133,11 +134,11 @@ export function AuthGate({
         </Link>
 
         <div className="auth-intro-copy">
-          <p className="auth-eyebrow">IT operations workspace</p>
-          <h1>Keep the work your team relies on within reach.</h1>
+          <p className="auth-eyebrow">Privacy-first SOP workspace</p>
+          <h1>Capture the work. Share only what each team should see.</h1>
           <p>
-            Organize runbooks, assets, vendors, and protected credentials in one
-            dependable workspace.
+            Turn real workflows into governed, versioned guides without sending
+            unredacted screenshots to the cloud.
           </p>
         </div>
 
@@ -188,8 +189,8 @@ export function AuthGate({
             </h2>
             <p>
               {isSignUp
-                ? "Set up your secure account, then name the workspace your team will share."
-                : "Use your work account to continue to your IT operations workspace."}
+                ? "Set up your secure account, verify your email, then create or join a workspace."
+                : "Use your work account to continue to your SOP workspace."}
             </p>
           </div>
 
@@ -312,9 +313,78 @@ export function AuthGate({
           </form>
 
           <p className="auth-card-footnote">
-            Your account is used only to access the Rivet workspaces you belong
-            to.
+            Rivet verifies access on every request and defaults to no access.
           </p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export function VerificationGate({
+  email,
+  busy,
+  sent,
+  error,
+  onSend,
+  onRefresh,
+  onSignOut,
+}: {
+  email: string;
+  busy: boolean;
+  sent: boolean;
+  error?: string;
+  onSend: () => void | Promise<void>;
+  onRefresh: () => void | Promise<void>;
+  onSignOut: () => void | Promise<void>;
+}) {
+  return (
+    <main className="auth-shell">
+      <section className="auth-intro" aria-labelledby="verify-brand-title">
+        <div className="auth-brand">
+          <span className="auth-brand-mark" aria-hidden="true">R</span>
+          <span id="verify-brand-title">Rivet</span>
+        </div>
+        <div className="auth-intro-copy">
+          <p className="auth-eyebrow">Account protection</p>
+          <h1>Verify the address that controls your access.</h1>
+          <p>
+            Domain approval only makes an account eligible. A workspace owner
+            or invitation still decides what that account can access.
+          </p>
+        </div>
+        <div className="auth-trust-note">
+          <ShieldCheck aria-hidden="true" />
+          <span>No workspace data is available until verification succeeds.</span>
+        </div>
+      </section>
+      <section className="auth-panel" aria-labelledby="verify-title">
+        <div className="auth-card verify-card">
+          <span className="verify-icon" aria-hidden="true"><MailCheck /></span>
+          <div className="auth-card-heading">
+            <p className="auth-eyebrow">Check your inbox</p>
+            <h2 id="verify-title">Verify your work email</h2>
+            <p>
+              We need to confirm <strong>{email}</strong> before Rivet can check
+              an invitation or approved domain.
+            </p>
+          </div>
+          {sent ? (
+            <p className="success-banner" role="status">
+              Verification email sent. Open the link, then return here.
+            </p>
+          ) : null}
+          {error ? <p className="auth-form-message" role="alert">{error}</p> : null}
+          <button className="auth-primary-button" type="button" onClick={onRefresh} disabled={busy}>
+            {busy ? <LoaderCircle className="auth-spin" /> : <RefreshCw />}
+            I have verified my email
+          </button>
+          <button className="auth-secondary-button" type="button" onClick={onSend} disabled={busy}>
+            Send verification email
+          </button>
+          <button className="text-button" type="button" onClick={onSignOut} disabled={busy}>
+            Use another account
+          </button>
         </div>
       </section>
     </main>
@@ -367,7 +437,7 @@ export function WorkspaceSetup({
           <p className="auth-eyebrow">One final step</p>
           <h1>Give your team a clear place to operate.</h1>
           <p>
-            Your workspace keeps day-to-day IT knowledge organized and
+            Your workspace keeps guides, approvals, and restricted knowledge
             available to the right people.
           </p>
         </div>

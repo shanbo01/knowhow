@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
+import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -13,9 +14,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Rivet — IT operations, documented";
+const title = "Rivet — SOPs captured, governed, and shared";
 const description =
-  "A fast, structured documentation and SOP vault for MSPs and internal IT teams.";
+  "A privacy-first SOP capture and publishing workspace for MSPs and multi-entity teams.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -62,9 +63,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        {children}
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

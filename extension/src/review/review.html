@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Review Rivet capture</title>
+    <link rel="stylesheet" href="./review.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Rivet Capture home">
+        <span>R</span>
+        <strong>Rivet Capture</strong>
+      </a>
+      <div class="top-actions">
+        <span id="connection-label">Checking Rivet…</span>
+        <button id="connect-button" class="secondary" type="button">Connect</button>
+        <button id="discard-button" class="danger" type="button">Discard capture</button>
+      </div>
+    </header>
+
+    <form id="pairing-form" class="pairing-form" hidden>
+      <label>
+        One-time pairing code
+        <input
+          id="pairing-code"
+          minlength="12"
+          maxlength="20"
+          pattern="[A-HJ-NP-Z2-9]{12,20}"
+          autocomplete="one-time-code"
+          autocapitalize="characters"
+          spellcheck="false"
+          placeholder="12-character code"
+          required
+        />
+      </label>
+      <button class="primary" type="submit">Pair workspace</button>
+      <button id="cancel-pairing-button" class="secondary" type="button">Cancel</button>
+    </form>
+
+    <main>
+      <section class="intro">
+        <p class="eyebrow">LOCAL PRIVACY REVIEW</p>
+        <h1 id="guide-title">Review captured guide</h1>
+        <p>
+          Automatic masks are already burned into each image and cannot be
+          removed. Add solid masks anywhere Smart Blur may have missed, then
+          reuse the last region across every step when needed. Edit the
+          generated instructions before creating a private draft.
+        </p>
+        <div class="privacy-callout">
+          <strong>No screenshots upload until you submit.</strong>
+          <span>Capture status is synced, while only the redacted images shown below are stored locally.</span>
+        </div>
+      </section>
+
+      <section id="steps" class="steps" aria-live="polite"></section>
+      <section id="empty-state" class="empty-state" hidden>
+        <strong>No captured steps</strong>
+        <p>Discard this session or return to the captured tab and start again.</p>
+      </section>
+
+      <section id="submit-panel" class="submit-panel">
+        <label class="review-confirmation">
+          <input id="privacy-confirmation" type="checkbox" />
+          <span>
+            <strong>I reviewed every screenshot for sensitive information.</strong>
+            <small>
+              Captured guides always enter Rivet as private drafts and still
+              require the normal review and publishing workflow.
+            </small>
+          </span>
+        </label>
+        <div class="submit-actions">
+          <span id="summary">0 steps ready</span>
+          <button id="submit-button" class="primary" type="button" disabled>
+            Create private Rivet draft
+          </button>
+        </div>
+      </section>
+
+      <section id="success" class="success" hidden>
+        <strong>Private draft created</strong>
+        <p>The local capture data has been removed from this browser.</p>
+        <a id="edit-link" href="#" target="_blank" rel="noreferrer">Open in Rivet</a>
+      </section>
+
+      <p id="error" class="error" role="alert" hidden></p>
+    </main>
+    <script type="module" src="./review.js"></script>
+  </body>
+</html>

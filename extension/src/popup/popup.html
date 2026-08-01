@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Rivet Capture</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <main>
+      <header class="brand">
+        <span class="brand-mark">R</span>
+        <span>
+          <strong>Rivet Capture</strong>
+          <small>Privacy-reviewed guides</small>
+        </span>
+      </header>
+
+      <section class="connection">
+        <span>
+          <i id="connection-dot"></i>
+          <span id="connection-label">Checking Rivet…</span>
+        </span>
+        <button id="connect-button" class="text-button" type="button">
+          Connect
+        </button>
+      </section>
+
+      <form id="pairing-form" class="pairing-form" hidden>
+        <label>
+          One-time pairing code
+          <input
+            id="pairing-code"
+            minlength="12"
+            maxlength="20"
+            pattern="[A-HJ-NP-Z2-9]{12,20}"
+            autocomplete="one-time-code"
+            autocapitalize="characters"
+            spellcheck="false"
+            placeholder="12-character code"
+            required
+          />
+        </label>
+        <div class="pairing-actions">
+          <button class="primary" type="submit">Pair workspace</button>
+          <button id="cancel-pairing-button" class="secondary" type="button">Cancel</button>
+        </div>
+      </form>
+
+      <section id="status-card" class="status-card">
+        <div>
+          <small>CAPTURE STATUS</small>
+          <strong id="status-label">Idle</strong>
+        </div>
+        <span id="step-count">0 steps</span>
+        <p id="status-detail">Start from the page you want to document.</p>
+      </section>
+
+      <form id="start-form">
+        <label>
+          Guide title
+          <input
+            id="guide-title"
+            minlength="2"
+            maxlength="200"
+            placeholder="Captured workflow"
+            required
+          />
+        </label>
+        <label>
+          Connected workspace
+          <input id="workspace-id" maxlength="128" placeholder="Pair Rivet first" readonly />
+        </label>
+        <button id="start-button" class="primary" type="submit">Start capturing this tab</button>
+      </form>
+
+      <section id="capture-actions" class="capture-actions" hidden>
+        <button id="pause-button" class="secondary" type="button">Pause</button>
+        <button id="finish-button" class="primary" type="button">Finish & review</button>
+        <button id="discard-button" class="danger" type="button">Discard</button>
+      </section>
+
+      <section id="review-actions" class="capture-actions" hidden>
+        <button id="open-review-button" class="primary" type="button">
+          Open privacy review
+        </button>
+        <button id="review-discard-button" class="danger" type="button">
+          Discard
+        </button>
+      </section>
+
+      <details class="privacy-settings">
+        <summary>Smart Blur settings</summary>
+        <div class="settings-grid">
+          <label><input data-policy="redactEmails" type="checkbox" /> Emails</label>
+          <label><input data-policy="redactPhoneNumbers" type="checkbox" /> Phone numbers</label>
+          <label><input data-policy="redactFinancialNumbers" type="checkbox" /> Financial numbers</label>
+          <label><input data-policy="redactIds" type="checkbox" /> Long IDs</label>
+          <label><input data-policy="redactFormFields" type="checkbox" /> Form fields</label>
+          <label><input data-policy="redactAllNumbers" type="checkbox" /> All numbers</label>
+          <label><input data-policy="redactImages" type="checkbox" /> Images and video</label>
+          <label><input data-policy="redactTableRows" type="checkbox" /> Table rows</label>
+          <label><input data-policy="redactLongText" type="checkbox" /> Long text blocks</label>
+          <label><input data-policy="redactCommonNames" type="checkbox" /> Common names (assisted)</label>
+          <label class="color-setting">
+            Click color
+            <input data-policy-color type="color" value="#ff5d2e" />
+          </label>
+        </div>
+        <button id="exclude-button" class="text-button exclude" type="button">
+          Exclude the current site
+        </button>
+        <p>Password fields and embedded frames are always redacted.</p>
+      </details>
+
+      <p id="error" class="error" role="alert" hidden></p>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>

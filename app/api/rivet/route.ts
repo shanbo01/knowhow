@@ -1,0 +1,2726 @@
+import { env } from "cloudflare:workers";
+import {
+  allRows,
+  assertMutationRequest,
+  authorize,
+  clonePrivateMedia,
+  deletePrivateMedia,
+  D1RivetRepository,
+  extractExactEmailDomain,
+  hashToken,
+  HttpError,
+  jsonResponse,
+  readJsonObject,
+  requireAuthorized,
+  requireD1Binding,
+  requireR2Binding,
+  requireVerifiedIdentity,
+  signInviteToken,
+  toErrorResponse,
+  type AuthenticatedIdentity,
+  type D1DatabaseLike,
+  type D1PreparedStatementLike,
+  type GuideAccessFacts,
+  type WorkspaceAccess,
+} from "../../../lib/server";
+import type {
+  Audience,
+  AuditEvent,
+  BootstrapResponse,
+  EditorBlock,
+  Guide,
+  GuideRevisionView,
+  Invitation,
+  JoinRequest,
+  PlatformMetrics,
+  PlatformWorkspace,
+  VaultItem,
+  WorkspaceBundle,
+  WorkspaceGroup,
+  WorkspaceMember,
+  WorkspaceMetrics,
+  WorkspaceRole,
+  WorkspaceSettings,
+  WorkspaceStatus,
+  WorkspaceSummary,
+} from "../../../lib/rivet-types";
+import type {
+  GuideActor,
+  GuideAudience,
+  GuideBlock,
+  GuideRevision,
+  WorkspaceBranding,
+} from "../../../lib/guide-contracts";
+import { parseGuideRevision } from "../../../lib/guide-contracts";
+
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
+
+let initializedBinding: D1DatabaseLike | null = null;
+
+function requestId() {
+  return crypto.randomUUID();
+}
+
+function dbBinding() {
+  return requireD1Binding(env.DB);
+}
+
+async function repositoryFor(db: D1DatabaseLike) {
+  const repository = new D1RivetRepository(db);
+  if (initializedBinding !== db) {
+    await repository.ensureSecurityGuards();
+    initializedBinding = db;
+  }
+  return repository;
+}
+
+function signingKey() {
+  return env.RIVET_TOKEN_SIGNING_KEY;
+}
+
+function statement(
+  db: D1DatabaseLike,
+  sql: string,
+  ...values: unknown[]
+): D1PreparedStatementLike {
+  return db.prepare(sql).bind(...values);
+}
+
+async function rows<T>(
+  db: D1DatabaseLike,
+  sql: string,
+  ...values: unknown[]
+): Promise<T[]> {
+  return allRows<T>(statement(db, sql, ...values));
+}
+
+async function first<T>(
+  db: D1DatabaseLike,
+  sql: string,
+  ...values: unknown[]
+): Promise<T | null> {
+  return statement(db, sql, ...values).first<T>();
+}
+
+async function run(
+  db: D1DatabaseLike,
+  sql: string,
+  ...values: unknown[]
+) {
+  const result = await statement(db, sql, ...values).run();
+  if (!result.success) {
+    throw new HttpError(500, "DATABASE_MUTATION_FAILED", "The change could not be saved.", {
+      expose: false,
+    });
+  }
+  return result;
+}
+
+function asObject(value: unknown, label = "payload"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function textValue(
+  value: unknown,
+  label: string,
+  options: { min?: number; max?: number; optional?: boolean } = {},
+) {
+  if (value === undefined && options.optional) return "";
+  if (typeof value !== "string") {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} must be text.`);
+  }
+  const result = value.trim();
+  if (result.length < (options.min ?? 0) || result.length > (options.max ?? 500)) {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} has an invalid length.`);
+  }
+  return result;
+}
+
+function integerValue(
+  value: unknown,
+  label: string,
+  min: number,
+  max: number,
+) {
+  if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} is invalid.`);
+  }
+  return value as number;
+}
+
+function booleanValue(value: unknown, label: string) {
+  if (typeof value !== "boolean") {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} must be true or false.`);
+  }
+  return value;
+}
+
+function stringList(value: unknown, label: string, maxItems = 100) {
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new HttpError(400, "INVALID_PAYLOAD", `${label} must be a list.`);
+  }
+  return [...new Set(value.map((item) => textValue(item, label, { max: 500 })).filter(Boolean))];
+}
+
+function safeJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function decodedBase64Length(value: string, label: string) {
+  if (
+    value.length === 0 ||
+    value.length > 131_072 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", `${label} is invalid.`);
+  }
+  try {
+    return atob(value).length;
+  } catch {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", `${label} is invalid.`);
+  }
+}
+
+function validateVaultEnvelopeJson(value: unknown) {
+  const source = textValue(value, "Encrypted envelope", { min: 20, max: 131_072 });
+  if (new TextEncoder().encode(source).byteLength > 131_072) {
+    throw new HttpError(413, "VAULT_ENVELOPE_TOO_LARGE", "The encrypted envelope is too large.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", "The encrypted envelope is invalid.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", "The encrypted envelope is invalid.");
+  }
+  const envelope = parsed as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "version",
+    "algorithm",
+    "keyDerivation",
+    "iterations",
+    "salt",
+    "iv",
+    "ciphertext",
+  ]);
+  if (
+    Object.keys(envelope).length !== allowedKeys.size ||
+    Object.keys(envelope).some((key) => !allowedKeys.has(key)) ||
+    envelope.version !== 1 ||
+    envelope.algorithm !== "AES-GCM" ||
+    envelope.keyDerivation !== "PBKDF2-SHA-256" ||
+    !Number.isSafeInteger(envelope.iterations) ||
+    (envelope.iterations as number) < 210_000 ||
+    (envelope.iterations as number) > 2_000_000 ||
+    typeof envelope.salt !== "string" ||
+    typeof envelope.iv !== "string" ||
+    typeof envelope.ciphertext !== "string"
+  ) {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", "The encrypted envelope is invalid.");
+  }
+  const saltBytes = decodedBase64Length(envelope.salt, "Envelope salt");
+  const ivBytes = decodedBase64Length(envelope.iv, "Envelope IV");
+  const ciphertextBytes = decodedBase64Length(envelope.ciphertext, "Envelope ciphertext");
+  if (saltBytes < 16 || saltBytes > 64 || ivBytes !== 12 || ciphertextBytes < 16 || ciphertextBytes > 96 * 1024) {
+    throw new HttpError(400, "VAULT_ENVELOPE_INVALID", "The encrypted envelope is invalid.");
+  }
+  return JSON.stringify(envelope);
+}
+
+function validateVaultMetadataJson(value: unknown) {
+  const source = textValue(value ?? "{}", "Vault metadata", { min: 2, max: 16_384 });
+  if (new TextEncoder().encode(source).byteLength > 16_384) {
+    throw new HttpError(413, "VAULT_METADATA_TOO_LARGE", "Vault metadata is too large.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new HttpError(400, "VAULT_METADATA_INVALID", "Vault metadata is invalid.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new HttpError(400, "VAULT_METADATA_INVALID", "Vault metadata is invalid.");
+  }
+  const metadata = parsed as Record<string, unknown>;
+  const allowedKeys = new Set(["username", "url", "notes"]);
+  if (
+    Object.keys(metadata).some((key) => !allowedKeys.has(key)) ||
+    Object.values(metadata).some((item) => typeof item !== "string")
+  ) {
+    throw new HttpError(400, "VAULT_METADATA_INVALID", "Vault metadata is invalid.");
+  }
+  const username = String(metadata.username ?? "").trim();
+  const url = String(metadata.url ?? "").trim();
+  const notes = String(metadata.notes ?? "").trim();
+  if (username.length > 320 || url.length > 2_000 || notes.length > 5_000) {
+    throw new HttpError(400, "VAULT_METADATA_INVALID", "Vault metadata is invalid.");
+  }
+  if (url) {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new HttpError(400, "VAULT_METADATA_INVALID", "The vault sign-in URL is invalid.");
+    }
+    if (
+      (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") ||
+      parsedUrl.username ||
+      parsedUrl.password
+    ) {
+      throw new HttpError(400, "VAULT_METADATA_INVALID", "The vault sign-in URL is invalid.");
+    }
+  }
+  return JSON.stringify({ username, url, notes });
+}
+
+function slug(value: string) {
+  return (
+    value
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 52) || "workspace"
+  );
+}
+
+function id(prefix: string) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function actor(identity: AuthenticatedIdentity) {
+  return { userId: identity.userId, email: identity.email, name: identity.name };
+}
+
+function platformOwnerEmails() {
+  return new Set(
+    (env.RIVET_PLATFORM_OWNER_EMAILS ?? "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+async function platformAdministrator(
+  db: D1DatabaseLike,
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+) {
+  const configured =
+    platformOwnerEmails().has(identity.email) || identity.labels.includes("platform-administrator");
+  if (configured) {
+    await run(
+      db,
+      `INSERT OR IGNORE INTO platform_admins (user_id, created_by, created_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)`,
+      identity.userId,
+      identity.userId,
+    );
+  }
+  return configured || repository.isPlatformAdministrator(identity.userId);
+}
+
+function policyContext(
+  access: WorkspaceAccess,
+  isPlatformAdministrator: boolean,
+  guide?: GuideAccessFacts,
+) {
+  return {
+    isVerifiedIdentity: true,
+    isPlatformAdministrator,
+    membershipStatus: access.membershipStatus,
+    workspaceStatus: access.workspaceStatus,
+    roles: access.roles,
+    capabilities: access.capabilities,
+    guide,
+  } as const;
+}
+
+async function requireWorkspace(
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+  workspaceId: string,
+  isPlatformAdministrator: boolean,
+) {
+  const access = await repository.getWorkspaceAccess(workspaceId, identity.userId);
+  if (!access) throw new HttpError(403, "WORKSPACE_ACCESS_REQUIRED", "You do not belong to this workspace.");
+  requireAuthorized("workspace.read", policyContext(access, isPlatformAdministrator));
+  return access;
+}
+
+async function audit(
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+  workspaceId: string,
+  event: {
+    action: string;
+    targetType: string;
+    targetId?: string;
+    targetLabel?: string;
+    summary: string;
+    metadata?: Record<string, string | number | boolean | null>;
+  },
+  statements: D1PreparedStatementLike[] = [],
+) {
+  return repository.executeAuditedMutation({
+    workspaceId,
+    actor: actor(identity),
+    event,
+    statements,
+  });
+}
+
+const DEFAULT_SETTINGS: WorkspaceSettings = {
+  logoUrl: null,
+  accentColor: "#1f7653",
+  clickTargetColor: "#ef6f47",
+  removeBranding: false,
+  allowedDomains: [],
+  excludedCaptureHosts: [],
+  allowRestrictedExports: false,
+  watermarkExports: true,
+};
+
+async function loadSettings(db: D1DatabaseLike, workspaceId: string): Promise<WorkspaceSettings> {
+  const [setting, domainRows] = await Promise.all([
+    first<{
+      logo_object_key: string | null;
+      accent_color: string;
+      click_target_color: string;
+      remove_branding: number;
+      restricted_exports_enabled: number;
+      watermark_restricted_exports: number;
+      capture_policy_json: string;
+    }>(
+      db,
+      `SELECT logo_object_key, accent_color, click_target_color, remove_branding,
+              restricted_exports_enabled, watermark_restricted_exports, capture_policy_json
+       FROM workspace_settings WHERE workspace_id = ?`,
+      workspaceId,
+    ),
+    rows<{ domain_ascii: string }>(
+      db,
+      `SELECT domain_ascii FROM workspace_domains
+       WHERE workspace_id = ? AND enabled = 1 ORDER BY domain_ascii`,
+      workspaceId,
+    ),
+  ]);
+  if (!setting) return DEFAULT_SETTINGS;
+  const capture = safeJson<{ excludedHosts?: string[] }>(setting.capture_policy_json, {});
+  return {
+    logoUrl: setting.logo_object_key,
+    accentColor: setting.accent_color,
+    clickTargetColor: setting.click_target_color,
+    removeBranding: setting.remove_branding === 1,
+    allowedDomains: domainRows.map((item) => item.domain_ascii),
+    excludedCaptureHosts: Array.isArray(capture.excludedHosts)
+      ? capture.excludedHosts.filter((item): item is string => typeof item === "string")
+      : [],
+    allowRestrictedExports: setting.restricted_exports_enabled === 1,
+    watermarkExports: setting.watermark_restricted_exports === 1,
+  };
+}
+
+async function loadWorkspaceSummaries(
+  db: D1DatabaseLike,
+  accesses: WorkspaceAccess[],
+): Promise<WorkspaceSummary[]> {
+  if (accesses.length === 0) return [];
+  const countRows = await rows<{
+    id: string;
+    member_count: number;
+    published_count: number;
+    draft_count: number;
+    created_at: string;
+  }>(
+    db,
+    `SELECT w.id,
+       (SELECT COUNT(*) FROM workspace_members wm
+        WHERE wm.workspace_id = w.id AND wm.status = 'active') AS member_count,
+       (SELECT COUNT(*) FROM guides g
+        WHERE g.workspace_id = w.id AND g.current_published_revision_id IS NOT NULL
+          AND g.archived_at IS NULL) AS published_count,
+       (SELECT COUNT(*) FROM guides g
+        WHERE g.workspace_id = w.id AND g.working_draft_revision_id IS NOT NULL
+          AND g.archived_at IS NULL) AS draft_count,
+       w.created_at
+     FROM workspaces w
+     WHERE w.id IN (SELECT value FROM json_each(?))`,
+    JSON.stringify(accesses.map((access) => access.workspaceId)),
+  );
+  const countsByWorkspace = new Map(countRows.map((item) => [item.id, item]));
+  return accesses.map((access) => {
+    const mayReadWorkspaceData =
+      access.membershipStatus === "active" && access.workspaceStatus === "active";
+    const counts = countsByWorkspace.get(access.workspaceId);
+    return {
+      id: access.workspaceId,
+      name: access.workspaceName,
+      slug: access.workspaceSlug,
+      status: access.workspaceStatus,
+      roles: [...access.roles],
+      memberCount: mayReadWorkspaceData ? Number(counts?.member_count ?? 0) : 0,
+      publishedCount: mayReadWorkspaceData ? Number(counts?.published_count ?? 0) : 0,
+      draftCount: mayReadWorkspaceData ? Number(counts?.draft_count ?? 0) : 0,
+      createdAt: counts?.created_at ?? "",
+    };
+  });
+}
+
+async function loadMembers(db: D1DatabaseLike, workspaceId: string): Promise<WorkspaceMember[]> {
+  const [memberRows, roleRows, capabilityRows, groupRows] = await Promise.all([
+    rows<{
+      workspace_id: string;
+      user_id: string;
+      email: string;
+      display_name: string | null;
+      status: "active" | "suspended";
+      joined_at: string;
+    }>(
+      db,
+      `SELECT workspace_id, user_id, email, display_name, status, joined_at
+       FROM workspace_members WHERE workspace_id = ? ORDER BY COALESCE(display_name, email)`,
+      workspaceId,
+    ),
+    rows<{ user_id: string; role: WorkspaceRole }>(
+      db,
+      `SELECT user_id, role FROM workspace_member_roles WHERE workspace_id = ?`,
+      workspaceId,
+    ),
+    rows<{ user_id: string; capability: "vault" }>(
+      db,
+      `SELECT user_id, capability FROM workspace_member_capabilities WHERE workspace_id = ?`,
+      workspaceId,
+    ),
+    rows<{ user_id: string; group_id: string }>(
+      db,
+      `SELECT gm.user_id, gm.group_id FROM group_members gm
+       JOIN groups g ON g.id = gm.group_id AND g.workspace_id = gm.workspace_id
+       WHERE gm.workspace_id = ?`,
+      workspaceId,
+    ),
+  ]);
+  return memberRows.map((member) => ({
+    id: `${member.workspace_id}:${member.user_id}`,
+    userId: member.user_id,
+    email: member.email,
+    name: member.display_name ?? member.email,
+    status: member.status,
+    roles: roleRows.filter((item) => item.user_id === member.user_id).map((item) => item.role),
+    capabilities: capabilityRows
+      .filter((item) => item.user_id === member.user_id)
+      .map((item) => item.capability),
+    groupIds: groupRows.filter((item) => item.user_id === member.user_id).map((item) => item.group_id),
+    joinedAt: member.joined_at,
+  }));
+}
+
+async function loadGroups(db: D1DatabaseLike, workspaceId: string): Promise<WorkspaceGroup[]> {
+  const groupRows = await rows<{
+    id: string;
+    name: string;
+    description: string;
+    sensitive: number;
+    kind: "all_members" | "custom";
+    created_at: string;
+  }>(
+    db,
+    `SELECT id, name, description, sensitive, kind, created_at
+     FROM groups WHERE workspace_id = ? ORDER BY kind, name`,
+    workspaceId,
+  );
+  const memberships = await rows<{ group_id: string; user_id: string }>(
+    db,
+    `SELECT group_id, user_id FROM group_members WHERE workspace_id = ?`,
+    workspaceId,
+  );
+  const activeCount = await first<{ count: number }>(
+    db,
+    `SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ? AND status = 'active'`,
+    workspaceId,
+  );
+  return groupRows.map((group) => {
+    const memberIds = memberships.filter((item) => item.group_id === group.id).map((item) => item.user_id);
+    return {
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      sensitive: group.sensitive === 1,
+      memberCount: group.kind === "all_members" ? Number(activeCount?.count ?? 0) : memberIds.length,
+      memberIds,
+      createdAt: group.created_at,
+    };
+  });
+}
+
+type RevisionRow = {
+  id: string;
+  guide_id: string;
+  workspace_id: string;
+  version: number;
+  status: "draft" | "review" | "published" | "archived";
+  source_type: "manual" | "capture" | "import";
+  title: string;
+  summary: string;
+  category: string | null;
+  tags_json: string;
+  system_references_json: string;
+  privacy_reviewed_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  published_by: string | null;
+  published_at: string | null;
+  has_active_capture?: number;
+};
+
+type RevisionStepRow = {
+  revision_id: string;
+  id: string;
+  position: number;
+  kind: EditorBlock["kind"];
+  title: string;
+  body: string;
+  annotation_json: string;
+};
+
+type RevisionAudienceRow = {
+  revision_id: string;
+  subject_type: Audience["kind"];
+  subject_id: string;
+};
+
+type RevisionReviewRow = {
+  revision_id: string;
+  reviewer_user_id: string;
+  status: "pending" | "approved" | "changes_requested";
+  decided_at: string | null;
+};
+
+type RevisionMediaRow = {
+  revision_id: string;
+  id: string;
+  step_id: string | null;
+};
+
+function latestApprovedReview(
+  reviews: readonly RevisionReviewRow[],
+): RevisionReviewRow | undefined {
+  return reviews
+    .filter(
+      (item): item is RevisionReviewRow & { decided_at: string } =>
+        item.status === "approved" && Boolean(item.decided_at),
+    )
+    .reduce<RevisionReviewRow | undefined>(
+      (latest, item) =>
+        !latest || !latest.decided_at || item.decided_at > latest.decided_at
+          ? item
+          : latest,
+      undefined,
+    );
+}
+
+function loadRevisionFromRows(
+  revision: RevisionRow | undefined,
+  members: WorkspaceMember[],
+  groupNames: ReadonlyMap<string, string>,
+  stepRows: RevisionStepRow[],
+  audienceRows: RevisionAudienceRow[],
+  reviews: RevisionReviewRow[],
+  mediaRows: RevisionMediaRow[],
+): GuideRevisionView | null {
+  if (!revision) return null;
+  const approved = latestApprovedReview(reviews);
+  const memberName = (userId: string | null) =>
+    members.find((item) => item.userId === userId)?.name ?? userId ?? "Unknown";
+  const audiences: Audience[] = audienceRows.map((item) => ({
+    kind: item.subject_type,
+    subjectId: item.subject_type === "workspace" ? undefined : item.subject_id,
+    label:
+      item.subject_type === "workspace"
+        ? "Entire workspace"
+        : item.subject_type === "group"
+          ? groupNames.get(item.subject_id) ?? "Group"
+          : memberName(item.subject_id),
+  }));
+  return {
+    id: revision.id,
+    number: revision.version,
+    status: revision.status,
+    title: revision.title,
+    summary: revision.summary,
+    category: revision.category ?? "",
+    tags: safeJson<string[]>(revision.tags_json, []),
+    systemReferences: safeJson<string[]>(revision.system_references_json, []),
+    steps: stepRows.map((step) => {
+      const annotations = safeJson<Record<string, unknown>>(step.annotation_json, {});
+      const linkedMedia = mediaRows.find((item) => item.step_id === step.id)?.id;
+      return {
+        id: step.id,
+        kind: step.kind,
+        title: step.title,
+        description: step.body,
+        ...(typeof annotations.screenshotMediaId === "string" || linkedMedia
+          ? { screenshotMediaId: (annotations.screenshotMediaId as string | undefined) ?? linkedMedia }
+          : {}),
+        ...(annotations.crop && typeof annotations.crop === "object"
+          ? { crop: annotations.crop as EditorBlock["crop"] }
+          : {}),
+        ...(Array.isArray(annotations.annotations)
+          ? { annotations: annotations.annotations as NonNullable<EditorBlock["annotations"]> }
+          : {}),
+      };
+    }),
+    audiences,
+    authorId: revision.created_by,
+    authorName: memberName(revision.created_by),
+    createdAt: revision.created_at,
+    updatedAt: revision.updated_at,
+    reviewedBy: approved ? memberName(approved.reviewer_user_id) : undefined,
+    reviewedAt: approved?.decided_at ?? undefined,
+    publishedBy: revision.published_by ? memberName(revision.published_by) : undefined,
+    publishedAt: revision.published_at ?? undefined,
+    privacyReviewedAt: revision.privacy_reviewed_at ?? undefined,
+    source: revision.source_type === "capture" ? "browser-capture" : "manual",
+  };
+}
+
+async function loadGuides(
+  db: D1DatabaseLike,
+  access: WorkspaceAccess,
+  identity: AuthenticatedIdentity,
+  isPlatformAdministrator: boolean,
+  members: WorkspaceMember[],
+  groups: WorkspaceGroup[],
+  settings: WorkspaceSettings,
+): Promise<Guide[]> {
+  const guideRows = await rows<{
+    id: string;
+    workspace_id: string;
+    title: string;
+    author_user_id: string;
+    current_published_revision_id: string | null;
+    working_draft_revision_id: string | null;
+    archived_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    db,
+    `SELECT id, workspace_id, title, author_user_id, current_published_revision_id,
+            working_draft_revision_id, archived_at, created_at, updated_at
+     FROM guides WHERE workspace_id = ? ORDER BY updated_at DESC`,
+    access.workspaceId,
+  );
+  const [revisionRows, stepRows, audienceRows, reviewRows, mediaRows] = await Promise.all([
+    rows<RevisionRow>(
+      db,
+      `SELECT r.id, r.guide_id, r.workspace_id, r.version, r.status, r.source_type,
+              r.title, r.summary, r.category, r.tags_json, r.system_references_json,
+              r.privacy_reviewed_at, r.created_by, r.created_at, r.updated_at,
+              r.published_by, r.published_at,
+              EXISTS (
+                SELECT 1 FROM capture_sessions c
+                WHERE c.workspace_id = r.workspace_id
+                  AND c.status IN ('recording', 'paused')
+                  AND json_extract(c.capture_scope, '$.revisionId') = r.id
+              ) AS has_active_capture
+       FROM guide_revisions r
+       WHERE r.workspace_id = ?
+       ORDER BY r.guide_id, r.version DESC`,
+      access.workspaceId,
+    ),
+    rows<RevisionStepRow>(
+      db,
+      `SELECT s.revision_id, s.id, s.position, s.kind, s.title, s.body, s.annotation_json
+       FROM guide_steps s
+       JOIN guide_revisions r ON r.id = s.revision_id
+       WHERE r.workspace_id = ? ORDER BY s.revision_id, s.position`,
+      access.workspaceId,
+    ),
+    rows<RevisionAudienceRow>(
+      db,
+      `SELECT a.revision_id, a.subject_type, a.subject_id
+       FROM guide_audiences a
+       JOIN guide_revisions r ON r.id = a.revision_id
+       WHERE r.workspace_id = ?`,
+      access.workspaceId,
+    ),
+    rows<RevisionReviewRow>(
+      db,
+      `SELECT a.revision_id, a.reviewer_user_id, a.status, a.decided_at
+       FROM review_assignments a
+       JOIN guide_revisions r ON r.id = a.revision_id
+       WHERE r.workspace_id = ? ORDER BY a.revision_id, a.decided_at`,
+      access.workspaceId,
+    ),
+    rows<RevisionMediaRow>(
+      db,
+      `SELECT m.revision_id, m.id, m.step_id
+       FROM guide_media m
+       JOIN guide_revisions r ON r.id = m.revision_id
+       WHERE r.workspace_id = ?`,
+      access.workspaceId,
+    ),
+  ]);
+  const revisionsById = new Map(revisionRows.map((item) => [item.id, item]));
+  const activeCaptureRevisionIds = new Set(
+    revisionRows.filter((item) => item.has_active_capture === 1).map((item) => item.id),
+  );
+  const groupNames = new Map(groups.map((item) => [item.id, item.name]));
+  const revisionView = (revisionId: string | null) => {
+    if (!revisionId) return null;
+    return loadRevisionFromRows(
+      revisionsById.get(revisionId),
+      members,
+      groupNames,
+      stepRows.filter((item) => item.revision_id === revisionId),
+      audienceRows.filter((item) => item.revision_id === revisionId),
+      reviewRows.filter((item) => item.revision_id === revisionId),
+      mediaRows.filter((item) => item.revision_id === revisionId),
+    );
+  };
+  const result: Guide[] = [];
+  for (const guide of guideRows) {
+    const hasActiveCapture = Boolean(
+      guide.working_draft_revision_id &&
+        activeCaptureRevisionIds.has(guide.working_draft_revision_id),
+    );
+    const working = hasActiveCapture
+      ? null
+      : revisionView(guide.working_draft_revision_id);
+    const published = revisionView(guide.current_published_revision_id);
+    const admin = access.roles.includes("administrator");
+    const author = guide.author_user_id === identity.userId;
+    const accessFacts = (revision: GuideRevisionView | null): GuideAccessFacts | null => {
+      if (!revision) return null;
+      const audiences = audienceRows.filter((item) => item.revision_id === revision.id);
+      const reviews = reviewRows.filter((item) => item.revision_id === revision.id);
+      const workspaceAudience = audiences.some(
+        (item) => item.subject_type === "workspace" && item.subject_id === access.workspaceId,
+      );
+      const isAudienceMember = audiences.some(
+        (item) =>
+          (item.subject_type === "workspace" && item.subject_id === access.workspaceId) ||
+          (item.subject_type === "user" && item.subject_id === identity.userId) ||
+          (item.subject_type === "group" && access.groupIds.includes(item.subject_id)),
+      );
+      return {
+        guideId: guide.id,
+        workspaceId: access.workspaceId,
+        revisionId: revision.id,
+        revisionStatus: revision.status,
+        sourceType: revision.source === "browser-capture" ? "capture" : "manual",
+        isAuthor: author,
+        isAssignedReviewer: reviews.some((item) => item.reviewer_user_id === identity.userId),
+        isAudienceMember,
+        exportAllowed: workspaceAudience || settings.allowRestrictedExports,
+        privacyReviewed: Boolean(revision.privacyReviewedAt),
+        reviewApproved:
+          reviews.some((item) => item.status === "approved") &&
+          reviews.every((item) => item.status === "approved"),
+      };
+    };
+    const workingFacts = accessFacts(working);
+    const canSeeWorking = Boolean(
+      working &&
+        workingFacts &&
+        authorize(
+          "guide.read",
+          policyContext(access, isPlatformAdministrator, workingFacts),
+        ).allowed,
+    );
+    const publishedFacts = accessFacts(published);
+    const canSeePublished = Boolean(
+      publishedFacts &&
+        authorize("guide.read", policyContext(access, isPlatformAdministrator, publishedFacts)).allowed,
+    );
+    if (guide.archived_at && !admin && !author) continue;
+    if (!canSeeWorking && !canSeePublished) continue;
+    const visibleWorking = canSeeWorking ? working : null;
+    const visiblePublished = canSeePublished ? published : null;
+    const display = visibleWorking ?? visiblePublished;
+    if (!display) continue;
+    const status = guide.archived_at ? "archived" : display.status;
+    const canEdit =
+      !guide.archived_at &&
+      !hasActiveCapture &&
+      access.workspaceStatus === "active" &&
+      (admin || (author && access.roles.includes("creator"))) &&
+      (!working || working.status === "draft");
+    const canReview = Boolean(
+      workingFacts &&
+        authorize("guide.review", policyContext(access, isPlatformAdministrator, workingFacts)).allowed,
+    );
+    const canPublish = Boolean(
+      workingFacts &&
+        authorize("guide.publish", policyContext(access, isPlatformAdministrator, workingFacts)).allowed,
+    );
+    const historyRows = revisionRows.filter((item) => item.guide_id === guide.id);
+    const restricted = !display.audiences.some((item) => item.kind === "workspace");
+    result.push({
+      id: guide.id,
+      workspaceId: guide.workspace_id,
+      title: display.title,
+      status,
+      restricted,
+      canEdit,
+      canReview,
+      canPublish,
+      createdAt: guide.created_at,
+      updatedAt: guide.updated_at,
+      publishedRevision: visiblePublished,
+      workingRevision: visibleWorking,
+      revisionHistory: historyRows
+        .filter(
+          (item) =>
+            !activeCaptureRevisionIds.has(item.id) &&
+            (canSeeWorking || Boolean(item.published_at)),
+        )
+        .map((item) => {
+          const approved = latestApprovedReview(
+            reviewRows.filter((review) => review.revision_id === item.id),
+          );
+          return {
+            id: item.id,
+            number: item.version,
+            status: item.status,
+            authorName:
+              members.find((member) => member.userId === item.created_by)?.name ??
+              item.created_by,
+            createdAt: item.created_at,
+            reviewedAt: approved?.decided_at ?? undefined,
+            publishedAt: item.published_at ?? undefined,
+            source: item.source_type === "capture" ? "browser-capture" : "manual",
+          };
+        }),
+    });
+  }
+  return result;
+}
+
+async function loadMetrics(db: D1DatabaseLike, workspaceId: string): Promise<WorkspaceMetrics> {
+  const result = await first<{
+    members: number;
+    groups: number;
+    drafts: number;
+    reviews: number;
+    published: number;
+    captures: number;
+    views: number;
+    completions: number;
+    exports: number;
+    storage_bytes: number;
+    failed_operations: number;
+  }>(
+    db,
+    `SELECT
+       (SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND status = 'active') AS members,
+       (SELECT COUNT(*) FROM groups WHERE workspace_id = ?) AS groups,
+       (SELECT COUNT(*) FROM guide_revisions WHERE workspace_id = ? AND status = 'draft') AS drafts,
+       (SELECT COUNT(*) FROM guide_revisions WHERE workspace_id = ? AND status = 'review') AS reviews,
+       (SELECT COUNT(*) FROM guides WHERE workspace_id = ? AND current_published_revision_id IS NOT NULL AND archived_at IS NULL) AS published,
+       (SELECT COUNT(*) FROM capture_sessions WHERE workspace_id = ?) AS captures,
+       COALESCE((SELECT SUM(views) FROM workspace_metrics_daily WHERE workspace_id = ?), 0) AS views,
+       COALESCE((SELECT SUM(completions) FROM workspace_metrics_daily WHERE workspace_id = ?), 0) AS completions,
+       (SELECT COUNT(*) FROM exports WHERE workspace_id = ? AND status = 'ready') AS exports,
+       COALESCE((SELECT SUM(byte_size) FROM guide_media WHERE workspace_id = ?), 0) AS storage_bytes,
+       COALESCE((SELECT SUM(failed_operations) FROM workspace_metrics_daily WHERE workspace_id = ?), 0) AS failed_operations`,
+    ...Array(11).fill(workspaceId),
+  );
+  return {
+    members: Number(result?.members ?? 0),
+    groups: Number(result?.groups ?? 0),
+    drafts: Number(result?.drafts ?? 0),
+    reviews: Number(result?.reviews ?? 0),
+    published: Number(result?.published ?? 0),
+    captures: Number(result?.captures ?? 0),
+    views: Number(result?.views ?? 0),
+    completions: Number(result?.completions ?? 0),
+    exports: Number(result?.exports ?? 0),
+    storageBytes: Number(result?.storage_bytes ?? 0),
+    failedOperations: Number(result?.failed_operations ?? 0),
+  };
+}
+
+async function loadInvitations(db: D1DatabaseLike, workspaceId: string): Promise<Invitation[]> {
+  const results = await rows<{
+    id: string;
+    label: string;
+    role: Invitation["role"];
+    expires_at: string;
+    max_uses: number;
+    use_count: number;
+    revoked_at: string | null;
+    created_at: string;
+  }>(
+    db,
+    `SELECT id, label, role, expires_at, max_uses, use_count, revoked_at, created_at
+     FROM invitations WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 200`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    label: item.label,
+    role: item.role,
+    expiresAt: item.expires_at,
+    maxUses: item.max_uses,
+    useCount: item.use_count,
+    revokedAt: item.revoked_at,
+    createdAt: item.created_at,
+  }));
+}
+
+async function loadJoinRequests(db: D1DatabaseLike, workspaceId: string): Promise<JoinRequest[]> {
+  const results = await rows<{
+    id: string;
+    user_id: string;
+    email: string;
+    status: JoinRequest["status"];
+    created_at: string;
+  }>(
+    db,
+    `SELECT id, user_id, email, status, created_at FROM join_requests
+     WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 200`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    userId: item.user_id,
+    email: item.email,
+    name: item.email.split("@")[0],
+    status: item.status,
+    createdAt: item.created_at,
+  }));
+}
+
+async function loadAudits(db: D1DatabaseLike, workspaceId: string): Promise<AuditEvent[]> {
+  const results = await rows<{
+    id: string;
+    sequence: number;
+    action: string;
+    actor_name: string | null;
+    actor_email: string | null;
+    target_type: string;
+    target_id: string | null;
+    target_label: string | null;
+    summary: string;
+    occurred_at: string;
+    metadata_json: string;
+  }>(
+    db,
+    `SELECT id, sequence, action, actor_name, actor_email, target_type, target_id,
+            target_label, summary, occurred_at, metadata_json
+     FROM audit_events WHERE workspace_id = ? ORDER BY sequence DESC LIMIT 500`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    sequence: item.sequence,
+    action: item.action,
+    actorName: item.actor_name ?? "Unknown actor",
+    actorEmail: item.actor_email ?? "",
+    targetType: item.target_type,
+    targetId: item.target_id ?? "",
+    targetLabel: item.target_label ?? item.target_id ?? "",
+    summary: item.summary,
+    occurredAt: item.occurred_at,
+    metadata: safeJson(item.metadata_json, {}),
+  }));
+}
+
+async function loadVaultItems(db: D1DatabaseLike, workspaceId: string): Promise<VaultItem[]> {
+  const results = await rows<{
+    id: string;
+    title: string;
+    encrypted_envelope_json: string;
+    metadata_json: string;
+    created_by: string;
+    created_at: string;
+    updated_at: string;
+  }>(
+    db,
+    `SELECT id, title, encrypted_envelope_json, metadata_json, created_by,
+            created_at, updated_at
+     FROM vault_items WHERE workspace_id = ? ORDER BY updated_at DESC, id`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    title: item.title,
+    encryptedEnvelopeJson: item.encrypted_envelope_json,
+    metadataJson: item.metadata_json,
+    createdBy: item.created_by,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at,
+  }));
+}
+
+async function loadWorkspaceBundle(
+  db: D1DatabaseLike,
+  repository: D1RivetRepository,
+  summary: WorkspaceSummary,
+  access: WorkspaceAccess,
+  identity: AuthenticatedIdentity,
+  isPlatformAdministrator: boolean,
+): Promise<WorkspaceBundle> {
+  const admin = access.roles.includes("administrator");
+  // Keep each fan-out below D1's six simultaneous-connection ceiling. These
+  // loaders also feed guide authorization, so they must finish before any
+  // document blocks are selected for delivery.
+  const settings = await loadSettings(db, access.workspaceId);
+  const members = await loadMembers(db, access.workspaceId);
+  const groups = await loadGroups(db, access.workspaceId);
+  const memberDirectory = admin
+    ? members
+    : members.map((member) => ({
+        ...member,
+        name:
+          member.userId === identity.userId || member.name !== member.email
+            ? member.name
+            : `Workspace member ${member.userId.slice(-6)}`,
+      }));
+  const metrics = admin
+    ? await loadMetrics(db, access.workspaceId)
+    : {
+        members: 0,
+        groups: 0,
+        drafts: 0,
+        reviews: 0,
+        published: 0,
+        captures: 0,
+        views: 0,
+        completions: 0,
+        exports: 0,
+        storageBytes: 0,
+        failedOperations: 0,
+      };
+  const guides = await loadGuides(
+    db,
+    access,
+    identity,
+    isPlatformAdministrator,
+    memberDirectory,
+    groups,
+    settings,
+  );
+  // The current client receives document blocks in bootstrap. Record every
+  // restricted published revision before returning those bytes; an audit
+  // failure therefore fails closed instead of serving an unrecorded view.
+  for (const guide of guides) {
+    const published = guide.publishedRevision;
+    if (!published || published.audiences.some((item) => item.kind === "workspace")) continue;
+    await audit(repository, identity, access.workspaceId, {
+      action: "guide.restricted-viewed",
+      targetType: "guide",
+      targetId: guide.id,
+      targetLabel: published.title,
+      summary: `${published.title} restricted content delivered`,
+      metadata: { revisionId: published.id, delivery: "workspace-bootstrap" },
+    });
+  }
+  const exposedMembers = admin
+    ? members
+    : memberDirectory
+        .filter((member) => member.status === "active")
+        .map((member) => ({
+          ...member,
+          email: member.userId === identity.userId ? member.email : "",
+          roles: member.userId === identity.userId ? member.roles : [],
+          capabilities:
+            member.userId === identity.userId ? member.capabilities : [],
+          groupIds: [],
+        }));
+  const exposedGroups = admin
+    ? groups
+    : groups.map((group) => ({
+        ...group,
+        memberCount: group.sensitive ? 0 : group.memberCount,
+        memberIds: [],
+      }));
+  const exposedSettings = admin
+    ? settings
+    : { ...settings, allowedDomains: [], excludedCaptureHosts: [] };
+  return {
+    workspace: { ...summary, settings: exposedSettings },
+    metrics,
+    members: exposedMembers,
+    groups: exposedGroups,
+    guides,
+    invitations: admin ? await loadInvitations(db, access.workspaceId) : [],
+    joinRequests: admin ? await loadJoinRequests(db, access.workspaceId) : [],
+    audits: admin ? await loadAudits(db, access.workspaceId) : [],
+    vaultItems: authorize(
+      "vault.use",
+      policyContext(access, isPlatformAdministrator),
+    ).allowed
+      ? await loadVaultItems(db, access.workspaceId)
+      : [],
+  };
+}
+
+async function loadPlatform(
+  db: D1DatabaseLike,
+): Promise<NonNullable<BootstrapResponse["platform"]>> {
+  const workspaceRows = await rows<{
+    id: string;
+    name: string;
+    slug: string;
+    status: WorkspaceStatus;
+    created_at: string;
+    member_count: number;
+    published_count: number;
+    draft_count: number;
+    captures: number;
+    views: number;
+    completions: number;
+    exports: number;
+    storage_bytes: number;
+    failed_operations: number;
+  }>(
+    db,
+    `SELECT w.id, w.name, w.slug, w.status, w.created_at,
+       (SELECT COUNT(*) FROM workspace_members wm WHERE wm.workspace_id = w.id AND wm.status = 'active') AS member_count,
+       (SELECT COUNT(*) FROM guides g WHERE g.workspace_id = w.id AND g.current_published_revision_id IS NOT NULL AND g.archived_at IS NULL) AS published_count,
+       (SELECT COUNT(*) FROM guide_revisions gr WHERE gr.workspace_id = w.id AND gr.status IN ('draft','review')) AS draft_count,
+       (SELECT COUNT(*) FROM capture_sessions cs WHERE cs.workspace_id = w.id) AS captures,
+       COALESCE((SELECT SUM(views) FROM workspace_metrics_daily m WHERE m.workspace_id = w.id), 0) AS views,
+       COALESCE((SELECT SUM(completions) FROM workspace_metrics_daily m WHERE m.workspace_id = w.id), 0) AS completions,
+       (SELECT COUNT(*) FROM exports e WHERE e.workspace_id = w.id AND e.status = 'ready') AS exports,
+       COALESCE((SELECT SUM(byte_size) FROM guide_media gm WHERE gm.workspace_id = w.id), 0) AS storage_bytes,
+       COALESCE((SELECT SUM(failed_operations) FROM workspace_metrics_daily m WHERE m.workspace_id = w.id), 0) AS failed_operations
+     FROM workspaces w ORDER BY w.created_at DESC`,
+  );
+  const administratorRows = await rows<{
+    workspace_id: string;
+    user_id: string;
+    display_name: string | null;
+    email: string;
+  }>(
+    db,
+    `SELECT wm.workspace_id, wm.user_id, wm.display_name, wm.email
+     FROM workspace_members wm
+     JOIN workspace_member_roles r
+       ON r.workspace_id = wm.workspace_id AND r.user_id = wm.user_id
+     WHERE r.role = 'administrator' AND wm.status = 'active'
+     ORDER BY wm.workspace_id, COALESCE(wm.display_name, wm.email)`,
+  );
+  const workspaces: PlatformWorkspace[] = [];
+  for (const workspace of workspaceRows) {
+    const administrators = administratorRows.filter(
+      (admin) => admin.workspace_id === workspace.id,
+    );
+    workspaces.push({
+      id: workspace.id,
+      name: workspace.name,
+      slug: workspace.slug,
+      status: workspace.status,
+      roles: [],
+      memberCount: Number(workspace.member_count),
+      publishedCount: Number(workspace.published_count),
+      draftCount: Number(workspace.draft_count),
+      createdAt: workspace.created_at,
+      administrators: administrators.map((admin) => ({ userId: admin.user_id, name: admin.display_name ?? admin.email, email: admin.email })),
+      captures: Number(workspace.captures),
+      views: Number(workspace.views),
+      completions: Number(workspace.completions),
+      exports: Number(workspace.exports),
+      storageBytes: Number(workspace.storage_bytes),
+      failedOperations: Number(workspace.failed_operations),
+    });
+  }
+  const metrics: PlatformMetrics = {
+    users: Number((await first<{ count: number }>(db, `SELECT COUNT(DISTINCT user_id) AS count FROM workspace_members`))?.count ?? 0),
+    activeWorkspaces: workspaces.filter((item) => item.status === "active").length,
+    suspendedWorkspaces: workspaces.filter((item) => item.status === "suspended").length,
+    archivedWorkspaces: workspaces.filter((item) => item.status === "archived").length,
+    drafts: workspaces.reduce((total, item) => total + item.draftCount, 0),
+    published: workspaces.reduce((total, item) => total + item.publishedCount, 0),
+    captures: workspaces.reduce((total, item) => total + item.captures, 0),
+    views: workspaces.reduce((total, item) => total + item.views, 0),
+    completions: workspaces.reduce((total, item) => total + item.completions, 0),
+    exports: workspaces.reduce((total, item) => total + item.exports, 0),
+    storageBytes: workspaces.reduce((total, item) => total + item.storageBytes, 0),
+    failedOperations: workspaces.reduce((total, item) => total + item.failedOperations, 0),
+  };
+  return { metrics, workspaces };
+}
+
+async function bootstrap(request: Request): Promise<BootstrapResponse> {
+  const db = dbBinding();
+  const repository = await repositoryFor(db);
+  const identity = await requireVerifiedIdentity(request);
+  const isPlatformAdministrator = await platformAdministrator(db, repository, identity);
+  const accesses = await repository.listWorkspaceAccess(identity.userId);
+  const summaries = await loadWorkspaceSummaries(db, accesses);
+  const eligibleIds = await repository.findDomainEligibleWorkspaceIds(identity.email);
+  const eligibleRows = eligibleIds.length
+    ? await rows<{ id: string; name: string; slug: string; status: WorkspaceStatus; created_at: string }>(
+         db,
+         `SELECT id, name, slug, status, created_at FROM workspaces
+          WHERE id IN (SELECT value FROM json_each(?))`,
+         JSON.stringify(eligibleIds),
+       )
+    : [];
+  const requested = new URL(request.url).searchParams.get("workspaceId");
+  const readableAccesses = accesses.filter((item) =>
+    authorize("workspace.read", policyContext(item, isPlatformAdministrator)).allowed &&
+    item.membershipStatus === "active" &&
+    item.workspaceStatus === "active",
+  );
+  const selectedAccess =
+    readableAccesses.find((item) => item.workspaceId === requested) ??
+    readableAccesses[0];
+  const selectedSummary = summaries.find((item) => item.id === selectedAccess?.workspaceId);
+  const theme = await first<{ theme: "light" | "dark" | "system" }>(
+    db,
+    `SELECT theme FROM user_preferences WHERE user_id = ?`,
+    identity.userId,
+  );
+  return {
+    viewer: {
+      id: identity.userId,
+      email: identity.email,
+      name: identity.name,
+      emailVerified: identity.emailVerified,
+      platformAdministrator: isPlatformAdministrator,
+      themePreference: theme?.theme ?? "system",
+    },
+    workspaces: summaries,
+    eligibleWorkspaces: eligibleRows
+      .filter((item) => !accesses.some((access) => access.workspaceId === item.id))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        slug: item.slug,
+        status: item.status,
+        roles: [],
+        memberCount: 0,
+        publishedCount: 0,
+        draftCount: 0,
+        createdAt: item.created_at,
+      })),
+    activeWorkspace:
+      selectedAccess && selectedSummary
+        ? await loadWorkspaceBundle(
+            db,
+            repository,
+            selectedSummary,
+            selectedAccess,
+            identity,
+            isPlatformAdministrator,
+          )
+        : null,
+    ...(isPlatformAdministrator ? { platform: await loadPlatform(db) } : {}),
+  };
+}
+
+function normalizeAudiences(value: unknown, workspaceId: string): Audience[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
+    throw new HttpError(400, "AUDIENCE_REQUIRED", "Select at least one audience.");
+  }
+  const result: Audience[] = [];
+  for (const candidate of value) {
+    const item = asObject(candidate, "Audience");
+    if (!(["workspace", "group", "user"] as unknown[]).includes(item.kind)) {
+      throw new HttpError(400, "AUDIENCE_INVALID", "An audience is invalid.");
+    }
+    const kind = item.kind as Audience["kind"];
+    result.push({
+      kind,
+      subjectId:
+        kind === "workspace"
+          ? workspaceId
+          : textValue(item.subjectId, "Audience target", { min: 1, max: 128 }),
+      label:
+        typeof item.label === "string" ? textValue(item.label, "Audience label", { max: 200 }) : undefined,
+    });
+  }
+  if (result.some((item) => item.kind === "workspace")) {
+    return [{ kind: "workspace", subjectId: workspaceId, label: "Entire workspace" }];
+  }
+  return result.filter(
+    (item, index, all) =>
+      all.findIndex((candidate) => candidate.kind === item.kind && candidate.subjectId === item.subjectId) === index,
+  );
+}
+
+function normalizedCoordinate(value: unknown, label: string, options: { positive?: boolean } = {}) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < (options.positive ? Number.EPSILON : 0) ||
+    value > 1
+  ) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} must be normalized between 0 and 1.`);
+  }
+  return value;
+}
+
+function normalizedCrop(value: unknown, label: string): NonNullable<EditorBlock["crop"]> {
+  const crop = asObject(value, label);
+  const expected = new Set(["x", "y", "width", "height"]);
+  if (Object.keys(crop).length !== 4 || Object.keys(crop).some((key) => !expected.has(key))) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} has invalid fields.`);
+  }
+  const result = {
+    x: normalizedCoordinate(crop.x, `${label} x`),
+    y: normalizedCoordinate(crop.y, `${label} y`),
+    width: normalizedCoordinate(crop.width, `${label} width`, { positive: true }),
+    height: normalizedCoordinate(crop.height, `${label} height`, { positive: true }),
+  };
+  if (result.x + result.width > 1 || result.y + result.height > 1) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} must stay inside the screenshot.`);
+  }
+  return result;
+}
+
+function normalizedAnnotations(
+  value: unknown,
+  label: string,
+): NonNullable<EditorBlock["annotations"]> {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} is invalid.`);
+  }
+  const allowedKeys = new Set([
+    "id",
+    "kind",
+    "x",
+    "y",
+    "width",
+    "height",
+    "text",
+    "color",
+  ]);
+  const seen = new Set<string>();
+  return value.map((candidate, index) => {
+    const annotation = asObject(candidate, `${label} ${index + 1}`);
+    if (Object.keys(annotation).some((key) => !allowedKeys.has(key))) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} has invalid fields.`);
+    }
+    const annotationId = textValue(annotation.id, `${label} ${index + 1} ID`, {
+      min: 1,
+      max: 128,
+    });
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(annotationId) || seen.has(annotationId)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} IDs must be unique and valid.`);
+    }
+    seen.add(annotationId);
+    if (!(annotation.kind === "click" || annotation.kind === "arrow" || annotation.kind === "box" || annotation.kind === "text")) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} has an invalid kind.`);
+    }
+    const x = normalizedCoordinate(annotation.x, `${label} ${index + 1} x`);
+    const y = normalizedCoordinate(annotation.y, `${label} ${index + 1} y`);
+    const width = annotation.width === undefined
+      ? undefined
+      : normalizedCoordinate(annotation.width, `${label} ${index + 1} width`, {
+          positive: true,
+        });
+    const height = annotation.height === undefined
+      ? undefined
+      : normalizedCoordinate(annotation.height, `${label} ${index + 1} height`, {
+          positive: true,
+        });
+    if ((width !== undefined && x + width > 1) || (height !== undefined && y + height > 1)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} is outside the screenshot.`);
+    }
+    const annotationText = annotation.text === undefined
+      ? undefined
+      : textValue(annotation.text, `${label} ${index + 1} text`, { max: 2_000 });
+    if (annotation.kind === "text" && !annotationText) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} text annotations need text.`);
+    }
+    const color = annotation.color === undefined
+      ? undefined
+      : textValue(annotation.color, `${label} ${index + 1} color`, { min: 7, max: 7 });
+    if (color && !/^#[0-9a-f]{6}$/i.test(color)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} has an invalid color.`);
+    }
+    return {
+      id: annotationId,
+      kind: annotation.kind,
+      x,
+      y,
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(annotationText !== undefined ? { text: annotationText } : {}),
+      ...(color !== undefined ? { color } : {}),
+    };
+  });
+}
+
+function normalizeBlocks(value: unknown): EditorBlock[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 250) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", "A guide needs between 1 and 250 blocks.");
+  }
+  return value.map((candidate, index) => {
+    const item = asObject(candidate, `Block ${index + 1}`);
+    if (!(["action", "heading", "note", "warning"] as unknown[]).includes(item.kind)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `Block ${index + 1} has an invalid type.`);
+    }
+    const blockId = typeof item.id === "string"
+      ? textValue(item.id, `Block ${index + 1} ID`, { min: 1, max: 128 })
+      : id("client_block");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(blockId)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `Block ${index + 1} has an invalid ID.`);
+    }
+    const screenshotMediaId = typeof item.screenshotMediaId === "string"
+      ? textValue(item.screenshotMediaId, "Screenshot", { min: 1, max: 128 })
+      : undefined;
+    if (screenshotMediaId && !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(screenshotMediaId)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `Block ${index + 1} has an invalid screenshot.`);
+    }
+    const crop = item.crop === undefined
+      ? undefined
+      : normalizedCrop(item.crop, `Block ${index + 1} crop`);
+    const annotations = item.annotations === undefined
+      ? undefined
+      : normalizedAnnotations(item.annotations, `Block ${index + 1} annotations`);
+    if (!screenshotMediaId && (crop || (annotations && annotations.length))) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `Block ${index + 1} media edits need a screenshot.`);
+    }
+    return {
+      id: blockId,
+      kind: item.kind as EditorBlock["kind"],
+      title: textValue(item.title, `Block ${index + 1} title`, { min: 1, max: 500 }),
+      description: textValue(item.description ?? "", `Block ${index + 1} description`, { max: 50_000 }),
+      ...(screenshotMediaId ? { screenshotMediaId } : {}),
+      ...(crop ? { crop } : {}),
+      ...(annotations ? { annotations } : {}),
+    };
+  });
+}
+
+function canonicalAudience(audiences: Audience[], workspaceId: string): GuideAudience {
+  if (audiences.some((item) => item.kind === "workspace")) {
+    return { mode: "workspace", workspaceId };
+  }
+  return {
+    mode: "restricted",
+    workspaceId,
+    targets: audiences.map((item) => ({
+      type: item.kind as "group" | "user",
+      id: item.subjectId!,
+      ...(item.label ? { label: item.label } : {}),
+    })),
+  };
+}
+
+function canonicalBlocks(blocks: EditorBlock[]): GuideBlock[] {
+  return blocks.map((block) => {
+    if (block.kind === "heading") return { id: block.id, type: "heading", level: 2, text: block.title };
+    if (block.kind === "note" || block.kind === "warning") {
+      return {
+        id: block.id,
+        type: "callout",
+        tone: block.kind === "warning" ? "warning" : "note",
+        title: block.title,
+        text: block.description || block.title,
+      };
+    }
+    return { id: block.id, type: "action", title: block.title, instructions: block.description || block.title };
+  });
+}
+
+function validateCanonicalRevision(input: {
+  guideId: string;
+  revisionId: string;
+  workspaceId: string;
+  version: number;
+  lifecycle: "draft" | "review";
+  source: "manual" | "browser-capture";
+  title: string;
+  summary: string;
+  createdAt: string;
+  identity: AuthenticatedIdentity;
+  blocks: EditorBlock[];
+  audiences: Audience[];
+  privacyReviewed: boolean;
+  branding: WorkspaceBranding;
+}) {
+  const guideActor: GuideActor = { userId: input.identity.userId, displayName: input.identity.name };
+  const base = {
+    schemaVersion: 1 as const,
+    guideId: input.guideId,
+    revisionId: input.revisionId,
+    workspaceId: input.workspaceId,
+    revisionNumber: input.version,
+    source: input.source,
+    title: input.title,
+    summary: input.summary,
+    createdAt: input.createdAt,
+    createdBy: guideActor,
+    blocks: canonicalBlocks(input.blocks),
+    audience: canonicalAudience(input.audiences, input.workspaceId),
+    privacyReview:
+      input.source === "browser-capture"
+        ? {
+            required: true as const,
+            status: input.privacyReviewed ? ("approved" as const) : ("pending" as const),
+            originalMediaRetained: false as const,
+            ...(input.privacyReviewed
+              ? { reviewedAt: input.createdAt, reviewedBy: guideActor, findingsResolved: true }
+              : {}),
+          }
+        : {
+            required: false as const,
+            status: "not-required" as const,
+            originalMediaRetained: false as const,
+          },
+    branding: input.branding,
+    exportPolicy: {
+      allowedFormats: ["live-link", "pdf", "html", "markdown"] as const,
+      restrictedGuideExports: "allowed" as const,
+      watermark: {
+        mode: "optional" as const,
+        includeViewer: true,
+        includeWorkspace: true,
+        includeDate: true,
+      },
+    },
+  };
+  const candidate: GuideRevision =
+    input.lifecycle === "review"
+      ? { ...base, lifecycle: "review", submittedAt: input.createdAt, submittedBy: guideActor }
+      : { ...base, lifecycle: "draft" };
+  parseGuideRevision(candidate);
+}
+
+async function createWorkspace(
+  db: D1DatabaseLike,
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+  payload: Record<string, unknown>,
+) {
+  const name = textValue(payload.name, "Workspace name", { min: 2, max: 120 });
+  const workspaceId = id("ws");
+  const entityId = id("entity");
+  const groupId = id("group");
+  const workspaceSlug = `${slug(name)}-${workspaceId.slice(-6)}`;
+  const statements = [
+    statement(db, `INSERT INTO entities (id, name, status, created_by, created_at, updated_at) VALUES (?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, entityId, name, identity.userId),
+    statement(db, `INSERT INTO workspaces (id, entity_id, name, slug, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, entityId, name, workspaceSlug, identity.userId),
+    statement(db, `INSERT INTO workspace_settings (workspace_id, accent_color, click_target_color, remove_branding, restricted_exports_enabled, watermark_restricted_exports, capture_policy_json, created_at, updated_at) VALUES (?, '#1f7653', '#ef6f47', 0, 0, 1, '{"excludedHosts":[]}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId),
+    statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.email, identity.name),
+    statement(db, `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'administrator', ?, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.userId),
+    statement(db, `INSERT INTO groups (id, workspace_id, name, slug, description, sensitive, kind, created_by, created_at, updated_at) VALUES (?, ?, 'All Employees', 'all-employees', 'Every active workspace member', 0, 'all_members', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, groupId, workspaceId, identity.userId),
+  ];
+  const results = await db.batch(statements);
+  if (results.some((result) => !result.success)) {
+    throw new HttpError(409, "WORKSPACE_CREATE_FAILED", "The workspace could not be created.");
+  }
+  await audit(repository, identity, workspaceId, {
+    action: "workspace.created",
+    targetType: "workspace",
+    targetId: workspaceId,
+    targetLabel: name,
+    summary: `${name} workspace created`,
+  });
+  return { workspaceId };
+}
+
+async function handleCommand(
+  request: Request,
+  actionName: string,
+  payload: Record<string, unknown>,
+) {
+  const db = dbBinding();
+  const repository = await repositoryFor(db);
+  const identity = await requireVerifiedIdentity(request);
+  const isPlatformAdministrator = await platformAdministrator(db, repository, identity);
+
+  if (actionName === "createWorkspace") {
+    requireAuthorized("platform.workspaces.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator,
+      roles: [],
+    });
+    return createWorkspace(db, repository, identity, payload);
+  }
+  if (actionName === "updateTheme") {
+    const theme = textValue(payload.theme, "Theme", { min: 4, max: 6 });
+    if (!(["light", "dark", "system"] as string[]).includes(theme)) {
+      throw new HttpError(400, "THEME_INVALID", "Theme must be light, dark, or system.");
+    }
+    await run(
+      db,
+      `INSERT INTO user_preferences (user_id, theme, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id) DO UPDATE SET theme = excluded.theme, updated_at = CURRENT_TIMESTAMP`,
+      identity.userId,
+      theme,
+    );
+    return { theme };
+  }
+  if (actionName === "redeemInvite") {
+    const token = textValue(payload.token, "Invitation", { min: 20, max: 8192 });
+    const validated = await repository.validateInvitationCredential(token, signingKey());
+    if (validated.claims.email && validated.claims.email !== identity.email) {
+      throw new HttpError(403, "INVITATION_EMAIL_MISMATCH", "This invitation belongs to another email address.");
+    }
+    const invitation = validated.invitation;
+    const existing = await repository.getWorkspaceAccess(invitation.workspaceId, identity.userId);
+    if (!existing) {
+      await audit(
+        repository,
+        identity,
+        invitation.workspaceId,
+        {
+          action: "invitation.accepted",
+          targetType: "invitation",
+          targetId: invitation.id,
+          summary: `${identity.name} accepted an invitation`,
+          metadata: { role: invitation.role },
+        },
+        [
+          statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, invitation.workspaceId, identity.userId, identity.email, identity.name),
+          statement(db, `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`, invitation.workspaceId, identity.userId, invitation.role, identity.userId),
+          statement(db, `INSERT INTO invite_redemptions (invitation_id, user_id, email, redeemed_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, invitation.id, identity.userId, identity.email),
+        ],
+      );
+    }
+    return { workspaceId: invitation.workspaceId };
+  }
+  if (actionName === "requestDomainJoin") {
+    const workspaceId = textValue(payload.workspaceId, "Workspace", { min: 1, max: 128 });
+    const eligible = await repository.findDomainEligibleWorkspaceIds(identity.email);
+    if (!eligible.includes(workspaceId)) {
+      throw new HttpError(403, "DOMAIN_NOT_ELIGIBLE", "Your verified email domain is not eligible for this workspace.");
+    }
+    const requestKey = id("join");
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "membership.requested",
+        targetType: "join-request",
+        targetId: requestKey,
+        summary: `${identity.email} requested workspace access`,
+      },
+      [
+        statement(
+          db,
+          `INSERT INTO join_requests (id, workspace_id, user_id, email, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(workspace_id, user_id) DO UPDATE SET email = excluded.email,
+             status = 'pending', decided_by = NULL, decided_at = NULL, updated_at = CURRENT_TIMESTAMP`,
+          requestKey,
+          workspaceId,
+          identity.userId,
+          identity.email,
+        ),
+      ],
+    );
+    return { requested: true };
+  }
+
+  if (actionName === "setWorkspaceStatus") {
+    requireAuthorized("platform.workspaces.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator,
+      roles: [],
+    });
+    const targetWorkspaceId = textValue(payload.targetWorkspaceId, "Workspace", { min: 1, max: 128 });
+    const status = textValue(payload.status, "Status", { min: 6, max: 9 }) as WorkspaceStatus;
+    if (!(["active", "suspended", "archived"] as string[]).includes(status)) {
+      throw new HttpError(400, "WORKSPACE_STATUS_INVALID", "Workspace status is invalid.");
+    }
+    const target = await first<{ name: string }>(db, `SELECT name FROM workspaces WHERE id = ?`, targetWorkspaceId);
+    if (!target) throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
+    await audit(
+      repository,
+      identity,
+      targetWorkspaceId,
+      {
+        action: "workspace.status-changed",
+        targetType: "workspace",
+        targetId: targetWorkspaceId,
+        targetLabel: target.name,
+        summary: `${target.name} marked ${status}`,
+        metadata: { status },
+      },
+      [
+        statement(db, `UPDATE workspaces SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, status, targetWorkspaceId),
+        ...(status === "active"
+          ? []
+          : [
+              statement(db, `UPDATE invitations SET status = 'revoked', revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND status = 'active'`, identity.userId, targetWorkspaceId),
+              statement(db, `UPDATE device_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND revoked_at IS NULL`, targetWorkspaceId),
+            ]),
+      ],
+    );
+    return { status };
+  }
+  if (actionName === "assignWorkspaceAdministrator") {
+    requireAuthorized("platform.workspaces.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator,
+      roles: [],
+    });
+    const targetWorkspaceId = textValue(payload.targetWorkspaceId, "Workspace", { min: 1, max: 128 });
+    const email = textValue(payload.email, "Email", { min: 5, max: 320 }).toLowerCase();
+    const known = await first<{ user_id: string; display_name: string | null }>(
+      db,
+      `SELECT user_id, display_name FROM workspace_members WHERE email = ?
+       UNION SELECT user_id, NULL AS display_name FROM join_requests WHERE email = ? LIMIT 1`,
+      email,
+      email,
+    );
+    if (!known) {
+      throw new HttpError(409, "ACCOUNT_NOT_KNOWN", "Ask this verified account to request access or join another workspace first.");
+    }
+    await audit(
+      repository,
+      identity,
+      targetWorkspaceId,
+      {
+        action: "workspace.permission-changed",
+        targetType: "member",
+        targetId: known.user_id,
+        targetLabel: email,
+        summary: `${email} assigned as workspace administrator`,
+        metadata: { role: "administrator" },
+      },
+      [
+        statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(workspace_id, user_id) DO UPDATE SET email = excluded.email, display_name = COALESCE(excluded.display_name, workspace_members.display_name), status = 'active', updated_at = CURRENT_TIMESTAMP`, targetWorkspaceId, known.user_id, email, known.display_name),
+        statement(db, `INSERT OR IGNORE INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'administrator', ?, CURRENT_TIMESTAMP)`, targetWorkspaceId, known.user_id, identity.userId),
+      ],
+    );
+    return { assigned: true };
+  }
+
+  const workspaceId = textValue(payload.workspaceId, "Workspace", { min: 1, max: 128 });
+  const access = await requireWorkspace(repository, identity, workspaceId, isPlatformAdministrator);
+  const context = policyContext(access, isPlatformAdministrator);
+
+  if (actionName === "updateWorkspaceSettings") {
+    requireAuthorized("workspace.settings.manage", context);
+    const settingsPayload = asObject(payload.settings, "Settings");
+    const currentLogo = await first<{ logo_object_key: string | null }>(
+      db,
+      `SELECT logo_object_key FROM workspace_settings WHERE workspace_id = ?`,
+      workspaceId,
+    );
+    const requestedLogo =
+      typeof settingsPayload.logoUrl === "string"
+        ? textValue(settingsPayload.logoUrl, "Workspace logo", { max: 512 }) || null
+        : null;
+    if (requestedLogo !== null && requestedLogo !== currentLogo?.logo_object_key) {
+      throw new HttpError(400, "LOGO_REFERENCE_INVALID", "Upload the workspace logo before selecting it.");
+    }
+    const accentColor = textValue(settingsPayload.accentColor, "Accent color", { min: 7, max: 7 });
+    const clickTargetColor = textValue(settingsPayload.clickTargetColor, "Click target color", { min: 7, max: 7 });
+    if (!/^#[0-9a-f]{6}$/i.test(accentColor) || !/^#[0-9a-f]{6}$/i.test(clickTargetColor)) {
+      throw new HttpError(400, "COLOR_INVALID", "Use six-digit hexadecimal colors.");
+    }
+    const domains = [
+      ...new Set(
+        stringList(settingsPayload.allowedDomains, "Allowed domains", 100).map((item) =>
+          item.toLowerCase(),
+        ),
+      ),
+    ];
+    for (const domain of domains) {
+      if (extractExactEmailDomain(`owner@${domain}`) !== domain) {
+        throw new HttpError(400, "DOMAIN_INVALID", `${domain} is not an exact valid email domain.`);
+      }
+    }
+    const excludedHosts = stringList(settingsPayload.excludedCaptureHosts, "Excluded hosts", 200).map((item) => item.toLowerCase());
+    for (const host of excludedHosts) {
+      try {
+        const parsed = new URL(`https://${host}`);
+        if (parsed.hostname !== host || parsed.pathname !== "/") throw new Error("invalid");
+      } catch {
+        throw new HttpError(400, "CAPTURE_HOST_INVALID", `${host} is not a valid hostname.`);
+      }
+    }
+    const statements: D1PreparedStatementLike[] = [
+      statement(
+        db,
+        `UPDATE workspace_settings SET logo_object_key = ?, accent_color = ?, click_target_color = ?,
+          remove_branding = ?, restricted_exports_enabled = ?, watermark_restricted_exports = ?,
+          capture_policy_json = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ?`,
+        requestedLogo,
+        accentColor,
+        clickTargetColor,
+        booleanValue(settingsPayload.removeBranding, "Remove branding") ? 1 : 0,
+        booleanValue(settingsPayload.allowRestrictedExports, "Restricted exports") ? 1 : 0,
+        booleanValue(settingsPayload.watermarkExports, "Watermarks") ? 1 : 0,
+        JSON.stringify({ excludedHosts }),
+        workspaceId,
+      ),
+      statement(db, `DELETE FROM workspace_domains WHERE workspace_id = ?`, workspaceId),
+      statement(
+        db,
+        `INSERT INTO workspace_domains
+           (id, workspace_id, domain_ascii, enabled, created_by, created_at)
+         SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.domain'), 1, ?, CURRENT_TIMESTAMP
+         FROM json_each(?)`,
+        workspaceId,
+        identity.userId,
+        JSON.stringify(domains.map((domain) => ({ id: id("domain"), domain }))),
+      ),
+    ];
+    await audit(repository, identity, workspaceId, {
+      action: "workspace.settings-updated",
+      targetType: "workspace",
+      targetId: workspaceId,
+      summary: "Workspace sharing, branding, and capture policies updated",
+      metadata: { domainCount: domains.length, excludedHostCount: excludedHosts.length },
+    }, statements);
+    return { saved: true };
+  }
+
+  if (actionName === "saveGroup") {
+    requireAuthorized("workspace.groups.manage", context);
+    const groupId = typeof payload.id === "string" ? textValue(payload.id, "Group", { min: 1, max: 128 }) : id("group");
+    const name = textValue(payload.name, "Group name", { min: 2, max: 120 });
+    const description = textValue(payload.description ?? "", "Description", { max: 1000 });
+    const sensitive = booleanValue(payload.sensitive, "Sensitive group");
+    const memberIds = [...new Set(stringList(payload.memberIds, "Group members", 500))];
+    if (memberIds.length) {
+      const validMembers = await rows<{ user_id: string }>(
+        db,
+        `SELECT user_id FROM workspace_members WHERE workspace_id = ? AND status = 'active'
+         AND user_id IN (SELECT value FROM json_each(?))`,
+        workspaceId,
+        JSON.stringify(memberIds),
+      );
+      if (validMembers.length !== memberIds.length) throw new HttpError(400, "GROUP_MEMBER_INVALID", "Every group member must be active in this workspace.");
+    }
+    const existing = await first<{ kind: string }>(db, `SELECT kind FROM groups WHERE id = ? AND workspace_id = ?`, groupId, workspaceId);
+    if (existing?.kind === "all_members") throw new HttpError(409, "SYSTEM_GROUP_LOCKED", "All Employees is managed automatically.");
+    const statements: D1PreparedStatementLike[] = [
+      existing
+        ? statement(db, `UPDATE groups SET name = ?, slug = ?, description = ?, sensitive = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, name, `${slug(name)}-${groupId.slice(-6)}`, description, sensitive ? 1 : 0, groupId, workspaceId)
+        : statement(db, `INSERT INTO groups (id, workspace_id, name, slug, description, sensitive, kind, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'custom', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, groupId, workspaceId, name, `${slug(name)}-${groupId.slice(-6)}`, description, sensitive ? 1 : 0, identity.userId),
+      statement(db, `DELETE FROM group_members WHERE group_id = ? AND workspace_id = ?`, groupId, workspaceId),
+      statement(
+        db,
+        `INSERT INTO group_members (group_id, workspace_id, user_id, added_by, added_at)
+         SELECT ?, ?, value, ?, CURRENT_TIMESTAMP FROM json_each(?)`,
+        groupId,
+        workspaceId,
+        identity.userId,
+        JSON.stringify(memberIds),
+      ),
+    ];
+    await audit(repository, identity, workspaceId, {
+      action: existing ? "group.updated" : "group.created",
+      targetType: "group",
+      targetId: groupId,
+      targetLabel: name,
+      summary: `${name} ${existing ? "updated" : "created"}`,
+      metadata: { sensitive, memberCount: memberIds.length },
+    }, statements);
+    return { groupId };
+  }
+
+  if (actionName === "deleteGroup") {
+    requireAuthorized("workspace.groups.manage", context);
+    const groupId = textValue(payload.groupId, "Group", { min: 1, max: 128 });
+    const group = await first<{ name: string; kind: string }>(db, `SELECT name, kind FROM groups WHERE id = ? AND workspace_id = ?`, groupId, workspaceId);
+    if (!group) throw new HttpError(404, "GROUP_NOT_FOUND", "Group not found.");
+    if (group.kind === "all_members") throw new HttpError(409, "SYSTEM_GROUP_LOCKED", "All Employees cannot be deleted.");
+    const used = await first<{ matched: number }>(db, `SELECT 1 AS matched FROM guide_audiences ga JOIN guide_revisions gr ON gr.id = ga.revision_id WHERE gr.workspace_id = ? AND ga.subject_type = 'group' AND ga.subject_id = ? LIMIT 1`, workspaceId, groupId);
+    if (used) throw new HttpError(409, "GROUP_IN_USE", "Remove this group from guide audiences before deleting it.");
+    await audit(repository, identity, workspaceId, { action: "group.deleted", targetType: "group", targetId: groupId, targetLabel: group.name, summary: `${group.name} deleted` }, [statement(db, `DELETE FROM groups WHERE id = ? AND workspace_id = ?`, groupId, workspaceId)]);
+    return { deleted: true };
+  }
+
+  if (actionName === "createInvite") {
+    requireAuthorized("workspace.invitations.manage", context);
+    const role = textValue(payload.role, "Role", { min: 6, max: 9 }) as Exclude<WorkspaceRole, "administrator">;
+    if (!(["creator", "reviewer", "publisher", "viewer"] as string[]).includes(role)) throw new HttpError(400, "INVITE_ROLE_INVALID", "Invitation role is invalid.");
+    const expiresInHours = integerValue(payload.expiresInHours, "Expiration", 1, 24 * 90);
+    const maxUses = integerValue(payload.maxUses, "Maximum uses", 1, 100);
+    const invitationId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+    const expiresAtSeconds = Math.floor(Date.now() / 1000) + expiresInHours * 3600;
+    const token = await signInviteToken({ jti: invitationId, workspaceId, expiresAt: expiresAtSeconds, role }, signingKey());
+    const tokenHash = await hashToken(token);
+    const label = textValue(payload.label ?? "Invite link", "Label", { max: 160 }) || "Invite link";
+    await audit(repository, identity, workspaceId, { action: "invitation.created", targetType: "invitation", targetId: invitationId, targetLabel: label, summary: `${label} invitation created`, metadata: { role, maxUses, expiresInHours } }, [statement(db, `INSERT INTO invitations (id, workspace_id, token_hash, label, role, status, max_uses, use_count, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?, 0, ?, ?, CURRENT_TIMESTAMP)`, invitationId, workspaceId, tokenHash, label, role, maxUses, new Date(expiresAtSeconds * 1000).toISOString(), identity.userId)]);
+    return { token };
+  }
+
+  if (actionName === "revokeInvite") {
+    requireAuthorized("workspace.invitations.manage", context);
+    const invitationId = textValue(payload.invitationId, "Invitation", { min: 1, max: 128 });
+    await audit(repository, identity, workspaceId, { action: "invitation.revoked", targetType: "invitation", targetId: invitationId, summary: "Invitation revoked" }, [statement(db, `UPDATE invitations SET status = 'revoked', revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND status = 'active'`, identity.userId, invitationId, workspaceId)]);
+    return { revoked: true };
+  }
+
+  if (actionName === "resolveJoinRequest") {
+    requireAuthorized("workspace.members.manage", context);
+    const joinRequestId = textValue(payload.joinRequestId, "Join request", { min: 1, max: 128 });
+    const approve = booleanValue(payload.approve, "Decision");
+    const join = await first<{ user_id: string; email: string; status: string }>(db, `SELECT user_id, email, status FROM join_requests WHERE id = ? AND workspace_id = ?`, joinRequestId, workspaceId);
+    if (!join || join.status !== "pending") throw new HttpError(409, "JOIN_REQUEST_UNAVAILABLE", "This join request is no longer pending.");
+    const statements = [
+      statement(db, `UPDATE join_requests SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, approve ? "approved" : "denied", identity.userId, joinRequestId),
+      ...(approve
+        ? [
+            statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(workspace_id, user_id) DO UPDATE SET status = 'active', email = excluded.email, updated_at = CURRENT_TIMESTAMP`, workspaceId, join.user_id, join.email, join.email.split("@")[0]),
+            statement(db, `INSERT OR IGNORE INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'viewer', ?, CURRENT_TIMESTAMP)`, workspaceId, join.user_id, identity.userId),
+          ]
+        : []),
+    ];
+    await audit(repository, identity, workspaceId, { action: approve ? "membership.approved" : "membership.denied", targetType: "join-request", targetId: joinRequestId, targetLabel: join.email, summary: `${join.email} ${approve ? "approved as a viewer" : "denied workspace access"}` }, statements);
+    return { approved: approve };
+  }
+
+  if (actionName === "updateMember") {
+    requireAuthorized("workspace.members.manage", context);
+    const memberId = textValue(payload.memberId, "Member", { min: 1, max: 300 });
+    const userId = memberId.includes(":") ? memberId.slice(memberId.indexOf(":") + 1) : memberId;
+    const roles = [...new Set(stringList(payload.roles, "Roles", 5))] as WorkspaceRole[];
+    if (!roles.length || roles.some((role) => !(["administrator", "creator", "reviewer", "publisher", "viewer"] as string[]).includes(role))) throw new HttpError(400, "MEMBER_ROLES_INVALID", "Select at least one valid role.");
+    const capabilities = [
+      ...new Set(stringList(payload.capabilities ?? [], "Capabilities", 1)),
+    ] as Array<"vault">;
+    if (capabilities.some((capability) => capability !== "vault")) {
+      throw new HttpError(400, "MEMBER_CAPABILITIES_INVALID", "Member capabilities are invalid.");
+    }
+    const status = textValue(payload.status, "Member status", { min: 6, max: 9 });
+    if (!(["active", "suspended"] as string[]).includes(status)) throw new HttpError(400, "MEMBER_STATUS_INVALID", "Member status is invalid.");
+    const member = await first<{ email: string }>(db, `SELECT email FROM workspace_members WHERE workspace_id = ? AND user_id = ?`, workspaceId, userId);
+    if (!member) throw new HttpError(404, "MEMBER_NOT_FOUND", "Member not found.");
+    const adminCount = await first<{ count: number }>(db, `SELECT COUNT(*) AS count FROM workspace_member_roles r JOIN workspace_members m ON m.workspace_id = r.workspace_id AND m.user_id = r.user_id WHERE r.workspace_id = ? AND r.role = 'administrator' AND m.status = 'active'`, workspaceId);
+    const currentlyAdmin = await first<{ matched: number }>(db, `SELECT 1 AS matched FROM workspace_member_roles WHERE workspace_id = ? AND user_id = ? AND role = 'administrator'`, workspaceId, userId);
+    if (currentlyAdmin && Number(adminCount?.count ?? 0) <= 1 && (status !== "active" || !roles.includes("administrator"))) throw new HttpError(409, "LAST_ADMIN_REQUIRED", "Assign another administrator before changing the last active administrator.");
+    const statements: D1PreparedStatementLike[] = [
+      statement(db, `UPDATE workspace_members SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND user_id = ?`, status, workspaceId, userId),
+      statement(db, `UPDATE device_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND user_id = ? AND revoked_at IS NULL`, workspaceId, userId),
+      statement(
+         db,
+         `DELETE FROM workspace_member_roles
+          WHERE workspace_id = ? AND user_id = ?
+            AND role NOT IN (SELECT value FROM json_each(?))`,
+         workspaceId,
+         userId,
+         JSON.stringify(roles),
+       ),
+      statement(
+        db,
+        `INSERT OR IGNORE INTO workspace_member_roles
+           (workspace_id, user_id, role, granted_by, granted_at)
+         SELECT ?, ?, value, ?, CURRENT_TIMESTAMP FROM json_each(?)`,
+        workspaceId,
+        userId,
+        identity.userId,
+        JSON.stringify(roles),
+      ),
+      statement(
+        db,
+        `DELETE FROM workspace_member_capabilities
+         WHERE workspace_id = ? AND user_id = ?
+           AND capability NOT IN (SELECT value FROM json_each(?))`,
+        workspaceId,
+        userId,
+        JSON.stringify(capabilities),
+      ),
+      statement(
+        db,
+        `INSERT OR IGNORE INTO workspace_member_capabilities
+           (workspace_id, user_id, capability, granted_by, granted_at)
+         SELECT ?, ?, value, ?, CURRENT_TIMESTAMP FROM json_each(?)`,
+        workspaceId,
+        userId,
+        identity.userId,
+        JSON.stringify(capabilities),
+      ),
+    ];
+    await audit(repository, identity, workspaceId, { action: "membership.changed", targetType: "member", targetId: userId, targetLabel: member.email, summary: `${member.email} membership updated`, metadata: { status, roles: roles.join(","), capabilities: capabilities.join(",") } }, statements);
+    return { updated: true };
+  }
+
+  if (actionName === "saveVaultItem") {
+    requireAuthorized("vault.use", context);
+    const suppliedId = typeof payload.id === "string"
+      ? textValue(payload.id, "Vault item", { min: 1, max: 128 })
+      : null;
+    if (suppliedId && !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(suppliedId)) {
+      throw new HttpError(400, "VAULT_ITEM_INVALID", "The vault item identifier is invalid.");
+    }
+    const vaultItemId = suppliedId ?? id("vault");
+    const title = textValue(payload.title, "Vault item title", { min: 2, max: 160 });
+    const encryptedEnvelopeJson = validateVaultEnvelopeJson(payload.encryptedEnvelopeJson);
+    const metadataJson = validateVaultMetadataJson(payload.metadataJson);
+    const existing = await first<{ title: string }>(
+      db,
+      `SELECT title FROM vault_items WHERE id = ? AND workspace_id = ?`,
+      vaultItemId,
+      workspaceId,
+    );
+    if (suppliedId && !existing) {
+      throw new HttpError(404, "VAULT_ITEM_NOT_FOUND", "Vault item not found.");
+    }
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: existing ? "vault.item-updated" : "vault.item-created",
+        targetType: "vault-item",
+        targetId: vaultItemId,
+        targetLabel: title,
+        summary: `${title} encrypted vault item ${existing ? "updated" : "created"}`,
+      },
+      [
+        existing
+          ? statement(
+              db,
+              `UPDATE vault_items SET title = ?, encrypted_envelope_json = ?,
+                 metadata_json = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND workspace_id = ?`,
+              title,
+              encryptedEnvelopeJson,
+              metadataJson,
+              vaultItemId,
+              workspaceId,
+            )
+          : statement(
+              db,
+              `INSERT INTO vault_items
+                 (id, workspace_id, title, encrypted_envelope_json, metadata_json,
+                  created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              vaultItemId,
+              workspaceId,
+              title,
+              encryptedEnvelopeJson,
+              metadataJson,
+              identity.userId,
+            ),
+      ],
+    );
+    return { vaultItemId };
+  }
+
+  if (actionName === "deleteVaultItem") {
+    requireAuthorized("vault.use", context);
+    const vaultItemId = textValue(payload.vaultItemId, "Vault item", {
+      min: 1,
+      max: 128,
+    });
+    const existing = await first<{ title: string }>(
+      db,
+      `SELECT title FROM vault_items WHERE id = ? AND workspace_id = ?`,
+      vaultItemId,
+      workspaceId,
+    );
+    if (!existing) throw new HttpError(404, "VAULT_ITEM_NOT_FOUND", "Vault item not found.");
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "vault.item-deleted",
+        targetType: "vault-item",
+        targetId: vaultItemId,
+        targetLabel: existing.title,
+        summary: `${existing.title} encrypted vault item deleted`,
+      },
+      [
+        statement(
+          db,
+          `DELETE FROM vault_items WHERE id = ? AND workspace_id = ?`,
+          vaultItemId,
+          workspaceId,
+        ),
+      ],
+    );
+    return { deleted: true };
+  }
+
+  if (actionName === "createPairingCode") {
+    requireAuthorized("capture.create", context);
+    const code = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[byte % 32]).join("");
+    const tokenId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+    const codeHash = await hashToken(code);
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    await audit(repository, identity, workspaceId, { action: "capture.pairing-created", targetType: "device-token", targetId: tokenId, summary: "One-time extension pairing code created" }, [statement(db, `INSERT INTO device_tokens (id, workspace_id, user_id, device_id, token_hash, scopes_json, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`, tokenId, workspaceId, identity.userId, `pair:${code.slice(0, 4)}`, codeHash, JSON.stringify(["capture:write", "media:write"]), expiresAt)]);
+    return { code, expiresAt };
+  }
+
+  if (actionName === "revokeCaptureDevices") {
+    requireAuthorized("capture.create", context);
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "capture.devices-revoked",
+        targetType: "device-token",
+        targetId: identity.userId,
+        summary: "All paired browser capture credentials revoked",
+      },
+      [
+        statement(
+          db,
+          "UPDATE device_tokens SET revoked_at = CURRENT_TIMESTAMP WHERE workspace_id = ? AND user_id = ? AND revoked_at IS NULL",
+          workspaceId,
+          identity.userId,
+        ),
+      ],
+    );
+    return { revoked: true };
+  }
+
+  if (actionName === "saveGuide") {
+    const guideId = typeof payload.guideId === "string" ? textValue(payload.guideId, "Guide", { min: 1, max: 128 }) : id("guide");
+    const existing = await first<{ author_user_id: string; working_draft_revision_id: string | null; current_published_revision_id: string | null; archived_at: string | null }>(db, `SELECT author_user_id, working_draft_revision_id, current_published_revision_id, archived_at FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId);
+    if (existing?.archived_at) throw new HttpError(409, "GUIDE_ARCHIVED", "Restore an archived revision before editing it.");
+    const title = textValue(payload.title, "Guide title", { min: 3, max: 500 });
+    const summary = textValue(payload.summary, "Guide summary", { min: 1, max: 5000 });
+    const category = textValue(payload.category ?? "", "Category", { max: 200 });
+    const tags = stringList(payload.tags, "Tags", 50);
+    const systems = stringList(payload.systemReferences, "Systems", 50);
+    let blocks = normalizeBlocks(payload.steps);
+    const audiences = normalizeAudiences(payload.audiences, workspaceId);
+    const source = payload.source === "browser-capture" ? "browser-capture" : "manual";
+    const privacyReviewed = booleanValue(payload.privacyReviewed, "Privacy review");
+    const transition = payload.transition === "review" ? "review" : "draft";
+    const settings = await loadSettings(db, workspaceId);
+    const revisionId = existing?.working_draft_revision_id ?? id("revision");
+    let version = 1;
+    let createdAt = nowIso();
+    let createRevision = !existing?.working_draft_revision_id;
+    if (existing) {
+      if (existing.working_draft_revision_id) {
+        const facts = await repository.getGuideAccessFacts(workspaceId, guideId, identity.userId, existing.working_draft_revision_id);
+        if (!facts) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+        requireAuthorized("guide.update", policyContext(access, isPlatformAdministrator, facts));
+        const current = await first<{ version: number; created_at: string; status: string }>(db, `SELECT version, created_at, status FROM guide_revisions WHERE id = ?`, revisionId);
+        if (!current || current.status !== "draft") throw new HttpError(409, "DRAFT_NOT_EDITABLE", "Only a draft revision can be edited.");
+        version = current.version;
+        createdAt = current.created_at;
+        createRevision = false;
+      } else {
+        const mayCreateDraft = access.roles.includes("administrator") || (access.roles.includes("creator") && existing.author_user_id === identity.userId);
+        if (!mayCreateDraft) throw new HttpError(403, "DRAFT_EDITOR_REQUIRED", "You cannot create a draft for this guide.");
+        const maxVersion = await first<{ version: number }>(db, `SELECT COALESCE(MAX(version), 0) AS version FROM guide_revisions WHERE guide_id = ?`, guideId);
+        version = Number(maxVersion?.version ?? 0) + 1;
+      }
+    } else {
+      requireAuthorized("guide.create", context);
+    }
+    const referencedMediaIds = [
+      ...new Set(
+        blocks
+          .map((block) => block.screenshotMediaId)
+          .filter((mediaId): mediaId is string => Boolean(mediaId)),
+      ),
+    ];
+    const inheritedMedia: Array<{
+      id: string;
+      stepId: string | null;
+      objectKey: string;
+      contentType: "image/png" | "image/jpeg" | "image/webp";
+      byteSize: number;
+      width: number;
+      height: number;
+      sha256: string;
+    }> = [];
+    const clonedObjectKeys: string[] = [];
+    const cleanupInheritedMedia = async () => {
+      if (!clonedObjectKeys.length) return;
+      const bucket = requireR2Binding(env.MEDIA);
+      for (const objectKey of clonedObjectKeys) {
+        await deletePrivateMedia(bucket, objectKey, workspaceId).catch(() => undefined);
+      }
+    };
+    if (referencedMediaIds.length) {
+      const sourceRevisionId = existing
+        ? createRevision
+          ? existing.current_published_revision_id
+          : revisionId
+        : null;
+      if (!sourceRevisionId) {
+        throw new HttpError(
+          409,
+          "SCREENSHOT_REFERENCE_INVALID",
+          "Save the guide before attaching a private screenshot.",
+        );
+      }
+      const sourceMedia = await rows<{
+        id: string;
+        object_key: string;
+        content_type: "image/png" | "image/jpeg" | "image/webp";
+        byte_size: number;
+        width: number;
+        height: number;
+        sha256: string;
+      }>(
+        db,
+        `SELECT id, object_key, content_type, byte_size, width, height, sha256
+         FROM guide_media
+         WHERE workspace_id = ? AND revision_id = ?
+           AND id IN (SELECT value FROM json_each(?))`,
+        workspaceId,
+        sourceRevisionId,
+        JSON.stringify(referencedMediaIds),
+      );
+      const sourceMediaById = new Map(sourceMedia.map((media) => [media.id, media]));
+      if (
+        sourceMediaById.size !== referencedMediaIds.length ||
+        referencedMediaIds.some((mediaId) => !sourceMediaById.has(mediaId))
+      ) {
+        throw new HttpError(
+          409,
+          "SCREENSHOT_REFERENCE_INVALID",
+          "Each screenshot must belong to the guide revision being saved.",
+        );
+      }
+      if (existing && createRevision) {
+        try {
+          const bucket = requireR2Binding(env.MEDIA);
+          const clonedBySourceId = new Map<string, { id: string; objectKey: string }>();
+          for (const sourceMediaId of referencedMediaIds) {
+            const sourceMediaRow = sourceMediaById.get(sourceMediaId)!;
+            const objectKey = await clonePrivateMedia(bucket, {
+              sourceObjectKey: sourceMediaRow.object_key,
+              workspaceId,
+              revisionId,
+              uploadedBy: identity.userId,
+            });
+            clonedObjectKeys.push(objectKey);
+            clonedBySourceId.set(sourceMediaId, { id: id("media"), objectKey });
+          }
+          blocks = blocks.map((block) => {
+            if (!block.screenshotMediaId) return block;
+            const cloned = clonedBySourceId.get(block.screenshotMediaId)!;
+            return { ...block, screenshotMediaId: cloned.id };
+          });
+          for (const sourceMediaId of referencedMediaIds) {
+            const sourceMediaRow = sourceMediaById.get(sourceMediaId)!;
+            const cloned = clonedBySourceId.get(sourceMediaId)!;
+            const stepPosition = blocks.findIndex(
+              (block) => block.screenshotMediaId === cloned.id,
+            );
+            inheritedMedia.push({
+              id: cloned.id,
+              stepId: stepPosition >= 0 ? `step_${revisionId}_${stepPosition}` : null,
+              objectKey: cloned.objectKey,
+              contentType: sourceMediaRow.content_type,
+              byteSize: sourceMediaRow.byte_size,
+              width: sourceMediaRow.width,
+              height: sourceMediaRow.height,
+              sha256: sourceMediaRow.sha256,
+            });
+          }
+        } catch (error) {
+          await cleanupInheritedMedia();
+          throw error;
+        }
+      }
+    }
+    try {
+      const branding: WorkspaceBranding = {
+      workspaceId,
+      workspaceName: access.workspaceName,
+      ...(settings.logoUrl ? { logoMediaId: settings.logoUrl } : {}),
+      accentColor: settings.accentColor,
+      clickTargetColor: settings.clickTargetColor,
+      showRivetBranding: !settings.removeBranding,
+      };
+      validateCanonicalRevision({ guideId, revisionId, workspaceId, version, lifecycle: transition, source, title, summary, createdAt, identity, blocks, audiences, privacyReviewed, branding });
+      const statements: D1PreparedStatementLike[] = [];
+    if (!existing) {
+      statements.push(statement(db, `INSERT INTO guides (id, workspace_id, title, slug, author_user_id, working_draft_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, guideId, workspaceId, title, `${slug(title)}-${guideId.slice(-6)}`, identity.userId, revisionId));
+    } else if (createRevision) {
+      statements.push(statement(db, `UPDATE guides SET working_draft_revision_id = ?, title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, revisionId, title, guideId, workspaceId));
+    } else {
+      statements.push(statement(db, `UPDATE guides SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, title, guideId, workspaceId));
+    }
+    if (createRevision) {
+      statements.push(statement(db, `INSERT INTO guide_revisions (id, guide_id, workspace_id, version, status, source_type, title, summary, category, tags_json, system_references_json, privacy_reviewed_at, privacy_reviewed_by, created_by, submitted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, revisionId, guideId, workspaceId, version, transition, source === "browser-capture" ? "capture" : "manual", title, summary, category || null, JSON.stringify(tags), JSON.stringify(systems), privacyReviewed && source === "browser-capture" ? nowIso() : null, privacyReviewed && source === "browser-capture" ? identity.userId : null, identity.userId, transition === "review" ? nowIso() : null, createdAt, nowIso()));
+    } else {
+      statements.push(statement(db, `UPDATE guide_revisions SET status = ?, title = ?, summary = ?, category = ?, tags_json = ?, system_references_json = ?, privacy_reviewed_at = ?, privacy_reviewed_by = ?, submitted_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND status = 'draft'`, transition, title, summary, category || null, JSON.stringify(tags), JSON.stringify(systems), privacyReviewed && source === "browser-capture" ? nowIso() : null, privacyReviewed && source === "browser-capture" ? identity.userId : null, transition === "review" ? nowIso() : null, revisionId, workspaceId));
+      statements.push(statement(db, `DELETE FROM guide_steps WHERE revision_id = ?`, revisionId));
+      statements.push(statement(db, `DELETE FROM guide_audiences WHERE revision_id = ?`, revisionId));
+      statements.push(statement(db, `DELETE FROM review_assignments WHERE revision_id = ?`, revisionId));
+    }
+    const blockWritesJson = JSON.stringify(
+      blocks.map((block, position) => ({
+        id: `step_${revisionId}_${position}`,
+        position,
+        kind: block.kind,
+        title: block.title,
+        body: block.description,
+        annotationJson: JSON.stringify({
+          ...(block.screenshotMediaId ? { screenshotMediaId: block.screenshotMediaId } : {}),
+          ...(block.crop ? { crop: block.crop } : {}),
+          ...(block.annotations ? { annotations: block.annotations } : {}),
+        }),
+      })),
+    );
+    statements.push(
+      statement(
+        db,
+        `INSERT INTO guide_steps
+           (id, revision_id, position, kind, title, body, annotation_json,
+            created_at, updated_at)
+         SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.position'),
+                json_extract(value, '$.kind'), json_extract(value, '$.title'),
+                json_extract(value, '$.body'), json_extract(value, '$.annotationJson'),
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+         FROM json_each(?)`,
+        revisionId,
+        blockWritesJson,
+      ),
+    );
+    if (inheritedMedia.length) {
+      statements.push(
+        statement(
+          db,
+          `INSERT INTO guide_media
+             (id, workspace_id, revision_id, step_id, object_key, content_type,
+              byte_size, width, height, sha256, redaction_state, source_rasterized,
+              uploaded_by, created_at)
+           SELECT json_extract(value, '$.id'), ?, ?, json_extract(value, '$.stepId'),
+                  json_extract(value, '$.objectKey'), json_extract(value, '$.contentType'),
+                  json_extract(value, '$.byteSize'), json_extract(value, '$.width'),
+                  json_extract(value, '$.height'), json_extract(value, '$.sha256'),
+                  'redacted', 1, ?, CURRENT_TIMESTAMP
+           FROM json_each(?)`,
+          workspaceId,
+          revisionId,
+          identity.userId,
+          JSON.stringify(inheritedMedia),
+        ),
+      );
+    }
+    const audienceWritesJson = JSON.stringify(
+      audiences.map((audience) => ({
+        kind: audience.kind,
+        subjectId: audience.kind === "workspace" ? workspaceId : audience.subjectId,
+      })),
+    );
+    statements.push(
+      statement(
+        db,
+        `INSERT INTO guide_audiences
+           (revision_id, subject_type, subject_id, granted_by, granted_at)
+         SELECT ?, json_extract(value, '$.kind'), json_extract(value, '$.subjectId'),
+                ?, CURRENT_TIMESTAMP
+         FROM json_each(?)`,
+        revisionId,
+        identity.userId,
+        audienceWritesJson,
+      ),
+    );
+    if (transition === "review") {
+      const reviewers = await rows<{ user_id: string }>(db, `SELECT DISTINCT r.user_id FROM workspace_member_roles r JOIN workspace_members m ON m.workspace_id = r.workspace_id AND m.user_id = r.user_id WHERE r.workspace_id = ? AND r.role IN ('reviewer', 'administrator') AND m.status = 'active'`, workspaceId);
+      const reviewerIds = reviewers.map((item) => item.user_id);
+      if (!reviewerIds.length) throw new HttpError(409, "REVIEWER_REQUIRED", "Assign an active reviewer or administrator before submitting this guide.");
+      statements.push(
+        statement(
+          db,
+          `INSERT INTO review_assignments
+             (revision_id, reviewer_user_id, status, assigned_by, assigned_at)
+           SELECT ?, value, 'pending', ?, CURRENT_TIMESTAMP FROM json_each(?)`,
+          revisionId,
+          identity.userId,
+          JSON.stringify(reviewerIds),
+        ),
+      );
+    }
+    await audit(repository, identity, workspaceId, { action: transition === "review" ? "guide.submitted" : existing ? "guide.updated" : "guide.created", targetType: "guide", targetId: guideId, targetLabel: title, summary: transition === "review" ? `${title} submitted for review` : `${title} private draft saved`, metadata: { revisionId, version, source, clonedMediaCount: inheritedMedia.length } }, statements);
+    } catch (error) {
+      await cleanupInheritedMedia();
+      throw error;
+    }
+    return { guideId, revisionId };
+  }
+
+  if (actionName === "reviewGuide") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const guide = await first<{ working_draft_revision_id: string | null; title: string }>(db, `SELECT working_draft_revision_id, title FROM guides WHERE id = ? AND workspace_id = ? AND archived_at IS NULL`, guideId, workspaceId);
+    if (!guide?.working_draft_revision_id) throw new HttpError(409, "REVIEW_NOT_AVAILABLE", "This guide has no review revision.");
+    const facts = await repository.getGuideAccessFacts(workspaceId, guideId, identity.userId, guide.working_draft_revision_id);
+    if (!facts) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    requireAuthorized("guide.review", policyContext(access, isPlatformAdministrator, facts));
+    if (payload.decision !== "approved" && payload.decision !== "changes_requested") {
+      throw new HttpError(400, "REVIEW_DECISION_INVALID", "Select an explicit review decision.");
+    }
+    const decision = payload.decision;
+    await audit(repository, identity, workspaceId, { action: decision === "approved" ? "guide.review-approved" : "guide.review-changes-requested", targetType: "guide", targetId: guideId, targetLabel: guide.title, summary: `${guide.title} review ${decision === "approved" ? "approved" : "returned for changes"}`, metadata: { revisionId: guide.working_draft_revision_id } }, [
+      statement(db, `INSERT INTO review_assignments (revision_id, reviewer_user_id, status, assigned_by, assigned_at, decided_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(revision_id, reviewer_user_id) DO UPDATE SET status = excluded.status, decided_at = CURRENT_TIMESTAMP`, guide.working_draft_revision_id, identity.userId, decision, identity.userId),
+      ...(decision === "changes_requested"
+        ? [statement(db, `UPDATE guide_revisions SET status = 'draft', submitted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ? AND status = 'review'`, guide.working_draft_revision_id, workspaceId)]
+        : []),
+    ]);
+    return { reviewed: true };
+  }
+
+  if (actionName === "publishGuide") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const guide = await first<{ working_draft_revision_id: string | null; current_published_revision_id: string | null; title: string }>(db, `SELECT working_draft_revision_id, current_published_revision_id, title FROM guides WHERE id = ? AND workspace_id = ? AND archived_at IS NULL`, guideId, workspaceId);
+    if (!guide?.working_draft_revision_id) throw new HttpError(409, "PUBLISH_NOT_AVAILABLE", "This guide has no review revision.");
+    const facts = await repository.getGuideAccessFacts(workspaceId, guideId, identity.userId, guide.working_draft_revision_id);
+    if (!facts) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    requireAuthorized("guide.publish", policyContext(access, isPlatformAdministrator, facts));
+    const publishedAt = nowIso();
+    const statements = [
+      ...(guide.current_published_revision_id
+        ? [statement(db, `UPDATE guide_revisions SET status = 'archived', archived_at = ?, updated_at = ? WHERE id = ? AND workspace_id = ?`, publishedAt, publishedAt, guide.current_published_revision_id, workspaceId)]
+        : []),
+      statement(db, `UPDATE guide_revisions SET status = 'published', published_by = ?, published_at = ?, updated_at = ? WHERE id = ? AND workspace_id = ?`, identity.userId, publishedAt, publishedAt, guide.working_draft_revision_id, workspaceId),
+      statement(db, `UPDATE guides SET current_published_revision_id = ?, working_draft_revision_id = NULL, updated_at = ? WHERE id = ? AND workspace_id = ?`, guide.working_draft_revision_id, publishedAt, guideId, workspaceId),
+    ];
+    await audit(repository, identity, workspaceId, { action: "guide.published", targetType: "guide", targetId: guideId, targetLabel: guide.title, summary: `${guide.title} published`, metadata: { revisionId: guide.working_draft_revision_id } }, statements);
+    return { published: true };
+  }
+
+  if (actionName === "archiveGuide") {
+    requireAuthorized("guide.archive", context);
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const guide = await first<{ title: string }>(db, `SELECT title FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId);
+    if (!guide) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    await audit(repository, identity, workspaceId, { action: "guide.archived", targetType: "guide", targetId: guideId, targetLabel: guide.title, summary: `${guide.title} archived` }, [statement(db, `UPDATE guides SET working_draft_revision_id = NULL, archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, guideId, workspaceId), statement(db, `UPDATE guide_revisions SET status = 'archived', archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE guide_id = ? AND workspace_id = ? AND status IN ('draft','review','published')`, guideId, workspaceId)]);
+    return { archived: true };
+  }
+
+  if (actionName === "restoreRevision") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const sourceRevisionId = textValue(payload.revisionId, "Revision", { min: 1, max: 128 });
+    const guide = await first<{ author_user_id: string; title: string; working_draft_revision_id: string | null }>(db, `SELECT author_user_id, title, working_draft_revision_id FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId);
+    if (!guide) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    if (guide.working_draft_revision_id) throw new HttpError(409, "WORKING_DRAFT_EXISTS", "Archive or finish the current draft before restoring another revision.");
+    if (!(access.roles.includes("administrator") || (access.roles.includes("creator") && guide.author_user_id === identity.userId))) throw new HttpError(403, "DRAFT_EDITOR_REQUIRED", "You cannot restore this guide.");
+    const source = await first<RevisionRow>(db, `SELECT id, guide_id, workspace_id, version, status, source_type, title, summary, category, tags_json, system_references_json, privacy_reviewed_at, created_by, created_at, updated_at, published_by, published_at FROM guide_revisions WHERE id = ? AND guide_id = ? AND workspace_id = ?`, sourceRevisionId, guideId, workspaceId);
+    if (!source) throw new HttpError(404, "REVISION_NOT_FOUND", "Revision not found.");
+    const nextVersion = Number((await first<{ version: number }>(db, `SELECT MAX(version) AS version FROM guide_revisions WHERE guide_id = ?`, guideId))?.version ?? 0) + 1;
+    const revisionId = id("revision");
+    const sourceSteps = await rows<{ id: string; position: number; kind: string; title: string; body: string; expected_result: string | null; requires_confirmation: number; annotation_json: string }>(db, `SELECT id, position, kind, title, body, expected_result, requires_confirmation, annotation_json FROM guide_steps WHERE revision_id = ? ORDER BY position`, sourceRevisionId);
+    const sourceAudiences = await rows<{ subject_type: string; subject_id: string }>(db, `SELECT subject_type, subject_id FROM guide_audiences WHERE revision_id = ?`, sourceRevisionId);
+    const sourceMedia = await rows<{
+      id: string;
+      object_key: string;
+      content_type: "image/png" | "image/jpeg" | "image/webp";
+      byte_size: number;
+      width: number;
+      height: number;
+      sha256: string;
+    }>(
+      db,
+      `SELECT id, object_key, content_type, byte_size, width, height, sha256
+       FROM guide_media WHERE revision_id = ? AND workspace_id = ?`,
+      sourceRevisionId,
+      workspaceId,
+    );
+    const referencedMediaIds = [
+      ...new Set(
+        sourceSteps
+          .map((step) =>
+            safeJson<{ screenshotMediaId?: unknown }>(step.annotation_json, {})
+              .screenshotMediaId,
+          )
+          .filter((item): item is string => typeof item === "string"),
+      ),
+    ];
+    if (referencedMediaIds.some((mediaId) => !sourceMedia.some((item) => item.id === mediaId))) {
+      throw new HttpError(
+        409,
+        "REVISION_MEDIA_INCOMPLETE",
+        "The revision cannot be restored because a private screenshot is missing.",
+      );
+    }
+    const clonedObjectKeys: string[] = [];
+    try {
+      const mediaIdMap = new Map<string, { id: string; objectKey: string }>();
+      if (referencedMediaIds.length) {
+        const bucket = requireR2Binding(env.MEDIA);
+        for (const sourceMediaId of referencedMediaIds) {
+          const media = sourceMedia.find((item) => item.id === sourceMediaId)!;
+          const objectKey = await clonePrivateMedia(bucket, {
+            sourceObjectKey: media.object_key,
+            workspaceId,
+            revisionId,
+            uploadedBy: identity.userId,
+          });
+          clonedObjectKeys.push(objectKey);
+          mediaIdMap.set(sourceMediaId, { id: id("media"), objectKey });
+        }
+      }
+      const restoredSteps = sourceSteps.map((step) => {
+        const annotation = safeJson<Record<string, unknown>>(step.annotation_json, {});
+        const sourceMediaId =
+          typeof annotation.screenshotMediaId === "string"
+            ? annotation.screenshotMediaId
+            : null;
+        const cloned = sourceMediaId ? mediaIdMap.get(sourceMediaId) : undefined;
+        return {
+          ...step,
+          id: `step_${revisionId}_${step.position}`,
+          annotation_json: JSON.stringify({
+            ...annotation,
+            ...(cloned ? { screenshotMediaId: cloned.id } : {}),
+          }),
+        };
+      });
+      const restoredMedia = referencedMediaIds.map((sourceMediaId) => {
+        const sourceRow = sourceMedia.find((item) => item.id === sourceMediaId)!;
+        const cloned = mediaIdMap.get(sourceMediaId)!;
+        const sourceStep = sourceSteps.find(
+          (step) =>
+            safeJson<{ screenshotMediaId?: unknown }>(step.annotation_json, {})
+              .screenshotMediaId === sourceMediaId,
+        );
+        return {
+          id: cloned.id,
+          stepId: sourceStep ? `step_${revisionId}_${sourceStep.position}` : null,
+          objectKey: cloned.objectKey,
+          contentType: sourceRow.content_type,
+          byteSize: sourceRow.byte_size,
+          width: sourceRow.width,
+          height: sourceRow.height,
+          sha256: sourceRow.sha256,
+        };
+      });
+      const statements: D1PreparedStatementLike[] = [
+        statement(db, `INSERT INTO guide_revisions (id, guide_id, workspace_id, version, status, source_type, title, summary, category, tags_json, system_references_json, privacy_reviewed_at, privacy_reviewed_by, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, NULL, NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, revisionId, guideId, workspaceId, nextVersion, source.source_type, source.title, source.summary, source.category, source.tags_json, source.system_references_json, identity.userId),
+        statement(db, `UPDATE guides SET working_draft_revision_id = ?, archived_at = NULL, title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, revisionId, source.title, guideId, workspaceId),
+        statement(
+          db,
+          `INSERT INTO guide_steps
+             (id, revision_id, position, kind, title, body, expected_result,
+              requires_confirmation, annotation_json, created_at, updated_at)
+           SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.position'),
+                  json_extract(value, '$.kind'), json_extract(value, '$.title'),
+                  json_extract(value, '$.body'), json_extract(value, '$.expected_result'),
+                  json_extract(value, '$.requires_confirmation'),
+                  json_extract(value, '$.annotation_json'), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+           FROM json_each(?)`,
+          revisionId,
+          JSON.stringify(restoredSteps),
+        ),
+        statement(
+          db,
+          `INSERT INTO guide_audiences
+             (revision_id, subject_type, subject_id, granted_by, granted_at)
+           SELECT ?, json_extract(value, '$.subject_type'),
+                  json_extract(value, '$.subject_id'), ?, CURRENT_TIMESTAMP
+           FROM json_each(?)`,
+          revisionId,
+          identity.userId,
+          JSON.stringify(sourceAudiences),
+        ),
+        statement(
+          db,
+          `INSERT INTO guide_media
+             (id, workspace_id, revision_id, step_id, object_key, content_type,
+              byte_size, width, height, sha256, redaction_state, source_rasterized,
+              uploaded_by, created_at)
+           SELECT json_extract(value, '$.id'), ?, ?, json_extract(value, '$.stepId'),
+                  json_extract(value, '$.objectKey'), json_extract(value, '$.contentType'),
+                  json_extract(value, '$.byteSize'), json_extract(value, '$.width'),
+                  json_extract(value, '$.height'), json_extract(value, '$.sha256'),
+                  'redacted', 1, ?, CURRENT_TIMESTAMP
+           FROM json_each(?)`,
+          workspaceId,
+          revisionId,
+          identity.userId,
+          JSON.stringify(restoredMedia),
+        ),
+      ];
+      await audit(repository, identity, workspaceId, { action: "guide.restored", targetType: "guide", targetId: guideId, targetLabel: source.title, summary: `${source.title} revision ${source.version} restored as draft`, metadata: { sourceRevisionId, revisionId, version: nextVersion, clonedMediaCount: restoredMedia.length } }, statements);
+    } catch (error) {
+      if (clonedObjectKeys.length) {
+        const bucket = requireR2Binding(env.MEDIA);
+        for (const objectKey of clonedObjectKeys) {
+          await deletePrivateMedia(bucket, objectKey, workspaceId).catch(() => undefined);
+        }
+      }
+      throw error;
+    }
+    return { revisionId };
+  }
+
+  if (actionName === "recordGuideView") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const facts = await repository.getGuideAccessFacts(workspaceId, guideId, identity.userId);
+    if (!facts) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    requireAuthorized("guide.read", policyContext(access, isPlatformAdministrator, facts));
+    if (facts.isAudienceMember && facts.revisionStatus === "published") {
+      const restricted = !(await first<{ matched: number }>(db, `SELECT 1 AS matched FROM guide_audiences WHERE revision_id = ? AND subject_type = 'workspace' LIMIT 1`, facts.revisionId));
+      if (restricted) await audit(repository, identity, workspaceId, { action: "guide.restricted-viewed", targetType: "guide", targetId: guideId, summary: "Restricted guide viewed", metadata: { revisionId: facts.revisionId } });
+      await run(db, `INSERT INTO workspace_metrics_daily (workspace_id, metric_date, views, updated_at) VALUES (?, date('now'), 1, CURRENT_TIMESTAMP) ON CONFLICT(workspace_id, metric_date) DO UPDATE SET views = views + 1, updated_at = CURRENT_TIMESTAMP`, workspaceId);
+    }
+    return { recorded: true };
+  }
+
+  if (actionName === "recordGuideCompletion") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const facts = await repository.getGuideAccessFacts(workspaceId, guideId, identity.userId);
+    if (!facts) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    requireAuthorized("guide.read", policyContext(access, isPlatformAdministrator, facts));
+    if (!facts.isAudienceMember || facts.revisionStatus !== "published") {
+      throw new HttpError(409, "PUBLISHED_GUIDE_REQUIRED", "Only a published guide can be completed.");
+    }
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "guide.completed",
+        targetType: "guide",
+        targetId: guideId,
+        summary: "Published guide completed",
+        metadata: { revisionId: facts.revisionId },
+      },
+      [
+        statement(
+          db,
+          `INSERT INTO workspace_metrics_daily
+             (workspace_id, metric_date, completions, updated_at)
+           VALUES (?, date('now'), 1, CURRENT_TIMESTAMP)
+           ON CONFLICT(workspace_id, metric_date) DO UPDATE SET
+             completions = completions + 1, updated_at = CURRENT_TIMESTAMP`,
+          workspaceId,
+        ),
+      ],
+    );
+    return { completed: true };
+  }
+
+  throw new HttpError(404, "ACTION_NOT_FOUND", "This action is not available.");
+}
+
+export async function GET(request: Request) {
+  const id = requestId();
+  try {
+    return jsonResponse(await bootstrap(request));
+  } catch (error) {
+    return toErrorResponse(error, id);
+  }
+}
+
+export async function POST(request: Request) {
+  const id = requestId();
+  try {
+    assertMutationRequest(request);
+    const body = await readJsonObject(request, 1_500_000);
+    const actionName = textValue(body.action, "Action", { min: 2, max: 100 });
+    const payload = asObject(body.payload ?? {}, "Payload");
+    return jsonResponse(await handleCommand(request, actionName, payload));
+  } catch (error) {
+    return toErrorResponse(error, id);
+  }
+}
