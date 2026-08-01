@@ -30,21 +30,34 @@ test("server-renders the Rivet technician workspace", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Rivet — IT operations, documented<\/title>/i);
-  assert.match(html, /Reset GlobalProtect MFA for a user/);
-  assert.match(html, /Interactive prototype/);
-  assert.match(html, /fictional demo record/);
+  assert.match(html, /Opening Rivet/);
+  assert.match(html, /Verifying Appwrite and restoring your session/);
+  assert.doesNotMatch(html, /Reset GlobalProtect MFA for a user/);
+  assert.doesNotMatch(html, /Interactive prototype|fictional demo record/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|Building your site/i);
 });
 
-test("ships without the disposable starter preview", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+test("ships the real Appwrite-backed MVP without fixture fallbacks", async () => {
+  const [page, layout, packageJson, appwriteClient, records] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../lib/appwrite.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/records.ts", import.meta.url), "utf8"),
   ]);
 
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
+  assert.doesNotMatch(page, /Reset GlobalProtect MFA for a user|Interactive prototype/);
   assert.doesNotMatch(layout, /codex-preview|Starter Project/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+  assert.match(packageJson, /"appwrite"/);
   assert.match(layout, /og\.png/);
+  assert.match(page, /await client\.ping\(\)/);
+  assert.match(appwriteClient, /https:\/\/sgp\.cloud\.appwrite\.io\/v1/);
+  assert.match(appwriteClient, /6a6a53ac002ca43c7ea4/);
+  assert.match(records, /Permission\.read\(team\)/);
+  assert.match(records, /Role\.team\(teamId, "editor"\)/);
+  assert.match(records, /Role\.team\(teamId, "vault"\)/);
+  assert.match(records, /Permission\.update\(editor\)/);
+  assert.match(records, /Permission\.delete\(vault\)/);
 });
