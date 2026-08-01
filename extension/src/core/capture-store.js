@@ -69,6 +69,31 @@ export async function listCapturedSteps(sessionId) {
   });
 }
 
+export async function getCapturedStep(sessionId, stepId) {
+  if (!sessionId || !stepId) return null;
+  const [step] = await getCapturedSteps(sessionId, [stepId]);
+  return step || null;
+}
+
+export async function getCapturedSteps(sessionId, stepIds) {
+  if (!sessionId || !Array.isArray(stepIds) || !stepIds.length) return [];
+  const requestedIds = [
+    ...new Set(
+      stepIds.filter((stepId) => typeof stepId === "string" && stepId),
+    ),
+  ];
+  if (!requestedIds.length) return [];
+
+  return withStore("readonly", async (store) => {
+    const steps = await Promise.all(
+      requestedIds.map((stepId) =>
+        requestResult(store.get([sessionId, stepId])),
+      ),
+    );
+    return steps.filter(Boolean);
+  });
+}
+
 export async function updateCapturedStep(sessionId, stepId, updates) {
   return withStore("readwrite", async (store) => {
     const current = await requestResult(store.get([sessionId, stepId]));

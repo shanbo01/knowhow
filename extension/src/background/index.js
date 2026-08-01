@@ -30,20 +30,30 @@ import { sanitizeCapturedText } from "../core/redaction.js";
 import {
   CaptureEvent,
   CaptureStatus,
+  createWindowActivationEpochs,
   createIdleState,
   isCollecting,
   jobIsCurrent,
   snapshotCaptureJob,
   transitionCapture,
-  withStepCount,
+  withCapturedStep,
 } from "../core/state-machine.js";
 import { createInteractionSequencer } from "../core/interaction-sequence.js";
 import { enqueueScreenshot } from "./screenshot-queue.js";
 
 let offscreenCreation;
 let stateMutationQueue = Promise.resolve();
+let capturePolicyMutationQueue = Promise.resolve();
 let remoteLifecycleQueue = Promise.resolve();
+let reviewTabQueue = Promise.resolve();
 const interactionSequencer = createInteractionSequencer();
+const windowActivationEpochs = createWindowActivationEpochs();
+const captureHostAccess = Object.freeze({ origins: ["<all_urls>"] });
+const connectableCaptureStatuses = new Set([
+  CaptureStatus.IDLE,
+  CaptureStatus.COMPLETED,
+  CaptureStatus.ERROR,
+]);
 
 function clickJobIsLatest(request) {
   return interactionSequencer.isLatest(request);
@@ -61,6 +71,18 @@ void configureActionSidePanel();
 function withStateMutation(operation) {
   const result = stateMutationQueue.then(operation, operation);
   stateMutationQueue = result.catch(() => undefined);
+  return result;
+}
+
+function withCapturePolicyMutation(operation) {
+  const result = capturePolicyMutationQueue.then(operation, operation);
+  capturePolicyMutationQueue = result.catch(() => undefined);
+  return result;
+}
+
+function withReviewTabMutation(operation) {
+  const result = reviewTabQueue.then(operation, operation);
+  reviewTabQueue = result.catch(() => undefined);
   return result;
 }
 
@@ -177,9 +199,13 @@ async function setCaptureState(state) {
   return state;
 }
 
-async function getLocalCapturePolicy() {
+async function readLocalCapturePolicy() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.capturePolicy);
   return mergePolicy(stored[STORAGE_KEYS.capturePolicy] || {});
+}
+
+async function getLocalCapturePolicy() {
+  return withCapturePolicyMutation(() => readLocalCapturePolicy());
 }
 
 async function getStoredWorkspaceContext() {
@@ -230,13 +256,45 @@ async function getCapturePolicy() {
 }
 
 async function setCapturePolicy(patch) {
-  const current = await getLocalCapturePolicy();
-  const merged = mergePolicy({ ...current, ...patch });
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.capturePolicy]: merged,
+  return withCapturePolicyMutation(async () => {
+    const current = await readLocalCapturePolicy();
+    const merged = mergePolicy({ ...current, ...patch });
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.capturePolicy]: merged,
+    });
+    const context = await getStoredWorkspaceContext();
+    return context ? applyWorkspaceContext(merged, context) : merged;
   });
-  const context = await getStoredWorkspaceContext();
-  return context ? applyWorkspaceContext(merged, context) : merged;
+}
+
+async function addExcludedSite(hostname) {
+  return withCapturePolicyMutation(async () => {
+    const current = await readLocalCapturePolicy();
+    const merged = mergePolicy({
+      ...current,
+      excludedSites: [
+        ...current.excludedSites,
+        normalizeSitePattern(hostname),
+      ],
+    });
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.capturePolicy]: merged,
+    });
+    const context = await getStoredWorkspaceContext();
+    return context ? applyWorkspaceContext(merged, context) : merged;
+  });
+}
+
+async function updateCapturePolicy(patch) {
+  return withStateMutation(async () => {
+    const state = await getCaptureState();
+    if (!connectableCaptureStatuses.has(state.status)) {
+      throw new Error(
+        "Privacy settings cannot change during an active capture. Finish or discard it first.",
+      );
+    }
+    return setCapturePolicy(patch);
+  });
 }
 
 function safeCaptureText(value, policy, maxLength, fallback) {
@@ -246,6 +304,7 @@ function safeCaptureText(value, policy, maxLength, fallback) {
 
 async function updateActionBadge(state) {
   const badges = {
+    [CaptureStatus.PREPARING]: ["...", "#0f766e"],
     [CaptureStatus.RECORDING]: ["REC", "#dc2626"],
     [CaptureStatus.PAUSED]: ["II", "#d97706"],
     [CaptureStatus.REVIEWING]: ["REV", "#4f46e5"],
@@ -263,7 +322,134 @@ async function updateActionBadge(state) {
   });
 }
 
-async function getActiveTab() {
+function selectionFromTab(tab, verdict) {
+  return {
+    tabId: tab.id,
+    windowId: tab.windowId,
+    pageUrl: requireRegularPageUrl(tab),
+    origin: verdict.origin,
+    sanitizedUrl: verdict.sanitizedUrl,
+    activationEpoch: windowActivationEpochs.current(tab.windowId),
+  };
+}
+
+async function revalidateSelectedTab(selection, policy, action = "continue") {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(selection.tabId);
+  } catch {
+    throw new Error(
+      "The page selected for capture is no longer open. Select a page and try again.",
+    );
+  }
+  if (
+    tab.windowId !== selection.windowId ||
+    !tab.active ||
+    windowActivationEpochs.current(selection.windowId) !==
+      selection.activationEpoch
+  ) {
+    throw new Error(
+      "The active page changed before Rivet could " +
+        action +
+        ". Return to the page you selected and try again.",
+    );
+  }
+  const pageUrl = requireRegularPageUrl(tab);
+  const verdict = evaluateCaptureUrl(pageUrl, policy);
+  if (!verdict.allowed) throw new Error(verdict.reason);
+  if (
+    pageUrl !== selection.pageUrl ||
+    verdict.origin !== selection.origin
+  ) {
+    throw new Error(
+      "The selected page changed while Rivet was " +
+        action +
+        ". Return to the page you want to capture and try again.",
+    );
+  }
+  return { tab, verdict };
+}
+
+async function getOriginalActiveTab(state, target = {}) {
+  if (
+    Number.isInteger(target.tabId) &&
+    target.tabId !== state.tabId
+  ) {
+    throw new Error("Return to the originally captured tab before resuming.");
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.get(state.tabId);
+  } catch {
+    throw new Error(
+      "The originally captured tab is no longer open. Discard this capture and start again.",
+    );
+  }
+  if (
+    (Number.isInteger(target.windowId) && target.windowId !== tab.windowId) ||
+    !tab.active
+  ) {
+    throw new Error("Return to the originally captured tab before resuming.");
+  }
+  const [activeTab] = await chrome.tabs.query({
+    active: true,
+    windowId: tab.windowId,
+  });
+  if (!activeTab || activeTab.id !== tab.id) {
+    throw new Error("Return to the originally captured tab before resuming.");
+  }
+  return tab;
+}
+
+async function requireCaptureHostAccess() {
+  if (await chrome.permissions.contains(captureHostAccess)) return;
+  throw new Error(
+    "Rivet does not have website access. In the side panel, click Start or Resume and select Allow in Chrome.",
+  );
+}
+
+function requireRegularPageUrl(tab) {
+  if (typeof tab?.url !== "string" || !tab.url) {
+    throw new Error(
+      "Rivet could not read this page's URL. In the side panel, click Start or Resume and allow website access.",
+    );
+  }
+  let url;
+  try {
+    url = new URL(tab.url);
+  } catch {
+    throw new Error(
+      "Rivet could not read this page's URL. Select a regular website and try again.",
+    );
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      "Rivet can capture regular HTTP and HTTPS websites only. Chrome pages, extension pages, and local files cannot be captured.",
+    );
+  }
+  return url.href;
+}
+
+async function getActiveTab(target = {}) {
+  if (Number.isInteger(target.tabId) || Number.isInteger(target.windowId)) {
+    if (!Number.isInteger(target.tabId) || !Number.isInteger(target.windowId)) {
+      throw new Error("Rivet received an incomplete browser tab selection.");
+    }
+    let tab;
+    try {
+      tab = await chrome.tabs.get(target.tabId);
+    } catch {
+      throw new Error(
+        "The page selected for capture is no longer open. Select a page and try again.",
+      );
+    }
+    if (tab.windowId !== target.windowId || !tab.active) {
+      throw new Error(
+        "The active page changed before Rivet could start. Return to the page you want to capture and try again.",
+      );
+    }
+    return tab;
+  }
   const [tab] = await chrome.tabs.query({
     active: true,
     currentWindow: true,
@@ -285,19 +471,22 @@ async function sendToCapturedTab(state, message, options) {
   }
 }
 
-async function injectCaptureContent(state) {
+async function injectCaptureContent(state, capturePolicy) {
   await chrome.scripting.executeScript({
     target: { tabId: state.tabId },
     files: [CONTENT_SCRIPT_PATH],
   });
-  const policy = await getCapturePolicy();
-  await chrome.tabs.sendMessage(state.tabId, {
+  const policy = capturePolicy || (await getCapturePolicy());
+  const configured = await chrome.tabs.sendMessage(state.tabId, {
     type: "RIVET_CONFIGURE",
     sessionId: state.sessionId,
     status: state.status,
     scopeLabel: state.scopeLabel,
     policy,
   });
+  if (!configured?.ok) {
+    throw new Error("Rivet could not safely configure capture on this page.");
+  }
 }
 
 async function ensureOffscreenDocument() {
@@ -342,20 +531,17 @@ async function pauseCapture(reason) {
 }
 
 async function startCapture(options = {}) {
-  const context = await refreshWorkspaceContext();
-  const tab = await getActiveTab();
-  if (tab.incognito) {
+  await requireCaptureHostAccess();
+  const initialTab = await getActiveTab(options);
+  if (initialTab.incognito) {
     throw new Error("Rivet Capture is disabled in incognito windows.");
   }
-  const policy = applyWorkspaceContext(
-    await getLocalCapturePolicy(),
-    context,
-  );
-  const verdict = evaluateCaptureUrl(tab.url || "", policy);
-  if (!verdict.allowed) throw new Error(verdict.reason);
-
+  let initialPolicy;
+  let cachedContext;
+  let initialVerdict;
+  let initialSelection;
   let previousSessionId;
-  const next = await withStateMutation(async () => {
+  const preparing = await withStateMutation(async () => {
     const current = await getCaptureState();
     if (
       current.status !== CaptureStatus.IDLE &&
@@ -364,47 +550,115 @@ async function startCapture(options = {}) {
     ) {
       throw new Error("Finish or discard the current capture first.");
     }
+    [initialPolicy, cachedContext] = await Promise.all([
+      getCapturePolicy(),
+      getStoredWorkspaceContext(),
+    ]);
+    initialVerdict = evaluateCaptureUrl(
+      requireRegularPageUrl(initialTab),
+      initialPolicy,
+    );
+    if (!initialVerdict.allowed) throw new Error(initialVerdict.reason);
+    initialSelection = selectionFromTab(initialTab, initialVerdict);
+    const context = cachedContext || {};
     previousSessionId = current.sessionId;
     const started = transitionCapture(current, CaptureEvent.START, {
       sessionId: crypto.randomUUID(),
-      tabId: tab.id,
-      windowId: tab.windowId,
-      origin: verdict.origin,
-      sanitizedUrl: verdict.sanitizedUrl,
+      tabId: initialTab.id,
+      windowId: initialTab.windowId,
+      origin: initialVerdict.origin,
+      sanitizedUrl: initialVerdict.sanitizedUrl,
       title: safeCaptureText(
-        options.title || tab.title || "Captured guide",
-        policy,
+        options.title || initialTab.title || "Captured guide",
+        initialPolicy,
         200,
         "Captured guide",
       ),
-      workspaceId: context.workspaceId,
+      workspaceId: cachedContext?.workspaceId || null,
       scopeLabel:
-        (context.workspaceName || "Workspace") + " · " + verdict.hostname,
-      policyVersion: context.policyVersion,
+        (context.workspaceName || "Workspace") +
+        " · " +
+        initialVerdict.hostname,
+      policyVersion: cachedContext?.policyVersion || initialPolicy.version,
     });
     await setCaptureState(started);
     return started;
   });
   if (previousSessionId) await deleteCaptureSession(previousSessionId);
-  let prepared = next;
+  let prepared = preparing;
   let remoteCreated = false;
-  let remoteCaptureId = null;
+  let remoteAttempted = false;
+  let remoteCaptureId = preparing.sessionId;
   try {
-    const remote = await enqueueRemoteLifecycle(() => beginRemoteCapture(next));
+    const workspaceContext = await refreshWorkspaceContext();
+    const policy = applyWorkspaceContext(
+      await getLocalCapturePolicy(),
+      workspaceContext,
+    );
+    const afterWorkspace = await revalidateSelectedTab(
+      initialSelection,
+      policy,
+      "preparing this capture",
+    );
+    const refreshedSelection = selectionFromTab(
+      afterWorkspace.tab,
+      afterWorkspace.verdict,
+    );
+    prepared = await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      if (
+        latest.sessionId !== preparing.sessionId ||
+        latest.status !== CaptureStatus.PREPARING
+      ) {
+        throw new Error("The capture session changed while Rivet was preparing it.");
+      }
+      const next = {
+        ...latest,
+        origin: afterWorkspace.verdict.origin,
+        sanitizedUrl: afterWorkspace.verdict.sanitizedUrl,
+        title: safeCaptureText(
+          options.title || afterWorkspace.tab.title || "Captured guide",
+          policy,
+          200,
+          "Captured guide",
+        ),
+        workspaceId: workspaceContext.workspaceId,
+        scopeLabel:
+          (workspaceContext.workspaceName || "Workspace") +
+          " · " +
+          afterWorkspace.verdict.hostname,
+        policyVersion: workspaceContext.policyVersion,
+        updatedAt: new Date().toISOString(),
+      };
+      await setCaptureState(next);
+      return next;
+    });
+    remoteAttempted = true;
+    const remote = await enqueueRemoteLifecycle(() =>
+      beginRemoteCapture(prepared),
+    );
     remoteCreated = true;
     remoteCaptureId =
       typeof remote?.captureId === "string" && remote.captureId
         ? remote.captureId
-        : next.sessionId;
+        : preparing.sessionId;
     if (!remote?.captureId) {
       throw new Error("Rivet did not return a capture identifier.");
     }
+    await revalidateSelectedTab(
+      refreshedSelection,
+      policy,
+      "creating the workspace capture",
+    );
     prepared = await withStateMutation(async () => {
       const latest = await getCaptureState();
-      if (latest.sessionId !== next.sessionId) {
+      if (
+        latest.sessionId !== preparing.sessionId ||
+        latest.status !== CaptureStatus.PREPARING
+      ) {
         throw new Error("The capture session changed while Rivet was preparing it.");
       }
-      const ready = {
+      const remotePrepared = {
         ...latest,
         remoteCaptureId: remote.captureId,
         remoteGuideId: remote.guideId,
@@ -412,16 +666,75 @@ async function startCapture(options = {}) {
         remoteSyncWarning: null,
         updatedAt: new Date().toISOString(),
       };
+      await setCaptureState(remotePrepared);
+      return remotePrepared;
+    });
+    await revalidateSelectedTab(
+      refreshedSelection,
+      policy,
+      "attaching capture to this page",
+    );
+    await injectCaptureContent(prepared, policy);
+    const beforeReady = await revalidateSelectedTab(
+      refreshedSelection,
+      policy,
+      "finishing capture setup",
+    );
+    const recording = await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      if (
+        latest.sessionId !== preparing.sessionId ||
+        latest.status !== CaptureStatus.PREPARING
+      ) {
+        throw new Error("The capture session changed before it became ready.");
+      }
+      const ready = transitionCapture(
+        {
+          ...latest,
+          sanitizedUrl: beforeReady.verdict.sanitizedUrl,
+          lastNavigationUrl: beforeReady.verdict.sanitizedUrl,
+          lastNavigationAt: Date.now(),
+        },
+        CaptureEvent.READY,
+      );
       await setCaptureState(ready);
       return ready;
     });
-    await injectCaptureContent(prepared);
+    const initialJob = snapshotCaptureJob(recording, {
+      pageUrl: beforeReady.tab.url,
+      sourceEvent: "navigation",
+      title: "Navigate to " + beforeReady.verdict.sanitizedUrl,
+      instructions: "Navigate to " + beforeReady.verdict.sanitizedUrl + ".",
+      targetRect: null,
+      clickPoint: null,
+    });
+    const capturedInitialStep = await enqueueScreenshot(() =>
+      captureStep(initialJob),
+    );
+    if (!capturedInitialStep) {
+      throw new Error(
+        "The selected page changed before Rivet could capture the initial step.",
+      );
+    }
+    const statusResponse = await chrome.tabs.sendMessage(recording.tabId, {
+      type: "RIVET_SET_STATUS",
+      status: CaptureStatus.RECORDING,
+    });
+    if (!statusResponse?.ok) {
+      throw new Error("Rivet could not activate capture on this page.");
+    }
+    return await getCaptureState();
   } catch (error) {
+    await sendToCapturedTab(preparing, {
+      type: "RIVET_SET_STATUS",
+      status: CaptureStatus.ERROR,
+    });
     await withStateMutation(async () => {
       const latest = await getCaptureState();
       if (
-        latest.sessionId !== next.sessionId ||
-        latest.status !== CaptureStatus.RECORDING
+        latest.sessionId !== preparing.sessionId ||
+        latest.status === CaptureStatus.IDLE ||
+        latest.status === CaptureStatus.ERROR
       ) {
         return latest;
       }
@@ -431,42 +744,77 @@ async function startCapture(options = {}) {
             ? error.message
             : "Rivet could not attach to this page.",
       });
-      await setCaptureState(failed);
-      return failed;
+      const cleanedFailure = {
+        ...failed,
+        stepCount: 0,
+        stepIds: [],
+      };
+      await setCaptureState(cleanedFailure);
+      return cleanedFailure;
     });
-    if (remoteCreated) await cleanupRemoteCapture(remoteCaptureId);
+    await deleteCaptureSession(preparing.sessionId);
+    if (remoteCreated || remoteAttempted) {
+      await cleanupRemoteCapture(remoteCaptureId);
+    }
     throw error;
   }
-  return prepared;
 }
 
-async function resumeCapture() {
-  const context = await refreshWorkspaceContext();
+async function resumeCapture(options = {}) {
+  await requireCaptureHostAccess();
   const current = await getCaptureState();
+  const initialTab = await getOriginalActiveTab(current, options);
+  if (initialTab.incognito) {
+    throw new Error("Rivet Capture is disabled in incognito windows.");
+  }
+  const initialPolicy = await getCapturePolicy();
+  const initialVerdict = evaluateCaptureUrl(
+    requireRegularPageUrl(initialTab),
+    initialPolicy,
+  );
+  if (!initialVerdict.allowed) throw new Error(initialVerdict.reason);
+  const initialSelection = selectionFromTab(initialTab, initialVerdict);
+  const context = await refreshWorkspaceContext();
   if (current.workspaceId !== context.workspaceId) {
     throw new Error("Reconnect the workspace used to start this capture.");
-  }
-  const tab = await getActiveTab();
-  if (tab.id !== current.tabId) {
-    throw new Error("Return to the originally captured tab before resuming.");
-  }
-  if (tab.incognito) {
-    throw new Error("Rivet Capture is disabled in incognito windows.");
   }
   const policy = applyWorkspaceContext(
     await getLocalCapturePolicy(),
     context,
   );
-  const verdict = evaluateCaptureUrl(tab.url || "", policy);
-  if (!verdict.allowed) throw new Error(verdict.reason);
+  const validated = await revalidateSelectedTab(
+    initialSelection,
+    policy,
+    "resuming capture",
+  );
+  const resumeSelection = selectionFromTab(validated.tab, validated.verdict);
+  const pausedConfiguration = {
+    ...current,
+    windowId: validated.tab.windowId,
+    origin: validated.verdict.origin,
+    sanitizedUrl: validated.verdict.sanitizedUrl,
+    scopeLabel:
+      (context.workspaceName || "Workspace") +
+      " · " +
+      validated.verdict.hostname,
+    status: CaptureStatus.PAUSED,
+  };
+  await injectCaptureContent(pausedConfiguration, policy);
+  const beforeResume = await revalidateSelectedTab(
+    resumeSelection,
+    policy,
+    "finishing resume",
+  );
+  const verdict = beforeResume.verdict;
   const scoped = await withStateMutation(async () => {
     const latest = await getCaptureState();
     if (latest.sessionId !== current.sessionId) {
       throw new Error("The capture session changed before it could resume.");
     }
     const resumed = transitionCapture(latest, CaptureEvent.RESUME, {
-      origin: verdict.origin,
-      sanitizedUrl: verdict.sanitizedUrl,
+      windowId: beforeResume.tab.windowId,
+      origin: beforeResume.verdict.origin,
+      sanitizedUrl: beforeResume.verdict.sanitizedUrl,
     });
     const next = {
       ...resumed,
@@ -476,14 +824,68 @@ async function resumeCapture() {
     await setCaptureState(next);
     return next;
   });
-  syncRemoteTransition(scoped, "resume");
   try {
-    await injectCaptureContent(scoped);
+    const response = await chrome.tabs.sendMessage(scoped.tabId, {
+      type: "RIVET_SET_STATUS",
+      status: CaptureStatus.RECORDING,
+    });
+    if (!response?.ok) throw new Error("The page did not accept resume.");
   } catch (error) {
     await pauseCapture("Rivet could not safely resume on this page.");
     throw error;
   }
+  syncRemoteTransition(scoped, "resume");
   return scoped;
+}
+
+function reviewTabHasSession(tab, reviewPageUrl, sessionId) {
+  if (typeof tab?.url !== "string") return false;
+  try {
+    const candidate = new URL(tab.url);
+    const reviewPage = new URL(reviewPageUrl);
+    return (
+      candidate.protocol === reviewPage.protocol &&
+      candidate.hostname === reviewPage.hostname &&
+      candidate.pathname === reviewPage.pathname &&
+      candidate.searchParams.get("session") === sessionId
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function openOrFocusReviewTab(sessionId) {
+  if (typeof sessionId !== "string" || !sessionId) {
+    throw new Error("The capture is missing its review session.");
+  }
+  return withReviewTabMutation(async () => {
+    const reviewPageUrl = chrome.runtime.getURL(REVIEW_PAGE_PATH);
+    const url =
+      reviewPageUrl + "?session=" + encodeURIComponent(sessionId);
+    const tabs = await chrome.tabs.query({});
+    const existing = tabs.find((tab) =>
+      reviewTabHasSession(tab, reviewPageUrl, sessionId),
+    );
+    if (Number.isInteger(existing?.id)) {
+      try {
+        const focused = await chrome.tabs.update(existing.id, {
+          active: true,
+        });
+        if (
+          Number.isInteger(existing.windowId) &&
+          typeof chrome.windows?.update === "function"
+        ) {
+          await chrome.windows
+            .update(existing.windowId, { focused: true })
+            .catch(() => undefined);
+        }
+        return focused;
+      } catch {
+        // The review tab closed after the query; replace it below.
+      }
+    }
+    return chrome.tabs.create({ url });
+  });
 }
 
 async function finishCapture() {
@@ -497,11 +899,7 @@ async function finishCapture() {
     type: "RIVET_SET_STATUS",
     status: CaptureStatus.REVIEWING,
   });
-  const url =
-    chrome.runtime.getURL(REVIEW_PAGE_PATH) +
-    "?session=" +
-    encodeURIComponent(reviewing.sessionId);
-  await chrome.tabs.create({ url });
+  await openOrFocusReviewTab(reviewing.sessionId);
   return reviewing;
 }
 
@@ -509,6 +907,11 @@ async function discardCapture() {
   let current;
   const discarded = await withStateMutation(async () => {
     current = await getCaptureState();
+    if (current.status === CaptureStatus.UPLOADING) {
+      throw new Error(
+        "Rivet cannot discard this capture while its reviewed draft is uploading.",
+      );
+    }
     const next = transitionCapture(current, CaptureEvent.DISCARD);
     await setCaptureState(next);
     return next;
@@ -526,23 +929,47 @@ async function discardCapture() {
   return result;
 }
 
-async function excludeCurrentSite() {
-  const tab = await getActiveTab();
-  const verdict = evaluateCaptureUrl(tab.url || "", {
+async function connectRivet(code) {
+  return withStateMutation(async () => {
+    const state = await getCaptureState();
+    if (!connectableCaptureStatuses.has(state.status)) {
+      throw new Error(
+        "Rivet cannot reconnect while a capture is active or under review. Finish or discard it first.",
+      );
+    }
+    if ((await flushRemoteDiscards()).length) {
+      throw new Error(
+        "Rivet must finish cleaning up a previous capture before reconnecting.",
+      );
+    }
+    await beginRivetPairing(code);
+    return refreshWorkspaceContext();
+  });
+}
+
+async function excludeCurrentSite(options = {}) {
+  await requireCaptureHostAccess();
+  const initialTab = await getActiveTab(options);
+  const pageUrl = requireRegularPageUrl(initialTab);
+  const policyWithoutLocalExclusions = {
     ...(await getCapturePolicy()),
     excludedSites: [],
-  });
-  if (!verdict.origin) {
-    throw new Error(verdict.reason || "This page cannot be excluded.");
+  };
+  const initialVerdict = evaluateCaptureUrl(
+    pageUrl,
+    policyWithoutLocalExclusions,
+  );
+  if (!initialVerdict.allowed || !initialVerdict.origin) {
+    throw new Error(initialVerdict.reason || "This page cannot be excluded.");
   }
+  const selection = selectionFromTab(initialTab, initialVerdict);
+  const { tab, verdict } = await revalidateSelectedTab(
+    selection,
+    policyWithoutLocalExclusions,
+    "exclude this site",
+  );
   const hostname = new URL(verdict.origin).hostname;
-  const localPolicy = await getLocalCapturePolicy();
-  const nextPolicy = await setCapturePolicy({
-    excludedSites: [
-      ...localPolicy.excludedSites,
-      normalizeSitePattern(hostname),
-    ],
-  });
+  const nextPolicy = await addExcludedSite(hostname);
   const state = await getCaptureState();
   if (state.tabId === tab.id && isCollecting(state)) {
     await pauseCapture("The current site was added to the exclusion list.");
@@ -570,21 +997,115 @@ async function preparePageContext(state, fallback) {
   };
 }
 
+async function validateActiveCaptureTab(state, policy, expectedSanitizedUrl) {
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    windowId: state.windowId,
+  });
+  if (!tab || tab.id !== state.tabId) {
+    throw new Error("Return to the captured tab to continue.");
+  }
+  const verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
+  if (!verdict.allowed) throw new Error(verdict.reason);
+  if (verdict.origin !== state.origin) {
+    throw new Error(
+      "The page changed origin. Resume explicitly to continue on the new site.",
+    );
+  }
+  if (
+    expectedSanitizedUrl &&
+    verdict.sanitizedUrl !== expectedSanitizedUrl
+  ) {
+    throw new Error(
+      "The captured page changed before its screenshot was ready. Try the action again.",
+    );
+  }
+  return { tab, verdict };
+}
+
+async function captureVisiblePage(state, policy, expectedSanitizedUrl) {
+  await requireCaptureHostAccess();
+  const activationEpoch = windowActivationEpochs.current(state.windowId);
+  await validateActiveCaptureTab(state, policy, expectedSanitizedUrl);
+  if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
+    throw new Error("The active tab changed before screenshot capture began.");
+  }
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(state.windowId, {
+      format: "png",
+    });
+  } catch (error) {
+    if (/permission|activeTab|all_urls/i.test(String(error?.message || error))) {
+      throw new Error(
+        "Chrome removed Rivet's website access. Click Resume in the side panel and select Allow to continue.",
+      );
+    }
+    throw error;
+  }
+  if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
+    dataUrl = null;
+    throw new Error(
+      "The active tab changed during screenshot capture. Rivet discarded the screenshot for privacy.",
+    );
+  }
+  const verified = await validateActiveCaptureTab(
+    state,
+    policy,
+    expectedSanitizedUrl,
+  );
+  if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
+    dataUrl = null;
+    throw new Error(
+      "The active tab changed during screenshot verification. Rivet discarded the screenshot for privacy.",
+    );
+  }
+  return { dataUrl, ...verified };
+}
+
+async function clickJobMayProceed(request) {
+  if (clickJobIsLatest(request)) return true;
+  if (request?.sourceEvent !== "click" || request.rapidSkipRecorded) {
+    return false;
+  }
+  request.rapidSkipRecorded = true;
+  await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (latest.sessionId !== request.sessionId) return latest;
+    const skipped = Number(latest.rapidInteractionsSkipped || 0) + 1;
+    const next = {
+      ...latest,
+      rapidInteractionsSkipped: skipped,
+      captureWarning:
+        "Rivet skipped " +
+        String(skipped) +
+        " rapid interaction" +
+        (skipped === 1 ? "" : "s") +
+        " because the page changed before a safe screenshot could be taken.",
+      updatedAt: new Date().toISOString(),
+    };
+    await setCaptureState(next);
+    return next;
+  });
+  return false;
+}
+
 async function captureStep(request) {
-  if (!clickJobIsLatest(request)) return;
+  if (!(await clickJobMayProceed(request))) return false;
   const snapshot = await getCaptureState();
   const generation = request.generation;
-  if (!Number.isInteger(generation)) return;
-  if (!jobIsCurrent(snapshot, request.sessionId, generation)) return;
-  if (!clickJobIsLatest(request)) return;
+  if (!Number.isInteger(generation)) return false;
+  if (!jobIsCurrent(snapshot, request.sessionId, generation)) return false;
+  if (!(await clickJobMayProceed(request))) return false;
   if (snapshot.stepCount >= CAPTURE_LIMITS.maxSteps) {
     await pauseCapture(
       "This capture reached the " +
         String(CAPTURE_LIMITS.maxSteps) +
         "-step safety limit.",
     );
-    return;
+    return false;
   }
+  await requireCaptureHostAccess();
 
   const [activeTab] = await chrome.tabs.query({
     active: true,
@@ -592,90 +1113,55 @@ async function captureStep(request) {
   });
   if (!activeTab || activeTab.id !== snapshot.tabId) {
     await pauseCapture("Return to the captured tab to continue.");
-    return;
+    return false;
   }
 
   const policy = await getCapturePolicy();
   const verdict = evaluateCaptureUrl(request.pageUrl || activeTab.url || "", policy);
   if (!verdict.allowed) {
     await pauseCapture(verdict.reason);
-    return;
+    return false;
   }
   if (verdict.origin !== snapshot.origin) {
     await pauseCapture(
       "The page changed origin. Resume explicitly to continue on the new site.",
     );
-    return;
+    return false;
   }
   const activeVerdict = evaluateCaptureUrl(activeTab.url || "", policy);
   if (!activeVerdict.allowed) {
     await pauseCapture(activeVerdict.reason);
-    return;
+    return false;
   }
-  if (activeVerdict.sanitizedUrl !== verdict.sanitizedUrl) return;
+  if (activeVerdict.sanitizedUrl !== verdict.sanitizedUrl) return false;
 
   const context = await preparePageContext(snapshot, request);
-  if (!context) return;
-  if (!clickJobIsLatest(request)) {
-    await sendToCapturedTab(snapshot, {
-      type: "RIVET_RESTORE_INDICATOR",
-    });
-    return;
-  }
+  if (!context) return false;
+  if (!(await clickJobMayProceed(request))) return false;
   if (
     context.sanitizedUrl &&
     context.sanitizedUrl !== activeVerdict.sanitizedUrl
-  ) {
-    await sendToCapturedTab(snapshot, {
-      type: "RIVET_RESTORE_INDICATOR",
-    });
-    return;
-  }
+  ) return false;
   const beforeCapture = await getCaptureState();
   if (
     !jobIsCurrent(beforeCapture, snapshot.sessionId, generation) ||
-    !clickJobIsLatest(request)
-  ) {
-    await sendToCapturedTab(snapshot, {
-      type: "RIVET_RESTORE_INDICATOR",
-    });
-    return;
-  }
-  let dataUrl;
-  try {
-    dataUrl = await chrome.tabs.captureVisibleTab(snapshot.windowId, {
-      format: "png",
-    });
-  } finally {
-    await sendToCapturedTab(snapshot, {
-      type: "RIVET_RESTORE_INDICATOR",
-    });
-  }
+    !(await clickJobMayProceed(request))
+  ) return false;
+  const captured = await captureVisiblePage(
+    snapshot,
+    policy,
+    verdict.sanitizedUrl,
+  );
+  let dataUrl = captured.dataUrl;
 
   const afterCapture = await getCaptureState();
   if (
-    !jobIsCurrent(afterCapture, snapshot.sessionId, generation) ||
-    !clickJobIsLatest(request)
+    !jobIsCurrent(afterCapture, snapshot.sessionId, generation)
   ) {
     dataUrl = null;
-    return;
+    return false;
   }
-  const [capturedTab] = await chrome.tabs.query({
-    active: true,
-    windowId: snapshot.windowId,
-  });
-  if (!capturedTab || capturedTab.id !== snapshot.tabId) {
-    dataUrl = null;
-    return;
-  }
-  const capturedVerdict = evaluateCaptureUrl(capturedTab.url || "", policy);
-  if (
-    !capturedVerdict.allowed ||
-    capturedVerdict.sanitizedUrl !== verdict.sanitizedUrl
-  ) {
-    dataUrl = null;
-    return;
-  }
+  const capturedVerdict = captured.verdict;
   if (typeof request.documentId === "string") {
     const verified = await sendToCapturedTab(
       snapshot,
@@ -687,15 +1173,11 @@ async function captureStep(request) {
       verified.sanitizedUrl !== capturedVerdict.sanitizedUrl
     ) {
       dataUrl = null;
-      return;
+      return false;
     }
   }
 
   await ensureOffscreenDocument();
-  if (!clickJobIsLatest(request)) {
-    dataUrl = null;
-    return;
-  }
   const stepId = crypto.randomUUID();
   const order = afterCapture.stepCount;
   const processed = await chrome.runtime.sendMessage({
@@ -737,12 +1219,6 @@ async function captureStep(request) {
     limits: CAPTURE_LIMITS,
   });
   dataUrl = null;
-  if (!clickJobIsLatest(request)) {
-    if (processed?.ok) {
-      await deleteCapturedStep(snapshot.sessionId, stepId);
-    }
-    return;
-  }
   if (!processed?.ok) {
     throw new Error(processed?.error || "Local screenshot redaction failed.");
   }
@@ -750,18 +1226,18 @@ async function captureStep(request) {
   const committed = await withStateMutation(async () => {
     const latest = await getCaptureState();
     if (
-      !jobIsCurrent(latest, snapshot.sessionId, generation) ||
-      !clickJobIsLatest(request)
+      !jobIsCurrent(latest, snapshot.sessionId, generation)
     ) {
       return false;
     }
-    await setCaptureState(withStepCount(latest, latest.stepCount + 1));
+    await setCaptureState(withCapturedStep(latest, stepId));
     return true;
   });
   if (!committed) {
     await deleteCapturedStep(snapshot.sessionId, stepId);
-    return;
+    return false;
   }
+  return true;
 }
 
 async function captureNavigation(details) {
@@ -853,25 +1329,19 @@ async function handleMessage(message, sender) {
     case "PAUSE_CAPTURE":
       return { ok: true, state: await pauseCapture("Paused by user") };
     case "RESUME_CAPTURE":
-      return { ok: true, state: await resumeCapture() };
+      return { ok: true, state: await resumeCapture(message.options) };
     case "FINISH_CAPTURE":
       return { ok: true, state: await finishCapture() };
     case "DISCARD_CAPTURE":
       return { ok: true, state: await discardCapture() };
     case "EXCLUDE_CURRENT_SITE":
-      return { ok: true, ...(await excludeCurrentSite()) };
+      return { ok: true, ...(await excludeCurrentSite(message.options)) };
     case "CONNECT_RIVET":
-      if ((await flushRemoteDiscards()).length) {
-        throw new Error(
-          "Rivet must finish cleaning up a previous capture before reconnecting.",
-        );
-      }
-      await beginRivetPairing(message.code);
-      return { ok: true, context: await refreshWorkspaceContext() };
+      return { ok: true, context: await connectRivet(message.code) };
     case "UPDATE_CAPTURE_POLICY":
       return {
         ok: true,
-        policy: await setCapturePolicy(message.policy || {}),
+        policy: await updateCapturePolicy(message.policy || {}),
       };
     case "CAPTURE_EVENT": {
       const interactionSequence = interactionSequencer.reserve();
@@ -981,6 +1451,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+chrome.tabs.onActivated.addListener(({ windowId }) => {
+  windowActivationEpochs.note(windowId);
+});
+
 chrome.webNavigation.onCompleted.addListener((details) => {
   void captureNavigation(details);
 });
@@ -1011,10 +1485,37 @@ chrome.runtime.onStartup.addListener(() => {
   void (async () => {
     await flushRemoteDiscards();
     const state = await getCaptureState();
-    if (state.status === CaptureStatus.RECORDING) {
+    if (state.status === CaptureStatus.PREPARING) {
+      if (state.sessionId) await deleteCaptureSession(state.sessionId);
+      await cleanupRemoteCapture(state.remoteCaptureId || state.sessionId);
+      const failed = transitionCapture(state, CaptureEvent.FAIL, {
+        message:
+          "Browser startup interrupted capture preparation. Start the capture again.",
+      });
+      await setCaptureState({
+        ...failed,
+        stepCount: 0,
+        stepIds: [],
+      });
+    } else if (state.status === CaptureStatus.RECORDING) {
       await pauseCapture(
         "Browser startup restored this session in a safe paused state.",
       );
+    } else if (state.status === CaptureStatus.UPLOADING) {
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        if (latest.status !== CaptureStatus.UPLOADING) return latest;
+        const reviewing = {
+          ...latest,
+          status: CaptureStatus.REVIEWING,
+          generation: latest.generation + 1,
+          lastError:
+            "Browser startup interrupted the draft upload. Reopen privacy review and retry.",
+          updatedAt: new Date().toISOString(),
+        };
+        await setCaptureState(reviewing);
+        return reviewing;
+      });
     } else {
       if (state.status === CaptureStatus.IDLE) {
         await clearAllCapturedSteps();

@@ -18,6 +18,9 @@
   "host_permissions": [
     "http://localhost/*"
   ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background/index.js",
     "type": "module"

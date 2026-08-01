@@ -33,10 +33,13 @@ For Edge, use edge://extensions and the same extension/dist directory.
 1. Pair the extension with the one-time code shown in a Rivet workspace.
 2. Open the page to document and select the Rivet toolbar action.
 3. Optionally configure Smart Blur and the click-target color.
-4. Enter a guide title and choose Start capturing this tab.
-5. Use Pause and Resume from either the page indicator or popup.
-6. Keep Rivet docked in Chrome's native side panel while the captured page
-   remains usable beside it.
+4. Enter a guide title and choose Start capturing this tab. The first capture
+   asks you to allow Rivet to access websites; this runtime permission is what
+   lets Chrome capture the foreground tab from its persistent side panel.
+5. Keep Rivet docked in Chrome's native side panel while the captured page
+   remains usable beside it. Numbered, locally redacted step previews appear
+   in the panel as you click and navigate.
+6. Use Pause and Resume from the native side panel.
 7. Choose Finish & review to open the full post-capture editor.
 8. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
    crop, add or remove manual blur regions, draw freehand, and move or remove
@@ -51,7 +54,12 @@ explicit Resume action on the destination origin.
 ## Privacy properties
 
 - Incognito operation is disabled in the manifest and checked again at runtime.
-- No static all-site content script or all-URLs host permission is used.
+- No static all-site content script is used. All-site host access is optional
+  and requested only when the user starts capture; it is required by Chrome's
+  visible-tab screenshot API for reliable capture from a persistent side panel.
+- Rivet still attaches only to the selected foreground tab, and the workspace
+  allowlist, excluded hosts, browser-internal-page, and incognito checks remain
+  enforced at runtime.
 - Password fields and embedded frames are always redacted.
 - The extension does not request clipboard, tab-capture, desktop-capture, or
   raw keyboard access.

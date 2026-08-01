@@ -51,6 +51,14 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+body[data-capture-mode="preparing"],
+body[data-capture-mode="active"],
+body[data-capture-mode="reviewing"] {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .panel-shell {
   width: 100%;
   min-height: 100vh;
@@ -58,6 +66,15 @@ body {
   flex-direction: column;
   gap: 14px;
   padding: 18px 16px 24px;
+}
+
+body[data-capture-mode="preparing"] .panel-shell,
+body[data-capture-mode="active"] .panel-shell,
+body[data-capture-mode="reviewing"] .panel-shell {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 14px;
 }
 
 button,
@@ -338,8 +355,10 @@ input::placeholder {
 
 .capture-actions {
   position: sticky;
-  bottom: 12px;
+  bottom: 0;
   z-index: 10;
+  flex: 0 0 auto;
+  margin-top: auto;
   gap: 8px;
   padding: 8px;
   background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -352,6 +371,168 @@ input::placeholder {
 .capture-actions button {
   min-width: 0;
   flex: 1;
+}
+
+.step-feed {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.step-feed-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 12px 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.step-feed-heading > span:first-child {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.step-feed-heading strong {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.step-feed-heading small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+#feed-count {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding-inline: 7px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.step-feed-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 12px;
+}
+
+.step-feed-empty {
+  max-width: 260px;
+  margin: 40px auto;
+  color: var(--muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.step-list {
+  display: grid;
+  gap: 11px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step-card {
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: var(--shadow-sm);
+}
+
+.step-card-copy {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 11px;
+}
+
+.step-number {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.step-card-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.step-card-title {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.step-card-detail {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.step-thumbnail {
+  position: relative;
+  width: calc(100% - 22px);
+  margin: 0 11px 11px;
+  overflow: hidden;
+  background: var(--sidebar);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.step-thumbnail img {
+  position: absolute;
+  max-width: none;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
+.step-click-ring {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--click-color, #ef6f47);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--click-color, #ef6f47) 25%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--click-color, #ef6f47) 16%, transparent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.step-card[data-source-event="navigation"] .step-card-copy {
+  min-height: 58px;
+  align-items: center;
+}
+
+.step-card[data-source-event="navigation"] .step-card-text {
+  padding-top: 0;
 }
 
 .privacy-settings {

@@ -125,7 +125,6 @@ async function deterministicZip(root) {
 
 const manifestPath = resolve(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const serializedManifest = JSON.stringify(manifest);
 const contentSource = await readFile(
   resolve(extensionRoot, "src/content/capture.js"),
   "utf8",
@@ -158,8 +157,23 @@ if (manifest.incognito !== "not_allowed") {
 if (manifest.content_scripts?.length) {
   throw new Error("Static content scripts are prohibited.");
 }
-if (serializedManifest.includes("<all_urls>")) {
-  throw new Error("Broad <all_urls> access is prohibited.");
+if (manifest.host_permissions?.includes("<all_urls>")) {
+  throw new Error("Required <all_urls> access is prohibited.");
+}
+if (
+  JSON.stringify(manifest.optional_host_permissions || []) !==
+  JSON.stringify(["<all_urls>"])
+) {
+  throw new Error(
+    "Website capture access must remain an explicit optional <all_urls> request.",
+  );
+}
+if (
+  (manifest.content_scripts || []).some((entry) =>
+    (entry.matches || []).includes("<all_urls>"),
+  )
+) {
+  throw new Error("Static <all_urls> content injection is prohibited.");
 }
 for (const forbiddenPermission of [
   "clipboardRead",

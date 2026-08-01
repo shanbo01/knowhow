@@ -1,5 +1,6 @@
 export const CaptureStatus = Object.freeze({
   IDLE: "idle",
+  PREPARING: "preparing",
   RECORDING: "recording",
   PAUSED: "paused",
   REVIEWING: "reviewing",
@@ -10,6 +11,7 @@ export const CaptureStatus = Object.freeze({
 
 export const CaptureEvent = Object.freeze({
   START: "START",
+  READY: "READY",
   PAUSE: "PAUSE",
   RESUME: "RESUME",
   FINISH: "FINISH",
@@ -83,7 +85,7 @@ export function transitionCapture(
       }
       requireSessionPayload(payload);
       return {
-        status: CaptureStatus.RECORDING,
+        status: CaptureStatus.PREPARING,
         generation: current.generation + 1,
         sessionId: payload.sessionId,
         tabId: payload.tabId,
@@ -95,12 +97,25 @@ export function transitionCapture(
         scopeLabel: payload.scopeLabel || "Current tab",
         policyVersion: payload.policyVersion || "local-v1",
         stepCount: 0,
+        stepIds: [],
         startedAt: timestamp(now),
         updatedAt: timestamp(now),
         pausedReason: null,
         lastError: null,
       };
     }
+
+    case CaptureEvent.READY:
+      if (current.status !== CaptureStatus.PREPARING) {
+        throw new CaptureTransitionError(current.status, event);
+      }
+      return {
+        ...bump(current, now),
+        status: CaptureStatus.RECORDING,
+        readyAt: timestamp(now),
+        pausedReason: null,
+        lastError: null,
+      };
 
     case CaptureEvent.PAUSE:
       if (current.status !== CaptureStatus.RECORDING) {
@@ -119,6 +134,9 @@ export function transitionCapture(
       return {
         ...bump(current, now),
         status: CaptureStatus.RECORDING,
+        windowId: Number.isInteger(payload.windowId)
+          ? payload.windowId
+          : current.windowId,
         origin: payload.origin || current.origin,
         sanitizedUrl: payload.sanitizedUrl || current.sanitizedUrl,
         pausedReason: null,
@@ -233,5 +251,38 @@ export function withStepCount(state, stepCount, now = Date.now()) {
     ...state,
     stepCount,
     updatedAt: timestamp(now),
+  };
+}
+
+export function withCapturedStep(state, stepId, now = Date.now()) {
+  if (typeof stepId !== "string" || !stepId) {
+    throw new TypeError("A captured step requires a non-empty ID.");
+  }
+  const currentStepIds = Array.isArray(state?.stepIds) ? state.stepIds : [];
+  if (currentStepIds.includes(stepId)) return state;
+  const stepIds = [...currentStepIds, stepId];
+  const legacyStepCount = Number.isInteger(state?.stepCount)
+    ? state.stepCount + 1
+    : 1;
+  return {
+    ...state,
+    stepIds,
+    stepCount: Math.max(legacyStepCount, stepIds.length),
+    updatedAt: timestamp(now),
+  };
+}
+
+export function createWindowActivationEpochs() {
+  const epochs = new Map();
+  return {
+    current(windowId) {
+      return Number.isInteger(windowId) ? epochs.get(windowId) || 0 : 0;
+    },
+    note(windowId) {
+      if (!Number.isInteger(windowId)) return 0;
+      const next = (epochs.get(windowId) || 0) + 1;
+      epochs.set(windowId, next);
+      return next;
+    },
   };
 }

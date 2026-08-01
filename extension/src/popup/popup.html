@@ -74,8 +74,61 @@
           <span>Connected workspace</span>
           <input id="workspace-id" maxlength="128" placeholder="Pair Rivet first" readonly />
         </label>
-        <button id="start-button" class="primary" type="submit">Start capturing this tab</button>
+        <button id="start-button" class="primary" type="submit" disabled>
+          Start capturing this tab
+        </button>
       </form>
+
+      <section
+        id="step-feed"
+        class="step-feed"
+        aria-label="Captured steps"
+        aria-live="polite"
+        hidden
+      >
+        <header class="step-feed-heading">
+          <span>
+            <strong>Live steps</strong>
+            <small>Redacted locally before they appear here</small>
+          </span>
+          <span id="feed-count">0</span>
+        </header>
+        <div id="step-feed-scroll" class="step-feed-scroll">
+          <p id="step-feed-empty" class="step-feed-empty">
+            Your numbered steps will appear here as you click and navigate.
+          </p>
+          <ol id="step-list" class="step-list"></ol>
+        </div>
+      </section>
+
+      <details id="privacy-settings" class="privacy-settings card">
+        <summary>
+          <span>Smart Blur settings</span>
+          <small>Applied before screenshots are stored</small>
+        </summary>
+        <div class="settings-grid">
+          <label><input data-policy="redactEmails" type="checkbox" disabled /> Emails</label>
+          <label><input data-policy="redactPhoneNumbers" type="checkbox" disabled /> Phone numbers</label>
+          <label><input data-policy="redactFinancialNumbers" type="checkbox" disabled /> Financial numbers</label>
+          <label><input data-policy="redactIds" type="checkbox" disabled /> Long IDs</label>
+          <label><input data-policy="redactFormFields" type="checkbox" disabled /> Form fields</label>
+          <label><input data-policy="redactAllNumbers" type="checkbox" disabled /> All numbers</label>
+          <label><input data-policy="redactImages" type="checkbox" disabled /> Images and video</label>
+          <label><input data-policy="redactTableRows" type="checkbox" disabled /> Table rows</label>
+          <label><input data-policy="redactLongText" type="checkbox" disabled /> Long text blocks</label>
+          <label><input data-policy="redactCommonNames" type="checkbox" disabled /> Common names (assisted)</label>
+          <label class="color-setting">
+            Click color
+            <input data-policy-color type="color" value="#ef6f47" disabled />
+          </label>
+        </div>
+        <button id="exclude-button" class="text-button exclude" type="button" disabled>
+          Exclude the current site
+        </button>
+        <p>Password fields and embedded frames are always redacted.</p>
+      </details>
+
+      <p id="error" class="error" role="alert" hidden></p>
 
       <section id="capture-actions" class="capture-actions" hidden>
         <button id="pause-button" class="secondary" type="button">Pause</button>
@@ -91,35 +144,6 @@
           Discard
         </button>
       </section>
-
-      <details class="privacy-settings card">
-        <summary>
-          <span>Smart Blur settings</span>
-          <small>Applied before screenshots are stored</small>
-        </summary>
-        <div class="settings-grid">
-          <label><input data-policy="redactEmails" type="checkbox" /> Emails</label>
-          <label><input data-policy="redactPhoneNumbers" type="checkbox" /> Phone numbers</label>
-          <label><input data-policy="redactFinancialNumbers" type="checkbox" /> Financial numbers</label>
-          <label><input data-policy="redactIds" type="checkbox" /> Long IDs</label>
-          <label><input data-policy="redactFormFields" type="checkbox" /> Form fields</label>
-          <label><input data-policy="redactAllNumbers" type="checkbox" /> All numbers</label>
-          <label><input data-policy="redactImages" type="checkbox" /> Images and video</label>
-          <label><input data-policy="redactTableRows" type="checkbox" /> Table rows</label>
-          <label><input data-policy="redactLongText" type="checkbox" /> Long text blocks</label>
-          <label><input data-policy="redactCommonNames" type="checkbox" /> Common names (assisted)</label>
-          <label class="color-setting">
-            Click color
-            <input data-policy-color type="color" value="#ef6f47" />
-          </label>
-        </div>
-        <button id="exclude-button" class="text-button exclude" type="button">
-          Exclude the current site
-        </button>
-        <p>Password fields and embedded frames are always redacted.</p>
-      </details>
-
-      <p id="error" class="error" role="alert" hidden></p>
     </main>
     <script type="module" src="./popup.js"></script>
   </body>

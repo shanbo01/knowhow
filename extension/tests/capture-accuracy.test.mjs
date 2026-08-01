@@ -122,6 +122,26 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(offscreenSource, /\{ clickTarget \}/);
 });
 
+test("content capture does not inject duplicate recording controls", async () => {
+  const source = await readFile(
+    new URL("../src/content/capture.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.doesNotMatch(source, /rivet-capture-indicator/);
+  assert.doesNotMatch(source, /attachShadow\(/);
+  assert.doesNotMatch(source, /document\.createElement\(/);
+  assert.doesNotMatch(source, /function (?:render|hide|restore)Indicator\(/);
+  assert.match(
+    source,
+    /function waitForPagePaint\(\) \{\s+return new Promise\(\(resolve\) =>\s+requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)/,
+  );
+  assert.match(
+    source,
+    /if \(message\?\.type === "RIVET_PREPARE_SCREENSHOT"\) \{\s+void waitForPagePaint\(\)\.then\(\(\) =>\s+sendResponse\(\{ ok: true, context: pageContext\(\) \}\),\s+\);\s+return true;/,
+  );
+});
+
 test("newer confirmed clicks supersede older queued capture jobs", () => {
   const sequencer = createInteractionSequencer();
   const firstSequence = sequencer.reserve();

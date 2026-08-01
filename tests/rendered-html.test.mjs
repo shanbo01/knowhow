@@ -91,6 +91,7 @@ test("the extension manifest keeps high-risk browser capabilities out", async ()
   assert.ok(!manifest.permissions.includes("desktopCapture"));
   assert.ok(!manifest.permissions.includes("tabCapture"));
   assert.ok(!manifest.host_permissions.includes("<all_urls>"));
+  assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
   assert.match(apiClient, /X-Rivet-Redacted/);
   assert.match(apiClient, /one-time pairing code/i);
   assert.doesNotMatch(captureSource, /\.value\b/);

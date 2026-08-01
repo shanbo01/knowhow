@@ -10,14 +10,8 @@
   const state = {
     sessionId: null,
     status: "idle",
-    scopeLabel: "Current tab",
     policy: {},
-    indicatorHidden: false,
   };
-  let host;
-  let statusText;
-  let scopeText;
-  let pauseButton;
   let pendingPointer = null;
   let interactionSequence = 0;
 
@@ -227,8 +221,7 @@
       if (
         !parent ||
         !visible(parent) ||
-        parent.closest("script,style,noscript,svg") ||
-        (host && (parent === host || host.contains(parent)))
+        parent.closest("script,style,noscript,svg")
       ) {
         continue;
       }
@@ -386,82 +379,14 @@
     };
   }
 
-  function renderIndicator() {
-    if (!host) {
-      host = document.createElement("div");
-      host.id = "rivet-capture-indicator";
-      host.style.all = "initial";
-      host.style.position = "fixed";
-      host.style.right = "16px";
-      host.style.bottom = "16px";
-      host.style.zIndex = "2147483647";
-      host.style.fontFamily =
-        "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif";
-      const shadow = host.attachShadow({ mode: "closed" });
-      shadow.innerHTML =
-        "<style>" +
-        ":host{all:initial}.bar{display:flex;align-items:center;gap:9px;padding:9px 10px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:12px;box-shadow:0 12px 32px rgba(15,23,42,.35);font:12px/1.25 Inter,system-ui,sans-serif}" +
-        ".dot{width:9px;height:9px;border-radius:50%;background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.2)}.copy{display:grid;gap:2px;max-width:190px}.copy strong{font-size:12px}.copy span{color:#cbd5e1;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
-        "button{appearance:none;border:1px solid #475569;background:#1e293b;color:#f8fafc;border-radius:7px;padding:6px 8px;font:600 10px Inter,system-ui,sans-serif;cursor:pointer}button:hover{background:#334155}.danger{color:#fecaca}.paused .dot{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.2)}" +
-        "</style>" +
-        "<div class=bar><span class=dot></span><span class=copy><strong data-status>Recording</strong><span data-scope>Current tab</span></span><button data-pause>Pause</button><button data-finish>Finish</button><button class=danger data-discard>Discard</button></div>";
-      statusText = shadow.querySelector("[data-status]");
-      scopeText = shadow.querySelector("[data-scope]");
-      pauseButton = shadow.querySelector("[data-pause]");
-      pauseButton.addEventListener("click", async (event) => {
-        event.stopPropagation();
-        const type =
-          state.status === "paused" ? "RESUME_CAPTURE" : "PAUSE_CAPTURE";
-        const response = await send({ type });
-        if (response?.ok) setStatus(response.state.status, response.state.pausedReason);
-      });
-      shadow.querySelector("[data-finish]").addEventListener("click", (event) => {
-        event.stopPropagation();
-        void send({ type: "FINISH_CAPTURE" });
-      });
-      shadow.querySelector("[data-discard]").addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (confirm("Discard this capture and all locally stored screenshots?")) {
-          void send({ type: "DISCARD_CAPTURE" });
-        }
-      });
-      (document.documentElement || document.body).append(host);
-    }
-    host.style.display =
-      state.status === "recording" || state.status === "paused"
-        ? "block"
-        : "none";
-    if (scopeText) scopeText.textContent = state.scopeLabel;
-    if (statusText) {
-      statusText.textContent =
-        state.status === "paused" ? "Capture paused" : "Rivet recording";
-    }
-    if (pauseButton) {
-      pauseButton.textContent = state.status === "paused" ? "Resume" : "Pause";
-      pauseButton.closest(".bar")?.classList.toggle(
-        "paused",
-        state.status === "paused",
-      );
-    }
-  }
-
-  function setStatus(status, reason) {
+  function setStatus(status) {
     state.status = status;
-    renderIndicator();
-    if (reason && statusText) statusText.title = reason;
   }
 
-  async function hideIndicatorForScreenshot() {
-    if (host) host.style.display = "none";
-    state.indicatorHidden = true;
-    await new Promise((resolve) =>
+  function waitForPagePaint() {
+    return new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve)),
     );
-  }
-
-  function restoreIndicator() {
-    state.indicatorHidden = false;
-    renderIndicator();
   }
 
   function sendCapturedInteraction(context) {
@@ -478,7 +403,6 @@
     pendingPointer = null;
     if (state.status !== "recording" || !event.isTrusted) return;
     if (event.isPrimary === false || event.button !== 0) return;
-    if (host && event.composedPath().includes(host)) return;
     const element = captureElement(event.target);
     const viewport = viewportSnapshot();
     const context = targetContext(
@@ -520,11 +444,6 @@
       pendingPointer = null;
       return;
     }
-    if (host && event.composedPath().includes(host)) {
-      pendingPointer = null;
-      return;
-    }
-
     if (event.detail === 0) {
       pendingPointer = null;
       const element = captureElement(event.target);
@@ -555,7 +474,6 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "RIVET_CONFIGURE") {
       state.sessionId = message.sessionId;
-      state.scopeLabel = message.scopeLabel || "Current tab";
       state.policy = message.policy || {};
       setStatus(message.status || "recording");
       sendResponse({ ok: true });
@@ -567,13 +485,14 @@
       return false;
     }
     if (message?.type === "RIVET_PREPARE_SCREENSHOT") {
-      void hideIndicatorForScreenshot().then(() =>
+      void waitForPagePaint().then(() =>
         sendResponse({ ok: true, context: pageContext() }),
       );
       return true;
     }
     if (message?.type === "RIVET_RESTORE_INDICATOR") {
-      restoreIndicator();
+      // Kept as a no-op for compatibility with capture jobs started by an
+      // older service worker. Rivet no longer injects page UI to restore.
       sendResponse({ ok: true });
       return false;
     }
