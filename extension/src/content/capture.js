@@ -18,6 +18,11 @@
   let statusText;
   let scopeText;
   let pauseButton;
+  let pendingPointer = null;
+  let interactionSequence = 0;
+
+  const POINTER_MOVE_TOLERANCE = 6;
+  const POINTER_COMMIT_WINDOW_MS = 3_000;
 
   function send(message) {
     return chrome.runtime.sendMessage(message).catch(() => null);
@@ -83,6 +88,26 @@
       width: right - left,
       height: bottom - top,
       reason,
+    };
+  }
+
+  function viewportSnapshot() {
+    const visual = globalThis.visualViewport;
+    return {
+      width: Math.max(1, innerWidth),
+      height: Math.max(1, innerHeight),
+      devicePixelRatio: Math.max(1, Number(globalThis.devicePixelRatio) || 1),
+      ...(visual
+        ? {
+            visualViewport: {
+              offsetX: Number(visual.offsetLeft) || 0,
+              offsetY: Number(visual.offsetTop) || 0,
+              width: Math.max(1, Number(visual.width) || innerWidth),
+              height: Math.max(1, Number(visual.height) || innerHeight),
+              scale: Math.max(0.01, Number(visual.scale) || 1),
+            },
+          }
+        : {}),
     };
   }
 
@@ -307,13 +332,18 @@
     );
   }
 
-  function targetContext(target) {
-    const element =
+  function captureElement(target) {
+    return (
       target instanceof Element
         ? target.closest(
             "button,a,input,select,textarea,[role=button],[role=link],[tabindex]",
           ) || target
-        : document.body;
+        : document.body
+    );
+  }
+
+  function targetContext(target, point, viewport = viewportSnapshot()) {
+    const element = captureElement(target);
     const targetRect = rectFor(element, "click-target");
     const label = labelFor(element);
     const role =
@@ -327,13 +357,14 @@
             : "control");
     const safeRole = sanitizedText(role) || "control";
     const name = label || "the highlighted " + safeRole;
+    const clickPoint = {
+      x: Math.min(viewport.width, Math.max(0, Number(point?.x) || 0)),
+      y: Math.min(viewport.height, Math.max(0, Number(point?.y) || 0)),
+    };
     return {
-      masks: collectMasks(),
       targetRect,
-      viewport: {
-        width: Math.max(1, document.documentElement.clientWidth || innerWidth),
-        height: Math.max(1, document.documentElement.clientHeight || innerHeight),
-      },
+      clickPoint,
+      viewport,
       title: "Select " + name,
       instructions: "Select " + name + ".",
       sanitizedUrl: sanitizedPageUrl(),
@@ -346,10 +377,8 @@
     return {
       masks: collectMasks(),
       targetRect: null,
-      viewport: {
-        width: Math.max(1, document.documentElement.clientWidth || innerWidth),
-        height: Math.max(1, document.documentElement.clientHeight || innerHeight),
-      },
+      clickPoint: null,
+      viewport: viewportSnapshot(),
       title: safeTitle,
       instructions: "Continue on " + safeTitle + ".",
       sanitizedUrl: sanitizedPageUrl(),
@@ -435,16 +464,92 @@
     renderIndicator();
   }
 
-  function onClick(event) {
-    if (state.status !== "recording" || !event.isTrusted) return;
-    if (host && event.composedPath().includes(host)) return;
-    const context = targetContext(event.target);
-    if (!context.targetRect) return;
+  function sendCapturedInteraction(context) {
+    interactionSequence += 1;
     void send({
       type: "CAPTURE_EVENT",
       sessionId: state.sessionId,
+      interactionSequence,
       context,
     });
+  }
+
+  function onPointerDown(event) {
+    pendingPointer = null;
+    if (state.status !== "recording" || !event.isTrusted) return;
+    if (event.isPrimary === false || event.button !== 0) return;
+    if (host && event.composedPath().includes(host)) return;
+    const element = captureElement(event.target);
+    const viewport = viewportSnapshot();
+    const context = targetContext(
+      element,
+      { x: event.clientX, y: event.clientY },
+      viewport,
+    );
+    if (!context.targetRect) return;
+    pendingPointer = {
+      pointerId: event.pointerId,
+      element,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      startedAt: performance.now(),
+      context,
+    };
+  }
+
+  function onPointerMove(event) {
+    if (!pendingPointer || event.pointerId !== pendingPointer.pointerId) return;
+    if (
+      Math.hypot(
+        event.clientX - pendingPointer.clientX,
+        event.clientY - pendingPointer.clientY,
+      ) > POINTER_MOVE_TOLERANCE
+    ) {
+      pendingPointer = null;
+    }
+  }
+
+  function onPointerCancel(event) {
+    if (pendingPointer && event.pointerId === pendingPointer.pointerId) {
+      pendingPointer = null;
+    }
+  }
+
+  function onClick(event) {
+    if (state.status !== "recording" || !event.isTrusted) {
+      pendingPointer = null;
+      return;
+    }
+    if (host && event.composedPath().includes(host)) {
+      pendingPointer = null;
+      return;
+    }
+
+    if (event.detail === 0) {
+      pendingPointer = null;
+      const element = captureElement(event.target);
+      const viewport = viewportSnapshot();
+      const targetRect = rectFor(element, "click-target");
+      if (!targetRect) return;
+      sendCapturedInteraction(
+        targetContext(
+          element,
+          {
+            x: targetRect.x + targetRect.width / 2,
+            y: targetRect.y + targetRect.height / 2,
+          },
+          viewport,
+        ),
+      );
+      return;
+    }
+
+    const staged = pendingPointer;
+    pendingPointer = null;
+    if (!staged) return;
+    if (performance.now() - staged.startedAt > POINTER_COMMIT_WINDOW_MS) return;
+    if (!event.composedPath().includes(staged.element)) return;
+    sendCapturedInteraction(staged.context);
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -476,9 +581,16 @@
       sendResponse({ ok: true, context: pageContext() });
       return false;
     }
+    if (message?.type === "RIVET_VERIFY_DOCUMENT") {
+      sendResponse({ ok: true, sanitizedUrl: sanitizedPageUrl() });
+      return false;
+    }
     return false;
   });
 
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("pointermove", onPointerMove, true);
+  document.addEventListener("pointercancel", onPointerCancel, true);
   document.addEventListener("click", onClick, true);
 
   globalThis[INSTANCE_KEY] = {

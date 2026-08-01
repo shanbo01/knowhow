@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,7 @@ const extensionRoot = resolve(scriptDirectory, "..");
 const destination = resolve(extensionRoot, "dist");
 const publicDirectory = resolve(extensionRoot, "..", "public");
 const archivePath = resolve(publicDirectory, "rivet-extension.zip");
+const expectedExtensionId = "phbofjenfnnnnndghhinoldlfbpaedpo";
 
 if (dirname(destination) !== extensionRoot || destination === extensionRoot) {
   throw new Error("Refusing to build outside extension/dist.");
@@ -30,6 +32,16 @@ function crc32(bytes) {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function chromeExtensionId(publicKey) {
+  const digest = createHash("sha256")
+    .update(Buffer.from(publicKey, "base64"))
+    .digest("hex")
+    .slice(0, 32);
+  return Array.from(digest, (character) =>
+    String.fromCharCode("a".charCodeAt(0) + Number.parseInt(character, 16)),
+  ).join("");
 }
 
 async function listFiles(root, directory = root) {
@@ -129,6 +141,16 @@ const captureStoreSource = await readFile(
 
 if (manifest.manifest_version !== 3) {
   throw new Error("Rivet Capture must remain a Manifest V3 extension.");
+}
+if (
+  typeof manifest.key !== "string" ||
+  chromeExtensionId(manifest.key) !== expectedExtensionId
+) {
+  throw new Error(
+    "Rivet Capture must retain the manifest key for extension ID " +
+      expectedExtensionId +
+      ".",
+  );
 }
 if (manifest.incognito !== "not_allowed") {
   throw new Error("Incognito capture must remain disabled.");

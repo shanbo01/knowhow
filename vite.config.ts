@@ -4,6 +4,10 @@ import { sites } from "./build/sites-vite-plugin";
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+const trustedDevelopmentOrigins = [
+  /^https?:\/\/(?:(?:[^:]+\.)?localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/,
+  /^chrome-extension:\/\/phbofjenfnnnnndghhinoldlfbpaedpo$/,
+];
 
 function consoleTaskCompatibility(): Plugin {
   return {
@@ -33,9 +37,12 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      cors: { origin: trustedDevelopmentOrigins },
+      ...(isCodexSeatbeltSandbox
+        ? { watch: { useFsEvents: false, usePolling: true } }
+        : {}),
+    },
     plugins: [
       vinext(),
       consoleTaskCompatibility(),

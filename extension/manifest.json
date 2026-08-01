@@ -3,12 +3,14 @@
   "name": "Rivet Capture",
   "short_name": "Rivet",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnGJnChdmiVMsN44qEeWGQefyuK5jHIeLJZ6+s6gASGMZ1AyBid/XyJljrDDP0Whcf3ZbMj0Ic+M32nzjRV03CKtHwCuqljJo7EBZesnmiTYKTulQRpIenbR0T093RnB7c02MIsQTMKEUUMc5EJwJo7Y203QdXQLbMFiT5BdpyUmdKepiKaF4e+AL9I6QNvrSk9rSTSHEpLN0RbtUIiLZyCmYkfkJnmiNQxW8p/iS3YRYVYadowv+8qtC4+rI3Ht+WxnEZd+u40Vw3Mx4HqfFRbFqhuN4RrGljdZ+mj/yyMqmybW+DxfsF/8/y1Dl84TwVhxZIzBA5+NrtQ4GgJXG4QIDAQAB",
   "description": "Capture privacy-reviewed browser workflows as private Rivet guide drafts.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
   "permissions": [
     "activeTab",
     "offscreen",
+    "sidePanel",
     "scripting",
     "storage",
     "webNavigation"
@@ -21,8 +23,10 @@
     "type": "module"
   },
   "action": {
-    "default_popup": "src/popup/popup.html",
-    "default_title": "Rivet Capture"
+    "default_title": "Open Rivet Capture"
+  },
+  "side_panel": {
+    "default_path": "src/popup/popup.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"

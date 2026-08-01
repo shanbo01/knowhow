@@ -101,6 +101,7 @@ test("localhost bootstraps governed storage and the capture extension on one ori
     packageText,
     localConfigText,
     viteConfig,
+    nextConfig,
     workerEntry,
     consoleCompatibility,
     extensionConfig,
@@ -109,6 +110,7 @@ test("localhost bootstraps governed storage and the capture extension on one ori
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../wrangler.local.jsonc", import.meta.url), "utf8"),
     readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../next.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
     readFile(
       new URL("../worker/console-task-compat.ts", import.meta.url),
@@ -132,6 +134,10 @@ test("localhost bootstraps governed storage and the capture extension on one ori
   assert.equal(localConfig.r2_buckets[0].binding, "MEDIA");
   assert.match(viteConfig, /configPath: "\.\/wrangler\.local\.jsonc"/);
   assert.match(viteConfig, /virtual:vinext-app-ssr-entry/);
+  assert.match(viteConfig, /chrome-extension/);
+  assert.match(viteConfig, /phbofjenfnnnnndghhinoldlfbpaedpo/);
+  assert.doesNotMatch(viteConfig, /cors:\s*true/);
+  assert.match(nextConfig, /allowedDevOrigins/);
   assert.match(workerEntry, /import "\.\/console-task-compat"/);
   assert.match(consoleCompatibility, /fallbackCreateTask/);
   assert.match(extensionConfig, /http:\/\/localhost:3001/);

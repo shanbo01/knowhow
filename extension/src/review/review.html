@@ -8,20 +8,27 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="#" aria-label="Rivet Capture home">
-        <span>R</span>
-        <strong>Rivet Capture</strong>
-      </a>
+      <div class="brand" aria-label="Rivet Capture">
+        <span class="brand-mark">R</span>
+        <span class="brand-copy">
+          <strong>Rivet Capture</strong>
+          <small>Private capture review</small>
+        </span>
+      </div>
+      <div class="capture-heading">
+        <span class="status-dot" aria-hidden="true"></span>
+        <strong id="guide-title">Review captured guide</strong>
+      </div>
       <div class="top-actions">
-        <span id="connection-label">Checking Rivet…</span>
-        <button id="connect-button" class="secondary" type="button">Connect</button>
-        <button id="discard-button" class="danger" type="button">Discard capture</button>
+        <span id="connection-label">Checking Rivet...</span>
+        <button id="connect-button" class="button secondary compact" type="button">Connect</button>
+        <button id="discard-button" class="button danger compact" type="button">Discard</button>
       </div>
     </header>
 
     <form id="pairing-form" class="pairing-form" hidden>
       <label>
-        One-time pairing code
+        <span>One-time pairing code</span>
         <input
           id="pairing-code"
           minlength="12"
@@ -34,59 +41,204 @@
           required
         />
       </label>
-      <button class="primary" type="submit">Pair workspace</button>
-      <button id="cancel-pairing-button" class="secondary" type="button">Cancel</button>
+      <button class="button primary" type="submit">Pair workspace</button>
+      <button id="cancel-pairing-button" class="button secondary" type="button">Cancel</button>
     </form>
 
-    <main>
-      <section class="intro">
-        <p class="eyebrow">LOCAL PRIVACY REVIEW</p>
-        <h1 id="guide-title">Review captured guide</h1>
-        <p>
-          Automatic masks are already burned into each image and cannot be
-          removed. Add solid masks anywhere Smart Blur may have missed, then
-          reuse the last region across every step when needed. Edit the
-          generated instructions before creating a private draft.
-        </p>
-        <div class="privacy-callout">
-          <strong>No screenshots upload until you submit.</strong>
-          <span>Capture status is synced, while only the redacted images shown below are stored locally.</span>
+    <main class="editor-shell">
+      <aside class="step-panel" aria-label="Captured steps">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Workflow</p>
+            <h2>Captured steps</h2>
+          </div>
+          <span id="step-count" class="count-badge">0</span>
         </div>
+        <div id="step-list" class="step-list" role="listbox" aria-label="Captured steps"></div>
+        <section class="privacy-note">
+          <span class="privacy-icon" aria-hidden="true">P</span>
+          <div>
+            <strong>Automatic privacy masks are locked</strong>
+            <p>The stored base is already redacted. Unblur only removes masks you add here.</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="workspace-panel">
+        <div class="editor-toolbar" role="toolbar" aria-label="Screenshot editing tools">
+          <div class="tool-group" id="tool-group">
+            <button class="tool-button active" type="button" data-tool="select" aria-pressed="true">Select</button>
+            <button class="tool-button" type="button" data-tool="blur" aria-pressed="false">Blur</button>
+            <button class="tool-button" type="button" data-tool="unblur" aria-pressed="false">Unblur</button>
+            <button class="tool-button" type="button" data-tool="draw" aria-pressed="false">Draw</button>
+            <button class="tool-button" type="button" data-tool="click" aria-pressed="false">Click</button>
+            <button class="tool-button" type="button" data-tool="crop" aria-pressed="false">Crop</button>
+            <button class="tool-button" type="button" data-tool="pan" aria-pressed="false">Pan</button>
+          </div>
+          <span class="toolbar-divider" aria-hidden="true"></span>
+          <div class="tool-group history-tools">
+            <button id="undo-button" class="icon-text-button" type="button" disabled title="Undo (Ctrl+Z)">Undo</button>
+            <button id="redo-button" class="icon-text-button" type="button" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+          </div>
+          <span class="toolbar-spacer"></span>
+          <div class="tool-group framing-tools">
+            <button id="fit-button" class="icon-text-button" type="button">Fit</button>
+            <button id="focus-button" class="icon-text-button" type="button">Focus click</button>
+            <button id="zoom-out-button" class="zoom-button" type="button" aria-label="Zoom out">-</button>
+            <input id="zoom-slider" type="range" min="100" max="800" step="10" value="100" aria-label="Screenshot zoom" />
+            <button id="zoom-in-button" class="zoom-button" type="button" aria-label="Zoom in">+</button>
+            <output id="zoom-label" for="zoom-slider">100%</output>
+          </div>
+        </div>
+
+        <div id="stage-shell" class="stage-shell" data-tool="select">
+          <div class="stage-backdrop">
+            <canvas id="editor-canvas" aria-label="Editable redacted screenshot"></canvas>
+            <div id="stage-loading" class="stage-message">Preparing screenshot...</div>
+            <div id="stage-empty" class="stage-message" hidden>No captured screenshot is available.</div>
+          </div>
+          <div class="stage-hud">
+            <span id="tool-hint">Select and drag the click target, or choose a tool.</span>
+            <span id="image-size">--</span>
+          </div>
+        </div>
+
+        <section class="copy-editor" aria-label="Step instructions">
+          <label>
+            <span>Step title</span>
+            <input id="step-title" maxlength="200" placeholder="Describe this action" />
+          </label>
+          <label>
+            <span>Instructions</span>
+            <textarea id="step-instructions" maxlength="2000" rows="3" placeholder="Explain what to do and what to expect."></textarea>
+          </label>
+        </section>
       </section>
 
-      <section id="steps" class="steps" aria-live="polite"></section>
-      <section id="empty-state" class="empty-state" hidden>
-        <strong>No captured steps</strong>
-        <p>Discard this session or return to the captured tab and start again.</p>
-      </section>
+      <aside class="inspector-panel" aria-label="Screenshot properties">
+        <div class="panel-heading inspector-heading">
+          <div>
+            <p class="eyebrow">Inspector</p>
+            <h2 id="inspector-title">Step details</h2>
+          </div>
+        </div>
 
-      <section id="submit-panel" class="submit-panel">
-        <label class="review-confirmation">
-          <input id="privacy-confirmation" type="checkbox" />
-          <span>
-            <strong>I reviewed every screenshot for sensitive information.</strong>
-            <small>
-              Captured guides always enter Rivet as private drafts and still
-              require the normal review and publishing workflow.
-            </small>
-          </span>
-        </label>
-        <div class="submit-actions">
-          <span id="summary">0 steps ready</span>
-          <button id="submit-button" class="primary" type="button" disabled>
+        <section class="inspector-section">
+          <div class="section-title">
+            <div>
+              <strong>Privacy masks</strong>
+              <small id="mask-summary">0 locked, 0 manual</small>
+            </div>
+            <button id="add-blur-button" class="text-button" type="button">Add blur</button>
+          </div>
+          <div class="locked-row">
+            <span class="lock-chip">Locked</span>
+            <span>Automatic redactions are part of the safe base image.</span>
+          </div>
+          <div id="blur-list" class="property-list"></div>
+        </section>
+
+        <section class="inspector-section">
+          <div class="section-title">
+            <div>
+              <strong>Freehand drawing</strong>
+              <small>Use normalized vector strokes</small>
+            </div>
+            <button id="clear-drawings-button" class="text-button" type="button">Clear</button>
+          </div>
+          <div class="control-row">
+            <label class="color-control">
+              <span>Color</span>
+              <input id="draw-color" type="color" value="#1f7653" />
+            </label>
+            <label class="range-control">
+              <span>Width</span>
+              <input id="draw-width" type="range" min="2" max="24" step="1" value="6" />
+            </label>
+          </div>
+          <p id="drawing-summary" class="section-caption">No drawing strokes</p>
+        </section>
+
+        <section class="inspector-section">
+          <div class="section-title">
+            <div>
+              <strong>Click target</strong>
+              <small>Drag it directly on the screenshot</small>
+            </div>
+            <button id="remove-click-button" class="text-button" type="button">Remove</button>
+          </div>
+          <div class="control-row">
+            <label class="color-control">
+              <span>Color</span>
+              <input id="click-color" type="color" value="#ef6f47" />
+            </label>
+            <label class="range-control">
+              <span>Size</span>
+              <input id="click-radius" type="range" min="10" max="100" step="1" value="35" />
+            </label>
+          </div>
+          <button id="place-click-button" class="button secondary full" type="button">Place or move click target</button>
+        </section>
+
+        <section class="inspector-section">
+          <div class="section-title">
+            <div>
+              <strong>Framing</strong>
+              <small>The submitted image uses this exact crop</small>
+            </div>
+          </div>
+          <div id="crop-readout" class="crop-readout"></div>
+          <div class="button-row">
+            <button id="inspector-focus-button" class="button secondary" type="button">Focus</button>
+            <button id="inspector-fit-button" class="button secondary" type="button">Show all</button>
+          </div>
+        </section>
+
+        <section class="inspector-section step-order-section">
+          <div class="section-title">
+            <div>
+              <strong>Step order</strong>
+              <small>All changes can be undone</small>
+            </div>
+          </div>
+          <div class="button-row three">
+            <button id="move-up-button" class="button secondary" type="button">Up</button>
+            <button id="move-down-button" class="button secondary" type="button">Down</button>
+            <button id="remove-step-button" class="button danger" type="button">Remove</button>
+          </div>
+        </section>
+
+        <section id="submit-panel" class="submit-panel">
+          <label class="review-confirmation">
+            <input id="privacy-confirmation" type="checkbox" />
+            <span>
+              <strong>I reviewed every screenshot.</strong>
+              <small>Only the flattened, redacted framing shown here will upload.</small>
+            </span>
+          </label>
+          <div class="submit-meta">
+            <span id="summary">0 steps ready</span>
+            <span>Private draft</span>
+          </div>
+          <button id="submit-button" class="button primary full" type="button" disabled>
             Create private Rivet draft
           </button>
-        </div>
-      </section>
-
-      <section id="success" class="success" hidden>
-        <strong>Private draft created</strong>
-        <p>The local capture data has been removed from this browser.</p>
-        <a id="edit-link" href="#" target="_blank" rel="noreferrer">Open in Rivet</a>
-      </section>
-
-      <p id="error" class="error" role="alert" hidden></p>
+        </section>
+      </aside>
     </main>
+
+    <section id="empty-state" class="page-state" role="dialog" aria-modal="true" aria-labelledby="empty-state-title" tabindex="-1" hidden>
+      <strong id="empty-state-title">No captured steps</strong>
+      <p>Discard this session or return to the captured tab and start again.</p>
+    </section>
+
+    <section id="success" class="page-state success" role="dialog" aria-modal="true" aria-labelledby="success-title" tabindex="-1" hidden>
+      <strong id="success-title">Private draft created</strong>
+      <p>The local capture data has been removed from this browser.</p>
+      <a id="edit-link" href="#" target="_blank" rel="noreferrer">Open in Rivet</a>
+    </section>
+
+    <p id="error" class="error" role="alert" hidden></p>
     <script type="module" src="./review.js"></script>
   </body>
 </html>

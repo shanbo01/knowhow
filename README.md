@@ -99,7 +99,7 @@ npm --prefix extension run build
 
 Then load `extension/dist` as an unpacked extension in `chrome://extensions` or `edge://extensions`, or install the packaged `public/rivet-extension.zip` through an appropriate enterprise/developer workflow.
 
-From a Rivet workspace, generate a one-time pairing code and enter it in the extension. Capture is limited to the active foreground tab and pauses on cross-origin navigation. Raw screenshots exist only in memory while local redaction is applied; only the redacted raster is retained or uploaded. A human privacy review is mandatory before a captured draft can be published.
+From a Rivet workspace, generate a one-time pairing code and enter it in the extension's native Chrome side panel. The page and Rivet remain visible side by side while capture is limited to the active foreground tab; cross-origin navigation pauses until explicitly resumed. Raw screenshots exist only in memory while local redaction is applied, and only the redacted base raster is retained. Post-capture crop, manual blur, drawing, and click-target layers stay reversible until they are flattened for private-draft upload. A human privacy review is mandatory before a captured draft can be published.
 
 See `extension/README.md` for capture behavior, privacy guarantees, and MVP limits.
 

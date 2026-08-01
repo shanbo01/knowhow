@@ -35,11 +35,14 @@ For Edge, use edge://extensions and the same extension/dist directory.
 3. Optionally configure Smart Blur and the click-target color.
 4. Enter a guide title and choose Start capturing this tab.
 5. Use Pause and Resume from either the page indicator or popup.
-6. Choose Finish & review.
-7. Edit the generated steps and drag solid masks over anything Smart Blur
-   missed. The last drawn region can also be burned into the same normalized
-   location in every screenshot.
-8. Confirm the privacy review and submit a private Rivet draft.
+6. Keep Rivet docked in Chrome's native side panel while the captured page
+   remains usable beside it.
+7. Choose Finish & review to open the full post-capture editor.
+8. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
+   crop, add or remove manual blur regions, draw freehand, and move or remove
+   the click target. Undo and redo operate on these editable layers.
+9. Confirm the privacy review and submit a private Rivet draft. The selected
+   crop and editable layers are flattened once into the upload raster.
 
 The default scope is one foreground tab. Same-origin navigation continues
 automatically. A cross-origin navigation pauses capture and requires an
@@ -56,8 +59,10 @@ explicit Resume action on the destination origin.
   listeners or reads form-field values.
 - A raw screenshot exists only in memory while the offscreen document applies
   local redaction. IndexedDB receives only the redacted image Blob.
-- Automatic masks are burned into the image and cannot be removed. Manual
-  review can add further solid masks to the already-redacted image.
+- Automatic masks are burned into the locally retained base image and cannot
+  be removed. Manual blur, drawing, crop, and click-target edits remain layered
+  and reversible until submission. "Unblur" removes only a manual blur layer;
+  it can never reveal content hidden by automatic Smart Blur.
 - Pause increments the capture generation before acknowledging the action.
   Queued or in-flight work from an older generation is discarded.
 - Discard removes every redacted screenshot for the local capture session.

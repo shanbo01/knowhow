@@ -1,8 +1,5 @@
 import { putCapturedStep } from "../core/capture-store.js";
-import {
-  buildSolidRedactionPlan,
-  scaleRect,
-} from "../core/redaction.js";
+import { buildSolidRedactionPlan } from "../core/redaction.js";
 
 function canvasBlob(canvas, type = "image/jpeg", quality = 0.86) {
   return new Promise((resolve, reject) => {
@@ -19,6 +16,64 @@ function validColor(value) {
   return /^#[0-9a-f]{6}$/i.test(String(value || ""))
     ? value
     : "#ff5d2e";
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+export function normalizedClickTarget(clickPoint, viewport, color) {
+  const x = Number(clickPoint?.x);
+  const y = Number(clickPoint?.y);
+  const width = Number(viewport?.width);
+  const height = Number(viewport?.height);
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return null;
+  }
+  return {
+    x: clamp(x / width, 0, 1),
+    y: clamp(y / height, 0, 1),
+    radius: 0.035,
+    color: validColor(color),
+  };
+}
+
+export function normalizedFocusRegion(targetRect, viewport) {
+  const x = Number(targetRect?.x);
+  const y = Number(targetRect?.y);
+  const regionWidth = Number(targetRect?.width);
+  const regionHeight = Number(targetRect?.height);
+  const viewportWidth = Number(viewport?.width);
+  const viewportHeight = Number(viewport?.height);
+  if (
+    ![x, y, regionWidth, regionHeight, viewportWidth, viewportHeight].every(
+      Number.isFinite,
+    ) ||
+    regionWidth <= 0 ||
+    regionHeight <= 0 ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return null;
+  }
+  const left = clamp(x / viewportWidth, 0, 1);
+  const top = clamp(y / viewportHeight, 0, 1);
+  const right = clamp((x + regionWidth) / viewportWidth, left, 1);
+  const bottom = clamp((y + regionHeight) / viewportHeight, top, 1);
+  if (right <= left || bottom <= top) return null;
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 async function compressCanvas(canvas, maxBytes) {
@@ -69,23 +124,6 @@ async function processScreenshot(message) {
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
 
-    if (message.targetRect) {
-      const target = scaleRect(
-        message.targetRect,
-        message.viewport,
-        { width: canvas.width, height: canvas.height },
-      );
-      context.strokeStyle = validColor(message.clickTargetColor);
-      context.lineWidth = Math.max(4, canvas.width / 450);
-      context.setLineDash([]);
-      context.strokeRect(
-        target.x - 3,
-        target.y - 3,
-        target.width + 6,
-        target.height + 6,
-      );
-    }
-
     const compressed = await compressCanvas(
       canvas,
       Number(message.limits?.maxScreenshotBytes) || 2_000_000,
@@ -95,8 +133,19 @@ async function processScreenshot(message) {
       throw new Error("Redacted screenshot exceeds the local size limit.");
     }
 
+    const clickTarget = normalizedClickTarget(
+      message.clickPoint,
+      message.interactionViewport || message.viewport,
+      message.clickTargetColor,
+    );
+    const focusRegion = normalizedFocusRegion(
+      message.targetRect,
+      message.interactionViewport || message.viewport,
+    );
     await putCapturedStep({
       ...message.step,
+      ...(clickTarget ? { clickTarget } : {}),
+      ...(focusRegion ? { focusRegion } : {}),
       imageBlob: compressed.blob,
       imageWidth: compressedCanvas.width,
       imageHeight: compressedCanvas.height,
@@ -123,20 +172,22 @@ async function processScreenshot(message) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (
-    message?.target !== "offscreen" ||
-    message.type !== "RIVET_PROCESS_SCREENSHOT"
-  ) {
-    return false;
-  }
-  processScreenshot(message)
-    .then(sendResponse)
-    .catch((error) =>
-      sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : "Redaction failed.",
-      }),
-    );
-  return true;
-});
+if (globalThis.chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (
+      message?.target !== "offscreen" ||
+      message.type !== "RIVET_PROCESS_SCREENSHOT"
+    ) {
+      return false;
+    }
+    processScreenshot(message)
+      .then(sendResponse)
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : "Redaction failed.",
+        }),
+      );
+    return true;
+  });
+}

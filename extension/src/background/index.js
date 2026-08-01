@@ -37,11 +37,26 @@ import {
   transitionCapture,
   withStepCount,
 } from "../core/state-machine.js";
+import { createInteractionSequencer } from "../core/interaction-sequence.js";
 import { enqueueScreenshot } from "./screenshot-queue.js";
 
 let offscreenCreation;
 let stateMutationQueue = Promise.resolve();
 let remoteLifecycleQueue = Promise.resolve();
+const interactionSequencer = createInteractionSequencer();
+
+function clickJobIsLatest(request) {
+  return interactionSequencer.isLatest(request);
+}
+
+function configureActionSidePanel() {
+  if (!chrome.sidePanel?.setPanelBehavior) return Promise.resolve();
+  return chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch(() => undefined);
+}
+
+void configureActionSidePanel();
 
 function withStateMutation(operation) {
   const result = stateMutationQueue.then(operation, operation);
@@ -259,10 +274,12 @@ async function getActiveTab() {
   return tab;
 }
 
-async function sendToCapturedTab(state, message) {
+async function sendToCapturedTab(state, message, options) {
   if (!Number.isInteger(state?.tabId)) return null;
   try {
-    return await chrome.tabs.sendMessage(state.tabId, message);
+    return options
+      ? await chrome.tabs.sendMessage(state.tabId, message, options)
+      : await chrome.tabs.sendMessage(state.tabId, message);
   } catch {
     return null;
   }
@@ -536,31 +553,30 @@ async function excludeCurrentSite() {
 async function preparePageContext(state, fallback) {
   const response = await sendToCapturedTab(state, {
     type: "RIVET_PREPARE_SCREENSHOT",
-  });
+  }, typeof fallback.documentId === "string"
+    ? { documentId: fallback.documentId }
+    : undefined);
   if (!response?.ok) {
-    return {
-      masks: fallback.masks || [],
-      viewport: fallback.viewport,
-      targetRect: fallback.targetRect,
-      title: fallback.title,
-      instructions: fallback.instructions,
-      sanitizedUrl: fallback.sanitizedUrl,
-    };
+    return null;
   }
   return {
     ...response.context,
     targetRect: fallback.targetRect || response.context.targetRect,
+    clickPoint: fallback.clickPoint || null,
+    interactionViewport: fallback.viewport || response.context.viewport,
     title: fallback.title || response.context.title,
     instructions: fallback.instructions || response.context.instructions,
-    sanitizedUrl: fallback.sanitizedUrl || response.context.sanitizedUrl,
+    sanitizedUrl: response.context.sanitizedUrl || fallback.sanitizedUrl,
   };
 }
 
 async function captureStep(request) {
+  if (!clickJobIsLatest(request)) return;
   const snapshot = await getCaptureState();
   const generation = request.generation;
   if (!Number.isInteger(generation)) return;
   if (!jobIsCurrent(snapshot, request.sessionId, generation)) return;
+  if (!clickJobIsLatest(request)) return;
   if (snapshot.stepCount >= CAPTURE_LIMITS.maxSteps) {
     await pauseCapture(
       "This capture reached the " +
@@ -591,10 +607,35 @@ async function captureStep(request) {
     );
     return;
   }
+  const activeVerdict = evaluateCaptureUrl(activeTab.url || "", policy);
+  if (!activeVerdict.allowed) {
+    await pauseCapture(activeVerdict.reason);
+    return;
+  }
+  if (activeVerdict.sanitizedUrl !== verdict.sanitizedUrl) return;
 
   const context = await preparePageContext(snapshot, request);
+  if (!context) return;
+  if (!clickJobIsLatest(request)) {
+    await sendToCapturedTab(snapshot, {
+      type: "RIVET_RESTORE_INDICATOR",
+    });
+    return;
+  }
+  if (
+    context.sanitizedUrl &&
+    context.sanitizedUrl !== activeVerdict.sanitizedUrl
+  ) {
+    await sendToCapturedTab(snapshot, {
+      type: "RIVET_RESTORE_INDICATOR",
+    });
+    return;
+  }
   const beforeCapture = await getCaptureState();
-  if (!jobIsCurrent(beforeCapture, snapshot.sessionId, generation)) {
+  if (
+    !jobIsCurrent(beforeCapture, snapshot.sessionId, generation) ||
+    !clickJobIsLatest(request)
+  ) {
     await sendToCapturedTab(snapshot, {
       type: "RIVET_RESTORE_INDICATOR",
     });
@@ -612,12 +653,49 @@ async function captureStep(request) {
   }
 
   const afterCapture = await getCaptureState();
-  if (!jobIsCurrent(afterCapture, snapshot.sessionId, generation)) {
+  if (
+    !jobIsCurrent(afterCapture, snapshot.sessionId, generation) ||
+    !clickJobIsLatest(request)
+  ) {
     dataUrl = null;
     return;
   }
+  const [capturedTab] = await chrome.tabs.query({
+    active: true,
+    windowId: snapshot.windowId,
+  });
+  if (!capturedTab || capturedTab.id !== snapshot.tabId) {
+    dataUrl = null;
+    return;
+  }
+  const capturedVerdict = evaluateCaptureUrl(capturedTab.url || "", policy);
+  if (
+    !capturedVerdict.allowed ||
+    capturedVerdict.sanitizedUrl !== verdict.sanitizedUrl
+  ) {
+    dataUrl = null;
+    return;
+  }
+  if (typeof request.documentId === "string") {
+    const verified = await sendToCapturedTab(
+      snapshot,
+      { type: "RIVET_VERIFY_DOCUMENT" },
+      { documentId: request.documentId },
+    );
+    if (
+      !verified?.ok ||
+      verified.sanitizedUrl !== capturedVerdict.sanitizedUrl
+    ) {
+      dataUrl = null;
+      return;
+    }
+  }
 
   await ensureOffscreenDocument();
+  if (!clickJobIsLatest(request)) {
+    dataUrl = null;
+    return;
+  }
   const stepId = crypto.randomUUID();
   const order = afterCapture.stepCount;
   const processed = await chrome.runtime.sendMessage({
@@ -644,22 +722,37 @@ async function captureStep(request) {
       ),
       sanitizedUrl: verdict.sanitizedUrl,
       sourceEvent: request.sourceEvent || "click",
+      ...(Number.isInteger(request.interactionSequence)
+        ? { interactionSequence: request.interactionSequence }
+        : {}),
       capturedAt: new Date().toISOString(),
     },
     masks: context.masks || request.masks || [],
     targetRect: context.targetRect || request.targetRect || null,
+    clickPoint: context.clickPoint || request.clickPoint || null,
     viewport: context.viewport || request.viewport,
+    interactionViewport:
+      context.interactionViewport || request.viewport || context.viewport,
     clickTargetColor: policy.clickTargetColor,
     limits: CAPTURE_LIMITS,
   });
   dataUrl = null;
+  if (!clickJobIsLatest(request)) {
+    if (processed?.ok) {
+      await deleteCapturedStep(snapshot.sessionId, stepId);
+    }
+    return;
+  }
   if (!processed?.ok) {
     throw new Error(processed?.error || "Local screenshot redaction failed.");
   }
 
   const committed = await withStateMutation(async () => {
     const latest = await getCaptureState();
-    if (!jobIsCurrent(latest, snapshot.sessionId, generation)) {
+    if (
+      !jobIsCurrent(latest, snapshot.sessionId, generation) ||
+      !clickJobIsLatest(request)
+    ) {
       return false;
     }
     await setCaptureState(withStepCount(latest, latest.stepCount + 1));
@@ -732,6 +825,10 @@ async function captureNavigation(details) {
           : "Open the next page",
         instructions: "Continue on the captured page.",
         targetRect: null,
+        clickPoint: null,
+        ...(typeof details.documentId === "string"
+          ? { documentId: details.documentId }
+          : {}),
       });
     await enqueueScreenshot(() => captureStep(job));
   } catch (error) {
@@ -777,6 +874,7 @@ async function handleMessage(message, sender) {
         policy: await setCapturePolicy(message.policy || {}),
       };
     case "CAPTURE_EVENT": {
+      const interactionSequence = interactionSequencer.reserve();
       const state = await getCaptureState();
       if (
         !sender.tab ||
@@ -786,10 +884,18 @@ async function handleMessage(message, sender) {
       ) {
         return { ok: false, ignored: true };
       }
+      interactionSequencer.confirm(state.sessionId, interactionSequence);
       const job = snapshotCaptureJob(state, {
           ...message.context,
           pageUrl: sender.tab.url || message.context?.pageUrl,
           sourceEvent: "click",
+          interactionSequence,
+          ...(Number.isInteger(message.interactionSequence)
+            ? { sourceInteractionSequence: message.interactionSequence }
+            : {}),
+          ...(typeof sender.documentId === "string"
+            ? { documentId: sender.documentId }
+            : {}),
         });
       void enqueueScreenshot(() => captureStep(job)).catch(async (error) => {
         const latest = await getCaptureState();
@@ -884,6 +990,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   void (async () => {
+    await configureActionSidePanel();
     const current = await getCaptureState();
     await clearAllCapturedSteps();
     await setCapturePolicy({});
