@@ -24,6 +24,24 @@ test("workspace navigation and direct links remain workspace-scoped", async () =
   assert.doesNotMatch(shell, /guide\.canReview[^\n]*reviewedAt/);
 });
 
+test("interactive dropdowns use the themed accessible menu instead of native selects", async () => {
+  const [shell, editor, menu, styles] = await Promise.all([
+    source("../app/components/rivet-workspace-app.tsx"),
+    source("../app/components/guide-editor.tsx"),
+    source("../app/components/select-menu.tsx"),
+    source("../app/globals.css"),
+  ]);
+
+  assert.doesNotMatch(`${shell}\n${editor}`, /<select\b/i);
+  assert.match(menu, /aria-haspopup="listbox"/);
+  assert.match(menu, /role="option"/);
+  assert.match(menu, /ArrowDown/);
+  assert.match(menu, /closeOnOutsideInteraction/);
+  assert.match(styles, /\.select-menu-option\[aria-selected="true"\]/);
+  assert.match(styles, /\.workspace-menu \.select-menu-options/);
+  assert.match(styles, /\.theme-menu \.select-menu-trigger/);
+});
+
 test("protected screenshots use authenticated media and redacted raster uploads", async () => {
   const [client, media, editor] = await Promise.all([
     source("../lib/rivet-client.ts"),

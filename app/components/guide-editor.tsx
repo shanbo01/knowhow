@@ -31,6 +31,7 @@ import type {
   WorkspaceSummary,
 } from "../../lib/rivet-types";
 import { AuthorizedMedia } from "./authorized-media";
+import { SelectMenu } from "./select-menu";
 
 export type GuideEditorPayload = {
   guideId?: string;
@@ -477,9 +478,7 @@ export function GuideEditor({
                   </aside>
                   <div className="step-editor-body">
                     <div className="step-toolbar">
-                      <select value={step.kind} onChange={(event) => updateStep(step.id, { kind: event.target.value as EditorBlockKind })} aria-label={`Block ${index + 1} type`}>
-                        {STEP_KINDS.map((kind) => <option value={kind.value} key={kind.value}>{kind.label}</option>)}
-                      </select>
+                      <SelectMenu className="toolbar-select" value={step.kind} onChange={(kind) => updateStep(step.id, { kind })} ariaLabel={`Block ${index + 1} type`} options={STEP_KINDS.map((kind) => ({ value: kind.value, label: kind.label }))} />
                       <span className="toolbar-spacer" />
                       <button type="button" className="icon-button tiny" onClick={() => moveStep(index, -1)} disabled={index === 0} aria-label="Move up"><ArrowUp /></button>
                       <button type="button" className="icon-button tiny" onClick={() => moveStep(index, 1)} disabled={index === steps.length - 1} aria-label="Move down"><ArrowDown /></button>
@@ -564,7 +563,7 @@ export function GuideEditor({
                               const fallbackColor = annotation.kind === "click" ? workspace.settings.clickTargetColor : workspace.settings.accentColor;
                               const color = /^#[0-9a-f]{6}$/i.test(annotation.color ?? "") ? annotation.color! : fallbackColor;
                               return <div className="annotation-row" key={annotation.id}>
-                                <div className="annotation-row-heading"><label className="field compact"><span>Type</span><select value={annotation.kind} onChange={(event) => updateAnnotation(step, annotation.id, { kind: event.target.value as typeof annotation.kind, color: event.target.value === "click" ? workspace.settings.clickTargetColor : color })}>{ANNOTATION_KINDS.map((kind) => <option key={kind} value={kind}>{kind === "click" ? "Click target" : titleCaseAnnotation(kind)}</option>)}</select></label><label className="field compact annotation-color"><span>Color</span><input type="color" value={color} onChange={(event) => updateAnnotation(step, annotation.id, { color: event.target.value })} /></label><button className="icon-button tiny danger" type="button" aria-label={`Remove annotation ${annotationIndex + 1}`} onClick={() => { updateStep(step.id, { annotations: (step.annotations ?? []).filter((item) => item.id !== annotation.id) }); if (isCaptured) setPrivacyReviewed(false); }}><Trash2 /></button></div>
+                                <div className="annotation-row-heading"><div className="field compact"><span>Type</span><SelectMenu className="form-select compact-select" value={annotation.kind} onChange={(kind) => updateAnnotation(step, annotation.id, { kind, color: kind === "click" ? workspace.settings.clickTargetColor : color })} ariaLabel={`Annotation ${annotationIndex + 1} type`} options={ANNOTATION_KINDS.map((kind) => ({ value: kind, label: kind === "click" ? "Click target" : titleCaseAnnotation(kind) }))} /></div><label className="field compact annotation-color"><span>Color</span><input type="color" value={color} onChange={(event) => updateAnnotation(step, annotation.id, { color: event.target.value })} /></label><button className="icon-button tiny danger" type="button" aria-label={`Remove annotation ${annotationIndex + 1}`} onClick={() => { updateStep(step.id, { annotations: (step.annotations ?? []).filter((item) => item.id !== annotation.id) }); if (isCaptured) setPrivacyReviewed(false); }}><Trash2 /></button></div>
                                 <div className="annotation-coordinates">{(["x", "y", "width", "height"] as const).map((key) => <label className="field compact" key={key}><span>{annotation.kind === "click" && key === "width" ? "Radius" : key.toUpperCase()} %</span><input type="number" min={key === "x" || key === "y" ? 0 : 0.1} max={annotation.kind === "click" && key === "width" ? 25 : 100} step="0.1" value={Math.round(((annotation[key] ?? (key === "x" || key === "y" ? 0 : 0.08)) * 100) * 10) / 10} onChange={(event) => updateAnnotation(step, annotation.id, { [key]: Number(event.target.value) / 100 })} /></label>)}</div>
                                 {annotation.kind === "text" ? <label className="field compact"><span>Annotation text</span><input maxLength={500} value={annotation.text ?? ""} onChange={(event) => updateAnnotation(step, annotation.id, { text: event.target.value })} /></label> : null}
                               </div>;
