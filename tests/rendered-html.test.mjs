@@ -129,7 +129,8 @@ test("localhost bootstraps governed storage and the capture extension on one ori
 
   assert.match(packageJson.scripts.predev, /db:local/);
   assert.match(packageJson.scripts["db:local"], /migrations apply DB --local/);
-  assert.match(packageJson.scripts.dev, /127\.0\.0\.1 -p 3001/);
+  assert.match(packageJson.scripts.dev, /-H localhost -p 3001/);
+  assert.match(packageJson.scripts.start, /-H localhost -p 3001/);
   assert.equal(localConfig.d1_databases[0].binding, "DB");
   assert.equal(localConfig.d1_databases[0].migrations_dir, "./drizzle");
   assert.equal(localConfig.r2_buckets[0].binding, "MEDIA");
@@ -143,6 +144,7 @@ test("localhost bootstraps governed storage and the capture extension on one ori
   assert.match(consoleCompatibility, /fallbackCreateTask/);
   assert.match(extensionConfig, /http:\/\/localhost:3001/);
   assert.deepEqual(manifest.host_permissions, ["http://localhost/*"]);
+  assert.doesNotMatch(await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"), /next\/font/);
   assert.doesNotMatch(
     `${extensionConfig}\n${manifestText}`,
     /chatgpt\.site/i,

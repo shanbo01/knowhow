@@ -47,7 +47,7 @@ Copy `.dev.vars.example` to `.dev.vars`, then set:
 - `APPWRITE_ENDPOINT` — optional server override; defaults to `https://sgp.cloud.appwrite.io/v1`
 - `APPWRITE_PROJECT_ID` — optional server override; defaults to the project currently configured in `lib/appwrite.ts`
 
-The public Appwrite endpoint and project ID used by the browser live in `lib/appwrite.ts`. If you change Appwrite projects, update that public configuration and the matching optional server values together. Add `localhost` to the Appwrite project’s Web platform allowlist and configure the email-verification callback as `http://localhost:3001/verify`; Rivet does not grant workspace access until Appwrite reports a verified email.
+The public Appwrite endpoint and project ID used by the browser live in `lib/appwrite.ts`. If you change Appwrite projects, update that public configuration and the matching optional server values together. Add `localhost` to the Appwrite project’s Web platform allowlist and configure the email-verification callback as `http://localhost:3001/verify`; use `http://localhost:3001` locally rather than `127.0.0.1`, because Appwrite treats them as different web origins. Rivet does not grant workspace access until Appwrite reports a verified email.
 
 The development extension is pinned to `http://localhost:3001` in `extension/src/core/config.js` and to the exact `http://localhost/*` manifest host permission. Change both values and rebuild the package when a production origin is selected.
 
