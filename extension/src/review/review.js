@@ -352,7 +352,7 @@ function drawComposite(context, bitmap, step, crop, width, height, editing = fal
       context,
       {
         points: gesture.draftDrawing,
-        color: validColor(elements.draw_color.value, "#1f7653"),
+        color: validColor(elements.draw_color.value, "#356fe5"),
         width: Number(elements.draw_width.value) / 1000,
       },
       crop,
@@ -373,9 +373,9 @@ function drawComposite(context, bitmap, step, crop, width, height, editing = fal
         height,
       );
       context.save();
-      context.strokeStyle = gesture.type === "blur" ? "#57bd8d" : "#ffffff";
+      context.strokeStyle = gesture.type === "blur" ? "#4c7ff0" : "#ffffff";
       context.fillStyle = gesture.type === "blur"
-        ? "rgba(87,189,141,.16)"
+        ? "rgba(76,127,240,.16)"
         : "rgba(255,255,255,.08)";
       context.lineWidth = 2;
       context.setLineDash([7, 5]);
@@ -988,7 +988,7 @@ function finishCanvasGesture(event, cancelled = false) {
               {
                 id: newId("drawing"),
                 points: completed.draftDrawing,
-                color: validColor(elements.draw_color.value, "#1f7653"),
+                color: validColor(elements.draw_color.value, "#356fe5"),
                 width: Number(elements.draw_width.value) / 1000,
               },
             ],
@@ -1395,13 +1395,13 @@ async function load() {
   const visible = loaded.filter((step) => step.editorState?.deleted !== true);
   history = createEditorHistory(
     createEditorDocument(visible, {
-      accentColor: capturePolicy.accentColor || "#1f7653",
+      accentColor: capturePolicy.accentColor || "#356fe5",
       clickTargetColor: capturePolicy.clickTargetColor || "#ef6f47",
     }),
   );
   elements.draw_color.value = validColor(
     capturePolicy.accentColor,
-    "#1f7653",
+    "#356fe5",
   );
 
   if (!visible.length) {

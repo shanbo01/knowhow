@@ -48,3 +48,6 @@ next-env.d.ts
 # local Sites preview state (hosting metadata is committed)
 /.openai/*
 !/.openai/hosting.json
+
+# zcode session data
+/.zcode/

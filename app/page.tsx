@@ -13,10 +13,11 @@ import {
   AssignAdminDialog,
   PlatformView,
   RivetWorkspaceApp,
+  SupportRequestDialog,
 } from "./components/rivet-workspace-app";
 import { account, client } from "../lib/appwrite";
 import { clearApiCredential, rivetApi, rivetCommand } from "../lib/rivet-client";
-import type { BootstrapResponse, PlatformWorkspace, WorkspaceSummary } from "../lib/rivet-types";
+import type { BootstrapResponse, PlatformWorkspace, WorkspaceRole, WorkspaceSummary } from "../lib/rivet-types";
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -44,6 +45,50 @@ function OpeningRivet() {
       <LoaderCircle className="spin" aria-hidden="true" />
       <h1>Opening Rivet</h1>
       <p>Verifying Appwrite and restoring your secure session.</p>
+    </main>
+  );
+}
+
+function AppointmentPrompt({
+  email,
+  busy,
+  error,
+  onAccept,
+  onDismiss,
+}: {
+  email: string;
+  busy: boolean;
+  error: string;
+  onAccept: () => Promise<void>;
+  onDismiss: () => void;
+}) {
+  return (
+    <main className="onboarding-shell">
+      <header className="onboarding-header">
+        <Link className="brand-lockup" href="/">
+          <span className="brand-mark">R</span>
+          <span>Rivet</span>
+        </Link>
+      </header>
+      <section className="onboarding-card">
+        <p className="eyebrow">Administrator appointment</p>
+        <h1>Become a workspace administrator</h1>
+        <p className="lede">
+          A Rivet platform administrator appointed <strong>{email}</strong> as the administrator
+          of a client workspace. Accepting adds you as that workspace&apos;s administrator and is
+          recorded in its audit history. This appointment is single-use and expires within 14 days.
+        </p>
+        {error ? <p className="form-error" role="alert">{error}</p> : null}
+        <div className="modal-actions">
+          <button className="button secondary" type="button" disabled={busy} onClick={onDismiss}>
+            Not now
+          </button>
+          <button className="button primary" type="button" disabled={busy} onClick={() => void onAccept()}>
+            {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />}
+            Accept administrator appointment
+          </button>
+        </div>
+      </section>
     </main>
   );
 }
@@ -88,6 +133,9 @@ function WorkspaceOnboarding({
   onRequestJoin,
   onSetWorkspaceStatus,
   onAssignAdministrator,
+  onRequestSupport,
+  onUpdateSettings,
+  onRevokeAppointment,
   onSignOut,
 }: {
   viewerName: string;
@@ -101,10 +149,14 @@ function WorkspaceOnboarding({
   onRequestJoin: (workspaceId: string) => Promise<void>;
   onSetWorkspaceStatus: (workspaceId: string, status: "active" | "suspended" | "archived") => Promise<void>;
   onAssignAdministrator: (workspaceId: string, email: string) => Promise<void>;
+  onRequestSupport: (workspaceId: string, requestedRole: WorkspaceRole, reason: string, requestedDurationHours: number) => Promise<void>;
+  onUpdateSettings: (limit: number) => Promise<void>;
+  onRevokeAppointment: (appointmentId: string) => Promise<void>;
   onSignOut: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [assigningWorkspace, setAssigningWorkspace] = useState<PlatformWorkspace | null>(null);
+  const [requestingWorkspace, setRequestingWorkspace] = useState<PlatformWorkspace | null>(null);
 
   return (
     <main className="onboarding-shell">
@@ -120,9 +172,7 @@ function WorkspaceOnboarding({
       <section className="onboarding-card">
         <p className="eyebrow">Verified account</p>
         <h1>Welcome, {viewerName || "there"}</h1>
-        <p className="lede">{canCreateWorkspace
-          ? "Create a workspace for a new organization, or request access to an eligible workspace."
-          : "Request access to an eligible workspace or redeem a signed invitation from its administrator."} Domain eligibility never grants access by itself.</p>
+        <p className="lede">Create your own workspace, request access to an eligible workspace, or redeem a signed invitation from its administrator. Domain eligibility never grants access by itself.</p>
 
         {eligibleWorkspaces.length ? (
           <div className="eligible-list">
@@ -157,7 +207,7 @@ function WorkspaceOnboarding({
 
         {error ? <p className="form-error" role="alert">{error}</p> : null}
 
-        {canCreateWorkspace ? <form
+        <form
           className="create-workspace-form"
           onSubmit={async (event) => {
             event.preventDefault();
@@ -167,7 +217,7 @@ function WorkspaceOnboarding({
         >
           <div className="section-heading compact">
             <div>
-              <h2>Create a new workspace</h2>
+              <h2>{canCreateWorkspace ? "Create a workspace for a client" : "Create your own workspace"}</h2>
               <p>You become its first administrator.</p>
             </div>
           </div>
@@ -184,7 +234,8 @@ function WorkspaceOnboarding({
             {busy ? <LoaderCircle className="spin" /> : <Plus />}
             Create workspace
           </button>
-        </form> : <div className="access-guidance"><h2>Need access to another workspace?</h2><p>Ask a workspace administrator for a signed invitation link. They can also approve your exact email domain so you can submit a join request here.</p></div>}
+        </form>
+        <div className="access-guidance"><h2>Need access to another workspace?</h2><p>Ask a workspace administrator for a signed invitation link. They can also approve your exact email domain so you can submit a join request here.</p></div>
       </section>
       {platform ? (
         <section className="onboarding-platform" aria-label="Platform administration">
@@ -196,6 +247,11 @@ function WorkspaceOnboarding({
               void onSetWorkspaceStatus(workspaceId, status).catch(() => undefined);
             }}
             onAssign={setAssigningWorkspace}
+            onRequestSupport={setRequestingWorkspace}
+            onUpdateSettings={onUpdateSettings}
+            onRevokeAppointment={(appointment) => {
+              if (window.confirm(`Revoke the administrator appointment for ${appointment.email}?`)) void onRevokeAppointment(appointment.id).catch(() => undefined);
+            }}
           />
         </section>
       ) : null}
@@ -207,6 +263,17 @@ function WorkspaceOnboarding({
           onAssign={async (email) => {
             await onAssignAdministrator(assigningWorkspace.id, email);
             setAssigningWorkspace(null);
+          }}
+        />
+      ) : null}
+      {requestingWorkspace ? (
+        <SupportRequestDialog
+          workspace={requestingWorkspace}
+          busy={busy}
+          onClose={() => setRequestingWorkspace(null)}
+          onRequest={async (requestedRole, reason, requestedDurationHours) => {
+            await onRequestSupport(requestingWorkspace.id, requestedRole, reason, requestedDurationHours);
+            setRequestingWorkspace(null);
           }}
         />
       ) : null}
@@ -225,7 +292,13 @@ export default function Home() {
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [pendingWorkspaceIds, setPendingWorkspaceIds] = useState<string[]>([]);
+  const [appointmentToken, setAppointmentToken] = useState<string | null>(null);
   const inviteAttempted = useRef<string | null>(null);
+
+  const appointmentFromLocation = useCallback(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("appointment");
+  }, []);
 
   const checkBackend = useCallback(async () => {
     setBackendState("checking");
@@ -258,6 +331,7 @@ export default function Home() {
     setError("");
     await checkBackend();
     rememberInviteFromLocation();
+    setAppointmentToken(appointmentFromLocation());
     let nextUser: Models.User<Models.Preferences>;
     try {
       nextUser = await account.get();
@@ -278,7 +352,7 @@ export default function Home() {
     } finally {
       setBooting(false);
     }
-  }, [checkBackend, loadBootstrap]);
+  }, [appointmentFromLocation, checkBackend, loadBootstrap]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => void restore());
@@ -437,6 +511,82 @@ export default function Home() {
     }
   };
 
+  const requestSupportAccess = async (
+    workspaceId: string,
+    requestedRole: WorkspaceRole,
+    reason: string,
+    requestedDurationHours: number,
+  ) => {
+    setBusy(true);
+    setError("");
+    try {
+      await rivetCommand("requestSupportAccess", {
+        workspaceId,
+        requestedRole,
+        reason,
+        requestedDurationHours,
+      });
+      await loadBootstrap(requestedWorkspaceFromLocation());
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+      throw nextError;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updatePlatformSettings = async (limit: number) => {
+    setBusy(true);
+    setError("");
+    try {
+      await rivetCommand("updatePlatformSettings", { selfServiceWorkspaceLimit: limit });
+      await loadBootstrap(requestedWorkspaceFromLocation());
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+      throw nextError;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revokePlatformAppointment = async (appointmentId: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      await rivetCommand("revokeAppointment", { appointmentId });
+      await loadBootstrap(requestedWorkspaceFromLocation());
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+      throw nextError;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const acceptAppointment = async () => {
+    if (!appointmentToken) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await rivetCommand<{ workspaceId: string }>("acceptAppointment", {
+        token: appointmentToken,
+      });
+      setAppointmentToken(null);
+      window.history.replaceState({}, "", window.location.pathname);
+      await loadBootstrap(result.workspaceId);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismissAppointment = () => {
+    setAppointmentToken(null);
+    setError("");
+    window.history.replaceState({}, "", window.location.pathname);
+  };
+
   if (booting) return <OpeningRivet />;
 
   if (!user) {
@@ -489,6 +639,18 @@ export default function Home() {
     );
   }
 
+  if (appointmentToken && user?.emailVerification && bootstrap) {
+    return (
+      <AppointmentPrompt
+        email={user.email}
+        busy={busy}
+        error={error}
+        onAccept={acceptAppointment}
+        onDismiss={dismissAppointment}
+      />
+    );
+  }
+
   if (!bootstrap.activeWorkspace) {
     return (
       <WorkspaceOnboarding
@@ -525,6 +687,9 @@ export default function Home() {
         }}
         onSetWorkspaceStatus={setPlatformWorkspaceStatus}
         onAssignAdministrator={assignPlatformWorkspaceAdministrator}
+        onRequestSupport={requestSupportAccess}
+        onUpdateSettings={updatePlatformSettings}
+        onRevokeAppointment={revokePlatformAppointment}
         onSignOut={signOut}
       />
     );

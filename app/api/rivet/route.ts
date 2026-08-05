@@ -6,6 +6,7 @@ import {
   clonePrivateMedia,
   deletePrivateMedia,
   D1RivetRepository,
+  evaluateGuideVisibility,
   extractExactEmailDomain,
   hashToken,
   HttpError,
@@ -15,25 +16,34 @@ import {
   requireD1Binding,
   requireR2Binding,
   requireVerifiedIdentity,
+  signAppointmentToken,
   signInviteToken,
   toErrorResponse,
   type AuthenticatedIdentity,
   type D1DatabaseLike,
   type D1PreparedStatementLike,
   type GuideAccessFacts,
+  type RevisionAudienceRow,
+  type RevisionMediaRow,
+  type RevisionReviewRow,
+  type RevisionRow,
+  type RevisionStepRow,
+  type SupportGrantState,
   type WorkspaceAccess,
 } from "../../../lib/server";
 import type {
+  AdminAppointment,
   Audience,
   AuditEvent,
   BootstrapResponse,
   EditorBlock,
   Guide,
-  GuideRevisionView,
   Invitation,
   JoinRequest,
   PlatformMetrics,
   PlatformWorkspace,
+  SupportAccessGrant,
+  SupportAccessRequest,
   VaultItem,
   WorkspaceBundle,
   WorkspaceGroup,
@@ -349,6 +359,7 @@ function policyContext(
     roles: access.roles,
     capabilities: access.capabilities,
     guide,
+    supportGrant: access.supportGrant,
   } as const;
 }
 
@@ -388,13 +399,32 @@ async function audit(
 
 const DEFAULT_SETTINGS: WorkspaceSettings = {
   logoUrl: null,
-  accentColor: "#1f7653",
+  accentColor: "#356fe5",
   clickTargetColor: "#ef6f47",
   removeBranding: false,
   allowedDomains: [],
   excludedCaptureHosts: [],
   allowRestrictedExports: false,
   watermarkExports: true,
+};
+
+type SupportRequestRow = {
+  id: string;
+  workspace_id: string;
+  requester_user_id: string;
+  requester_email: string;
+  requester_name: string;
+  requested_role: WorkspaceRole;
+  requested_duration_hours: number;
+  status: string;
+};
+
+type SupportGrantRow = {
+  id: string;
+  user_id: string;
+  email: string;
+  status: string;
+  workspace_id: string;
 };
 
 async function loadSettings(db: D1DatabaseLike, workspaceId: string): Promise<WorkspaceSettings> {
@@ -569,138 +599,6 @@ async function loadGroups(db: D1DatabaseLike, workspaceId: string): Promise<Work
   });
 }
 
-type RevisionRow = {
-  id: string;
-  guide_id: string;
-  workspace_id: string;
-  version: number;
-  status: "draft" | "review" | "published" | "archived";
-  source_type: "manual" | "capture" | "import";
-  title: string;
-  summary: string;
-  category: string | null;
-  tags_json: string;
-  system_references_json: string;
-  privacy_reviewed_at: string | null;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-  published_by: string | null;
-  published_at: string | null;
-  has_active_capture?: number;
-};
-
-type RevisionStepRow = {
-  revision_id: string;
-  id: string;
-  position: number;
-  kind: EditorBlock["kind"];
-  title: string;
-  body: string;
-  annotation_json: string;
-};
-
-type RevisionAudienceRow = {
-  revision_id: string;
-  subject_type: Audience["kind"];
-  subject_id: string;
-};
-
-type RevisionReviewRow = {
-  revision_id: string;
-  reviewer_user_id: string;
-  status: "pending" | "approved" | "changes_requested";
-  decided_at: string | null;
-};
-
-type RevisionMediaRow = {
-  revision_id: string;
-  id: string;
-  step_id: string | null;
-};
-
-function latestApprovedReview(
-  reviews: readonly RevisionReviewRow[],
-): RevisionReviewRow | undefined {
-  return reviews
-    .filter(
-      (item): item is RevisionReviewRow & { decided_at: string } =>
-        item.status === "approved" && Boolean(item.decided_at),
-    )
-    .reduce<RevisionReviewRow | undefined>(
-      (latest, item) =>
-        !latest || !latest.decided_at || item.decided_at > latest.decided_at
-          ? item
-          : latest,
-      undefined,
-    );
-}
-
-function loadRevisionFromRows(
-  revision: RevisionRow | undefined,
-  members: WorkspaceMember[],
-  groupNames: ReadonlyMap<string, string>,
-  stepRows: RevisionStepRow[],
-  audienceRows: RevisionAudienceRow[],
-  reviews: RevisionReviewRow[],
-  mediaRows: RevisionMediaRow[],
-): GuideRevisionView | null {
-  if (!revision) return null;
-  const approved = latestApprovedReview(reviews);
-  const memberName = (userId: string | null) =>
-    members.find((item) => item.userId === userId)?.name ?? userId ?? "Unknown";
-  const audiences: Audience[] = audienceRows.map((item) => ({
-    kind: item.subject_type,
-    subjectId: item.subject_type === "workspace" ? undefined : item.subject_id,
-    label:
-      item.subject_type === "workspace"
-        ? "Entire workspace"
-        : item.subject_type === "group"
-          ? groupNames.get(item.subject_id) ?? "Group"
-          : memberName(item.subject_id),
-  }));
-  return {
-    id: revision.id,
-    number: revision.version,
-    status: revision.status,
-    title: revision.title,
-    summary: revision.summary,
-    category: revision.category ?? "",
-    tags: safeJson<string[]>(revision.tags_json, []),
-    systemReferences: safeJson<string[]>(revision.system_references_json, []),
-    steps: stepRows.map((step) => {
-      const annotations = safeJson<Record<string, unknown>>(step.annotation_json, {});
-      const linkedMedia = mediaRows.find((item) => item.step_id === step.id)?.id;
-      return {
-        id: step.id,
-        kind: step.kind,
-        title: step.title,
-        description: step.body,
-        ...(typeof annotations.screenshotMediaId === "string" || linkedMedia
-          ? { screenshotMediaId: (annotations.screenshotMediaId as string | undefined) ?? linkedMedia }
-          : {}),
-        ...(annotations.crop && typeof annotations.crop === "object"
-          ? { crop: annotations.crop as EditorBlock["crop"] }
-          : {}),
-        ...(Array.isArray(annotations.annotations)
-          ? { annotations: annotations.annotations as NonNullable<EditorBlock["annotations"]> }
-          : {}),
-      };
-    }),
-    audiences,
-    authorId: revision.created_by,
-    authorName: memberName(revision.created_by),
-    createdAt: revision.created_at,
-    updatedAt: revision.updated_at,
-    reviewedBy: approved ? memberName(approved.reviewer_user_id) : undefined,
-    reviewedAt: approved?.decided_at ?? undefined,
-    publishedBy: revision.published_by ? memberName(revision.published_by) : undefined,
-    publishedAt: revision.published_at ?? undefined,
-    privacyReviewedAt: revision.privacy_reviewed_at ?? undefined,
-    source: revision.source_type === "capture" ? "browser-capture" : "manual",
-  };
-}
-
 async function loadGuides(
   db: D1DatabaseLike,
   access: WorkspaceAccess,
@@ -778,137 +676,44 @@ async function loadGuides(
       access.workspaceId,
     ),
   ]);
-  const revisionsById = new Map(revisionRows.map((item) => [item.id, item]));
   const activeCaptureRevisionIds = new Set(
     revisionRows.filter((item) => item.has_active_capture === 1).map((item) => item.id),
   );
   const groupNames = new Map(groups.map((item) => [item.id, item.name]));
-  const revisionView = (revisionId: string | null) => {
-    if (!revisionId) return null;
-    return loadRevisionFromRows(
-      revisionsById.get(revisionId),
-      members,
-      groupNames,
-      stepRows.filter((item) => item.revision_id === revisionId),
-      audienceRows.filter((item) => item.revision_id === revisionId),
-      reviewRows.filter((item) => item.revision_id === revisionId),
-      mediaRows.filter((item) => item.revision_id === revisionId),
-    );
-  };
   const result: Guide[] = [];
   for (const guide of guideRows) {
-    const hasActiveCapture = Boolean(
-      guide.working_draft_revision_id &&
-        activeCaptureRevisionIds.has(guide.working_draft_revision_id),
-    );
-    const working = hasActiveCapture
-      ? null
-      : revisionView(guide.working_draft_revision_id);
-    const published = revisionView(guide.current_published_revision_id);
-    const admin = access.roles.includes("administrator");
-    const author = guide.author_user_id === identity.userId;
-    const accessFacts = (revision: GuideRevisionView | null): GuideAccessFacts | null => {
-      if (!revision) return null;
-      const audiences = audienceRows.filter((item) => item.revision_id === revision.id);
-      const reviews = reviewRows.filter((item) => item.revision_id === revision.id);
-      const workspaceAudience = audiences.some(
-        (item) => item.subject_type === "workspace" && item.subject_id === access.workspaceId,
-      );
-      const isAudienceMember = audiences.some(
-        (item) =>
-          (item.subject_type === "workspace" && item.subject_id === access.workspaceId) ||
-          (item.subject_type === "user" && item.subject_id === identity.userId) ||
-          (item.subject_type === "group" && access.groupIds.includes(item.subject_id)),
-      );
-      return {
-        guideId: guide.id,
-        workspaceId: access.workspaceId,
-        revisionId: revision.id,
-        revisionStatus: revision.status,
-        sourceType: revision.source === "browser-capture" ? "capture" : "manual",
-        isAuthor: author,
-        isAssignedReviewer: reviews.some((item) => item.reviewer_user_id === identity.userId),
-        isAudienceMember,
-        exportAllowed: workspaceAudience || settings.allowRestrictedExports,
-        privacyReviewed: Boolean(revision.privacyReviewedAt),
-        reviewApproved:
-          reviews.some((item) => item.status === "approved") &&
-          reviews.every((item) => item.status === "approved"),
-      };
-    };
-    const workingFacts = accessFacts(working);
-    const canSeeWorking = Boolean(
-      working &&
-        workingFacts &&
-        authorize(
-          "guide.read",
-          policyContext(access, isPlatformAdministrator, workingFacts),
-        ).allowed,
-    );
-    const publishedFacts = accessFacts(published);
-    const canSeePublished = Boolean(
-      publishedFacts &&
-        authorize("guide.read", policyContext(access, isPlatformAdministrator, publishedFacts)).allowed,
-    );
-    if (guide.archived_at && !admin && !author) continue;
-    if (!canSeeWorking && !canSeePublished) continue;
-    const visibleWorking = canSeeWorking ? working : null;
-    const visiblePublished = canSeePublished ? published : null;
-    const display = visibleWorking ?? visiblePublished;
+    const visibility = evaluateGuideVisibility({
+      guide,
+      revisions: revisionRows,
+      steps: stepRows,
+      audiences: audienceRows,
+      reviews: reviewRows,
+      media: mediaRows,
+      activeCaptureRevisionIds,
+      access,
+      identity,
+      isPlatformAdministrator,
+      settings,
+      members,
+      groupNames,
+    });
+    if (!visibility) continue;
+    const display = visibility.working ?? visibility.published;
     if (!display) continue;
-    const status = guide.archived_at ? "archived" : display.status;
-    const canEdit =
-      !guide.archived_at &&
-      !hasActiveCapture &&
-      access.workspaceStatus === "active" &&
-      (admin || (author && access.roles.includes("creator"))) &&
-      (!working || working.status === "draft");
-    const canReview = Boolean(
-      workingFacts &&
-        authorize("guide.review", policyContext(access, isPlatformAdministrator, workingFacts)).allowed,
-    );
-    const canPublish = Boolean(
-      workingFacts &&
-        authorize("guide.publish", policyContext(access, isPlatformAdministrator, workingFacts)).allowed,
-    );
-    const historyRows = revisionRows.filter((item) => item.guide_id === guide.id);
-    const restricted = !display.audiences.some((item) => item.kind === "workspace");
     result.push({
       id: guide.id,
       workspaceId: guide.workspace_id,
       title: display.title,
-      status,
-      restricted,
-      canEdit,
-      canReview,
-      canPublish,
+      status: visibility.status,
+      restricted: visibility.restricted,
+      canEdit: visibility.canEdit,
+      canReview: visibility.canReview,
+      canPublish: visibility.canPublish,
       createdAt: guide.created_at,
       updatedAt: guide.updated_at,
-      publishedRevision: visiblePublished,
-      workingRevision: visibleWorking,
-      revisionHistory: historyRows
-        .filter(
-          (item) =>
-            !activeCaptureRevisionIds.has(item.id) &&
-            (canSeeWorking || Boolean(item.published_at)),
-        )
-        .map((item) => {
-          const approved = latestApprovedReview(
-            reviewRows.filter((review) => review.revision_id === item.id),
-          );
-          return {
-            id: item.id,
-            number: item.version,
-            status: item.status,
-            authorName:
-              members.find((member) => member.userId === item.created_by)?.name ??
-              item.created_by,
-            createdAt: item.created_at,
-            reviewedAt: approved?.decided_at ?? undefined,
-            publishedAt: item.published_at ?? undefined,
-            source: item.source_type === "capture" ? "browser-capture" : "manual",
-          };
-        }),
+      publishedRevision: visibility.published,
+      workingRevision: visibility.working,
+      revisionHistory: visibility.revisionHistory,
     });
   }
   return result;
@@ -1156,6 +961,12 @@ async function loadWorkspaceBundle(
   const exposedSettings = admin
     ? settings
     : { ...settings, allowedDomains: [], excludedCaptureHosts: [] };
+  const supportRequests = admin
+    ? await loadSupportRequests(db, access.workspaceId)
+    : [];
+  const supportGrants = admin
+    ? await loadSupportGrants(db, access.workspaceId)
+    : [];
   return {
     workspace: { ...summary, settings: exposedSettings },
     metrics,
@@ -1164,6 +975,8 @@ async function loadWorkspaceBundle(
     guides,
     invitations: admin ? await loadInvitations(db, access.workspaceId) : [],
     joinRequests: admin ? await loadJoinRequests(db, access.workspaceId) : [],
+    supportRequests,
+    supportGrants,
     audits: admin ? await loadAudits(db, access.workspaceId) : [],
     vaultItems: authorize(
       "vault.use",
@@ -1174,8 +987,92 @@ async function loadWorkspaceBundle(
   };
 }
 
+async function loadSupportRequests(
+  db: D1DatabaseLike,
+  workspaceId: string,
+): Promise<SupportAccessRequest[]> {
+  const results = await rows<{
+    id: string;
+    requester_user_id: string;
+    requester_email: string;
+    requester_name: string;
+    requested_role: WorkspaceRole;
+    reason: string;
+    requested_duration_hours: number;
+    status: SupportAccessRequest["status"];
+    granted_role: WorkspaceRole | null;
+    created_at: string;
+  }>(
+    db,
+    `SELECT id, requester_user_id, requester_email, requester_name, requested_role,
+            reason, requested_duration_hours, status, granted_role, created_at
+     FROM support_access_requests
+     WHERE workspace_id = ? AND status = 'pending'
+     ORDER BY created_at DESC`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    workspaceId,
+    requesterUserId: item.requester_user_id,
+    requesterEmail: item.requester_email,
+    requesterName: item.requester_name,
+    requestedRole: item.requested_role,
+    reason: item.reason,
+    requestedDurationHours: item.requested_duration_hours,
+    status: item.status,
+    grantedRole: item.granted_role,
+    createdAt: item.created_at,
+  }));
+}
+
+async function loadSupportGrants(
+  db: D1DatabaseLike,
+  workspaceId: string,
+): Promise<SupportAccessGrant[]> {
+  const results = await rows<{
+    id: string;
+    request_id: string;
+    user_id: string;
+    email: string;
+    display_name: string;
+    role: WorkspaceRole;
+    status: SupportAccessGrant["status"];
+    approved_by: string;
+    granted_at: string;
+    expires_at: string;
+    ended_at: string | null;
+    revoked_by: string | null;
+  }>(
+    db,
+    `SELECT id, request_id, user_id, email, display_name, role, status,
+            approved_by, granted_at, expires_at, ended_at, revoked_by
+     FROM support_access_grants
+     WHERE workspace_id = ?
+     ORDER BY granted_at DESC
+     LIMIT 100`,
+    workspaceId,
+  );
+  return results.map((item) => ({
+    id: item.id,
+    requestId: item.request_id,
+    workspaceId,
+    userId: item.user_id,
+    email: item.email,
+    displayName: item.display_name,
+    role: item.role,
+    status: item.status,
+    approvedBy: item.approved_by,
+    grantedAt: item.granted_at,
+    expiresAt: item.expires_at,
+    endedAt: item.ended_at,
+    revokedBy: item.revoked_by,
+  }));
+}
+
 async function loadPlatform(
   db: D1DatabaseLike,
+  identity: AuthenticatedIdentity,
 ): Promise<NonNullable<BootstrapResponse["platform"]>> {
   const workspaceRows = await rows<{
     id: string;
@@ -1220,11 +1117,69 @@ async function loadPlatform(
      WHERE r.role = 'administrator' AND wm.status = 'active'
      ORDER BY wm.workspace_id, COALESCE(wm.display_name, wm.email)`,
   );
+  const [supportRows, appointmentRows, settingsRow] = await Promise.all([
+    rows<{
+      workspace_id: string;
+      request_id: string;
+      request_status: "pending" | "approved" | "denied" | "cancelled";
+      requested_role: WorkspaceRole;
+      requested_duration_hours: number;
+      reason: string;
+      created_at: string;
+      grant_id: string | null;
+      grant_role: WorkspaceRole | null;
+      granted_at: string | null;
+      expires_at: string | null;
+    }>(
+      db,
+      `SELECT r.workspace_id, r.id AS request_id, r.status AS request_status,
+              r.requested_role, r.requested_duration_hours, r.reason, r.created_at,
+              g.id AS grant_id, g.role AS grant_role, g.granted_at, g.expires_at
+       FROM support_access_requests r
+       LEFT JOIN support_access_grants g ON g.request_id = r.id
+       WHERE r.requester_user_id = ?
+       ORDER BY r.created_at DESC`,
+      identity.userId,
+    ),
+    rows<{
+      id: string;
+      workspace_id: string;
+      email: string;
+      status: AdminAppointment["status"];
+      expires_at: string;
+      created_at: string;
+    }>(
+      db,
+      `SELECT a.id, a.workspace_id, a.email, a.status, a.expires_at, a.created_at
+       FROM admin_appointments a
+       JOIN workspaces w ON w.id = a.workspace_id
+       WHERE a.status = 'active'
+       ORDER BY a.created_at DESC`,
+    ),
+    db
+      .prepare(
+        `SELECT value_json FROM platform_settings WHERE key = 'selfServiceWorkspaceLimit' LIMIT 1`,
+      )
+      .first<{ value_json: string }>(),
+  ]);
+  const latestByWorkspace = new Map<string, typeof supportRows[number]>();
+  for (const row of supportRows) {
+    if (!latestByWorkspace.has(row.workspace_id)) latestByWorkspace.set(row.workspace_id, row);
+  }
+  const appointments: AdminAppointment[] = appointmentRows.map((item) => ({
+    id: item.id,
+    workspaceId: item.workspace_id,
+    email: item.email,
+    status: item.status,
+    expiresAt: item.expires_at,
+    createdAt: item.created_at,
+  }));
   const workspaces: PlatformWorkspace[] = [];
   for (const workspace of workspaceRows) {
     const administrators = administratorRows.filter(
       (admin) => admin.workspace_id === workspace.id,
     );
+    const support = latestByWorkspace.get(workspace.id);
     workspaces.push({
       id: workspace.id,
       name: workspace.name,
@@ -1242,6 +1197,25 @@ async function loadPlatform(
       exports: Number(workspace.exports),
       storageBytes: Number(workspace.storage_bytes),
       failedOperations: Number(workspace.failed_operations),
+      supportRequest: support
+        ? {
+            id: support.request_id,
+            status: support.request_status,
+            requestedRole: support.requested_role,
+            requestedDurationHours: support.requested_duration_hours,
+            reason: support.reason,
+            createdAt: support.created_at,
+          }
+        : null,
+      supportGrant:
+        support?.grant_id && support.grant_role && support.granted_at && support.expires_at
+          ? {
+              id: support.grant_id,
+              role: support.grant_role,
+              grantedAt: support.granted_at,
+              expiresAt: support.expires_at,
+            }
+          : null,
     });
   }
   const metrics: PlatformMetrics = {
@@ -1258,7 +1232,16 @@ async function loadPlatform(
     storageBytes: workspaces.reduce((total, item) => total + item.storageBytes, 0),
     failedOperations: workspaces.reduce((total, item) => total + item.failedOperations, 0),
   };
-  return { metrics, workspaces };
+  let limit = 1;
+  try {
+    const parsed = settingsRow ? (JSON.parse(settingsRow.value_json) as unknown) : null;
+    if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 0 && parsed <= 1000) {
+      limit = parsed;
+    }
+  } catch {
+    // Fall back to the default limit.
+  }
+  return { metrics, workspaces, settings: { selfServiceWorkspaceLimit: limit }, appointments };
 }
 
 async function bootstrap(request: Request): Promise<BootstrapResponse> {
@@ -1266,6 +1249,19 @@ async function bootstrap(request: Request): Promise<BootstrapResponse> {
   const repository = await repositoryFor(db);
   const identity = await requireVerifiedIdentity(request);
   const isPlatformAdministrator = await platformAdministrator(db, repository, identity);
+  // Close any grants that lapsed while the workspace was idle and record each
+  // expiration in the customer's audit ledger before serving access.
+  const expired = await repository.expireSupportGrants();
+  for (const grant of expired) {
+    await audit(repository, identity, grant.workspaceId, {
+      action: "support.expired",
+      targetType: "support-grant",
+      targetId: grant.id,
+      targetLabel: grant.email,
+      summary: `${grant.email} temporary access expired`,
+      metadata: { role: grant.role, expiresAt: grant.expiresAt },
+    });
+  }
   const accesses = await repository.listWorkspaceAccess(identity.userId);
   const summaries = await loadWorkspaceSummaries(db, accesses);
   const eligibleIds = await repository.findDomainEligibleWorkspaceIds(identity.email);
@@ -1326,7 +1322,7 @@ async function bootstrap(request: Request): Promise<BootstrapResponse> {
             isPlatformAdministrator,
           )
         : null,
-    ...(isPlatformAdministrator ? { platform: await loadPlatform(db) } : {}),
+    ...(isPlatformAdministrator ? { platform: await loadPlatform(db, identity) } : {}),
   };
 }
 
@@ -1606,6 +1602,7 @@ async function createWorkspace(
   repository: D1RivetRepository,
   identity: AuthenticatedIdentity,
   payload: Record<string, unknown>,
+  options: { selfServe: boolean; administratorEmail?: string; inviteEmails?: string[] },
 ) {
   const name = textValue(payload.name, "Workspace name", { min: 2, max: 120 });
   const workspaceId = id("ws");
@@ -1614,8 +1611,8 @@ async function createWorkspace(
   const workspaceSlug = `${slug(name)}-${workspaceId.slice(-6)}`;
   const statements = [
     statement(db, `INSERT INTO entities (id, name, status, created_by, created_at, updated_at) VALUES (?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, entityId, name, identity.userId),
-    statement(db, `INSERT INTO workspaces (id, entity_id, name, slug, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, entityId, name, workspaceSlug, identity.userId),
-    statement(db, `INSERT INTO workspace_settings (workspace_id, accent_color, click_target_color, remove_branding, restricted_exports_enabled, watermark_restricted_exports, capture_policy_json, created_at, updated_at) VALUES (?, '#1f7653', '#ef6f47', 0, 0, 1, '{"excludedHosts":[]}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId),
+    statement(db, `INSERT INTO workspaces (id, entity_id, name, slug, status, self_serve, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, entityId, name, workspaceSlug, options.selfServe ? 1 : 0, identity.userId),
+    statement(db, `INSERT INTO workspace_settings (workspace_id, accent_color, click_target_color, remove_branding, restricted_exports_enabled, watermark_restricted_exports, capture_policy_json, created_at, updated_at) VALUES (?, '#356fe5', '#ef6f47', 0, 0, 1, '{"excludedHosts":[]}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId),
     statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.email, identity.name),
     statement(db, `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'administrator', ?, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.userId),
     statement(db, `INSERT INTO groups (id, workspace_id, name, slug, description, sensitive, kind, created_by, created_at, updated_at) VALUES (?, ?, 'All Employees', 'all-employees', 'Every active workspace member', 0, 'all_members', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, groupId, workspaceId, identity.userId),
@@ -1630,8 +1627,151 @@ async function createWorkspace(
     targetId: workspaceId,
     targetLabel: name,
     summary: `${name} workspace created`,
+    metadata: options.selfServe ? { origin: "self-serve" } : { origin: "platform-provisioned" },
   });
-  return { workspaceId };
+
+  let appointmentToken: string | null = null;
+  if (options.administratorEmail) {
+    appointmentToken = await createAppointmentToken(
+      db,
+      repository,
+      identity,
+      workspaceId,
+      options.administratorEmail,
+    );
+  }
+  const invitations = await createScopedInvitations(
+    db,
+    repository,
+    identity,
+    workspaceId,
+    options.inviteEmails ?? [],
+    null,
+  );
+  return { workspaceId, appointmentToken, invitations };
+}
+
+/**
+ * A pending administrator appointment: single-use, expiring, and bound to one
+ * normalized email. The recipient must sign in with that exact verified email
+ * and explicitly accept before becoming the workspace administrator.
+ */
+async function createAppointmentToken(
+  db: D1DatabaseLike,
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+  workspaceId: string,
+  rawEmail: string,
+): Promise<string> {
+  const email = rawEmail.trim().toLowerCase();
+  if (extractExactEmailDomain(email) === null || email.length > 320) {
+    throw new HttpError(400, "APPOINTMENT_EMAIL_INVALID", "The administrator email is invalid.");
+  }
+  const appointmentId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + 14 * 24 * 3600;
+  const token = await signAppointmentToken(
+    { jti: appointmentId, workspaceId, email, expiresAt: expiresAtSeconds },
+    signingKey(),
+  );
+  const tokenHash = await hashToken(token);
+  await audit(
+    repository,
+    identity,
+    workspaceId,
+    {
+      action: "appointment.created",
+      targetType: "admin-appointment",
+      targetId: appointmentId,
+      summary: `Administrator appointment created`,
+      metadata: { durationDays: 14 },
+    },
+    [
+      statement(
+        db,
+        `INSERT INTO admin_appointments (id, workspace_id, token_hash, email, status, expires_at, created_by, created_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)`,
+        appointmentId,
+        workspaceId,
+        tokenHash,
+        email,
+        new Date(expiresAtSeconds * 1000).toISOString(),
+        identity.userId,
+      ),
+    ],
+  );
+  return token;
+}
+
+async function createScopedInvitations(
+  db: D1DatabaseLike,
+  repository: D1RivetRepository,
+  identity: AuthenticatedIdentity,
+  workspaceId: string,
+  emails: string[],
+  supportGrant: SupportGrantState | null,
+): Promise<string[]> {
+  const unique = [...new Set(emails.map((email) => email.trim().toLowerCase()))].slice(0, 50);
+  const tokens: string[] = [];
+  for (const email of unique) {
+    if (extractExactEmailDomain(email) === null || email.length > 320) {
+      throw new HttpError(400, "INVITE_EMAIL_INVALID", `${email} is not a valid email address.`);
+    }
+    const invitationId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+    const maxHours = 24 * 90;
+    const expiresAtSeconds =
+      supportGrant !== null
+        ? Math.min(
+            Math.floor(Date.parse(supportGrant.expiresAt) / 1000),
+            Math.floor(Date.now() / 1000) + maxHours * 3600,
+          )
+        : Math.floor(Date.now() / 1000) + maxHours * 3600;
+    const token = await signInviteToken(
+      {
+        jti: invitationId,
+        workspaceId,
+        role: "viewer",
+        email,
+        expiresAt: expiresAtSeconds,
+      },
+      signingKey(),
+    );
+    const tokenHash = await hashToken(token);
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "invitation.created",
+        targetType: "invitation",
+        targetId: invitationId,
+        summary: "Email-scoped invitation created",
+        metadata: {
+          role: "viewer",
+          maxUses: 1,
+          ...(supportGrant !== null
+            ? { via: "support-access", grantId: supportGrant.id }
+            : {}),
+        },
+      },
+      [
+        statement(
+          db,
+          `INSERT INTO invitations (id, workspace_id, token_hash, label, email, role, status, max_uses, use_count, expires_at, created_by, created_via, created_at)
+           VALUES (?, ?, ?, ?, ?, 'viewer', 'active', 1, 0, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          invitationId,
+          workspaceId,
+          tokenHash,
+          `Invite ${email}`,
+          email,
+          new Date(expiresAtSeconds * 1000).toISOString(),
+          identity.userId,
+          supportGrant !== null ? "support-access" : "standard",
+        ),
+      ],
+    );
+    tokens.push(token);
+  }
+  return tokens;
 }
 
 async function handleCommand(
@@ -1643,14 +1783,253 @@ async function handleCommand(
   const repository = await repositoryFor(db);
   const identity = await requireVerifiedIdentity(request);
   const isPlatformAdministrator = await platformAdministrator(db, repository, identity);
+  // A platform administrator operating under a temporary support grant is a
+  // transient workspace identity: platform authority is suspended for the
+  // duration of the grant (see policy.ts). This covers every platform-level
+  // mutation, not just the ones whose policy contexts carry the grant.
+  const activeSupportGrantAnywhere = isPlatformAdministrator
+    ? await repository.hasActiveSupportGrant(identity.userId)
+    : false;
+  const platformMutation =
+    actionName === "createWorkspace" ||
+    actionName === "setWorkspaceStatus" ||
+    actionName === "assignWorkspaceAdministrator" ||
+    actionName === "requestSupportAccess" ||
+    actionName === "revokeAppointment" ||
+    actionName === "updatePlatformSettings";
+  if (platformMutation && activeSupportGrantAnywhere) {
+    throw new HttpError(
+      409,
+      "SUPPORT_GRANT_ACTIVE",
+      "Platform administration is suspended while temporary support access is active.",
+    );
+  }
 
   if (actionName === "createWorkspace") {
+    if (isPlatformAdministrator) {
+      requireAuthorized("platform.workspaces.manage", {
+        isVerifiedIdentity: true,
+        isPlatformAdministrator,
+        roles: [],
+      });
+      const rawAdministrator = payload.administratorEmail;
+      const administratorEmail =
+        typeof rawAdministrator === "string" && rawAdministrator.trim()
+          ? rawAdministrator.trim().toLowerCase()
+          : undefined;
+      const inviteEmails =
+        payload.inviteEmails === undefined || payload.inviteEmails === null
+          ? []
+          : stringList(payload.inviteEmails, "Invite emails", 50);
+      return createWorkspace(db, repository, identity, payload, {
+        selfServe: false,
+        administratorEmail,
+        inviteEmails,
+      });
+    }
+    // Any verified user may create a personal workspace; the self-serve limit
+    // is enforced atomically by the workspaces_limit_self_serve trigger.
+    return createWorkspace(db, repository, identity, payload, { selfServe: true });
+  }
+  if (actionName === "requestSupportAccess") {
     requireAuthorized("platform.workspaces.manage", {
       isVerifiedIdentity: true,
       isPlatformAdministrator,
       roles: [],
     });
-    return createWorkspace(db, repository, identity, payload);
+    const targetWorkspaceId = textValue(payload.workspaceId, "Workspace", { min: 1, max: 128 });
+    const requestedRole = textValue(payload.requestedRole, "Requested role", { min: 4, max: 13 }) as WorkspaceRole;
+    if (!(["administrator", "creator", "reviewer", "publisher", "viewer"] as string[]).includes(requestedRole)) {
+      throw new HttpError(400, "SUPPORT_ROLE_INVALID", "The requested role is invalid.");
+    }
+    const reason = textValue(payload.reason, "Reason", { min: 10, max: 2000 });
+    const requestedDurationHours = integerValue(payload.requestedDurationHours, "Duration", 1, 168);
+    const target = await first<{ name: string; status: WorkspaceStatus }>(
+      db,
+      `SELECT name, status FROM workspaces WHERE id = ?`,
+      targetWorkspaceId,
+    );
+    if (!target) throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
+    if (target.status !== "active") {
+      throw new HttpError(409, "WORKSPACE_NOT_ACTIVE", "Only active workspaces accept support access.");
+    }
+    const existing = await first<{ id: string }>(
+      db,
+      `SELECT id FROM support_access_requests
+       WHERE workspace_id = ? AND requester_user_id = ? AND status = 'pending'
+       LIMIT 1`,
+      targetWorkspaceId,
+      identity.userId,
+    );
+    if (existing) {
+      throw new HttpError(409, "SUPPORT_REQUEST_PENDING", "A support request is already pending for this workspace.");
+    }
+    const grant = await repository.getActiveSupportGrant(targetWorkspaceId, identity.userId);
+    if (grant) {
+      throw new HttpError(409, "SUPPORT_GRANT_ACTIVE", "Support access is already active in this workspace.");
+    }
+    const requestKey = id("support");
+    await audit(
+      repository,
+      identity,
+      targetWorkspaceId,
+      {
+        action: "support.requested",
+        targetType: "support-request",
+        targetId: requestKey,
+        targetLabel: target.name,
+        summary: `${identity.name} requested temporary ${requestedRole} access`,
+        metadata: { requestedRole, requestedDurationHours },
+      },
+      [
+        statement(
+          db,
+          `INSERT INTO support_access_requests
+             (id, workspace_id, requester_user_id, requester_email, requester_name,
+              requested_role, reason, requested_duration_hours, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          requestKey,
+          targetWorkspaceId,
+          identity.userId,
+          identity.email,
+          identity.name,
+          requestedRole,
+          reason,
+          requestedDurationHours,
+        ),
+      ],
+    );
+    return { requested: true, requestId: requestKey };
+  }
+  if (actionName === "cancelSupportRequest") {
+    const requestId = textValue(payload.requestId, "Support request", { min: 1, max: 128 });
+    const request = await first<{ workspace_id: string; requester_user_id: string; status: string }>(
+      db,
+      `SELECT workspace_id, requester_user_id, status FROM support_access_requests WHERE id = ? LIMIT 1`,
+      requestId,
+    );
+    if (!request || request.requester_user_id !== identity.userId) {
+      throw new HttpError(404, "SUPPORT_REQUEST_NOT_FOUND", "Support request not found.");
+    }
+    if (request.status !== "pending") {
+      throw new HttpError(409, "SUPPORT_REQUEST_NOT_PENDING", "This support request is no longer pending.");
+    }
+    await audit(
+      repository,
+      identity,
+      request.workspace_id,
+      {
+        action: "support.cancelled",
+        targetType: "support-request",
+        targetId: requestId,
+        summary: "Support request cancelled by the requester",
+      },
+      [
+        statement(
+          db,
+          `UPDATE support_access_requests
+           SET status = 'cancelled', decided_by = ?, decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'pending'`,
+          identity.userId,
+          requestId,
+        ),
+      ],
+    );
+    return { cancelled: true };
+  }
+  if (actionName === "acceptAppointment") {
+    const token = textValue(payload.token, "Appointment", { min: 20, max: 8192 });
+    const validated = await repository.validateAppointmentCredential(token, signingKey());
+    if (validated.appointment.email !== identity.email) {
+      throw new HttpError(403, "APPOINTMENT_EMAIL_MISMATCH", "This appointment belongs to another email address.");
+    }
+    const grant = await repository.getActiveSupportGrant(validated.appointment.workspaceId, identity.userId);
+    if (grant) {
+      throw new HttpError(403, "APPOINTMENT_SUPPORT_BLOCKED", "Support access cannot accept a permanent administrator appointment.");
+    }
+    const workspace = await first<{ name: string; status: WorkspaceStatus }>(
+      db,
+      `SELECT name, status FROM workspaces WHERE id = ?`,
+      validated.appointment.workspaceId,
+    );
+    if (!workspace || workspace.status !== "active") {
+      throw new HttpError(409, "WORKSPACE_NOT_ACTIVE", "Only active workspaces accept administrator appointments.");
+    }
+    const existing = await repository.getWorkspaceAccess(validated.appointment.workspaceId, identity.userId);
+    if (existing) {
+      throw new HttpError(409, "MEMBERSHIP_EXISTS", "You are already a member of this workspace.");
+    }
+    await audit(
+      repository,
+      identity,
+      validated.appointment.workspaceId,
+      {
+        action: "appointment.accepted",
+        targetType: "admin-appointment",
+        targetId: validated.appointment.id,
+        targetLabel: workspace.name,
+        summary: `${identity.email} accepted the administrator appointment`,
+      },
+      [
+        statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, validated.appointment.workspaceId, identity.userId, identity.email, identity.name),
+        statement(db, `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'administrator', ?, CURRENT_TIMESTAMP)`, validated.appointment.workspaceId, identity.userId, identity.userId),
+        statement(
+          db,
+          `UPDATE admin_appointments
+           SET status = 'accepted', accepted_by = ?, accepted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'active'`,
+          identity.userId,
+          validated.appointment.id,
+        ),
+      ],
+    );
+    return { workspaceId: validated.appointment.workspaceId };
+  }
+  if (actionName === "revokeAppointment") {
+    requireAuthorized("platform.workspaces.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator,
+      roles: [],
+    });
+    const appointmentId = textValue(payload.appointmentId, "Appointment", { min: 1, max: 128 });
+    const appointment = await first<{ workspace_id: string; email: string }>(
+      db,
+      `SELECT workspace_id, email FROM admin_appointments WHERE id = ? AND status = 'active'`,
+      appointmentId,
+    );
+    if (!appointment) throw new HttpError(404, "APPOINTMENT_NOT_FOUND", "Appointment not found.");
+    await audit(
+      repository,
+      identity,
+      appointment.workspace_id,
+      {
+        action: "appointment.revoked",
+        targetType: "admin-appointment",
+        targetId: appointmentId,
+        summary: "Administrator appointment revoked",
+      },
+      [
+        statement(
+          db,
+          `UPDATE admin_appointments
+           SET status = 'revoked', revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND status = 'active'`,
+          identity.userId,
+          appointmentId,
+        ),
+      ],
+    );
+    return { revoked: true };
+  }
+  if (actionName === "updatePlatformSettings") {
+    requireAuthorized("platform.settings.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator,
+      roles: [],
+    });
+    const limit = integerValue(payload.selfServiceWorkspaceLimit, "Self-serve workspace limit", 0, 1000);
+    await repository.setPlatformSetting("selfServiceWorkspaceLimit", limit, identity.userId);
+    return { selfServiceWorkspaceLimit: limit };
   }
   if (actionName === "updateTheme") {
     const theme = textValue(payload.theme, "Theme", { min: 4, max: 6 });
@@ -1671,6 +2050,17 @@ async function handleCommand(
     const validated = await repository.validateInvitationCredential(token, signingKey());
     if (validated.claims.email && validated.claims.email !== identity.email) {
       throw new HttpError(403, "INVITATION_EMAIL_MISMATCH", "This invitation belongs to another email address.");
+    }
+    const supportGrant = await repository.getActiveSupportGrant(
+      validated.invitation.workspaceId,
+      identity.userId,
+    );
+    if (supportGrant) {
+      throw new HttpError(
+        403,
+        "INVITATION_SUPPORT_BLOCKED",
+        "Temporary support access cannot convert itself into permanent membership.",
+      );
     }
     const invitation = validated.invitation;
     const existing = await repository.getWorkspaceAccess(invitation.workspaceId, identity.userId);
@@ -1697,6 +2087,14 @@ async function handleCommand(
   }
   if (actionName === "requestDomainJoin") {
     const workspaceId = textValue(payload.workspaceId, "Workspace", { min: 1, max: 128 });
+    const supportGrant = await repository.getActiveSupportGrant(workspaceId, identity.userId);
+    if (supportGrant) {
+      throw new HttpError(
+        403,
+        "JOIN_SUPPORT_BLOCKED",
+        "Temporary support access cannot request permanent membership.",
+      );
+    }
     const eligible = await repository.findDomainEligibleWorkspaceIds(identity.email);
     if (!eligible.includes(workspaceId)) {
       throw new HttpError(403, "DOMAIN_NOT_ELIGIBLE", "Your verified email domain is not eligible for this workspace.");
@@ -1807,6 +2205,234 @@ async function handleCommand(
   const workspaceId = textValue(payload.workspaceId, "Workspace", { min: 1, max: 128 });
   const access = await requireWorkspace(repository, identity, workspaceId, isPlatformAdministrator);
   const context = policyContext(access, isPlatformAdministrator);
+  const supportGrant = access.supportGrant
+    ? await repository.getActiveSupportGrant(workspaceId, identity.userId)
+    : null;
+
+  if (actionName === "resolveSupportRequest") {
+    requireAuthorized("workspace.support.decide", context);
+    const requestId = textValue(payload.requestId, "Support request", { min: 1, max: 128 });
+    const approve = booleanValue(payload.approve, "Decision");
+    const request = await first<SupportRequestRow>(
+      db,
+      `SELECT id, requester_user_id, requester_email, requester_name, requested_role,
+              requested_duration_hours, status, workspace_id
+       FROM support_access_requests WHERE id = ? AND workspace_id = ?`,
+      requestId,
+      workspaceId,
+    );
+    if (!request || request.status !== "pending") {
+      throw new HttpError(409, "SUPPORT_REQUEST_UNAVAILABLE", "This support request is no longer pending.");
+    }
+    if (!approve) {
+      await audit(
+        repository,
+        identity,
+        workspaceId,
+        {
+          action: "support.denied",
+          targetType: "support-request",
+          targetId: requestId,
+          targetLabel: request.requester_email,
+          summary: `${request.requester_email} support request denied`,
+          metadata: { requestedRole: request.requested_role },
+        },
+        [
+          statement(
+            db,
+            `UPDATE support_access_requests
+             SET status = 'denied', decided_by = ?, decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND status = 'pending'`,
+            identity.userId,
+            requestId,
+          ),
+        ],
+      );
+      return { approved: false };
+    }
+    const grantedRole = textValue(
+      payload.grantedRole ?? request.requested_role,
+      "Granted role",
+      { min: 4, max: 13 },
+    ) as WorkspaceRole;
+    if (!(["administrator", "creator", "reviewer", "publisher", "viewer"] as string[]).includes(grantedRole)) {
+      throw new HttpError(400, "SUPPORT_ROLE_INVALID", "The granted role is invalid.");
+    }
+    const grantedDurationHours = integerValue(
+      payload.grantedDurationHours ?? request.requested_duration_hours,
+      "Granted duration",
+      1,
+      168,
+    );
+    if (grantedRole === "administrator") {
+      // A customer administrator may approve administrator-level support, but
+      // the approval must be an explicit, separate decision from the request.
+      const explicit = booleanValue(payload.explicitAdministrator, "Administrator approval");
+      if (!explicit) {
+        throw new HttpError(400, "SUPPORT_ADMIN_CONFIRM_REQUIRED", "Confirm administrator-level access explicitly.");
+      }
+    }
+    const grantId = id("grant");
+    const expiresAt = new Date(
+      Date.now() + grantedDurationHours * 3600 * 1000,
+    ).toISOString();
+    const statements = [
+      statement(
+        db,
+        `UPDATE support_access_requests
+         SET status = 'approved', decided_by = ?, decided_at = CURRENT_TIMESTAMP,
+             granted_role = ?, grant_id = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'pending'`,
+        identity.userId,
+        grantedRole,
+        grantId,
+        requestId,
+      ),
+      statement(
+        db,
+        `INSERT INTO support_access_grants
+           (id, request_id, workspace_id, user_id, email, display_name, role,
+            status, approved_by, granted_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, ?)`,
+        grantId,
+        requestId,
+        workspaceId,
+        request.requester_user_id,
+        request.requester_email,
+        request.requester_name,
+        grantedRole,
+        identity.userId,
+        expiresAt,
+      ),
+    ];
+    await audit(repository, identity, workspaceId, {
+      action: "support.approved",
+      targetType: "support-grant",
+      targetId: grantId,
+      targetLabel: request.requester_email,
+      summary: `${request.requester_email} granted temporary ${grantedRole} access`,
+      metadata: {
+        requestedRole: request.requested_role,
+        grantedRole,
+        requestedDurationHours: request.requested_duration_hours,
+        grantedDurationHours,
+        expiresAt,
+      },
+    }, statements);
+    return { approved: true, grantId };
+  }
+  if (actionName === "revokeSupportAccess") {
+    const grantId = textValue(payload.grantId, "Support grant", { min: 1, max: 128 });
+    const grant = await first<SupportGrantRow>(
+      db,
+      `SELECT id, user_id, email, status, workspace_id FROM support_access_grants
+       WHERE id = ? AND workspace_id = ?`,
+      grantId,
+      workspaceId,
+    );
+    if (!grant) throw new HttpError(404, "SUPPORT_GRANT_NOT_FOUND", "Support grant not found.");
+    const holder = grant.user_id === identity.userId;
+    if (holder) {
+      // Grant holders may always revoke their own temporary access.
+      requireAuthorized("workspace.read", context);
+    } else {
+      requireAuthorized("workspace.support.revoke", context);
+    }
+    if (grant.status !== "active") {
+      throw new HttpError(409, "SUPPORT_GRANT_NOT_ACTIVE", "This support grant is not active.");
+    }
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "support.revoked",
+        targetType: "support-grant",
+        targetId: grantId,
+        targetLabel: grant.email,
+        summary: `${grant.email} temporary access revoked`,
+        metadata: { revokedBy: holder ? "grant-holder" : "workspace-administrator" },
+      },
+      [
+        statement(
+          db,
+          `UPDATE support_access_grants
+           SET status = 'revoked', ended_at = CURRENT_TIMESTAMP, revoked_by = ?
+           WHERE id = ? AND status = 'active'`,
+          identity.userId,
+          grantId,
+        ),
+        statement(
+          db,
+          `UPDATE invitations
+           SET status = 'revoked', revoked_by = ?, revoked_at = CURRENT_TIMESTAMP
+           WHERE workspace_id = ? AND created_by = ? AND created_via = 'support-access'
+             AND status = 'active'`,
+          identity.userId,
+          workspaceId,
+          grant.user_id,
+        ),
+      ],
+    );
+    return { revoked: true };
+  }
+  if (actionName === "sweepExpiredSupportAccess") {
+    requireAuthorized("workspace.audit.read", context);
+    const expired = await repository.expireSupportGrants();
+    const expiredHere = expired.filter((item) => item.workspaceId === workspaceId);
+    for (const grant of expiredHere) {
+      await audit(repository, identity, workspaceId, {
+        action: "support.expired",
+        targetType: "support-grant",
+        targetId: grant.id,
+        targetLabel: grant.email,
+        summary: `${grant.email} temporary access expired`,
+        metadata: { role: grant.role, expiresAt: grant.expiresAt },
+      });
+    }
+    return { expired: expiredHere.length };
+  }
+  if (actionName === "updateAllowedDomains") {
+    requireAuthorized("workspace.domains.manage", context);
+    const domains = [
+      ...new Set(
+        stringList(payload.allowedDomains, "Allowed domains", 100).map((item) =>
+          item.toLowerCase(),
+        ),
+      ),
+    ];
+    for (const domain of domains) {
+      if (extractExactEmailDomain(`owner@${domain}`) !== domain) {
+        throw new HttpError(400, "DOMAIN_INVALID", `${domain} is not an exact valid email domain.`);
+      }
+    }
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "workspace.domains-updated",
+        targetType: "workspace",
+        targetId: workspaceId,
+        summary: "Approved email domains updated",
+        metadata: { domainCount: domains.length },
+      },
+      [
+        statement(db, `DELETE FROM workspace_domains WHERE workspace_id = ?`, workspaceId),
+        statement(
+          db,
+          `INSERT INTO workspace_domains
+             (id, workspace_id, domain_ascii, enabled, created_by, created_at)
+           SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.domain'), 1, ?, CURRENT_TIMESTAMP
+           FROM json_each(?)`,
+          workspaceId,
+          identity.userId,
+          JSON.stringify(domains.map((domain) => ({ id: id("domain"), domain }))),
+        ),
+      ],
+    );
+    return { saved: true };
+  }
 
   if (actionName === "updateWorkspaceSettings") {
     requireAuthorized("workspace.settings.manage", context);
@@ -1827,18 +2453,6 @@ async function handleCommand(
     const clickTargetColor = textValue(settingsPayload.clickTargetColor, "Click target color", { min: 7, max: 7 });
     if (!/^#[0-9a-f]{6}$/i.test(accentColor) || !/^#[0-9a-f]{6}$/i.test(clickTargetColor)) {
       throw new HttpError(400, "COLOR_INVALID", "Use six-digit hexadecimal colors.");
-    }
-    const domains = [
-      ...new Set(
-        stringList(settingsPayload.allowedDomains, "Allowed domains", 100).map((item) =>
-          item.toLowerCase(),
-        ),
-      ),
-    ];
-    for (const domain of domains) {
-      if (extractExactEmailDomain(`owner@${domain}`) !== domain) {
-        throw new HttpError(400, "DOMAIN_INVALID", `${domain} is not an exact valid email domain.`);
-      }
     }
     const excludedHosts = stringList(settingsPayload.excludedCaptureHosts, "Excluded hosts", 200).map((item) => item.toLowerCase());
     for (const host of excludedHosts) {
@@ -1864,24 +2478,13 @@ async function handleCommand(
         JSON.stringify({ excludedHosts }),
         workspaceId,
       ),
-      statement(db, `DELETE FROM workspace_domains WHERE workspace_id = ?`, workspaceId),
-      statement(
-        db,
-        `INSERT INTO workspace_domains
-           (id, workspace_id, domain_ascii, enabled, created_by, created_at)
-         SELECT json_extract(value, '$.id'), ?, json_extract(value, '$.domain'), 1, ?, CURRENT_TIMESTAMP
-         FROM json_each(?)`,
-        workspaceId,
-        identity.userId,
-        JSON.stringify(domains.map((domain) => ({ id: id("domain"), domain }))),
-      ),
     ];
     await audit(repository, identity, workspaceId, {
       action: "workspace.settings-updated",
       targetType: "workspace",
       targetId: workspaceId,
-      summary: "Workspace sharing, branding, and capture policies updated",
-      metadata: { domainCount: domains.length, excludedHostCount: excludedHosts.length },
+      summary: "Workspace branding and capture policies updated",
+      metadata: { excludedHostCount: excludedHosts.length },
     }, statements);
     return { saved: true };
   }
@@ -1948,13 +2551,38 @@ async function handleCommand(
     const role = textValue(payload.role, "Role", { min: 6, max: 9 }) as Exclude<WorkspaceRole, "administrator">;
     if (!(["creator", "reviewer", "publisher", "viewer"] as string[]).includes(role)) throw new HttpError(400, "INVITE_ROLE_INVALID", "Invitation role is invalid.");
     const expiresInHours = integerValue(payload.expiresInHours, "Expiration", 1, 24 * 90);
-    const maxUses = integerValue(payload.maxUses, "Maximum uses", 1, 100);
+    const maxUses = supportGrant ? 1 : integerValue(payload.maxUses, "Maximum uses", 1, 100);
+    const email =
+      typeof payload.email === "string" && payload.email.trim()
+        ? payload.email.trim().toLowerCase()
+        : undefined;
+    if (email !== undefined && (email.length > 320 || extractExactEmailDomain(email) === null)) {
+      throw new HttpError(400, "INVITE_EMAIL_INVALID", "The invitation email is invalid.");
+    }
     const invitationId = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
-    const expiresAtSeconds = Math.floor(Date.now() / 1000) + expiresInHours * 3600;
-    const token = await signInviteToken({ jti: invitationId, workspaceId, expiresAt: expiresAtSeconds, role }, signingKey());
+    const expiresAtSeconds = supportGrant
+      ? Math.min(
+          Math.floor(Date.parse(supportGrant.expiresAt) / 1000),
+          Math.floor(Date.now() / 1000) + expiresInHours * 3600,
+        )
+      : Math.floor(Date.now() / 1000) + expiresInHours * 3600;
+    const token = await signInviteToken({ jti: invitationId, workspaceId, expiresAt: expiresAtSeconds, role, ...(email ? { email } : {}) }, signingKey());
     const tokenHash = await hashToken(token);
     const label = textValue(payload.label ?? "Invite link", "Label", { max: 160 }) || "Invite link";
-    await audit(repository, identity, workspaceId, { action: "invitation.created", targetType: "invitation", targetId: invitationId, targetLabel: label, summary: `${label} invitation created`, metadata: { role, maxUses, expiresInHours } }, [statement(db, `INSERT INTO invitations (id, workspace_id, token_hash, label, role, status, max_uses, use_count, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, 'active', ?, 0, ?, ?, CURRENT_TIMESTAMP)`, invitationId, workspaceId, tokenHash, label, role, maxUses, new Date(expiresAtSeconds * 1000).toISOString(), identity.userId)]);
+    await audit(repository, identity, workspaceId, {
+      action: "invitation.created",
+      targetType: "invitation",
+      targetId: invitationId,
+      targetLabel: label,
+      summary: `${label} invitation created`,
+      metadata: {
+        role,
+        maxUses,
+        expiresInHours,
+        ...(email ? { emailScoped: true } : {}),
+        ...(supportGrant ? { via: "support-access", grantId: supportGrant.id } : {}),
+      },
+    }, [statement(db, `INSERT INTO invitations (id, workspace_id, token_hash, label, email, role, status, max_uses, use_count, expires_at, created_by, created_via, created_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 0, ?, ?, ?, CURRENT_TIMESTAMP)`, invitationId, workspaceId, tokenHash, label, email ?? null, role, maxUses, new Date(expiresAtSeconds * 1000).toISOString(), identity.userId, supportGrant ? "support-access" : "standard")]);
     return { token };
   }
 
@@ -1971,6 +2599,9 @@ async function handleCommand(
     const approve = booleanValue(payload.approve, "Decision");
     const join = await first<{ user_id: string; email: string; status: string }>(db, `SELECT user_id, email, status FROM join_requests WHERE id = ? AND workspace_id = ?`, joinRequestId, workspaceId);
     if (!join || join.status !== "pending") throw new HttpError(409, "JOIN_REQUEST_UNAVAILABLE", "This join request is no longer pending.");
+    if (approve && join.user_id === identity.userId) {
+      throw new HttpError(403, "JOIN_SELF_APPROVAL_BLOCKED", "You cannot approve your own join request.");
+    }
     const statements = [
       statement(db, `UPDATE join_requests SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, approve ? "approved" : "denied", identity.userId, joinRequestId),
       ...(approve

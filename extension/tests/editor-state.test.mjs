@@ -73,7 +73,7 @@ test("manual blur, drawing, and click edits undo and redo as one command each", 
       drawings: [{
         id: "draw-1",
         points: [{ x: 0.2, y: 0.2 }, { x: 0.3, y: 0.3 }],
-        color: "#1f7653",
+        color: "#356fe5",
         width: 0.006,
       }],
     },

@@ -166,6 +166,59 @@ export type JoinRequest = {
   createdAt: string;
 };
 
+export type SupportAccessRequest = {
+  id: string;
+  workspaceId: string;
+  requesterUserId: string;
+  requesterEmail: string;
+  requesterName: string;
+  requestedRole: WorkspaceRole;
+  reason: string;
+  requestedDurationHours: number;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  grantedRole: WorkspaceRole | null;
+  createdAt: string;
+};
+
+export type SupportAccessGrant = {
+  id: string;
+  requestId: string;
+  workspaceId: string;
+  userId: string;
+  email: string;
+  displayName: string;
+  role: WorkspaceRole;
+  status: "active" | "expired" | "revoked";
+  approvedBy: string;
+  grantedAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+  revokedBy: string | null;
+};
+
+export type AdminAppointment = {
+  id: string;
+  workspaceId: string;
+  email: string;
+  status: "active" | "accepted" | "revoked" | "expired";
+  expiresAt: string;
+  createdAt: string;
+};
+
+export type PlatformSettings = {
+  selfServiceWorkspaceLimit: number;
+};
+
+export type GuideSearchResult = {
+  guideId: string;
+  revisionId: string;
+  title: string;
+  excerpt: string;
+  status: RevisionStatus;
+  restricted: boolean;
+  updatedAt: string;
+};
+
 export type AuditEvent = {
   id: string;
   sequence: number;
@@ -202,6 +255,22 @@ export type PlatformWorkspace = WorkspaceSummary & {
   exports: number;
   storageBytes: number;
   failedOperations: number;
+  /** The platform administrator's most recent support request, if any. */
+  supportRequest?: {
+    id: string;
+    status: "pending" | "approved" | "denied" | "cancelled";
+    requestedRole: WorkspaceRole;
+    requestedDurationHours: number;
+    reason: string;
+    createdAt: string;
+  } | null;
+  /** An active support grant the platform administrator holds, if any. */
+  supportGrant?: {
+    id: string;
+    role: WorkspaceRole;
+    grantedAt: string;
+    expiresAt: string;
+  } | null;
 };
 
 export type PlatformMetrics = {
@@ -236,6 +305,8 @@ export type WorkspaceBundle = {
   guides: Guide[];
   invitations: Invitation[];
   joinRequests: JoinRequest[];
+  supportRequests: SupportAccessRequest[];
+  supportGrants: SupportAccessGrant[];
   audits: AuditEvent[];
   vaultItems: VaultItem[];
 };
@@ -248,6 +319,8 @@ export type BootstrapResponse = {
   platform?: {
     metrics: PlatformMetrics;
     workspaces: PlatformWorkspace[];
+    settings: PlatformSettings;
+    appointments: AdminAppointment[];
   };
 };
 

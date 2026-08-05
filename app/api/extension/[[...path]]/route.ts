@@ -1032,7 +1032,7 @@ async function commitCapture(
       workspaceId: credential.claims.workspaceId,
       workspaceName: access.workspaceName,
       ...(settings?.logo_object_key ? { logoMediaId: settings.logo_object_key } : {}),
-      accentColor: settings?.accent_color ?? "#1f7653",
+      accentColor: settings?.accent_color ?? "#356fe5",
       clickTargetColor: settings?.click_target_color ?? "#ef6f47",
       showRivetBranding: settings?.remove_branding !== 1,
     },

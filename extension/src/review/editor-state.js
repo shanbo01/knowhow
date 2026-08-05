@@ -1,7 +1,7 @@
 export const EDITOR_STATE_VERSION = 1;
 export const MAX_HISTORY = 80;
 
-const DEFAULT_ACCENT = "#1f7653";
+const DEFAULT_ACCENT = "#356fe5";
 const DEFAULT_CLICK = "#ef6f47";
 const MIN_CROP_SIZE = 0.12;
 

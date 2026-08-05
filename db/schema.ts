@@ -27,6 +27,15 @@ export const platformAdmins = sqliteTable("platform_admins", {
     .default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const platformSettings = sqliteTable("platform_settings", {
+  key: text("key").primaryKey(),
+  valueJson: text("value_json").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const entities = sqliteTable(
   "entities",
   {
@@ -63,6 +72,7 @@ export const workspaces = sqliteTable(
     })
       .notNull()
       .default("active"),
+    selfServe: integer("self_serve").notNull().default(0),
     createdBy: text("created_by").notNull(),
     ...timestamps,
   },
@@ -637,6 +647,9 @@ export const invitations = sqliteTable(
     useCount: integer("use_count").notNull().default(0),
     expiresAt: text("expires_at").notNull(),
     createdBy: text("created_by").notNull(),
+    createdVia: text("created_via", { enum: ["standard", "support-access"] })
+      .notNull()
+      .default("standard"),
     revokedBy: text("revoked_by"),
     revokedAt: text("revoked_at"),
     createdAt: text("created_at")
@@ -648,6 +661,10 @@ export const invitations = sqliteTable(
     check(
       "invitations_role_check",
       sql`${table.role} IN ('creator', 'reviewer', 'publisher', 'viewer')`,
+    ),
+    check(
+      "invitations_created_via_check",
+      sql`${table.createdVia} IN ('standard', 'support-access')`,
     ),
     check(
       "invitations_status_check",
@@ -680,6 +697,134 @@ export const inviteRedemptions = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.invitationId, table.userId] }),
     index("idx_invite_redemptions_user").on(table.userId, table.redeemedAt),
+  ],
+);
+
+export const supportAccessRequests = sqliteTable(
+  "support_access_requests",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    requesterUserId: text("requester_user_id").notNull(),
+    requesterEmail: text("requester_email").notNull(),
+    requesterName: text("requester_name").notNull(),
+    requestedRole: text("requested_role", {
+      enum: ["administrator", "creator", "reviewer", "publisher", "viewer"],
+    }).notNull(),
+    reason: text("reason").notNull(),
+    requestedDurationHours: integer("requested_duration_hours").notNull(),
+    status: text("status", {
+      enum: ["pending", "approved", "denied", "cancelled"],
+    })
+      .notNull()
+      .default("pending"),
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    grantedRole: text("granted_role", {
+      enum: ["administrator", "creator", "reviewer", "publisher", "viewer"],
+    }),
+    grantId: text("grant_id"),
+    ...timestamps,
+  },
+  (table) => [
+    check(
+      "support_access_requests_status_check",
+      sql`${table.status} IN ('pending', 'approved', 'denied', 'cancelled')`,
+    ),
+    check(
+      "support_access_requests_duration_check",
+      sql`${table.requestedDurationHours} BETWEEN 1 AND 168`,
+    ),
+    check(
+      "support_access_requests_reason_check",
+      sql`length(${table.reason}) BETWEEN 10 AND 2000`,
+    ),
+    index("idx_support_access_requests_workspace_status").on(
+      table.workspaceId,
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const supportAccessGrants = sqliteTable(
+  "support_access_grants",
+  {
+    id: text("id").primaryKey(),
+    requestId: text("request_id")
+      .notNull()
+      .references(() => supportAccessRequests.id, { onDelete: "cascade" }),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull(),
+    email: text("email").notNull(),
+    displayName: text("display_name").notNull(),
+    role: text("role", {
+      enum: ["administrator", "creator", "reviewer", "publisher", "viewer"],
+    }).notNull(),
+    status: text("status", { enum: ["active", "expired", "revoked"] })
+      .notNull()
+      .default("active"),
+    approvedBy: text("approved_by").notNull(),
+    grantedAt: text("granted_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+    endedAt: text("ended_at"),
+    revokedBy: text("revoked_by"),
+  },
+  (table) => [
+    uniqueIndex("uq_support_access_grants_request").on(table.requestId),
+    check(
+      "support_access_grants_status_check",
+      sql`${table.status} IN ('active', 'expired', 'revoked')`,
+    ),
+    index("idx_support_access_grants_workspace_user").on(
+      table.workspaceId,
+      table.userId,
+      table.status,
+    ),
+    index("idx_support_access_grants_expiry").on(table.expiresAt),
+  ],
+);
+
+export const adminAppointments = sqliteTable(
+  "admin_appointments",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    email: text("email").notNull(),
+    status: text("status", {
+      enum: ["active", "accepted", "revoked", "expired"],
+    })
+      .notNull()
+      .default("active"),
+    expiresAt: text("expires_at").notNull(),
+    createdBy: text("created_by").notNull(),
+    acceptedBy: text("accepted_by"),
+    acceptedAt: text("accepted_at"),
+    revokedBy: text("revoked_by"),
+    revokedAt: text("revoked_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("uq_admin_appointments_token_hash").on(table.tokenHash),
+    check(
+      "admin_appointments_status_check",
+      sql`${table.status} IN ('active', 'accepted', 'revoked', 'expired')`,
+    ),
+    index("idx_admin_appointments_workspace_status").on(
+      table.workspaceId,
+      table.status,
+    ),
   ],
 );
 
@@ -1285,8 +1430,144 @@ export const workflowIntegrityTriggerStatements = [
    END`,
 ] as const;
 
+/**
+ * Governed-access invariants keep self-serve workspace creation, temporary
+ * support grants, and administrator appointments transient and accountable:
+ * the self-serve limit is enforced inside the creation transaction, support
+ * grants cannot be self-approved or stacked, and an appointment can only be
+ * accepted once by the exact verified email it was issued to.
+ */
+export const governedAccessTriggerStatements = [
+  `CREATE TRIGGER IF NOT EXISTS workspaces_limit_self_serve
+   BEFORE INSERT ON workspaces
+   WHEN NEW.self_serve = 1
+   BEGIN
+     SELECT CASE
+       WHEN (
+         SELECT COUNT(*)
+         FROM workspaces
+         WHERE created_by = NEW.created_by AND self_serve = 1
+       ) >= CAST(COALESCE(
+         (
+           SELECT json_extract(value_json, '$')
+           FROM platform_settings
+           WHERE key = 'selfServiceWorkspaceLimit'
+         ),
+         1
+       ) AS INTEGER)
+       THEN RAISE(ABORT, 'self-serve workspace limit reached')
+     END;
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS support_access_requests_validate_decision
+   BEFORE UPDATE OF status ON support_access_requests
+   WHEN NEW.status != OLD.status
+   BEGIN
+     SELECT CASE
+       WHEN OLD.status != 'pending'
+         OR NEW.status NOT IN ('approved', 'denied', 'cancelled')
+         OR NEW.decided_by IS NULL
+         OR NEW.decided_at IS NULL
+         OR (
+           NEW.status = 'approved'
+           AND (NEW.granted_role IS NULL OR NEW.grant_id IS NULL)
+         )
+         OR (NEW.status = 'approved' AND NEW.decided_by = NEW.requester_user_id)
+       THEN RAISE(ABORT, 'invalid support request decision')
+     END;
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS support_access_grants_validate_insert
+   BEFORE INSERT ON support_access_grants
+   BEGIN
+     SELECT CASE
+       WHEN NOT EXISTS (
+         SELECT 1
+         FROM support_access_requests r
+         WHERE r.id = NEW.request_id
+           AND r.workspace_id = NEW.workspace_id
+           AND r.status = 'approved'
+           AND r.requester_user_id = NEW.user_id
+           AND r.decided_by IS NOT NULL
+           AND r.decided_by != r.requester_user_id
+       )
+       THEN RAISE(ABORT, 'support grant requires an approved request')
+     END;
+     SELECT CASE
+       WHEN NEW.approved_by IS NULL OR NEW.approved_by = NEW.user_id
+       THEN RAISE(ABORT, 'support grant cannot be self-approved')
+     END;
+     SELECT CASE
+       WHEN unixepoch(NEW.expires_at) <= unixepoch('now')
+       THEN RAISE(ABORT, 'support grant is already expired')
+     END;
+     SELECT CASE
+       WHEN EXISTS (
+         SELECT 1
+         FROM support_access_grants g
+         WHERE g.workspace_id = NEW.workspace_id
+           AND g.user_id = NEW.user_id
+           AND g.status = 'active'
+       )
+       THEN RAISE(ABORT, 'an active support grant already exists')
+     END;
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS support_access_grants_validate_update
+   BEFORE UPDATE OF status ON support_access_grants
+   WHEN NEW.status != OLD.status
+   BEGIN
+     SELECT CASE
+       WHEN OLD.status != 'active'
+         OR NEW.status NOT IN ('expired', 'revoked')
+         OR NEW.ended_at IS NULL
+         OR (NEW.status = 'revoked' AND NEW.revoked_by IS NULL)
+       THEN RAISE(ABORT, 'invalid support grant transition')
+     END;
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS admin_appointments_single_accept
+   BEFORE UPDATE OF accepted_by ON admin_appointments
+   WHEN NEW.accepted_by IS NOT NULL
+     AND (OLD.accepted_by IS NULL OR NEW.accepted_by != OLD.accepted_by)
+   BEGIN
+     SELECT CASE
+       WHEN OLD.status != 'active'
+         OR unixepoch(OLD.expires_at) <= unixepoch('now')
+         OR NOT EXISTS (
+           SELECT 1
+           FROM workspace_members wm
+           WHERE wm.workspace_id = OLD.workspace_id
+             AND wm.user_id = NEW.accepted_by
+             AND wm.status = 'active'
+             AND lower(wm.email) = lower(OLD.email)
+         )
+       THEN RAISE(ABORT, 'appointment unavailable')
+     END;
+   END`,
+  `CREATE TRIGGER IF NOT EXISTS admin_appointments_status_transitions
+   BEFORE UPDATE OF status ON admin_appointments
+   WHEN NEW.status != OLD.status
+   BEGIN
+     SELECT CASE
+       WHEN NOT (
+         OLD.status = 'active'
+         AND NEW.status IN ('accepted', 'revoked', 'expired')
+       )
+       THEN RAISE(ABORT, 'invalid appointment transition')
+     END;
+     SELECT CASE
+       WHEN NEW.status = 'accepted'
+         AND (NEW.accepted_by IS NULL OR NEW.accepted_at IS NULL)
+       THEN RAISE(ABORT, 'appointment acceptance incomplete')
+     END;
+     SELECT CASE
+       WHEN NEW.status = 'revoked'
+         AND (NEW.revoked_by IS NULL OR NEW.revoked_at IS NULL)
+       THEN RAISE(ABORT, 'appointment revocation incomplete')
+     END;
+   END`,
+] as const;
+
 export const securityTriggerStatements = [
   ...auditAppendOnlyTriggerStatements,
   ...tenantBoundaryTriggerStatements,
   ...workflowIntegrityTriggerStatements,
+  ...governedAccessTriggerStatements,
 ] as const;

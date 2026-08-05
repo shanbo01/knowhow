@@ -30,7 +30,15 @@ export interface DeviceTokenClaims extends ClaimsBase {
   scopes: readonly DeviceScope[];
 }
 
-export type RivetTokenClaims = InviteTokenClaims | DeviceTokenClaims;
+export interface AppointmentTokenClaims extends ClaimsBase {
+  type: "admin-appointment";
+  email: string;
+}
+
+export type RivetTokenClaims =
+  | InviteTokenClaims
+  | DeviceTokenClaims
+  | AppointmentTokenClaims;
 
 function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -106,7 +114,9 @@ function assertBaseClaims(value: unknown): asserts value is RivetTokenClaims {
   const claims = value as Partial<RivetTokenClaims>;
   if (
     claims.version !== TOKEN_VERSION ||
-    (claims.type !== "invite" && claims.type !== "device") ||
+    (claims.type !== "invite" &&
+      claims.type !== "device" &&
+      claims.type !== "admin-appointment") ||
     typeof claims.jti !== "string" ||
     typeof claims.workspaceId !== "string" ||
     typeof claims.issuedAt !== "number" ||
@@ -262,6 +272,42 @@ export async function verifyDeviceToken(
     )
   ) {
     throw new HttpError(401, "TOKEN_INVALID", "The device token is invalid.");
+  }
+  return claims;
+}
+
+export function signAppointmentToken(
+  input: Omit<AppointmentTokenClaims, "version" | "type" | "issuedAt" | "email"> & {
+    email: string;
+    issuedAt?: number;
+  },
+  secret?: string,
+): Promise<string> {
+  return signClaims(
+    {
+      ...input,
+      email: input.email.trim().toLowerCase(),
+      version: TOKEN_VERSION,
+      type: "admin-appointment",
+      issuedAt: input.issuedAt ?? Math.floor(Date.now() / 1000),
+    },
+    secret,
+  );
+}
+
+export async function verifyAppointmentToken(
+  token: string,
+  secret?: string,
+): Promise<AppointmentTokenClaims> {
+  const claims = await verifyClaims(token, "admin-appointment", secret);
+  if (
+    claims.type !== "admin-appointment" ||
+    typeof claims.email !== "string" ||
+    claims.email.length > 320 ||
+    claims.email !== claims.email.trim().toLowerCase() ||
+    !claims.email.includes("@")
+  ) {
+    throw new HttpError(401, "TOKEN_INVALID", "The appointment token is invalid.");
   }
   return claims;
 }

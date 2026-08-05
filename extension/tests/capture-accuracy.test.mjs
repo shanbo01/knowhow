@@ -122,6 +122,59 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(offscreenSource, /\{ clickTarget \}/);
 });
 
+test("capture defers interactive clicks until a pre-click screenshot is ready", async () => {
+  const [contentSource, backgroundSource] = await Promise.all([
+    readFile(new URL("../src/content/capture.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(contentSource, /addEventListener\("pointerup", onPointerUp, true\)/);
+  assert.match(contentSource, /function deferrableTarget\(element\)/);
+  assert.match(contentSource, /event\.preventDefault\(\);/);
+  assert.match(contentSource, /event\.stopImmediatePropagation\(\);/);
+  assert.match(contentSource, /type: "PREFLIGHT_CAPTURE"/);
+  assert.match(contentSource, /type: "PREFLIGHT_DISCARD"/);
+  assert.match(
+    contentSource,
+    /document\.elementFromPoint\(deferred\.clientX, deferred\.clientY\)/,
+  );
+  assert.match(contentSource, /deferred\.element\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(
+    contentSource,
+    /preflight: deferred\.screenshotReady === true/,
+  );
+  assert.match(contentSource, /function tryCommitDeferredClick\(deferred\)/);
+  const deferrableSource = contentSource.slice(
+    contentSource.indexOf("function deferrableTarget"),
+    contentSource.indexOf("function tryCommitDeferredClick"),
+  );
+  assert.match(deferrableSource, /input\[type=text\]/);
+  assert.match(deferrableSource, /textarea/);
+  assert.match(deferrableSource, /\[contenteditable=true\]/);
+
+  assert.match(backgroundSource, /case "PREFLIGHT_CAPTURE":/);
+  assert.match(backgroundSource, /case "PREFLIGHT_DISCARD":/);
+  assert.match(backgroundSource, /PREFLIGHT_TTL_MS = 10_000/);
+  assert.match(backgroundSource, /commitPreflightStep\(stash, request, snapshot\)/);
+  assert.match(backgroundSource, /preflight: message\.preflight === true/);
+  assert.match(backgroundSource, /stash\.generation === generation/);
+  assert.match(backgroundSource, /verdictUrl: verdict\.sanitizedUrl/);
+  const stepSlice = backgroundSource.slice(
+    backgroundSource.indexOf("async function captureStep"),
+    backgroundSource.indexOf("async function commitPreflightStep"),
+  );
+  assert.ok(stepSlice.indexOf("request.preflight === true") < stepSlice.indexOf("captureVisiblePage("));
+  const preflightSlice = backgroundSource.slice(
+    backgroundSource.indexOf("async function commitPreflightStep"),
+    backgroundSource.indexOf("async function captureNavigation"),
+  );
+  assert.match(preflightSlice, /clearPendingPreflight\(\)/);
+  assert.match(preflightSlice, /jobIsCurrent\(latest, snapshot\.sessionId, request\.generation\)/);
+  assert.match(preflightSlice, /withCapturedStep\(current, stepId\)/);
+  assert.doesNotMatch(preflightSlice, /captureVisiblePage\(/);
+  assert.doesNotMatch(preflightSlice, /clickJobMayProceed/);
+});
+
 test("content capture does not inject duplicate recording controls", async () => {
   const source = await readFile(
     new URL("../src/content/capture.js", import.meta.url),

@@ -92,6 +92,29 @@ function enqueueRemoteLifecycle(operation) {
   return result;
 }
 
+const PREFLIGHT_STORAGE_KEY = "rivet-pending-preflight";
+const PREFLIGHT_TTL_MS = 10_000;
+
+async function getPendingPreflight(sessionId) {
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  const stored = await chrome.storage.session.get(PREFLIGHT_STORAGE_KEY);
+  const stash = stored[PREFLIGHT_STORAGE_KEY];
+  if (!stash || stash.sessionId !== sessionId) return null;
+  if (Date.now() - Number(stash.capturedAt || 0) > PREFLIGHT_TTL_MS) {
+    await chrome.storage.session.remove(PREFLIGHT_STORAGE_KEY);
+    return null;
+  }
+  return stash;
+}
+
+async function setPendingPreflight(stash) {
+  await chrome.storage.session.set({ [PREFLIGHT_STORAGE_KEY]: stash });
+}
+
+async function clearPendingPreflight() {
+  await chrome.storage.session.remove(PREFLIGHT_STORAGE_KEY);
+}
+
 async function pendingRemoteDiscards() {
   const stored = await chrome.storage.local.get(
     STORAGE_KEYS.pendingRemoteDiscards,
@@ -304,7 +327,7 @@ function safeCaptureText(value, policy, maxLength, fallback) {
 
 async function updateActionBadge(state) {
   const badges = {
-    [CaptureStatus.PREPARING]: ["...", "#0f766e"],
+    [CaptureStatus.PREPARING]: ["...", "#356fe5"],
     [CaptureStatus.RECORDING]: ["REC", "#dc2626"],
     [CaptureStatus.PAUSED]: ["II", "#d97706"],
     [CaptureStatus.REVIEWING]: ["REV", "#4f46e5"],
@@ -1107,6 +1130,13 @@ async function captureStep(request) {
   }
   await requireCaptureHostAccess();
 
+  if (request.preflight === true) {
+    const stash = await getPendingPreflight(request.sessionId);
+    if (stash && stash.generation === generation) {
+      return commitPreflightStep(stash, request, snapshot);
+    }
+  }
+
   const [activeTab] = await chrome.tabs.query({
     active: true,
     windowId: snapshot.windowId,
@@ -1240,6 +1270,72 @@ async function captureStep(request) {
   return true;
 }
 
+async function commitPreflightStep(stash, request, snapshot) {
+  await clearPendingPreflight();
+  const policy = await getCapturePolicy();
+  const context = stash.context || {};
+  const latest = await getCaptureState();
+  if (!jobIsCurrent(latest, snapshot.sessionId, request.generation)) {
+    return false;
+  }
+  const stepId = crypto.randomUUID();
+  const order = latest.stepCount;
+  await ensureOffscreenDocument();
+  const processed = await chrome.runtime.sendMessage({
+    target: "offscreen",
+    type: "RIVET_PROCESS_SCREENSHOT",
+    dataUrl: stash.dataUrl,
+    step: {
+      sessionId: snapshot.sessionId,
+      id: stepId,
+      order,
+      title: safeCaptureText(
+        context.title || request.title || "Captured step",
+        policy,
+        200,
+        "Captured step",
+      ),
+      instructions: safeCaptureText(
+        context.instructions ||
+          request.instructions ||
+          "Follow the highlighted action.",
+        policy,
+        2_000,
+        "Follow the highlighted action.",
+      ),
+      sanitizedUrl: stash.verdictUrl || context.sanitizedUrl || "",
+      sourceEvent: request.sourceEvent || "click",
+      ...(Number.isInteger(request.interactionSequence)
+        ? { interactionSequence: request.interactionSequence }
+        : {}),
+      capturedAt: new Date().toISOString(),
+    },
+    masks: Array.isArray(context.masks) ? context.masks : [],
+    targetRect: context.targetRect || request.targetRect || null,
+    clickPoint: context.clickPoint || request.clickPoint || null,
+    viewport: context.viewport || request.viewport,
+    interactionViewport: context.viewport || request.viewport,
+    clickTargetColor: policy.clickTargetColor,
+    limits: CAPTURE_LIMITS,
+  });
+  if (!processed?.ok) {
+    throw new Error(processed?.error || "Local screenshot redaction failed.");
+  }
+  const committed = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (!jobIsCurrent(current, snapshot.sessionId, request.generation)) {
+      return false;
+    }
+    await setCaptureState(withCapturedStep(current, stepId));
+    return true;
+  });
+  if (!committed) {
+    await deleteCapturedStep(snapshot.sessionId, stepId);
+    return false;
+  }
+  return true;
+}
+
 async function captureNavigation(details) {
   const state = await getCaptureState();
   if (
@@ -1343,6 +1439,54 @@ async function handleMessage(message, sender) {
         ok: true,
         policy: await updateCapturePolicy(message.policy || {}),
       };
+    case "PREFLIGHT_CAPTURE": {
+      const state = await getCaptureState();
+      if (
+        !sender.tab ||
+        sender.tab.id !== state.tabId ||
+        message.sessionId !== state.sessionId ||
+        !isCollecting(state)
+      ) {
+        return { ok: false, ignored: true };
+      }
+      const policy = await getCapturePolicy();
+      const verdict = evaluateCaptureUrl(
+        message.context?.pageUrl || sender.tab.url || "",
+        policy,
+      );
+      if (!verdict.allowed || verdict.origin !== state.origin) {
+        return { ok: false };
+      }
+      try {
+        const captured = await enqueueScreenshot(() =>
+          captureVisiblePage(state, policy, verdict.sanitizedUrl),
+        );
+        await setPendingPreflight({
+          sessionId: state.sessionId,
+          generation: state.generation,
+          dataUrl: captured.dataUrl,
+          context: message.context || {},
+          verdictUrl: verdict.sanitizedUrl,
+          capturedAt: Date.now(),
+        });
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Screenshot preflight failed.",
+        };
+      }
+    }
+    case "PREFLIGHT_DISCARD": {
+      const state = await getCaptureState();
+      if (state.sessionId === message.sessionId) {
+        await clearPendingPreflight();
+      }
+      return { ok: true };
+    }
     case "CAPTURE_EVENT": {
       const interactionSequence = interactionSequencer.reserve();
       const state = await getCaptureState();
@@ -1360,6 +1504,7 @@ async function handleMessage(message, sender) {
           pageUrl: sender.tab.url || message.context?.pageUrl,
           sourceEvent: "click",
           interactionSequence,
+          preflight: message.preflight === true,
           ...(Number.isInteger(message.interactionSequence)
             ? { sourceInteractionSequence: message.interactionSequence }
             : {}),

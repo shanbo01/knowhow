@@ -1,6 +1,7 @@
 "use client";
 
 import { account } from "./appwrite";
+import type { GuideSearchResult } from "./rivet-types";
 
 let cachedJwt: { value: string; expiresAt: number } | null = null;
 
@@ -53,6 +54,14 @@ export function rivetCommand<T>(action: string, payload: unknown = {}) {
     method: "POST",
     body: JSON.stringify({ action, payload }),
   });
+}
+
+export function searchGuides(workspaceId: string, query: string) {
+  const params = new URLSearchParams({
+    workspaceId,
+    q: query.slice(0, 300),
+  });
+  return rivetApi<{ results: GuideSearchResult[] }>(`/api/rivet/search?${params}`);
 }
 
 export async function downloadAuthorizedExport(

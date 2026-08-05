@@ -4,12 +4,17 @@ import { HttpError } from "./http-security";
 export type PolicyAction =
   | "platform.metrics.read"
   | "platform.workspaces.manage"
+  | "platform.settings.read"
+  | "platform.settings.manage"
   | "workspace.read"
   | "workspace.settings.manage"
+  | "workspace.domains.manage"
   | "workspace.members.manage"
   | "workspace.groups.manage"
   | "workspace.invitations.manage"
   | "workspace.audit.read"
+  | "workspace.support.decide"
+  | "workspace.support.revoke"
   | "guide.list"
   | "guide.read"
   | "guide.create"
@@ -34,6 +39,11 @@ export interface GuideAuthorizationFacts {
   reviewApproved?: boolean;
 }
 
+export interface SupportGrantFacts {
+  role: WorkspaceRole;
+  expiresAt: string;
+}
+
 export interface AuthorizationContext {
   isPlatformAdministrator?: boolean;
   isVerifiedIdentity: boolean;
@@ -42,6 +52,14 @@ export interface AuthorizationContext {
   roles: readonly WorkspaceRole[];
   capabilities?: readonly ("vault")[];
   guide?: GuideAuthorizationFacts;
+  /**
+   * Present when the actor is inside the workspace through a temporary,
+   * customer-approved support grant instead of permanent membership. Support
+   * actors remain transient identities even when the granted role is
+   * administrator: they may operate the workspace but never change its
+   * membership, identity eligibility, or governance.
+   */
+  supportGrant?: SupportGrantFacts;
 }
 
 export interface PolicyDecision {
@@ -78,6 +96,12 @@ export function authorize(
   }
 
   if (action.startsWith("platform.")) {
+    if (context.supportGrant) {
+      return deny(
+        "SUPPORT_GRANT_NOT_PLATFORM",
+        "Temporary support access cannot exercise platform administration.",
+      );
+    }
     return context.isPlatformAdministrator
       ? allow("The actor is a platform administrator.")
       : deny("PLATFORM_ADMIN_REQUIRED", "Platform administration is required.");
@@ -103,19 +127,51 @@ export function authorize(
     return deny("WORKSPACE_UNAVAILABLE", "The workspace is not active.");
   }
 
+  if (context.supportGrant) {
+    if (
+      action === "workspace.members.manage" ||
+      action === "workspace.groups.manage" ||
+      action === "workspace.invitations.manage" ||
+      action === "workspace.domains.manage" ||
+      action === "workspace.support.decide"
+    ) {
+      return deny(
+        "SUPPORT_GRANT_RESTRICTED",
+        "Temporary support access cannot change membership, invitations, domains, groups, or support governance.",
+      );
+    }
+  }
+
   if (action === "workspace.read" || action === "guide.list") {
     return allow("Active workspace members may access the workspace shell.");
   }
 
   if (
     action === "workspace.settings.manage" ||
-    action === "workspace.members.manage" ||
-    action === "workspace.groups.manage" ||
     action === "workspace.invitations.manage" ||
     action === "workspace.audit.read"
   ) {
     return roles.has("administrator")
       ? allow("Workspace administrators may manage workspace administration.")
+      : deny("WORKSPACE_ADMIN_REQUIRED", "Workspace administration is required.");
+  }
+
+  if (
+    action === "workspace.members.manage" ||
+    action === "workspace.groups.manage" ||
+    action === "workspace.domains.manage" ||
+    action === "workspace.support.decide"
+  ) {
+    return roles.has("administrator") && !context.supportGrant
+      ? allow("Workspace administrators may manage workspace identity and governance.")
+      : deny("WORKSPACE_ADMIN_REQUIRED", "Workspace administration is required.");
+  }
+
+  if (action === "workspace.support.revoke") {
+    // The command layer additionally allows grant holders to revoke their own
+    // grant; policy only authorizes administrator-driven revocation here.
+    return roles.has("administrator") && !context.supportGrant
+      ? allow("Workspace administrators may revoke temporary support access.")
       : deny("WORKSPACE_ADMIN_REQUIRED", "Workspace administration is required.");
   }
 

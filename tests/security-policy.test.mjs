@@ -656,3 +656,176 @@ test("capture guards reject uploads and completion after the scoped draft is arc
   );
   database.close();
 });
+
+test("temporary support grants are restricted-admin identities", () => {
+  const grant = (role, extra = {}) => ({
+    ...context([role]),
+    supportGrant: { role, expiresAt: "2099-01-01T00:00:00Z" },
+    ...extra,
+  });
+  // Operational administration remains possible under an approved grant.
+  assert.equal(
+    security.authorize("workspace.settings.manage", grant("administrator")).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("workspace.audit.read", grant("administrator")).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("workspace.read", grant("viewer")).allowed,
+    true,
+  );
+  assert.equal(security.authorize("guide.list", grant("viewer")).allowed, true);
+  // Administrator-driven revocation requires a permanent administrator; the
+  // grant holder may still revoke their own grant through the command layer.
+  assert.equal(
+    security.authorize("workspace.support.revoke", grant("administrator")).allowed,
+    false,
+  );
+  // Identity, invitation, domain, group, and governance mutations are locked.
+  for (const action of [
+    "workspace.members.manage",
+    "workspace.groups.manage",
+    "workspace.invitations.manage",
+    "workspace.domains.manage",
+    "workspace.support.decide",
+  ]) {
+    assert.equal(
+      security.authorize(action, grant("administrator")).allowed,
+      false,
+      `${action} must be denied for support administrators`,
+    );
+    assert.equal(
+      security.authorize(action, grant("administrator")).code,
+      "SUPPORT_GRANT_RESTRICTED",
+    );
+  }
+  // Support access never grants platform authority, even to platform admins.
+  assert.equal(
+    security.authorize("platform.workspaces.manage", {
+      ...grant("administrator"),
+      isPlatformAdministrator: true,
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    security.authorize("platform.settings.manage", {
+      ...grant("administrator"),
+      isPlatformAdministrator: true,
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    security.authorize("platform.settings.manage", grant("administrator")).allowed,
+    false,
+  );
+  // A non-support platform administrator keeps platform settings authority.
+  assert.equal(
+    security.authorize("platform.settings.manage", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator: true,
+      roles: [],
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("platform.settings.read", {
+      isVerifiedIdentity: true,
+      isPlatformAdministrator: false,
+      roles: [],
+    }).allowed,
+    false,
+  );
+});
+
+test("support governance decisions require a permanent workspace administrator", () => {
+  assert.equal(
+    security.authorize("workspace.support.decide", context(["creator"])).allowed,
+    false,
+  );
+  assert.equal(
+    security.authorize("workspace.support.decide", context(["viewer"])).allowed,
+    false,
+  );
+  assert.equal(
+    security.authorize("workspace.support.decide", context(["administrator"])).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("workspace.support.revoke", context(["administrator"])).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("workspace.support.revoke", context(["viewer"])).allowed,
+    false,
+  );
+  // Suspended membership blocks governance even for administrators.
+  assert.equal(
+    security.authorize("workspace.support.decide", {
+      ...context(["administrator"]),
+      membershipStatus: "suspended",
+    }).allowed,
+    false,
+  );
+});
+
+test("domain policy is a distinct administrator action unavailable to support grants", () => {
+  assert.equal(
+    security.authorize("workspace.domains.manage", context(["administrator"])).allowed,
+    true,
+  );
+  assert.equal(
+    security.authorize("workspace.domains.manage", context(["creator"])).allowed,
+    false,
+  );
+  assert.equal(
+    security.authorize("workspace.domains.manage", {
+      ...context(["administrator"]),
+      supportGrant: { role: "administrator", expiresAt: "2099-01-01T00:00:00Z" },
+    }).allowed,
+    false,
+  );
+});
+
+test("guide.read works for support identities under the granted role", () => {
+  const supportAdmin = {
+    ...context(["administrator"]),
+    supportGrant: { role: "administrator", expiresAt: "2099-01-01T00:00:00Z" },
+  };
+  assert.equal(
+    security.authorize("guide.read", {
+      ...supportAdmin,
+      guide: {
+        revisionStatus: "published",
+        isAudienceMember: false,
+        isAuthor: false,
+        isAssignedReviewer: false,
+        exportAllowed: true,
+        privacyReviewed: true,
+        reviewApproved: true,
+      },
+    }).allowed,
+    true,
+  );
+  const supportViewer = {
+    ...context(["viewer"]),
+    supportGrant: { role: "viewer", expiresAt: "2099-01-01T00:00:00Z" },
+  };
+  assert.equal(
+    security.authorize("guide.read", {
+      ...supportViewer,
+      guide: {
+        revisionStatus: "published",
+        isAudienceMember: false,
+        isAuthor: false,
+        isAssignedReviewer: false,
+        exportAllowed: true,
+        privacyReviewed: true,
+        reviewApproved: true,
+      },
+    }).allowed,
+    false,
+    "a viewer-level support identity needs audience membership like any viewer",
+  );
+});

@@ -13,8 +13,10 @@ import { HttpError } from "./http-security";
 import {
   constantTimeEqual,
   hashToken,
+  type AppointmentTokenClaims,
   type DeviceTokenClaims,
   type InviteTokenClaims,
+  verifyAppointmentToken,
   verifyDeviceToken,
   verifyInviteToken,
 } from "./tokens";
@@ -22,7 +24,13 @@ import {
 const ZERO_HASH = "0".repeat(64);
 const MAX_AUDIT_METADATA_BYTES = 32_000;
 const SENSITIVE_AUDIT_KEY =
-  /(?:password|passphrase|secret|credential|authorization|cookie|clipboard|token|raw.?screenshot|unredacted|api.?key)/i;
+  /(?:password|passphrase|secret|credential|authorization|cookie|clipboard|token|raw.?screenshot|unredacted|api.?key|email\b)/i;
+
+export interface SupportGrantAccess {
+  grantId: string;
+  role: WorkspaceRole;
+  expiresAt: string;
+}
 
 export interface WorkspaceAccess {
   workspaceId: string;
@@ -34,6 +42,8 @@ export interface WorkspaceAccess {
   roles: readonly WorkspaceRole[];
   capabilities: readonly "vault"[];
   groupIds: readonly string[];
+  /** Present when access comes from a temporary support grant, not membership. */
+  supportGrant?: SupportGrantAccess;
 }
 
 export interface GuideAccessFacts {
@@ -60,6 +70,49 @@ export interface InvitationState {
   maxUses: number;
   useCount: number;
   expiresAt: string;
+  createdVia: "standard" | "support-access";
+}
+
+export interface AppointmentState {
+  id: string;
+  workspaceId: string;
+  tokenHash: string;
+  email: string;
+  status: "active" | "accepted" | "revoked" | "expired";
+  expiresAt: string;
+}
+
+export interface SupportGrantState {
+  id: string;
+  requestId: string;
+  workspaceId: string;
+  userId: string;
+  email: string;
+  displayName: string;
+  role: WorkspaceRole;
+  status: "active" | "expired" | "revoked";
+  approvedBy: string;
+  grantedAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+  revokedBy: string | null;
+}
+
+export interface SupportRequestState {
+  id: string;
+  workspaceId: string;
+  requesterUserId: string;
+  requesterEmail: string;
+  requesterName: string;
+  requestedRole: WorkspaceRole;
+  reason: string;
+  requestedDurationHours: number;
+  status: "pending" | "approved" | "denied" | "cancelled";
+  decidedBy: string | null;
+  decidedAt: string | null;
+  grantedRole: WorkspaceRole | null;
+  grantId: string | null;
+  createdAt: string;
 }
 
 export interface DeviceTokenState {
@@ -136,6 +189,17 @@ interface WorkspaceAccessRow {
 interface WorkspaceGroupRow {
   workspace_id: string;
   group_id: string;
+}
+
+interface SupportGrantRow {
+  grant_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+  entity_id: string;
+  workspace_status: WorkspaceStatus;
+  role: WorkspaceRole;
+  expires_at: string;
 }
 
 interface GuideRow {
@@ -339,7 +403,7 @@ export class D1RivetRepository {
   }
 
   async listWorkspaceAccess(userId: string): Promise<WorkspaceAccess[]> {
-    const [accessRows, groupRows] = await Promise.all([
+    const [accessRows, groupRows, supportRows] = await Promise.all([
       allRows<WorkspaceAccessRow>(
         this.db
           .prepare(
@@ -379,6 +443,27 @@ export class D1RivetRepository {
           )
           .bind(userId, userId),
       ),
+      allRows<SupportGrantRow>(
+        this.db
+          .prepare(
+            `SELECT
+               g.id AS grant_id,
+               w.id AS workspace_id,
+               w.name AS workspace_name,
+               w.slug AS workspace_slug,
+               w.entity_id,
+               w.status AS workspace_status,
+               g.role,
+               g.expires_at
+             FROM support_access_grants g
+             JOIN workspaces w ON w.id = g.workspace_id
+             WHERE g.user_id = ?
+               AND g.status = 'active'
+               AND unixepoch(g.expires_at) > unixepoch('now')
+             ORDER BY w.name, w.id`,
+          )
+          .bind(userId),
+      ),
     ]);
 
     const groupsByWorkspace = new Map<string, Set<string>>();
@@ -411,12 +496,38 @@ export class D1RivetRepository {
       accessByWorkspace.set(row.workspace_id, current);
     }
 
-    return [...accessByWorkspace.values()].map((access) => ({
+    const memberships = [...accessByWorkspace.values()].map((access) => ({
       ...access,
       roles: [...access.roles],
       capabilities: [...access.capabilities],
       groupIds: [...(groupsByWorkspace.get(access.workspaceId) ?? [])],
     }));
+
+    // A real membership always takes precedence over a support grant for the
+    // same workspace; grants only open workspaces the actor is not a member of.
+    const memberWorkspaceIds = new Set(memberships.map((access) => access.workspaceId));
+    const grants = supportRows
+      .filter((grant) => !memberWorkspaceIds.has(grant.workspace_id))
+      .map(
+        (grant): WorkspaceAccess => ({
+          workspaceId: grant.workspace_id,
+          workspaceName: grant.workspace_name,
+          workspaceSlug: grant.workspace_slug,
+          entityId: grant.entity_id,
+          workspaceStatus: grant.workspace_status,
+          membershipStatus: "active",
+          roles: [grant.role],
+          capabilities: [],
+          groupIds: [],
+          supportGrant: {
+            grantId: grant.grant_id,
+            role: grant.role,
+            expiresAt: grant.expires_at,
+          },
+        }),
+      );
+
+    return [...memberships, ...grants];
   }
 
   async getWorkspaceAccess(
@@ -527,7 +638,7 @@ export class D1RivetRepository {
     const row = await this.db
       .prepare(
         `SELECT id, workspace_id, token_hash, email, role, status,
-                max_uses, use_count, expires_at
+                max_uses, use_count, expires_at, created_via
          FROM invitations WHERE id = ? LIMIT 1`,
       )
       .bind(jti)
@@ -541,6 +652,7 @@ export class D1RivetRepository {
         max_uses: number;
         use_count: number;
         expires_at: string;
+        created_via: InvitationState["createdVia"];
       }>();
     return row
       ? {
@@ -553,6 +665,7 @@ export class D1RivetRepository {
           maxUses: row.max_uses,
           useCount: row.use_count,
           expiresAt: row.expires_at,
+          createdVia: row.created_via,
         }
       : null;
   }
@@ -657,6 +770,181 @@ export class D1RivetRepository {
         .bind(domain),
     );
     return rows.map((row) => row.workspace_id);
+  }
+
+  async getPlatformSetting<T = unknown>(key: string): Promise<T | null> {
+    const row = await this.db
+      .prepare("SELECT value_json FROM platform_settings WHERE key = ? LIMIT 1")
+      .bind(key)
+      .first<{ value_json: string }>();
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value_json) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  async getActiveSupportGrant(
+    workspaceId: string,
+    userId: string,
+  ): Promise<SupportGrantState | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, request_id, workspace_id, user_id, email, display_name, role,
+                status, approved_by, granted_at, expires_at, ended_at, revoked_by
+         FROM support_access_grants
+         WHERE workspace_id = ? AND user_id = ? AND status = 'active'
+           AND unixepoch(expires_at) > unixepoch('now')
+         LIMIT 1`,
+      )
+      .bind(workspaceId, userId)
+      .first<SupportGrantState>();
+    return row ?? null;
+  }
+
+  async hasActiveSupportGrant(userId: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(
+        `SELECT 1 AS matched FROM support_access_grants
+         WHERE user_id = ? AND status = 'active'
+           AND unixepoch(expires_at) > unixepoch('now')
+         LIMIT 1`,
+      )
+      .bind(userId)
+      .first<{ matched: number }>();
+    return row !== null;
+  }
+
+  async listPendingSupportRequests(
+    workspaceId: string,
+  ): Promise<SupportRequestState[]> {
+    return allRows<SupportRequestState>(
+      this.db
+        .prepare(
+          `SELECT id, workspace_id, requester_user_id, requester_email,
+                  requester_name, requested_role, reason, requested_duration_hours,
+                  status, decided_by, decided_at, granted_role, grant_id, created_at
+           FROM support_access_requests
+           WHERE workspace_id = ? AND status = 'pending'
+           ORDER BY created_at`,
+        )
+        .bind(workspaceId),
+    );
+  }
+
+  async listActiveSupportGrants(
+    workspaceId: string,
+  ): Promise<SupportGrantState[]> {
+    return allRows<SupportGrantState>(
+      this.db
+        .prepare(
+          `SELECT id, request_id, workspace_id, user_id, email, display_name, role,
+                  status, approved_by, granted_at, expires_at, ended_at, revoked_by
+           FROM support_access_grants
+           WHERE workspace_id = ? AND status = 'active'
+           ORDER BY granted_at`,
+        )
+        .bind(workspaceId),
+    );
+  }
+
+  async listAppointments(workspaceId: string): Promise<AppointmentState[]> {
+    return allRows<AppointmentState>(
+      this.db
+        .prepare(
+          `SELECT id, workspace_id, token_hash, email, status, expires_at
+           FROM admin_appointments
+           WHERE workspace_id = ? AND status = 'active'
+           ORDER BY created_at`,
+        )
+        .bind(workspaceId),
+    );
+  }
+
+  async getAppointmentByJti(jti: string): Promise<AppointmentState | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, workspace_id, token_hash, email, status, expires_at
+         FROM admin_appointments WHERE id = ? LIMIT 1`,
+      )
+      .bind(jti)
+      .first<AppointmentState>();
+    return row ?? null;
+  }
+
+  async validateAppointmentCredential(
+    token: string,
+    signingSecret?: string,
+  ): Promise<{ claims: AppointmentTokenClaims; appointment: AppointmentState }> {
+    const claims = await verifyAppointmentToken(token, signingSecret);
+    const [appointment, presentedHash] = await Promise.all([
+      this.getAppointmentByJti(claims.jti),
+      hashToken(token),
+    ]);
+    const databaseExpiry = appointment ? expirationSeconds(appointment.expiresAt) : null;
+    const matches =
+      appointment !== null &&
+      constantTimeEqual(appointment.tokenHash, presentedHash) &&
+      appointment.workspaceId === claims.workspaceId &&
+      normalizedOptionalEmail(appointment.email) === claims.email &&
+      appointment.status === "active" &&
+      databaseExpiry !== null &&
+      databaseExpiry === claims.expiresAt &&
+      databaseExpiry > Math.floor(Date.now() / 1000);
+    if (!matches || !appointment) {
+      throw new HttpError(401, "APPOINTMENT_INVALID", "The administrator appointment is invalid or no longer active.");
+    }
+    return { claims, appointment };
+  }
+
+  async expireSupportGrants(): Promise<SupportGrantState[]> {
+    const expired = await allRows<SupportGrantState>(
+      this.db
+        .prepare(
+          `SELECT id, request_id, workspace_id, user_id, email, display_name, role,
+                  status, approved_by, granted_at, expires_at, ended_at, revoked_by
+           FROM support_access_grants
+           WHERE status = 'active' AND unixepoch(expires_at) <= unixepoch('now')`,
+        ),
+    );
+    if (expired.length === 0) return [];
+    const result = await this.db
+      .prepare(
+        `UPDATE support_access_grants
+         SET status = 'expired', ended_at = expires_at
+         WHERE status = 'active' AND unixepoch(expires_at) <= unixepoch('now')`,
+      )
+      .run();
+    if (!result.success) {
+      throw new HttpError(500, "SUPPORT_GRANT_SWEEP_FAILED", "Expired support grants could not be closed.", {
+        expose: false,
+      });
+    }
+    return expired;
+  }
+
+  async setPlatformSetting(
+    key: string,
+    value: unknown,
+    updatedBy: string,
+  ): Promise<void> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO platform_settings (key, value_json, updated_by, updated_at)
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+           value_json = excluded.value_json,
+           updated_by = excluded.updated_by,
+           updated_at = CURRENT_TIMESTAMP`,
+      )
+      .bind(key, JSON.stringify(value), updatedBy)
+      .run();
+    if (!result.success) {
+      throw new HttpError(500, "PLATFORM_SETTING_FAILED", "The platform setting could not be saved.", {
+        expose: false,
+      });
+    }
   }
 
   async executeAuditedMutation(

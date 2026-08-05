@@ -13,10 +13,12 @@
     policy: {},
   };
   let pendingPointer = null;
+  let deferredClick = null;
   let interactionSequence = 0;
 
   const POINTER_MOVE_TOLERANCE = 6;
   const POINTER_COMMIT_WINDOW_MS = 3_000;
+  const DEFERRED_REPLY_TIMEOUT_MS = 2_500;
 
   function send(message) {
     return chrome.runtime.sendMessage(message).catch(() => null);
@@ -389,13 +391,107 @@
     );
   }
 
-  function sendCapturedInteraction(context) {
+  function sendCapturedInteraction(context, options = {}) {
     interactionSequence += 1;
     void send({
       type: "CAPTURE_EVENT",
       sessionId: state.sessionId,
       interactionSequence,
+      preflight: options.preflight === true,
       context,
+    });
+  }
+
+  // A pointerdown on an interactive control is deferred until the pre-click
+  // screenshot is ready, so transient UI (menus, popovers) is still visible in
+  // the captured step. Canceling pointerdown suppresses the compatibility
+  // mousedown/mouseup/click events, then the click is synthesized after the
+  // screenshot so the page still reacts normally.
+  function deferrableTarget(element) {
+    if (!(element instanceof Element)) return false;
+    if (
+      !element.matches(
+        "button,a,input,select,textarea,[role=button],[role=link],[tabindex]",
+      )
+    ) {
+      return false;
+    }
+    // Text-entry fields keep native behavior: caret placement and typing
+    // matter more than transient UI, and their pickers open on click.
+    if (
+      element.matches(
+        "textarea,[contenteditable=true],input:not([type]),input[type=text]," +
+          "input[type=search],input[type=email],input[type=password]," +
+          "input[type=tel],input[type=url],input[type=number]",
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function tryCommitDeferredClick(deferred) {
+    if (deferred.cancelled || !deferred.released) return;
+    if (!deferred.screenshotReady && !deferred.preflightFailed) return;
+    commitDeferredClick(deferred);
+  }
+
+  function commitDeferredClick(deferred) {
+    if (deferredClick === deferred) deferredClick = null;
+    if (deferred.timer) clearTimeout(deferred.timer);
+    const hit =
+      document.elementFromPoint(deferred.clientX, deferred.clientY) ||
+      deferred.element;
+    try {
+      hit.click();
+    } catch {
+      // Some pages reject programmatic activation; the page stays unchanged.
+    }
+    if (deferred.element instanceof HTMLElement) {
+      try {
+        deferred.element.focus({ preventScroll: true });
+      } catch {
+        // Focus restoration is best-effort for inputs clicked during capture.
+      }
+    }
+    sendCapturedInteraction(deferred.context, {
+      preflight: deferred.screenshotReady === true,
+    });
+  }
+
+  function beginDeferredClick(event, element, context) {
+    const deferred = {
+      pointerId: event.pointerId,
+      element,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      context,
+      screenshotReady: false,
+      preflightFailed: false,
+      released: false,
+      cancelled: false,
+      timer: null,
+    };
+    deferredClick = deferred;
+    deferred.timer = setTimeout(() => {
+      if (deferredClick !== deferred) return;
+      deferred.preflightFailed = true;
+      tryCommitDeferredClick(deferred);
+    }, DEFERRED_REPLY_TIMEOUT_MS);
+    void send({
+      type: "PREFLIGHT_CAPTURE",
+      sessionId: state.sessionId,
+      context: {
+        ...context,
+        masks: collectMasks(),
+      },
+      viewport: context.viewport,
+    }).then((response) => {
+      if (deferredClick !== deferred || deferred.cancelled) return;
+      if (deferred.timer) clearTimeout(deferred.timer);
+      deferred.screenshotReady = response?.ok === true;
+      deferred.preflightFailed = response?.ok !== true;
+      tryCommitDeferredClick(deferred);
     });
   }
 
@@ -411,6 +507,12 @@
       viewport,
     );
     if (!context.targetRect) return;
+    if (deferrableTarget(element)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      beginDeferredClick(event, element, context);
+      return;
+    }
     pendingPointer = {
       pointerId: event.pointerId,
       element,
@@ -422,14 +524,21 @@
   }
 
   function onPointerMove(event) {
-    if (!pendingPointer || event.pointerId !== pendingPointer.pointerId) return;
+    const active = pendingPointer || deferredClick;
+    if (!active || event.pointerId !== active.pointerId) return;
     if (
       Math.hypot(
-        event.clientX - pendingPointer.clientX,
-        event.clientY - pendingPointer.clientY,
-      ) > POINTER_MOVE_TOLERANCE
+        event.clientX - active.clientX,
+        event.clientY - active.clientY,
+      ) <= POINTER_MOVE_TOLERANCE
     ) {
-      pendingPointer = null;
+      return;
+    }
+    pendingPointer = null;
+    if (deferredClick === active) {
+      deferredClick = null;
+      if (active.timer) clearTimeout(active.timer);
+      void send({ type: "PREFLIGHT_DISCARD", sessionId: state.sessionId });
     }
   }
 
@@ -437,6 +546,19 @@
     if (pendingPointer && event.pointerId === pendingPointer.pointerId) {
       pendingPointer = null;
     }
+    if (deferredClick && event.pointerId === deferredClick.pointerId) {
+      if (deferredClick.timer) clearTimeout(deferredClick.timer);
+      deferredClick = null;
+      void send({ type: "PREFLIGHT_DISCARD", sessionId: state.sessionId });
+    }
+  }
+
+  function onPointerUp(event) {
+    if (event.isPrimary === false || event.button !== 0) return;
+    const deferred = deferredClick;
+    if (!deferred || event.pointerId !== deferred.pointerId) return;
+    deferred.released = true;
+    tryCommitDeferredClick(deferred);
   }
 
   function onClick(event) {
@@ -510,6 +632,7 @@
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("pointercancel", onPointerCancel, true);
+  document.addEventListener("pointerup", onPointerUp, true);
   document.addEventListener("click", onClick, true);
 
   globalThis[INSTANCE_KEY] = {
