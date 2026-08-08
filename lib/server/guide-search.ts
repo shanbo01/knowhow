@@ -2,7 +2,7 @@ import type {
   GuideSearchResult,
   WorkspaceMember,
   WorkspaceSettings,
-} from "../rivet-types";
+} from "../knowhow-types";
 import type { D1DatabaseLike } from "./d1";
 import {
   evaluateGuideVisibility,

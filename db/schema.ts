@@ -330,6 +330,11 @@ export const guides = sqliteTable(
     currentPublishedRevisionId: text("current_published_revision_id"),
     workingDraftRevisionId: text("working_draft_revision_id"),
     archivedAt: text("archived_at"),
+    // Set once, the first time any revision of this guide is submitted for
+    // review. Before this is set, screenshot redactions/crops stay editable
+    // (non-destructive); after it is set, they are flattened into the
+    // stored pixels and can never be reverted for this guide again.
+    screenshotsLockedAt: text("screenshots_locked_at"),
     ...timestamps,
   },
   (table) => [
@@ -579,12 +584,16 @@ export const guideMedia = sqliteTable(
     width: integer("width").notNull(),
     height: integer("height").notNull(),
     sha256: text("sha256").notNull(),
-    redactionState: text("redaction_state", { enum: ["redacted"] })
+    // "pending" media may still carry unflattened (reversible) redaction/crop
+    // metadata client-side; it becomes "redacted" once flattened at first
+    // review submission (see guides.screenshots_locked_at) or on manual
+    // upload/replace, at which point pixels are final.
+    redactionState: text("redaction_state", { enum: ["pending", "redacted"] })
       .notNull()
-      .default("redacted"),
+      .default("pending"),
     sourceRasterized: integer("source_rasterized", { mode: "boolean" })
       .notNull()
-      .default(true),
+      .default(false),
     uploadedBy: text("uploaded_by").notNull(),
     createdAt: text("created_at")
       .notNull()
@@ -598,7 +607,7 @@ export const guideMedia = sqliteTable(
     ),
     check(
       "guide_media_redaction_check",
-      sql`${table.redactionState} = 'redacted' AND ${table.sourceRasterized} = 1`,
+      sql`${table.redactionState} IN ('pending', 'redacted') AND (${table.redactionState} != 'redacted' OR ${table.sourceRasterized} = 1)`,
     ),
     check(
       "guide_media_dimensions_check",

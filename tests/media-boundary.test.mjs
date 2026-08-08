@@ -17,7 +17,7 @@ let outputDirectory;
 let media;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-media-boundary-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-media-boundary-"));
   await build({
     root,
     configFile: false,
@@ -81,46 +81,56 @@ function screenshotInput(overrides = {}) {
     bytes: ONE_PIXEL_PNG,
     width: 1,
     height: 1,
-    redactionAttested: true,
+    redactionState: "redacted",
     sourceRasterized: true,
     ...overrides,
   };
 }
 
-test("private screenshot storage accepts only attested raster bytes", async () => {
+test("private screenshot storage accepts only rasterized bytes with a valid redaction state", async () => {
   const storage = bucket();
-  const stored = await media.storeRedactedScreenshot(storage, screenshotInput());
+  const stored = await media.storeScreenshot(storage, screenshotInput());
 
   assert.match(stored.objectKey, /^workspaces\/workspace-acme\/revisions\/revision-1\//);
   assert.equal(stored.contentType, "image/png");
   assert.equal(stored.width, 1);
   assert.equal(stored.height, 1);
+  assert.equal(stored.redactionState, "redacted");
+  assert.equal(stored.sourceRasterized, true);
   assert.match(stored.sha256, /^[0-9a-f]{64}$/);
   assert.equal(storage.writes.length, 1);
   assert.equal(storage.writes[0].options.customMetadata.redactionState, "redacted");
   assert.equal(storage.writes[0].options.customMetadata.sourceRasterized, "true");
 });
 
+test("a screenshot may also be stored pending non-destructive redaction before its first review", async () => {
+  const storage = bucket();
+  const stored = await media.storeScreenshot(storage, screenshotInput({ redactionState: "pending" }));
+  assert.equal(stored.redactionState, "pending");
+  assert.equal(storage.writes[0].options.customMetadata.redactionState, "pending");
+});
+
 test("claimed screenshot dimensions must match the raster header", async () => {
   const storage = bucket();
   await assert.rejects(
-    media.storeRedactedScreenshot(storage, screenshotInput({ width: 2 })),
+    media.storeScreenshot(storage, screenshotInput({ width: 2 })),
     (error) => error.code === "MEDIA_DIMENSIONS_INVALID",
   );
   assert.equal(storage.writes.length, 0);
 });
 
-test("unattested and WebP screenshot uploads fail before storage", async () => {
+test("unrasterized, invalid-state, and WebP screenshot uploads fail before storage", async () => {
   const storage = bucket();
   await assert.rejects(
-    media.storeRedactedScreenshot(
-      storage,
-      screenshotInput({ redactionAttested: false }),
-    ),
+    media.storeScreenshot(storage, screenshotInput({ sourceRasterized: false })),
     (error) => error.code === "REDACTION_REQUIRED",
   );
   await assert.rejects(
-    media.storeRedactedScreenshot(
+    media.storeScreenshot(storage, screenshotInput({ redactionState: "unknown" })),
+    (error) => error.code === "REDACTION_REQUIRED",
+  );
+  await assert.rejects(
+    media.storeScreenshot(
       storage,
       screenshotInput({
         contentType: "image/webp",
@@ -134,7 +144,7 @@ test("unattested and WebP screenshot uploads fail before storage", async () => {
 
 test("private media reads enforce workspace and privacy metadata", async () => {
   const storage = bucket();
-  const stored = await media.storeRedactedScreenshot(storage, screenshotInput());
+  const stored = await media.storeScreenshot(storage, screenshotInput());
   const object = await media.readPrivateMedia(
     storage,
     stored.objectKey,
@@ -147,23 +157,25 @@ test("private media reads enforce workspace and privacy metadata", async () => {
   );
 });
 
-test("restoration clones only the redacted object into the new revision boundary", async () => {
+test("restoration clones the media object, preserving its redaction state, into the new revision boundary", async () => {
   const storage = bucket();
-  const source = await media.storeRedactedScreenshot(storage, screenshotInput());
-  const clonedKey = await media.clonePrivateMedia(storage, {
+  const source = await media.storeScreenshot(storage, screenshotInput());
+  const cloned = await media.clonePrivateMedia(storage, {
     sourceObjectKey: source.objectKey,
     workspaceId: "workspace-acme",
     revisionId: "revision-2",
     uploadedBy: "user-2",
   });
-  assert.match(clonedKey, /^workspaces\/workspace-acme\/revisions\/revision-2\//);
-  assert.notEqual(clonedKey, source.objectKey);
-  const cloned = await storage.get(clonedKey);
-  assert.equal(cloned.customMetadata.revisionId, "revision-2");
-  assert.equal(cloned.customMetadata.redactionState, "redacted");
-  assert.equal(cloned.customMetadata.sourceRasterized, "true");
+  assert.match(cloned.objectKey, /^workspaces\/workspace-acme\/revisions\/revision-2\//);
+  assert.notEqual(cloned.objectKey, source.objectKey);
+  assert.equal(cloned.redactionState, "redacted");
+  assert.equal(cloned.sourceRasterized, true);
+  const clonedObject = await storage.get(cloned.objectKey);
+  assert.equal(clonedObject.customMetadata.revisionId, "revision-2");
+  assert.equal(clonedObject.customMetadata.redactionState, "redacted");
+  assert.equal(clonedObject.customMetadata.sourceRasterized, "true");
   assert.deepEqual(
-    new Uint8Array(await new Response(cloned.body).arrayBuffer()),
+    new Uint8Array(await new Response(clonedObject.body).arrayBuffer()),
     ONE_PIXEL_PNG,
   );
 });

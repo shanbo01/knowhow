@@ -4,8 +4,10 @@ import { Check, ChevronDown } from "lucide-react";
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -42,7 +44,9 @@ export function SelectMenu<T extends string>({
   const [activeIndex, setActiveIndex] = useState(() =>
     Math.max(0, options.findIndex((option) => option.value === value)),
   );
+  const [position, setPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = useId();
   const selected = options.find((option) => option.value === value) ?? options[0];
@@ -78,6 +82,36 @@ export function SelectMenu<T extends string>({
     return () => cancelAnimationFrame(frame);
   }, [activeIndex, open]);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    function updatePosition() {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const gap = 6;
+      const spaceBelow = viewportHeight - rect.bottom - gap - 8;
+      const spaceAbove = rect.top - gap - 8;
+      const openUpward = spaceBelow < 160 && spaceAbove > spaceBelow;
+      const maxHeight = Math.max(120, Math.min(300, openUpward ? spaceAbove : spaceBelow));
+      const width = Math.min(320, Math.max(rect.width, 160));
+      const left = Math.min(
+        Math.max(8, align === "end" ? rect.right - width : rect.left),
+        viewportWidth - width - 8,
+      );
+      const top = openUpward ? rect.top - gap - maxHeight : rect.bottom + gap;
+      setPosition({ top, left, width, maxHeight });
+    }
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, align]);
+
   function toggleMenu() {
     if (!open) setActiveIndex(selectedIndex);
     setOpen(!open);
@@ -111,6 +145,7 @@ export function SelectMenu<T extends string>({
       ref={rootRef}
     >
       <button
+        ref={triggerRef}
         className="select-menu-trigger"
         type="button"
         aria-label={ariaLabel}
@@ -131,8 +166,21 @@ export function SelectMenu<T extends string>({
         <span className="select-menu-value">{selected ? renderValue?.(selected) ?? selected.label : "Select"}</span>
         <ChevronDown className="select-menu-chevron" aria-hidden="true" />
       </button>
-      {open ? (
-        <div className="select-menu-options" id={listboxId} role="listbox" aria-label={ariaLabel}>
+      {open && position ? (
+        <div
+          className="select-menu-options"
+          id={listboxId}
+          role="listbox"
+          aria-label={ariaLabel}
+          style={
+            {
+              top: `${position.top}px`,
+              left: `${position.left}px`,
+              width: `${position.width}px`,
+              maxHeight: `${position.maxHeight}px`,
+            } as CSSProperties
+          }
+        >
           {options.map((option, index) => (
             <button
               className="select-menu-option"

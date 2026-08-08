@@ -12,7 +12,7 @@ let identity;
 let outputDirectory;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-appwrite-identity-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-appwrite-identity-"));
   await build({
     root,
     configFile: false,
@@ -43,17 +43,17 @@ after(async () => {
 });
 
 function request() {
-  return new Request("https://rivet.example/api/rivet", {
+  return new Request("https://knowhow.example/api/knowhow", {
     headers: {
       authorization: "Bearer header.payload.signature",
-      "user-agent": "Rivet test browser",
+      "user-agent": "KnowHow test browser",
     },
   });
 }
 
 const config = {
   endpoint: "https://identity.example/v1",
-  projectId: "rivet-project",
+  projectId: "knowhow-project",
 };
 
 test("validates an Appwrite JWT using the native Fetch API", async () => {
@@ -75,9 +75,9 @@ test("validates an Appwrite JWT using the native Fetch API", async () => {
   assert.equal(outbound.init.method, "GET");
   assert.equal(outbound.init.redirect, "manual");
   const headers = new Headers(outbound.init.headers);
-  assert.equal(headers.get("x-appwrite-project"), "rivet-project");
+  assert.equal(headers.get("x-appwrite-project"), "knowhow-project");
   assert.equal(headers.get("x-appwrite-jwt"), "header.payload.signature");
-  assert.equal(headers.get("x-forwarded-user-agent"), "Rivet test browser");
+  assert.equal(headers.get("x-forwarded-user-agent"), "KnowHow test browser");
   assert.deepEqual(result, {
     userId: "user-1",
     email: "person@example.com",
@@ -90,7 +90,7 @@ test("validates an Appwrite JWT using the native Fetch API", async () => {
 });
 
 for (const status of [401, 403]) {
-  test(`maps Appwrite ${status} responses to an expired Rivet session`, async () => {
+  test(`maps Appwrite ${status} responses to an expired KnowHow session`, async () => {
     globalThis.fetch = async () => new Response(null, { status });
 
     await assert.rejects(

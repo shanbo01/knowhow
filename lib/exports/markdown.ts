@@ -101,8 +101,8 @@ export function renderGuideToMarkdown(
     }
   }
 
-  if (revision.branding.showRivetBranding) {
-    output.push("---", "", "Generated with Rivet.", "");
+  if (revision.branding.showKnowHowBranding) {
+    output.push("---", "", "Generated with KnowHow.", "");
   }
 
   return `${output.join("\n").trimEnd()}\n`;

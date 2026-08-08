@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import {
   assertMutationRequest,
   authorize,
-  D1RivetRepository,
+  D1KnowHowRepository,
   HttpError,
   jsonResponse,
   readPrivateMedia,
@@ -10,7 +10,7 @@ import {
   requireD1Binding,
   requireR2Binding,
   requireVerifiedIdentity,
-  storeRedactedScreenshot,
+  storeScreenshot,
   storeWorkspaceLogo,
   toErrorResponse,
   type D1DatabaseLike,
@@ -33,7 +33,7 @@ function requiredQuery(url: URL, key: string, label: string) {
 
 async function requestContext(request: Request) {
   const db = requireD1Binding(env.DB);
-  const repository = new D1RivetRepository(db);
+  const repository = new D1KnowHowRepository(db);
   await repository.ensureSecurityGuards();
   const identity = await requireVerifiedIdentity(request);
   const url = new URL(request.url);
@@ -164,11 +164,22 @@ export async function POST(request: Request) {
         workspaceId,
       ).first<{ id: string }>();
       if (!step) throw new HttpError(404, "STEP_NOT_FOUND", "Draft step not found.");
-      if (
-        request.headers.get("x-rivet-redacted") !== "true" ||
-        request.headers.get("x-rivet-source-rasterized") !== "true"
-      ) {
-        throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Review and rasterize the replacement before upload.");
+      if (request.headers.get("x-knowhow-source-rasterized") !== "true") {
+        throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Rasterize the screenshot locally before upload.");
+      }
+      const guideLock = await statement(
+        db,
+        `SELECT screenshots_locked_at FROM guides WHERE id = ? AND workspace_id = ?`,
+        guideId,
+        workspaceId,
+      ).first<{ screenshots_locked_at: string | null }>();
+      const requestedState = request.headers.get("x-knowhow-redacted") === "true" ? "redacted" : "pending";
+      if (guideLock?.screenshots_locked_at && requestedState !== "redacted") {
+        throw new HttpError(
+          409,
+          "SCREENSHOTS_LOCKED",
+          "This guide's screenshots are locked; upload an already-flattened image.",
+        );
       }
       const contentType = request.headers.get("content-type")?.split(";")[0];
       if (contentType !== "image/png" && contentType !== "image/jpeg") {
@@ -178,10 +189,10 @@ export async function POST(request: Request) {
       if (Number.isFinite(advertised) && advertised > 5 * 1024 * 1024) {
         throw new HttpError(413, "MEDIA_TOO_LARGE", "The replacement screenshot is too large.");
       }
-      const width = Number(request.headers.get("x-rivet-image-width"));
-      const height = Number(request.headers.get("x-rivet-image-height"));
+      const width = Number(request.headers.get("x-knowhow-image-width"));
+      const height = Number(request.headers.get("x-knowhow-image-height"));
       const bucket = requireR2Binding(env.MEDIA);
-      const stored = await storeRedactedScreenshot(bucket, {
+      const stored = await storeScreenshot(bucket, {
         workspaceId,
         revisionId,
         uploadedBy: identity.userId,
@@ -189,7 +200,7 @@ export async function POST(request: Request) {
         bytes: await request.arrayBuffer(),
         width,
         height,
-        redactionAttested: true,
+        redactionState: requestedState,
         sourceRasterized: true,
       });
       storedKey = stored.objectKey;
@@ -211,7 +222,7 @@ export async function POST(request: Request) {
                (id, workspace_id, revision_id, step_id, object_key, content_type,
                 byte_size, width, height, sha256, redaction_state,
                 source_rasterized, uploaded_by, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'redacted', 1, ?, CURRENT_TIMESTAMP)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP)`,
             mediaId,
             workspaceId,
             revisionId,
@@ -222,6 +233,7 @@ export async function POST(request: Request) {
             stored.width,
             stored.height,
             stored.sha256,
+            stored.redactionState,
             identity.userId,
           ),
           statement(

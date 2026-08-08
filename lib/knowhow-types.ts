@@ -26,8 +26,28 @@ export type EditorBlock = {
     y: number;
     width?: number;
     height?: number;
+    // Arrow tail/head, normalized to the full screenshot. When present, the
+    // arrow is drawn from (x, y) to (x2, y2) in the exact dragged direction
+    // instead of the fixed bottom-left-to-top-right diagonal fallback.
+    x2?: number;
+    y2?: number;
     text?: string;
     color?: string;
+  }>;
+  /**
+   * Non-destructive blur regions. While the guide is not yet
+   * `screenshotsLocked`, these render as a live blur overlay and can be
+   * freely added/removed. The first time the guide is submitted for review,
+   * the editor flattens them into the image pixels and marks them `applied`;
+   * after that they can never be reverted for this guide.
+   */
+  redactions?: Array<{
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    applied: boolean;
   }>;
 };
 
@@ -70,8 +90,15 @@ export type Guide = {
   canEdit: boolean;
   canReview: boolean;
   canPublish: boolean;
+  canDelete: boolean;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Set once this guide's first review was ever submitted. From then on,
+   * screenshot redactions are permanent and the redact tool becomes
+   * read-only for existing regions.
+   */
+  screenshotsLockedAt?: string;
   publishedRevision: GuideRevisionView | null;
   workingRevision: GuideRevisionView | null;
   revisionHistory?: Array<

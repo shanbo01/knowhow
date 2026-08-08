@@ -2,7 +2,7 @@
 
 import { ImageOff, LoaderCircle, ShieldCheck } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { loadAuthorizedMediaUrl } from "../../lib/rivet-client";
+import { loadAuthorizedMediaUrl } from "../../lib/knowhow-client";
 
 export function AuthorizedMedia({
   workspaceId,

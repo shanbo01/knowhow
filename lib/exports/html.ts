@@ -209,7 +209,7 @@ export function renderGuideToHtml(
     <article class="guide-content">
 ${blocks}
     </article>
-    ${revision.branding.showRivetBranding ? '<footer class="document-footer">Generated with Rivet.</footer>' : ""}
+    ${revision.branding.showKnowHowBranding ? '<footer class="document-footer">Generated with KnowHow.</footer>' : ""}
   </main>
 </body>
 </html>

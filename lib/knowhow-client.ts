@@ -1,7 +1,7 @@
 "use client";
 
 import { account } from "./appwrite";
-import type { GuideSearchResult } from "./rivet-types";
+import type { GuideSearchResult } from "./knowhow-types";
 
 let cachedJwt: { value: string; expiresAt: number } | null = null;
 
@@ -18,7 +18,7 @@ async function getJwt() {
   return result.jwt;
 }
 
-export async function rivetApi<T>(
+export async function knowhowApi<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
@@ -49,8 +49,8 @@ export async function rivetApi<T>(
   return (await response.json()) as T;
 }
 
-export function rivetCommand<T>(action: string, payload: unknown = {}) {
-  return rivetApi<T>("/api/rivet", {
+export function knowhowCommand<T>(action: string, payload: unknown = {}) {
+  return knowhowApi<T>("/api/knowhow", {
     method: "POST",
     body: JSON.stringify({ action, payload }),
   });
@@ -61,7 +61,7 @@ export function searchGuides(workspaceId: string, query: string) {
     workspaceId,
     q: query.slice(0, 300),
   });
-  return rivetApi<{ results: GuideSearchResult[] }>(`/api/rivet/search?${params}`);
+  return knowhowApi<{ results: GuideSearchResult[] }>(`/api/knowhow/search?${params}`);
 }
 
 export async function downloadAuthorizedExport(
@@ -71,7 +71,7 @@ export async function downloadAuthorizedExport(
 ) {
   const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, guideId, format });
-  const response = await fetch(`/api/rivet/export?${params}`, {
+  const response = await fetch(`/api/knowhow/export?${params}`, {
     headers: { authorization: `Bearer ${jwt}` },
   });
   if (!response.ok) {
@@ -88,7 +88,7 @@ export async function downloadAuthorizedExport(
   anchor.download =
     response.headers
       .get("content-disposition")
-      ?.match(/filename="([^"]+)"/)?.[1] ?? `rivet-guide.${format}`;
+      ?.match(/filename="([^"]+)"/)?.[1] ?? `knowhow-guide.${format}`;
   anchor.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
@@ -103,7 +103,7 @@ export async function downloadAuditCsv(
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
 
-  const response = await fetch(`/api/rivet/audit?${params}`, {
+  const response = await fetch(`/api/knowhow/audit?${params}`, {
     headers: { authorization: `Bearer ${jwt}` },
   });
   if (!response.ok) {
@@ -121,7 +121,7 @@ export async function downloadAuditCsv(
   link.download =
     response.headers
       .get("content-disposition")
-      ?.match(/filename="([^"]+)"/)?.[1] ?? "rivet-audit.csv";
+      ?.match(/filename="([^"]+)"/)?.[1] ?? "knowhow-audit.csv";
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
@@ -150,19 +150,19 @@ export async function loadAuthorizedMediaUrl(
   mediaId: string,
 ) {
   const params = new URLSearchParams({ workspaceId, mediaId });
-  const blob = await authorizedBlob(`/api/rivet/media?${params}`);
+  const blob = await authorizedBlob(`/api/knowhow/media?${params}`);
   return URL.createObjectURL(blob);
 }
 
 export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
   const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, kind: "logo" });
-  const response = await fetch(`/api/rivet/media?${params}`, {
+  const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
       "content-type": file.type,
-      "x-rivet-file-name": encodeURIComponent(file.name),
+      "x-knowhow-file-name": encodeURIComponent(file.name),
     },
     body: file,
   });
@@ -179,7 +179,7 @@ export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
 export async function removeWorkspaceLogo(workspaceId: string) {
   const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, kind: "logo" });
-  const response = await fetch(`/api/rivet/media?${params}`, {
+  const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "DELETE",
     headers: { authorization: `Bearer ${jwt}` },
   });
@@ -200,6 +200,12 @@ export async function replaceDraftScreenshot(input: {
   bytes: Blob;
   width: number;
   height: number;
+  /**
+   * "redacted" (default) attests these bytes are final and may never change
+   * again for any redaction region they contain. Pass "pending" only for a
+   * fresh manual upload with no baked-in redactions yet.
+   */
+  redactionState?: "pending" | "redacted";
 }) {
   const jwt = await getJwt();
   const params = new URLSearchParams({
@@ -209,15 +215,15 @@ export async function replaceDraftScreenshot(input: {
     revisionId: input.revisionId,
     stepId: input.stepId,
   });
-  const response = await fetch(`/api/rivet/media?${params}`, {
+  const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
       "content-type": input.bytes.type,
-      "x-rivet-redacted": "true",
-      "x-rivet-source-rasterized": "true",
-      "x-rivet-image-width": String(input.width),
-      "x-rivet-image-height": String(input.height),
+      "x-knowhow-redacted": input.redactionState === "pending" ? "false" : "true",
+      "x-knowhow-source-rasterized": "true",
+      "x-knowhow-image-width": String(input.width),
+      "x-knowhow-image-height": String(input.height),
     },
     body: input.bytes,
   });

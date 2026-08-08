@@ -3,7 +3,7 @@ import type {
   RevisionStatus,
   WorkspaceRole,
   WorkspaceStatus,
-} from "../rivet-types";
+} from "../knowhow-types";
 import {
   allRows,
   type D1DatabaseLike,
@@ -377,7 +377,7 @@ function isAuditSequenceConflict(error: unknown): boolean {
   );
 }
 
-export class D1RivetRepository {
+export class D1KnowHowRepository {
   constructor(private readonly db: D1DatabaseLike) {}
 
   async ensureSecurityGuards(): Promise<void> {

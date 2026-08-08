@@ -55,22 +55,17 @@ test("private draft submission rejects a WebP before any authenticated request",
   );
 });
 
-test("privacy review is attested before redacted blobs upload and commit", async () => {
-  const reviewSource = await readFile(
-    new URL("../src/review/review.js", import.meta.url),
-    "utf8",
-  );
+test("screenshots upload as pending (not attested) and reversible redaction regions ride along in the commit", async () => {
   const apiSource = await readFile(
     new URL("../src/core/api-client.js", import.meta.url),
     "utf8",
   );
-  const beginUpload = reviewSource.indexOf('type: "BEGIN_DRAFT_UPLOAD"');
-  const reviewedAt = reviewSource.indexOf("completedAt: new Date().toISOString()");
-  const upload = reviewSource.indexOf("await submitPrivateDraft");
   const screenshotPath = apiSource.indexOf('"/steps/"');
   const commitPath = apiSource.indexOf('"/commit"');
 
-  assert.ok(beginUpload >= 0 && beginUpload < reviewedAt);
-  assert.ok(reviewedAt < upload);
   assert.ok(screenshotPath >= 0 && screenshotPath < commitPath);
+  assert.match(apiSource, /"X-KnowHow-Redacted":\s*"false"/);
+  assert.match(apiSource, /"X-KnowHow-Source-Rasterized":\s*"true"/);
+  assert.match(apiSource, /redactions: Array\.isArray\(step\.pendingRedactions\)/);
+  assert.doesNotMatch(apiSource, /attestation/);
 });

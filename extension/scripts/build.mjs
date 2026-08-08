@@ -8,14 +8,14 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(scriptDirectory, "..");
 const destination = resolve(extensionRoot, "dist");
 const publicDirectory = resolve(extensionRoot, "..", "public");
-const archivePath = resolve(publicDirectory, "rivet-extension.zip");
+const archivePath = resolve(publicDirectory, "knowhow-extension.zip");
 const expectedExtensionId = "phbofjenfnnnnndghhinoldlfbpaedpo";
 
 if (dirname(destination) !== extensionRoot || destination === extensionRoot) {
   throw new Error("Refusing to build outside extension/dist.");
 }
 if (dirname(archivePath) !== publicDirectory) {
-  throw new Error("Refusing to package outside public/rivet-extension.zip.");
+  throw new Error("Refusing to package outside public/knowhow-extension.zip.");
 }
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
@@ -139,14 +139,14 @@ const captureStoreSource = await readFile(
 );
 
 if (manifest.manifest_version !== 3) {
-  throw new Error("Rivet Capture must remain a Manifest V3 extension.");
+  throw new Error("KnowHow Capture must remain a Manifest V3 extension.");
 }
 if (
   typeof manifest.key !== "string" ||
   chromeExtensionId(manifest.key) !== expectedExtensionId
 ) {
   throw new Error(
-    "Rivet Capture must retain the manifest key for extension ID " +
+    "KnowHow Capture must retain the manifest key for extension ID " +
       expectedExtensionId +
       ".",
   );

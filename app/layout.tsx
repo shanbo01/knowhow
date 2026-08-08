@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
 
-const title = "Rivet — SOPs captured, governed, and shared";
+const title = "KnowHow — SOPs captured, governed, and shared";
 const description =
   "A privacy-first SOP capture and publishing workspace for MSPs and multi-entity teams.";
 
@@ -27,13 +27,13 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      siteName: "Rivet",
+      siteName: "KnowHow",
       images: [
         {
           url: imageUrl,
           width: 1732,
           height: 909,
-          alt: "Rivet IT operations documentation workspace",
+          alt: "KnowHow IT operations documentation workspace",
         },
       ],
     },

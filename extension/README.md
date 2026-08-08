@@ -1,6 +1,6 @@
-# Rivet Capture Extension
+# KnowHow Capture Extension
 
-Rivet Capture is a dependency-free Chromium Manifest V3 extension for
+KnowHow Capture is a dependency-free Chromium Manifest V3 extension for
 capturing the visible foreground tab as an editable, privacy-reviewed guide.
 It can run as an unpacked Chrome or Edge extension.
 
@@ -14,7 +14,7 @@ Node.js 22 or newer is sufficient; there are no package dependencies.
 
 The build validates the privacy-sensitive manifest, writes an unpacked
 extension to extension/dist, and deterministically refreshes the installable
-public/rivet-extension.zip archive. The generated dist directory is
+public/knowhow-extension.zip archive. The generated dist directory is
 intentionally ignored by Git.
 
 ## Load in Chrome
@@ -24,19 +24,19 @@ intentionally ignored by Git.
 3. Enable Developer mode.
 4. Choose Load unpacked.
 5. Select the extension/dist directory.
-6. Pin Rivet Capture to the toolbar.
+6. Pin KnowHow Capture to the toolbar.
 
 For Edge, use edge://extensions and the same extension/dist directory.
 
 ## Capture workflow
 
-1. Pair the extension with the one-time code shown in a Rivet workspace.
-2. Open the page to document and select the Rivet toolbar action.
+1. Pair the extension with the one-time code shown in a KnowHow workspace.
+2. Open the page to document and select the KnowHow toolbar action.
 3. Optionally configure Smart Blur and the click-target color.
 4. Enter a guide title and choose Start capturing this tab. The first capture
-   asks you to allow Rivet to access websites; this runtime permission is what
+   asks you to allow KnowHow to access websites; this runtime permission is what
    lets Chrome capture the foreground tab from its persistent side panel.
-5. Keep Rivet docked in Chrome's native side panel while the captured page
+5. Keep KnowHow docked in Chrome's native side panel while the captured page
    remains usable beside it. Numbered, locally redacted step previews appear
    in the panel as you click and navigate.
 6. Use Pause and Resume from the native side panel.
@@ -44,7 +44,7 @@ For Edge, use edge://extensions and the same extension/dist directory.
 8. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
    crop, add or remove manual blur regions, draw freehand, and move or remove
    the click target. Undo and redo operate on these editable layers.
-9. Confirm the privacy review and submit a private Rivet draft. The selected
+9. Confirm the privacy review and submit a private KnowHow draft. The selected
    crop and editable layers are flattened once into the upload raster.
 
 The default scope is one foreground tab. Same-origin navigation continues
@@ -57,7 +57,7 @@ explicit Resume action on the destination origin.
 - No static all-site content script is used. All-site host access is optional
   and requested only when the user starts capture; it is required by Chrome's
   visible-tab screenshot API for reliable capture from a persistent side panel.
-- Rivet still attaches only to the selected foreground tab, and the workspace
+- KnowHow still attaches only to the selected foreground tab, and the workspace
   allowlist, excluded hosts, browser-internal-page, and incognito checks remain
   enforced at runtime.
 - Password fields and embedded frames are always redacted.
@@ -80,11 +80,11 @@ WebGL, video, images, native browser UI, or closed shadow roots. Images and
 table rows can be masked as complete regions. Mandatory human review remains
 the final privacy control.
 
-## Rivet API
+## KnowHow API
 
 The development build points to `http://localhost:3001` in src/core/config.js
 and declares only localhost in manifest host_permissions. Pairing uses a signed,
-short-lived one-time code generated inside an authenticated Rivet workspace:
+short-lived one-time code generated inside an authenticated KnowHow workspace:
 
     POST /api/extension/pair
     POST /api/extension/token/refresh
@@ -108,7 +108,7 @@ Production distribution should use a stable Chrome Web Store or enterprise
 extension ID. The extension uses bearer device credentials, never cookies or
 the user’s Appwrite session.
 
-When a production Rivet origin is selected, update both src/core/config.js and
+When a production KnowHow origin is selected, update both src/core/config.js and
 the exact manifest host_permissions entry before building.
 
 ## MVP limits

@@ -3,7 +3,7 @@ import {
   getCapturedSteps,
   listCapturedSteps,
 } from "../core/capture-store.js";
-import { REVIEW_PAGE_PATH, STORAGE_KEYS } from "../core/config.js";
+import { STORAGE_KEYS } from "../core/config.js";
 import {
   createCapturedStepCache,
   createRefreshGate,
@@ -74,7 +74,7 @@ async function requestCaptureAccess() {
   const granted = await chrome.permissions.request(captureAccess);
   if (!granted) {
     throw new Error(
-      "Rivet needs website access to capture the page. Click Start again and select Allow in Chrome.",
+      "KnowHow needs website access to capture the page. Click Start again and select Allow in Chrome.",
     );
   }
 }
@@ -86,7 +86,7 @@ async function getSelectedContentTab() {
   });
   if (!tab || !Number.isInteger(tab.id) || !Number.isInteger(tab.windowId)) {
     throw new Error(
-      "Rivet could not find the active page. Select the page you want to capture and try again.",
+      "KnowHow could not find the active page. Select the page you want to capture and try again.",
     );
   }
   return { tabId: tab.id, windowId: tab.windowId };
@@ -139,7 +139,7 @@ function applyPolicyControls(policy) {
 async function request(message) {
   const response = await chrome.runtime.sendMessage(message);
   if (!response?.ok) {
-    throw new Error(response?.error || "Rivet Capture could not complete the action.");
+    throw new Error(response?.error || "KnowHow Capture could not complete the action.");
   }
   return response;
 }
@@ -147,7 +147,7 @@ async function request(message) {
 function statusDescription(state) {
   switch (state.status) {
     case "preparing":
-      return "Preparing a private capture and attaching Rivet to this tab.";
+      return "Preparing a private capture and attaching KnowHow to this tab.";
     case "recording":
       return state.captureWarning ||
         state.scopeLabel ||
@@ -155,11 +155,13 @@ function statusDescription(state) {
     case "paused":
       return state.pausedReason || "No events or screenshots are being collected.";
     case "reviewing":
-      return "Capture stopped. Review every screenshot before submitting.";
+      return state.lastError
+        ? state.lastError
+        : "Wrapping up the capture before upload.";
     case "uploading":
-      return "Uploading only the locally redacted screenshots.";
+      return "Uploading your captured screenshots to KnowHow.";
     case "completed":
-      return "Private Rivet draft created successfully.";
+      return "Draft created. Continue editing it in the KnowHow app.";
     case "error":
       return state.lastError || "Capture needs attention.";
     default:
@@ -404,8 +406,8 @@ function renderConnection() {
     currentConnection.connected,
   );
   elements.connectionLabel.textContent = currentConnection.connected
-    ? "Connected to " + (currentContext?.workspaceName || "Rivet")
-    : "Pair Rivet to capture";
+    ? "Connected to " + (currentContext?.workspaceName || "KnowHow")
+    : "Pair KnowHow to capture";
   elements.connectButton.textContent = currentConnection.connected
     ? "Reconnect"
     : "Connect";
@@ -431,7 +433,7 @@ async function refresh() {
     showError(
       failure.reason instanceof Error
         ? failure.reason.message
-        : "Could not load Rivet Capture.",
+        : "Could not load KnowHow Capture.",
     );
   }
 }
@@ -515,51 +517,17 @@ async function discard() {
 elements.discardButton.addEventListener("click", discard);
 elements.reviewDiscardButton.addEventListener("click", discard);
 
-async function openOrFocusReview(sessionId) {
-  const reviewBaseUrl = chrome.runtime.getURL(REVIEW_PAGE_PATH);
-  const reviewUrl = reviewBaseUrl + "?session=" + encodeURIComponent(sessionId);
-  const expectedPage = new URL(reviewBaseUrl);
-  const candidates = await chrome.tabs.query({});
-  const existing = candidates.find((tab) => {
-    if (typeof tab.url !== "string") return false;
-    try {
-      const candidate = new URL(tab.url);
-      return (
-        candidate.protocol === expectedPage.protocol &&
-        candidate.hostname === expectedPage.hostname &&
-        candidate.pathname === expectedPage.pathname &&
-        candidate.searchParams.get("session") === sessionId
-      );
-    } catch {
-      return false;
-    }
-  });
-
-  if (existing && Number.isInteger(existing.id)) {
-    await chrome.tabs.update(existing.id, { active: true });
-    if (Number.isInteger(existing.windowId)) {
-      await chrome.windows
-        .update(existing.windowId, { focused: true })
-        .catch(() => undefined);
-    }
-    return;
-  }
-  await chrome.tabs.create({ url: reviewUrl });
-}
-
 elements.openReviewButton.addEventListener("click", async () => {
-  if (
-    currentState?.status !== "reviewing" ||
-    !currentState.sessionId ||
-    !beginCaptureAction()
-  ) {
+  if (currentState?.status !== "reviewing" || !beginCaptureAction()) {
     return;
   }
   showError("");
   try {
-    await openOrFocusReview(currentState.sessionId);
+    const response = await request({ type: "RETRY_DRAFT_UPLOAD" });
+    renderState(response.state, currentPolicy);
+    await refreshCapture();
   } catch (error) {
-    showError(error instanceof Error ? error.message : "Could not open privacy review.");
+    showError(error instanceof Error ? error.message : "Could not retry the upload.");
   } finally {
     endCaptureAction();
   }
@@ -567,7 +535,7 @@ elements.openReviewButton.addEventListener("click", async () => {
 
 elements.excludeButton.addEventListener("click", async () => {
   if (elements.excludeButton.disabled) return;
-  if (!confirm("Block Rivet Capture on the current site?")) return;
+  if (!confirm("Block KnowHow Capture on the current site?")) return;
   if (!beginCaptureAction()) return;
   showError("");
   try {
@@ -683,14 +651,14 @@ elements.pairingForm.addEventListener("submit", async (event) => {
   elements.connectionLabel.textContent = "Pairing workspace…";
   try {
     await request({
-      type: "CONNECT_RIVET",
+      type: "CONNECT_KNOWHOW",
       code: elements.pairingCode.value,
     });
     setPairingFormVisible(false);
     await refresh();
   } catch (error) {
     await refresh();
-    showError(error instanceof Error ? error.message : "Rivet pairing failed.");
+    showError(error instanceof Error ? error.message : "KnowHow pairing failed.");
   } finally {
     pairingPending = false;
     syncConnectionControls();

@@ -3,7 +3,7 @@ import {
   allRows,
   authorize,
   deletePrivateMedia,
-  D1RivetRepository,
+  D1KnowHowRepository,
   hashToken,
   HttpError,
   jsonResponse,
@@ -12,7 +12,7 @@ import {
   requireD1Binding,
   requireR2Binding,
   signDeviceToken,
-  storeRedactedScreenshot,
+  storeScreenshot,
   toErrorResponse,
   type D1DatabaseLike,
   type D1PreparedStatementLike,
@@ -53,7 +53,7 @@ async function run(db: D1DatabaseLike, sql: string, ...values: unknown[]) {
 }
 
 function key() {
-  return env.RIVET_TOKEN_SIGNING_KEY;
+  return env.KNOWHOW_TOKEN_SIGNING_KEY;
 }
 
 function text(
@@ -91,6 +91,47 @@ function safeJson<T>(value: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function normalizedCoordinate(value: unknown, label: string, options: { positive?: boolean } = {}) {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} must be between 0 and 1.`);
+  }
+  if (options.positive && parsed <= 0) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} must be greater than 0.`);
+  }
+  return parsed;
+}
+
+/**
+ * Pending redactions captured by the extension are reversible blur overlays,
+ * not baked pixels: they carry `applied: false` until the guide's first
+ * review submission flattens them in the app editor.
+ */
+function normalizedStepRedactions(value: unknown, label: string) {
+  if (value === undefined) return [] as Array<{ id: string; x: number; y: number; width: number; height: number; applied: boolean }>;
+  if (!Array.isArray(value) || value.length > 200) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} is invalid.`);
+  }
+  const seen = new Set<string>();
+  return value.map((candidate, index) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} ${index + 1} is invalid.`);
+    }
+    const region = candidate as Record<string, unknown>;
+    const regionId = safeId(region.id ?? `redaction_${index}`, `${label} ${index + 1} ID`);
+    if (seen.has(regionId)) throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} IDs must be unique.`);
+    seen.add(regionId);
+    const x = normalizedCoordinate(region.x, `${label} ${index + 1} x`);
+    const y = normalizedCoordinate(region.y, `${label} ${index + 1} y`);
+    const width = normalizedCoordinate(region.width, `${label} ${index + 1} width`, { positive: true });
+    const height = normalizedCoordinate(region.height, `${label} ${index + 1} height`, { positive: true });
+    if (x + width > 1 || y + height > 1) {
+      throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} ${index + 1} is outside the screenshot.`);
+    }
+    return { id: regionId, x, y, width, height, applied: false as const };
+  });
 }
 
 /**
@@ -208,7 +249,7 @@ function newId(prefix: string) {
 async function authenticateDevice(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   scopes: DeviceScope[],
 ) {
   const token = requireBearerToken(request);
@@ -254,7 +295,7 @@ async function deviceActor(
   };
 }
 
-async function pair(request: Request, db: D1DatabaseLike, repository: D1RivetRepository) {
+async function pair(request: Request, db: D1DatabaseLike, repository: D1KnowHowRepository) {
   const payload = await readJsonObject(request, 20_000);
   const code = text(payload.code, "Pairing code", { min: 9, max: 20 }).toUpperCase();
   const deviceId = safeId(payload.deviceId, "Device ID");
@@ -339,7 +380,7 @@ async function pair(request: Request, db: D1DatabaseLike, repository: D1RivetRep
   });
 }
 
-async function refresh(request: Request, db: D1DatabaseLike, repository: D1RivetRepository) {
+async function refresh(request: Request, db: D1DatabaseLike, repository: D1KnowHowRepository) {
   const payload = await readJsonObject(request, 20_000);
   const refreshToken = text(payload.refreshToken, "Device credential", { min: 20, max: 8192 });
   const credential = await repository.validateDeviceCredential(refreshToken, key());
@@ -356,7 +397,7 @@ async function refresh(request: Request, db: D1DatabaseLike, repository: D1Rivet
   });
 }
 
-async function contextResponse(request: Request, db: D1DatabaseLike, repository: D1RivetRepository) {
+async function contextResponse(request: Request, db: D1DatabaseLike, repository: D1KnowHowRepository) {
   const { credential, access } = await authenticateDevice(request, db, repository, ["capture:write"]);
   const workspace = await first<{
     name: string;
@@ -388,7 +429,7 @@ async function contextResponse(request: Request, db: D1DatabaseLike, repository:
   });
 }
 
-async function startCapture(request: Request, db: D1DatabaseLike, repository: D1RivetRepository) {
+async function startCapture(request: Request, db: D1DatabaseLike, repository: D1KnowHowRepository) {
   const { credential } = await authenticateDevice(request, db, repository, ["capture:write"]);
   const payload = await readJsonObject(request, 100_000);
   const sessionId = safeId(payload.sessionId, "Capture session");
@@ -563,7 +604,7 @@ async function mediaIdFor(captureId: string, stepId: string) {
 async function updateExpectedSteps(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   captureId: string,
 ) {
   const { credential } = await authenticateDevice(request, db, repository, ["capture:write"]);
@@ -626,7 +667,7 @@ async function updateExpectedSteps(
 async function transitionCapture(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   captureId: string,
   transition: "pause" | "resume",
 ) {
@@ -672,7 +713,7 @@ async function transitionCapture(
 async function discardCapture(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   captureId: string,
 ) {
   const { credential } = await authenticateDevice(request, db, repository, ["capture:write"]);
@@ -775,7 +816,7 @@ async function discardCapture(
 async function uploadScreenshot(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   captureId: string,
   stepId: string,
 ) {
@@ -785,12 +826,10 @@ async function uploadScreenshot(
     throw new HttpError(409, "CAPTURE_NOT_RECORDING", "This capture no longer accepts screenshots.");
   }
   assertCaptureFresh(capture.started_at);
-  if (
-    request.headers.get("x-rivet-redacted") !== "true" ||
-    request.headers.get("x-rivet-source-rasterized") !== "true"
-  ) {
-    throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Only locally redacted, rasterized screenshots are accepted.");
+  if (request.headers.get("x-knowhow-source-rasterized") !== "true") {
+    throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Only locally rasterized screenshots are accepted.");
   }
+  const redactionState = request.headers.get("x-knowhow-redacted") === "true" ? "redacted" : "pending";
   const mediaId = await mediaIdFor(captureId, stepId);
   const existing = await first<{ id: string }>(
     db,
@@ -798,7 +837,7 @@ async function uploadScreenshot(
     mediaId,
     credential.claims.workspaceId,
   );
-  if (existing) return jsonResponse({ mediaId, redactionState: "redacted" });
+  if (existing) return jsonResponse({ mediaId, redactionState });
   const uploadedCount = await first<{ count: number }>(
     db,
     `SELECT COUNT(*) AS count FROM guide_media
@@ -815,13 +854,13 @@ async function uploadScreenshot(
     throw new HttpError(415, "MEDIA_TYPE_INVALID", "The screenshot file type is not allowed.");
   }
   const bytes = await readBoundedBody(request, MAX_SCREENSHOT_BYTES);
-  const width = integer(request.headers.get("x-rivet-image-width"), "Image width", 1, 16_384);
-  const height = integer(request.headers.get("x-rivet-image-height"), "Image height", 1, 16_384);
+  const width = integer(request.headers.get("x-knowhow-image-width"), "Image width", 1, 16_384);
+  const height = integer(request.headers.get("x-knowhow-image-height"), "Image height", 1, 16_384);
   if (width * height > MAX_SCREENSHOT_PIXELS) {
     throw new HttpError(413, "MEDIA_DIMENSIONS_INVALID", "The redacted screenshot dimensions are too large.");
   }
   const bucket = requireR2Binding(env.MEDIA);
-  const stored = await storeRedactedScreenshot(bucket, {
+  const stored = await storeScreenshot(bucket, {
     workspaceId: credential.claims.workspaceId,
     revisionId: capture.scope.revisionId,
     captureId,
@@ -830,7 +869,7 @@ async function uploadScreenshot(
     bytes,
     width,
     height,
-    redactionAttested: true,
+    redactionState,
     sourceRasterized: true,
   });
   try {
@@ -839,7 +878,7 @@ async function uploadScreenshot(
       `INSERT INTO guide_media (id, workspace_id, revision_id, capture_session_id,
         object_key, content_type, byte_size, width, height, sha256,
         redaction_state, source_rasterized, uploaded_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'redacted', 1, ?, CURRENT_TIMESTAMP)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       mediaId,
       credential.claims.workspaceId,
       capture.scope.revisionId,
@@ -850,19 +889,21 @@ async function uploadScreenshot(
       stored.width,
       stored.height,
       stored.sha256,
+      stored.redactionState,
+      1,
       credential.claims.userId,
     );
   } catch (error) {
     await bucket.delete(stored.objectKey).catch(() => undefined);
     throw error;
   }
-  return jsonResponse({ mediaId, redactionState: "redacted", sha256: stored.sha256 });
+  return jsonResponse({ mediaId, redactionState: stored.redactionState, sha256: stored.sha256 });
 }
 
 async function commitCapture(
   request: Request,
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   captureId: string,
 ) {
   const { credential, access } = await authenticateDevice(request, db, repository, ["capture:write"]);
@@ -882,24 +923,25 @@ async function commitCapture(
   if (payload.steps.length !== capture.scope.expectedSteps) {
     throw new HttpError(409, "CAPTURE_STEP_COUNT_MISMATCH", "The reviewed step count does not match this capture.");
   }
+  // The extension no longer performs a local privacy review: screenshots
+  // arrive with reversible pending redaction metadata only, and the author
+  // reviews/adjusts blur regions in the app editor before the guide's first
+  // "Request review" submission permanently flattens them. `capturedAt` is
+  // informational only.
   const privacy = payload.privacyReview && typeof payload.privacyReview === "object"
     ? (payload.privacyReview as Record<string, unknown>)
     : {};
-  if (
-    privacy.attestation !== "all-screenshots-reviewed" ||
-    typeof privacy.completedAt !== "string" ||
-    Number.isNaN(Date.parse(privacy.completedAt))
-  ) {
-    throw new HttpError(400, "PRIVACY_REVIEW_REQUIRED", "Complete the mandatory local privacy review first.");
-  }
-  const reviewedMilliseconds = Date.parse(privacy.completedAt);
+  const capturedAtCandidate =
+    typeof privacy.completedAt === "string" && !Number.isNaN(Date.parse(privacy.completedAt))
+      ? privacy.completedAt
+      : new Date().toISOString();
   const startedMilliseconds = Date.parse(capture.started_at);
-  if (
-    reviewedMilliseconds < startedMilliseconds ||
-    reviewedMilliseconds > Date.now() + 5 * 60_000
-  ) {
-    throw new HttpError(400, "PRIVACY_REVIEW_INVALID", "The privacy review timestamp is outside this capture.");
-  }
+  const capturedMilliseconds = Date.parse(capturedAtCandidate);
+  const capturedAt = new Date(
+    Number.isFinite(capturedMilliseconds) && capturedMilliseconds >= startedMilliseconds
+      ? Math.min(capturedMilliseconds, Date.now() + 5 * 60_000)
+      : Date.now(),
+  ).toISOString();
   const automaticMaskCount = integer(
     privacy.automaticMaskCount ?? 0,
     "Automatic mask count",
@@ -934,12 +976,13 @@ async function commitCapture(
       ),
       automaticMaskCount: integer(item.automaticMaskCount ?? 0, "Automatic masks", 0, 10_000),
       manualMaskCount: integer(item.manualMaskCount ?? 0, "Manual masks", 0, 10_000),
+      redactions: normalizedStepRedactions(item.redactions, `Step ${index + 1} redactions`),
     };
   });
   const mediaIds = await Promise.all(steps.map((step) => mediaIdFor(captureId, step.sourceId)));
-  const uploaded = await rows<{ id: string; content_type: "image/png" | "image/jpeg" | "image/webp"; width: number; height: number; sha256: string; created_at: string }>(
+  const uploaded = await rows<{ id: string; content_type: "image/png" | "image/jpeg" | "image/webp"; width: number; height: number; sha256: string; created_at: string; redaction_state: "pending" | "redacted" }>(
     db,
-     `SELECT id, content_type, width, height, sha256, created_at FROM guide_media
+     `SELECT id, content_type, width, height, sha256, created_at, redaction_state FROM guide_media
       WHERE workspace_id = ? AND revision_id = ? AND capture_session_id = ?`,
     credential.claims.workspaceId,
     capture.scope.revisionId,
@@ -971,7 +1014,6 @@ async function commitCapture(
     credential.claims.workspaceId,
     credential.claims.userId,
   );
-  const reviewedAt = new Date(reviewedMilliseconds).toISOString();
   const canonical: DraftGuideRevision = {
     schemaVersion: 1,
     guideId: capture.scope.guideId,
@@ -980,8 +1022,8 @@ async function commitCapture(
     revisionNumber: 1,
     source: "browser-capture",
     title: capture.scope.title,
-    summary: `Captured browser workflow with ${steps.length} reviewed steps.`,
-    createdAt: reviewedAt,
+    summary: `Captured browser workflow with ${steps.length} steps.`,
+    createdAt: capturedAt,
     createdBy: {
       userId: credential.claims.userId,
       displayName: member?.display_name ?? member?.email,
@@ -1002,12 +1044,19 @@ async function commitCapture(
                 mimeType: media.content_type,
                 width: media.width,
                 height: media.height,
-                altText: `Locally redacted screenshot for ${step.title}`,
+                altText: `Screenshot for ${step.title}`,
                 sanitized: true as const,
                 sanitizedAt: media.created_at,
                 contentHash: media.sha256,
                 annotations: [],
-                redactions: [],
+                redactions: step.redactions.map((region) => ({
+                  id: region.id,
+                  category: "manual-region" as const,
+                  mode: "blur" as const,
+                  region: { x: region.x, y: region.y, width: region.width, height: region.height },
+                  detection: "automatic" as const,
+                  applied: region.applied,
+                })),
               },
       };
     }),
@@ -1018,15 +1067,9 @@ async function commitCapture(
     },
     privacyReview: {
       required: true,
-      status: "approved",
+      status: "pending",
       originalMediaRetained: false,
-      reviewedAt,
-      reviewedBy: {
-        userId: credential.claims.userId,
-        displayName: member?.display_name ?? member?.email,
-      },
-      findingsResolved: true,
-      note: `${automaticMaskCount} automatic and ${manualMaskCount} manual masks reviewed locally.`,
+      note: `${automaticMaskCount} automatic and ${manualMaskCount} manual masks pending review in the app editor.`,
     },
     branding: {
       workspaceId: credential.claims.workspaceId,
@@ -1034,7 +1077,7 @@ async function commitCapture(
       ...(settings?.logo_object_key ? { logoMediaId: settings.logo_object_key } : {}),
       accentColor: settings?.accent_color ?? "#356fe5",
       clickTargetColor: settings?.click_target_color ?? "#ef6f47",
-      showRivetBranding: settings?.remove_branding !== 1,
+      showKnowHowBranding: settings?.remove_branding !== 1,
     },
     exportPolicy: {
       allowedFormats: ["live-link", "pdf", "html", "markdown"],
@@ -1053,12 +1096,9 @@ async function commitCapture(
   const statements: D1PreparedStatementLike[] = [
     statement(
       db,
-      `UPDATE guide_revisions SET summary = ?, privacy_reviewed_at = ?,
-        privacy_reviewed_by = ?, updated_at = CURRENT_TIMESTAMP
+      `UPDATE guide_revisions SET summary = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND workspace_id = ? AND status = 'draft'`,
       canonical.summary,
-      reviewedAt,
-      credential.claims.userId,
       capture.scope.revisionId,
       credential.claims.workspaceId,
     ),
@@ -1093,6 +1133,7 @@ async function commitCapture(
         sanitizedUrl: step.sanitizedUrl,
         automaticMaskCount: step.automaticMaskCount,
         manualMaskCount: step.manualMaskCount,
+        ...(step.redactions.length ? { redactions: step.redactions } : {}),
       }),
     })),
   );
@@ -1136,7 +1177,7 @@ async function commitCapture(
       targetType: "guide",
       targetId: capture.scope.guideId,
       targetLabel: capture.scope.title,
-      summary: `${capture.scope.title} saved as a privacy-reviewed private draft`,
+      summary: `${capture.scope.title} saved as a private draft pending review`,
       metadata: {
         revisionId: capture.scope.revisionId,
         stepCount: steps.length,
@@ -1156,7 +1197,7 @@ async function commitCapture(
 
 async function dispatch(request: Request, context: RouteContext) {
   const db = dbBinding();
-  const repository = new D1RivetRepository(db);
+  const repository = new D1KnowHowRepository(db);
   await repository.ensureSecurityGuards();
   const path = (await context.params).path ?? [];
 

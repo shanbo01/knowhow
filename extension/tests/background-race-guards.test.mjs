@@ -79,13 +79,13 @@ test("pairing and discard honor capture lifecycle boundaries", async () => {
   const source = await backgroundSource();
   const connect = functionSlice(
     source,
-    "connectRivet",
+    "connectKnowHow",
     "excludeCurrentSite",
   );
   const discard = functionSlice(
     source,
     "discardCapture",
-    "connectRivet",
+    "connectKnowHow",
   );
 
   assert.match(
@@ -95,7 +95,7 @@ test("pairing and discard honor capture lifecycle boundaries", async () => {
   assert.match(connect, /withStateMutation/);
   assert.ok(
     connect.indexOf("connectableCaptureStatuses.has(state.status)") <
-      connect.indexOf("beginRivetPairing(code)"),
+      connect.indexOf("beginKnowHowPairing(code)"),
   );
   assert.match(discard, /current\.status === CaptureStatus\.UPLOADING/);
   assert.ok(
@@ -108,21 +108,25 @@ test("pairing and discard honor capture lifecycle boundaries", async () => {
   );
 });
 
-test("finish reuses and focuses an existing review tab for its session", async () => {
+test("finish uploads the reviewed draft itself and opens the app editor tab, without a separate review tab", async () => {
   const source = await backgroundSource();
-  const openReview = functionSlice(
+  const openEditor = functionSlice(
     source,
-    "openOrFocusReviewTab",
-    "finishCapture",
+    "openOrFocusEditorTab",
+    "performDraftUpload",
   );
-  const finish = functionSlice(source, "finishCapture", "discardCapture");
+  const upload = functionSlice(source, "performDraftUpload", "finishCapture");
+  const finish = functionSlice(source, "finishCapture", "retryDraftUpload");
 
-  assert.match(openReview, /withReviewTabMutation/);
-  assert.match(openReview, /chrome\.tabs\.query\(\{\}\)/);
-  assert.match(openReview, /reviewTabHasSession/);
-  assert.match(openReview, /chrome\.tabs\.update\(existing\.id/);
-  assert.match(openReview, /chrome\.windows/);
-  assert.match(openReview, /chrome\.tabs\.create\(\{ url \}\)/);
-  assert.match(finish, /openOrFocusReviewTab\(reviewing\.sessionId\)/);
-  assert.doesNotMatch(finish, /chrome\.tabs\.create/);
+  assert.match(openEditor, /withReviewTabMutation/);
+  assert.match(openEditor, /chrome\.tabs\.query\(\{\}\)/);
+  assert.match(openEditor, /chrome\.tabs\.update\(existing\.id/);
+  assert.match(openEditor, /chrome\.windows/);
+  assert.match(openEditor, /chrome\.tabs\.create\(\{ url: target\.href \}\)/);
+  assert.match(upload, /CaptureEvent\.BEGIN_UPLOAD/);
+  assert.match(upload, /submitPrivateDraft\(/);
+  assert.match(upload, /openOrFocusEditorTab\(result\.editUrl\)/);
+  assert.match(finish, /performDraftUpload\(reviewing\)/);
+  assert.doesNotMatch(source, /openOrFocusReviewTab/);
+  assert.doesNotMatch(source, /review\.html/);
 });

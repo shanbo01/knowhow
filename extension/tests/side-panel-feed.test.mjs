@@ -269,7 +269,7 @@ test("live step cards keep capture order and navigation copy", () => {
   assert.equal(stepCopy(steps[1]).title, "Select New chat");
 });
 
-test("context thumbnails project the click ring into the same crop as review", () => {
+test("live thumbnails show the full screenshot with the click ring at its true position", () => {
   const geometry = thumbnailGeometry({
     id: "step-1",
     imageWidth: 1920,
@@ -278,11 +278,11 @@ test("context thumbnails project the click ring into the same crop as review", (
     clickTarget: { x: 0.5, y: 0.4, color: "#ef6f47" },
   });
 
-  assert.ok(geometry.crop.width < 1);
-  assert.ok(geometry.crop.height < 1);
-  assert.ok(geometry.aspectRatio > 1);
+  assert.deepEqual(geometry.crop, { x: 0, y: 0, width: 1, height: 1 });
+  assert.deepEqual(geometry.image, { left: 0, top: 0, width: 100, height: 100 });
+  assert.ok(Math.abs(geometry.aspectRatio - 1920 / 1080) < 0.001);
   assert.ok(Math.abs(geometry.clickTarget.x - 0.5) < 0.001);
-  assert.ok(Math.abs(geometry.clickTarget.y - 0.5) < 0.001);
+  assert.ok(Math.abs(geometry.clickTarget.y - 0.4) < 0.001);
   assert.equal(geometry.clickTarget.color, "#ef6f47");
 });
 

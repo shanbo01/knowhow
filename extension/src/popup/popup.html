@@ -3,25 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Rivet Capture</title>
+    <title>KnowHow Capture</title>
     <link rel="stylesheet" href="./popup.css" />
   </head>
   <body>
     <main class="panel-shell">
       <header class="brand">
-        <span class="brand-mark">R</span>
+        <span class="brand-mark">K</span>
         <span class="brand-copy">
-          <strong>Rivet Capture</strong>
+          <strong>KnowHow Capture</strong>
           <small>Private, privacy-reviewed guides</small>
         </span>
       </header>
 
-      <section class="connection" aria-label="Rivet connection">
+      <section class="connection" aria-label="KnowHow connection">
         <span class="connection-state">
           <i id="connection-dot"></i>
           <span class="connection-copy">
             <small>Workspace</small>
-            <strong id="connection-label">Checking Rivet…</strong>
+            <strong id="connection-label">Checking KnowHow…</strong>
           </span>
         </span>
         <button id="connect-button" class="text-button" type="button">
@@ -72,7 +72,7 @@
         </label>
         <label>
           <span>Connected workspace</span>
-          <input id="workspace-id" maxlength="128" placeholder="Pair Rivet first" readonly />
+          <input id="workspace-id" maxlength="128" placeholder="Pair KnowHow first" readonly />
         </label>
         <button id="start-button" class="primary" type="submit" disabled>
           Start capturing this tab
@@ -107,6 +107,7 @@
           <small>Applied before screenshots are stored</small>
         </summary>
         <div class="settings-grid">
+          <label><input data-policy="showRecordingIndicator" type="checkbox" disabled /> Show "Recording started" flash</label>
           <label><input data-policy="redactEmails" type="checkbox" disabled /> Emails</label>
           <label><input data-policy="redactPhoneNumbers" type="checkbox" disabled /> Phone numbers</label>
           <label><input data-policy="redactFinancialNumbers" type="checkbox" disabled /> Financial numbers</label>
@@ -132,13 +133,13 @@
 
       <section id="capture-actions" class="capture-actions" hidden>
         <button id="pause-button" class="secondary" type="button">Pause</button>
-        <button id="finish-button" class="primary" type="button">Finish & review</button>
+        <button id="finish-button" class="primary" type="button">Finish capture</button>
         <button id="discard-button" class="danger" type="button">Discard</button>
       </section>
 
       <section id="review-actions" class="capture-actions" hidden>
         <button id="open-review-button" class="primary" type="button">
-          Open privacy review
+          Retry upload
         </button>
         <button id="review-discard-button" class="danger" type="button">
           Discard

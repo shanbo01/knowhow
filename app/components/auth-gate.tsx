@@ -53,7 +53,7 @@ const backendCopy: Record<
   },
   failed: {
     label: "Connection issue",
-    defaultMessage: "Rivet could not reach the workspace service.",
+    defaultMessage: "KnowHow could not reach the workspace service.",
   },
 };
 
@@ -126,11 +126,11 @@ export function AuthGate({
   return (
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="auth-brand-title">
-        <Link className="auth-brand" href="/" aria-label="Rivet home">
+        <Link className="auth-brand" href="/" aria-label="KnowHow home">
           <span className="auth-brand-mark" aria-hidden="true">
-            R
+            K
           </span>
-          <span id="auth-brand-title">Rivet</span>
+          <span id="auth-brand-title">KnowHow</span>
         </Link>
 
         <div className="auth-intro-copy">
@@ -185,7 +185,7 @@ export function AuthGate({
               {isSignUp ? "Create your account" : "Welcome back"}
             </p>
             <h2 id="auth-heading">
-              {isSignUp ? "Start a Rivet workspace" : "Sign in to Rivet"}
+              {isSignUp ? "Start a KnowHow workspace" : "Sign in to KnowHow"}
             </h2>
             <p>
               {isSignUp
@@ -313,7 +313,7 @@ export function AuthGate({
           </form>
 
           <p className="auth-card-footnote">
-            Rivet verifies access on every request and defaults to no access.
+            KnowHow verifies access on every request and defaults to no access.
           </p>
         </div>
       </section>
@@ -342,8 +342,8 @@ export function VerificationGate({
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="verify-brand-title">
         <div className="auth-brand">
-          <span className="auth-brand-mark" aria-hidden="true">R</span>
-          <span id="verify-brand-title">Rivet</span>
+          <span className="auth-brand-mark" aria-hidden="true">K</span>
+          <span id="verify-brand-title">KnowHow</span>
         </div>
         <div className="auth-intro-copy">
           <p className="auth-eyebrow">Account protection</p>
@@ -365,7 +365,7 @@ export function VerificationGate({
             <p className="auth-eyebrow">Check your inbox</p>
             <h2 id="verify-title">Verify your work email</h2>
             <p>
-              We need to confirm <strong>{email}</strong> before Rivet can check
+              We need to confirm <strong>{email}</strong> before KnowHow can check
               an invitation or approved domain.
             </p>
           </div>
@@ -426,11 +426,11 @@ export function WorkspaceSetup({
   return (
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="auth-brand-title">
-        <Link className="auth-brand" href="/" aria-label="Rivet home">
+        <Link className="auth-brand" href="/" aria-label="KnowHow home">
           <span className="auth-brand-mark" aria-hidden="true">
-            R
+            K
           </span>
-          <span id="auth-brand-title">Rivet</span>
+          <span id="auth-brand-title">KnowHow</span>
         </Link>
 
         <div className="auth-intro-copy">
@@ -453,7 +453,7 @@ export function WorkspaceSetup({
           <div className="auth-card-heading">
             <p className="auth-eyebrow">Workspace setup</p>
             <h2 id="auth-workspace-heading">
-              {userName ? `Welcome, ${userName}` : "Welcome to Rivet"}
+              {userName ? `Welcome, ${userName}` : "Welcome to KnowHow"}
             </h2>
             <p>
               Choose a recognizable name, such as your company or IT team name.
@@ -483,7 +483,7 @@ export function WorkspaceSetup({
                 }
               />
               <span id="auth-workspace-hint" className="auth-field-hint">
-                Your team will see this name in Rivet.
+                Your team will see this name in KnowHow.
               </span>
             </div>
 

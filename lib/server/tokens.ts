@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from "../rivet-types";
+import type { WorkspaceRole } from "../knowhow-types";
 import { HttpError } from "./http-security";
 
 const TOKEN_VERSION = 1 as const;
@@ -35,7 +35,7 @@ export interface AppointmentTokenClaims extends ClaimsBase {
   email: string;
 }
 
-export type RivetTokenClaims =
+export type KnowHowTokenClaims =
   | InviteTokenClaims
   | DeviceTokenClaims
   | AppointmentTokenClaims;
@@ -66,7 +66,7 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 function signingSecret(override?: string): string {
-  const secret = override ?? process.env.RIVET_TOKEN_SIGNING_KEY ?? "";
+  const secret = override ?? process.env.KNOWHOW_TOKEN_SIGNING_KEY ?? "";
   if (encoder.encode(secret).byteLength < 32) {
     throw new HttpError(500, "TOKEN_KEY_MISSING", "Token signing is unavailable.", {
       expose: false,
@@ -97,21 +97,21 @@ function stableJson(value: unknown): string {
 }
 
 async function signClaims(
-  claims: RivetTokenClaims,
+  claims: KnowHowTokenClaims,
   secret?: string,
 ): Promise<string> {
   assertBaseClaims(claims);
   const payload = bytesToBase64Url(encoder.encode(stableJson(claims)));
-  const message = encoder.encode(`rivet.v1.${payload}`);
+  const message = encoder.encode(`knowhow.v1.${payload}`);
   const signature = await crypto.subtle.sign("HMAC", await hmacKey(secret), message);
   return `${payload}.${bytesToBase64Url(new Uint8Array(signature))}`;
 }
 
-function assertBaseClaims(value: unknown): asserts value is RivetTokenClaims {
+function assertBaseClaims(value: unknown): asserts value is KnowHowTokenClaims {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
   }
-  const claims = value as Partial<RivetTokenClaims>;
+  const claims = value as Partial<KnowHowTokenClaims>;
   if (
     claims.version !== TOKEN_VERSION ||
     (claims.type !== "invite" &&
@@ -133,9 +133,9 @@ function assertBaseClaims(value: unknown): asserts value is RivetTokenClaims {
 
 async function verifyClaims(
   token: string,
-  expectedType: RivetTokenClaims["type"],
+  expectedType: KnowHowTokenClaims["type"],
   secret?: string,
-): Promise<RivetTokenClaims> {
+): Promise<KnowHowTokenClaims> {
   if (!token || token.length > MAX_TOKEN_LENGTH) {
     throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
   }
@@ -155,7 +155,7 @@ async function verifyClaims(
     "HMAC",
     await hmacKey(secret),
     ownedBuffer(signatureBytes),
-    encoder.encode(`rivet.v1.${payload}`),
+    encoder.encode(`knowhow.v1.${payload}`),
   );
   if (!valid) throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
 

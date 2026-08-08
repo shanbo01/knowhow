@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import {
   allRows,
   authorize,
-  D1RivetRepository,
+  D1KnowHowRepository,
   HttpError,
   requireD1Binding,
   requireVerifiedIdentity,
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
     }
 
     const db = requireD1Binding(env.DB);
-    const repository = new D1RivetRepository(db);
+    const repository = new D1KnowHowRepository(db);
     await repository.ensureSecurityGuards();
     const identity = await requireVerifiedIdentity(request);
     const access = await repository.getWorkspaceAccess(workspaceId, identity.userId);
@@ -148,7 +148,7 @@ export async function GET(request: Request) {
     return new Response(csv, {
       headers: {
         "content-type": "text/csv; charset=utf-8",
-        "content-disposition": `attachment; filename="rivet-audit-${workspaceId}.csv"`,
+        "content-disposition": `attachment; filename="knowhow-audit-${workspaceId}.csv"`,
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
       },

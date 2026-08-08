@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import {
   authorize,
-  D1RivetRepository,
+  D1KnowHowRepository,
   HttpError,
   jsonResponse,
   requireD1Binding,
@@ -10,7 +10,7 @@ import {
   splitSearchTerms,
   toErrorResponse,
 } from "../../../../lib/server";
-import type { GuideSearchResult } from "../../../../lib/rivet-types";
+import type { GuideSearchResult } from "../../../../lib/knowhow-types";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ export async function GET(request: Request) {
     }
 
     const db = requireD1Binding(env.DB);
-    const repository = new D1RivetRepository(db);
+    const repository = new D1KnowHowRepository(db);
     await repository.ensureSecurityGuards();
     const identity = await requireVerifiedIdentity(request);
     const access = await repository.getWorkspaceAccess(workspaceId, identity.userId);

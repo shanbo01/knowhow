@@ -12,7 +12,7 @@ let outputDirectory;
 let access;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-search-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-search-"));
   await build({
     root,
     configFile: false,
@@ -135,7 +135,7 @@ const identity = {
 test("search returns only guides the viewer is authorized to read", async () => {
   const database = await openMigratedDatabase();
   seedSearchWorkspace(database);
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const viewerAccess = await repository.getWorkspaceAccess("w1", "u-viewer");
   assert.ok(viewerAccess);
   assert.ok(viewerAccess.groupIds.includes("g-all"), "viewer belongs to all-members group");
@@ -162,7 +162,7 @@ test("search returns only guides the viewer is authorized to read", async () => 
 test("restricted and private content never surfaces — not even existence", async () => {
   const database = await openMigratedDatabase();
   seedSearchWorkspace(database);
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const viewerAccess = await repository.getWorkspaceAccess("w1", "u-viewer");
 
   // A search targeting the restricted guide's unique words must return nothing.
@@ -203,7 +203,7 @@ test("restricted and private content never surfaces — not even existence", asy
 test("the engineers group member sees the restricted guide", async () => {
   const database = await openMigratedDatabase();
   seedSearchWorkspace(database);
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const engineerAccess = await repository.getWorkspaceAccess("w1", "u-engineer");
   assert.ok(engineerAccess.groupIds.includes("g-eng"));
 
@@ -230,7 +230,7 @@ test("workspace boundaries hold: a member of another workspace finds nothing", a
   database.exec(`INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status) VALUES ('w2', 'u-viewer', 'viewer@customer.com', 'Viewer', 'active')`);
   database.exec(`INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by) VALUES ('w2', 'u-viewer', 'viewer', 'u-admin')`);
 
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const otherAccess = await repository.getWorkspaceAccess("w2", "u-viewer");
   const results = await access.searchGuides(
     d1Adapter(database),

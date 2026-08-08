@@ -130,7 +130,7 @@ async function embedImage(
   } catch (error) {
     throw new GuideRendererError(
       "INVALID_MEDIA",
-      `Rivet could not decode media ${asset.mediaId}.`,
+      `KnowHow could not decode media ${asset.mediaId}.`,
       { format: "pdf", cause: error },
     );
   }
@@ -157,9 +157,9 @@ export async function renderGuideToPdf(
     document.setTitle(pdfSafeText(revision.title));
     document.setAuthor(pdfSafeText(revision.branding.workspaceName));
     document.setSubject(`Published guide revision ${revision.revisionNumber}`);
-    document.setCreator("Rivet");
-    document.setProducer("Rivet");
-    document.setKeywords(["Rivet", "guide", "SOP", revision.guideId]);
+    document.setCreator("KnowHow");
+    document.setProducer("KnowHow");
+    document.setKeywords(["KnowHow", "guide", "SOP", revision.guideId]);
     const publishedDate = new Date(revision.publishedAt);
     document.setCreationDate(publishedDate);
     document.setModificationDate(publishedDate);
@@ -593,8 +593,8 @@ export async function renderGuideToPdf(
         size: 8,
         color: MUTED,
       });
-      if (revision.branding.showRivetBranding) {
-        target.drawText("Generated with Rivet", {
+      if (revision.branding.showKnowHowBranding) {
+        target.drawText("Generated with KnowHow", {
           x: MARGIN_X,
           y: 25,
           font: fonts.regular,
@@ -623,7 +623,7 @@ export async function renderGuideToPdf(
     return await document.save({ useObjectStreams: false });
   } catch (error) {
     if (error instanceof GuideRendererError) throw error;
-    throw new GuideRendererError("RENDER_FAILED", "Rivet could not render the PDF.", {
+    throw new GuideRendererError("RENDER_FAILED", "KnowHow could not render the PDF.", {
       format: "pdf",
       cause: error,
     });

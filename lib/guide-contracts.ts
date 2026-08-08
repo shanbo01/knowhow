@@ -77,7 +77,13 @@ export interface GuideRedaction {
   readonly mode: "blur" | "solid";
   readonly region: NormalizedRectangle;
   readonly detection: "automatic" | "assisted" | "manual";
-  readonly applied: true;
+  /**
+   * False while the redaction is still a reversible, on-image blur overlay
+   * that the author can add/remove during editing. Becomes true forever the
+   * moment the guide's first review is submitted, at which point the region
+   * has been flattened into the stored pixels and can never be undone.
+   */
+  readonly applied: boolean;
 }
 
 export interface GuideAnnotation {
@@ -175,7 +181,7 @@ export interface WorkspaceBranding {
   readonly logoMediaId?: string;
   readonly accentColor: string;
   readonly clickTargetColor: string;
-  readonly showRivetBranding: boolean;
+  readonly showKnowHowBranding: boolean;
 }
 
 export const GUIDE_EXPORT_FORMATS = [
@@ -731,8 +737,8 @@ function redaction(
     `${path}.detection`,
     issues,
   );
-  if (value.applied !== true) {
-    issue(issues, `${path}.applied`, "Exportable redactions must already be applied.");
+  if (typeof value.applied !== "boolean") {
+    issue(issues, `${path}.applied`, "Expected a boolean.");
   }
   if (
     (value.category === "common-name" || value.category === "long-text") &&
@@ -1039,7 +1045,7 @@ function branding(
       "logoMediaId",
       "accentColor",
       "clickTargetColor",
-      "showRivetBranding",
+      "showKnowHowBranding",
     ],
     path,
     issues,
@@ -1049,8 +1055,8 @@ function branding(
   identifier(value.logoMediaId, `${path}.logoMediaId`, issues, true);
   color(value.accentColor, `${path}.accentColor`, issues);
   color(value.clickTargetColor, `${path}.clickTargetColor`, issues);
-  if (typeof value.showRivetBranding !== "boolean") {
-    issue(issues, `${path}.showRivetBranding`, "Expected a boolean.");
+  if (typeof value.showKnowHowBranding !== "boolean") {
+    issue(issues, `${path}.showKnowHowBranding`, "Expected a boolean.");
   }
   return true;
 }
@@ -1288,6 +1294,17 @@ function revision(
             `${path}.blocks[${index}].media.sanitizedAt`,
             "Media must be sanitized before publication.",
           );
+        }
+        if (Array.isArray(block.media.redactions)) {
+          block.media.redactions.forEach((entry, redactionIndex) => {
+            if (isRecord(entry) && entry.applied !== true) {
+              issue(
+                issues,
+                `${path}.blocks[${index}].media.redactions[${redactionIndex}].applied`,
+                "Published redactions must already be flattened into the image.",
+              );
+            }
+          });
         }
       });
     }

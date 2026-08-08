@@ -1,4 +1,12 @@
-import { normalizeEditorStep } from "../review/editor-state.js";
+/**
+ * The live step feed thumbnail always shows the full, uncropped screenshot
+ * (matching what the app editor starts with): no automatic zoom-to-click
+ * framing. The click ring is still drawn at its true position over the full
+ * frame so the highlighted control stays visible without cropping anything.
+ */
+function contextualCrop() {
+  return { x: 0, y: 0, width: 1, height: 1 };
+}
 
 function finitePositive(value, fallback = 1) {
   const numeric = Number(value);
@@ -372,12 +380,11 @@ export function projectClickToCrop(clickTarget, crop) {
 }
 
 export function thumbnailGeometry(step) {
-  const normalized = normalizeEditorStep(step);
-  const crop = normalized.editorState.crop;
+  const crop = contextualCrop(step);
   const clickTarget =
     step?.sourceEvent === "navigation"
       ? null
-      : projectClickToCrop(normalized.editorState.clickTarget, crop);
+      : projectClickToCrop(step?.clickTarget || null, crop);
   const imageWidth = finitePositive(step?.imageWidth);
   const imageHeight = finitePositive(step?.imageHeight);
 
@@ -386,8 +393,10 @@ export function thumbnailGeometry(step) {
     clickTarget,
     aspectRatio: (imageWidth * crop.width) / (imageHeight * crop.height),
     image: {
-      left: (-crop.x / crop.width) * 100,
-      top: (-crop.y / crop.height) * 100,
+      // The "+ 0" normalizes the -0 that (-0 / n) * 100 would otherwise
+      // produce when crop.x/crop.y are exactly 0 (the common, un-cropped case).
+      left: ((-crop.x / crop.width) * 100) + 0,
+      top: ((-crop.y / crop.height) * 100) + 0,
       width: (1 / crop.width) * 100,
       height: (1 / crop.height) * 100,
     },

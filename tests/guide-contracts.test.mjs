@@ -12,7 +12,7 @@ let outputDirectory;
 let guide;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-guide-contracts-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-guide-contracts-"));
   await build({
     root,
     configFile: false,
@@ -79,7 +79,7 @@ function publishedRevision() {
       workspaceName: "Acme & Co",
       accentColor: "#0d6b57",
       clickTargetColor: "#ff7a00",
-      showRivetBranding: true,
+      showKnowHowBranding: true,
     },
     exportPolicy: {
       allowedFormats: ["live-link", "pdf", "html", "markdown"],

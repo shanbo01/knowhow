@@ -1,4 +1,4 @@
-import type { RevisionStatus, WorkspaceRole, WorkspaceStatus } from "../rivet-types";
+import type { RevisionStatus, WorkspaceRole, WorkspaceStatus } from "../knowhow-types";
 import { HttpError } from "./http-security";
 
 export type PolicyAction =

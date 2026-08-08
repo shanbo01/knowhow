@@ -33,7 +33,7 @@ export function ensureUsableConsoleCreateTask(target: ConsoleWithTask): boolean 
   }
 
   try {
-    const task = createTask.call(target, "rivet-runtime-check");
+    const task = createTask.call(target, "knowhow-runtime-check");
     if (task && typeof task.run === "function") {
       return false;
     }

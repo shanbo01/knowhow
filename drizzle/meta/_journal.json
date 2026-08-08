@@ -15,6 +15,13 @@
       "when": 1785946837269,
       "tag": "0001_spotty_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786125449572,
+      "tag": "0002_salty_robin_chapel",
+      "breakpoints": true
     }
   ]
 }

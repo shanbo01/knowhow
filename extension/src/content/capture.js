@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const INSTANCE_KEY = "__RIVET_CAPTURE_INSTANCE_V1__";
+  const INSTANCE_KEY = "__KNOWHOW_CAPTURE_INSTANCE_V1__";
   if (globalThis[INSTANCE_KEY]) {
     globalThis[INSTANCE_KEY].announce();
     return;
@@ -148,7 +148,7 @@
     if (state.policy.redactPhoneNumbers !== false) {
       selectors.push("input[type=tel]", "[autocomplete=tel]");
     }
-    selectors.push("[data-rivet-redact]");
+    selectors.push("[data-knowhow-redact]");
     const selector = selectors.join(",");
     return Array.from(document.querySelectorAll(selector))
       .filter(visible)
@@ -381,8 +381,79 @@
     };
   }
 
+  let recordingFlashEl = null;
+  let recordingFlashHideTimer = null;
+  let recordingActivationCount = 0;
+
+  // A brief full-viewport dim + "Recording started/resumed" flash gives clear
+  // feedback that capture is live, without leaving any persistent page UI
+  // that could show up in later screenshots. It is force-removed immediately
+  // before every screenshot opportunity below, so it can never be captured.
+  function removeRecordingFlash() {
+    if (recordingFlashHideTimer) {
+      clearTimeout(recordingFlashHideTimer);
+      recordingFlashHideTimer = null;
+    }
+    if (recordingFlashEl) {
+      recordingFlashEl.remove();
+      recordingFlashEl = null;
+    }
+  }
+
+  function showRecordingFlash(label) {
+    if (state.policy.showRecordingIndicator === false) return;
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    removeRecordingFlash();
+    const flash = document.createElement("div");
+    flash.setAttribute("aria-hidden", "true");
+    flash.style.cssText =
+      "position:fixed;inset:0;z-index:2147483647;display:flex;" +
+      "align-items:center;justify-content:center;" +
+      "background:rgba(8,10,20,.55);opacity:1;" +
+      "transition:opacity .45s ease;pointer-events:none;";
+    const badge = document.createElement("div");
+    badge.style.cssText =
+      "display:flex;align-items:center;gap:10px;padding:14px 22px;" +
+      "border-radius:999px;background:rgba(17,20,30,.94);color:#fff;" +
+      "font:600 15px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
+      "box-shadow:0 12px 32px rgba(0,0,0,.35);letter-spacing:.01em;";
+    const dot = document.createElement("span");
+    dot.style.cssText =
+      "width:10px;height:10px;border-radius:50%;background:#ef4444;" +
+      "animation:knowhow-recording-pulse 1.4s ease-out infinite;";
+    const style = document.createElement("style");
+    style.textContent =
+      "@keyframes knowhow-recording-pulse{" +
+      "0%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}" +
+      "70%{box-shadow:0 0 0 10px rgba(239,68,68,0)}" +
+      "100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}";
+    const text = document.createElement("span");
+    text.textContent = label;
+    badge.append(dot, text);
+    flash.append(style, badge);
+    root.appendChild(flash);
+    recordingFlashEl = flash;
+    recordingFlashHideTimer = setTimeout(() => {
+      if (recordingFlashEl !== flash) return;
+      flash.style.opacity = "0";
+      recordingFlashHideTimer = setTimeout(() => {
+        if (recordingFlashEl === flash) removeRecordingFlash();
+      }, 450);
+    }, 1100);
+  }
+
   function setStatus(status) {
+    const enteringRecording =
+      status === "recording" && state.status !== "recording";
     state.status = status;
+    if (status !== "recording") removeRecordingFlash();
+    if (enteringRecording) {
+      recordingActivationCount += 1;
+      showRecordingFlash(
+        recordingActivationCount === 1 ? "Recording started" : "Recording resumed",
+      );
+    }
   }
 
   function waitForPagePaint() {
@@ -398,6 +469,7 @@
       sessionId: state.sessionId,
       interactionSequence,
       preflight: options.preflight === true,
+      sourceEvent: options.sourceEvent || "click",
       context,
     });
   }
@@ -460,6 +532,7 @@
   }
 
   function beginDeferredClick(event, element, context) {
+    removeRecordingFlash();
     const deferred = {
       pointerId: event.pointerId,
       element,
@@ -561,6 +634,27 @@
     tryCommitDeferredClick(deferred);
   }
 
+  // A right-click that opens the native context menu is captured as its own
+  // step, matching how Scribe documents "right-click X" actions.
+  function onContextMenu(event) {
+    if (state.status !== "recording" || !event.isTrusted) return;
+    const element = captureElement(event.target);
+    const viewport = viewportSnapshot();
+    const targetRect = rectFor(element, "click-target");
+    if (!targetRect) return;
+    const point = { x: event.clientX, y: event.clientY };
+    const context = targetContext(element, point, viewport);
+    const name = context.title.replace(/^Select /, "");
+    sendCapturedInteraction(
+      {
+        ...context,
+        title: "Right-click " + name,
+        instructions: "Right-click " + name + ".",
+      },
+      { sourceEvent: "contextmenu" },
+    );
+  }
+
   function onClick(event) {
     if (state.status !== "recording" || !event.isTrusted) {
       pendingPointer = null;
@@ -594,35 +688,37 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type === "RIVET_CONFIGURE") {
+    if (message?.type === "KNOWHOW_CONFIGURE") {
       state.sessionId = message.sessionId;
       state.policy = message.policy || {};
       setStatus(message.status || "recording");
       sendResponse({ ok: true });
       return false;
     }
-    if (message?.type === "RIVET_SET_STATUS") {
+    if (message?.type === "KNOWHOW_SET_STATUS") {
       setStatus(message.status, message.reason);
       sendResponse({ ok: true });
       return false;
     }
-    if (message?.type === "RIVET_PREPARE_SCREENSHOT") {
+    if (message?.type === "KNOWHOW_PREPARE_SCREENSHOT") {
+      removeRecordingFlash();
       void waitForPagePaint().then(() =>
         sendResponse({ ok: true, context: pageContext() }),
       );
       return true;
     }
-    if (message?.type === "RIVET_RESTORE_INDICATOR") {
+    if (message?.type === "KNOWHOW_RESTORE_INDICATOR") {
       // Kept as a no-op for compatibility with capture jobs started by an
-      // older service worker. Rivet no longer injects page UI to restore.
+      // older service worker. KnowHow no longer injects page UI to restore.
       sendResponse({ ok: true });
       return false;
     }
-    if (message?.type === "RIVET_GET_PAGE_CONTEXT") {
+    if (message?.type === "KNOWHOW_GET_PAGE_CONTEXT") {
+      removeRecordingFlash();
       sendResponse({ ok: true, context: pageContext() });
       return false;
     }
-    if (message?.type === "RIVET_VERIFY_DOCUMENT") {
+    if (message?.type === "KNOWHOW_VERIFY_DOCUMENT") {
       sendResponse({ ok: true, sanitizedUrl: sanitizedPageUrl() });
       return false;
     }
@@ -634,6 +730,7 @@
   document.addEventListener("pointercancel", onPointerCancel, true);
   document.addEventListener("pointerup", onPointerUp, true);
   document.addEventListener("click", onClick, true);
+  document.addEventListener("contextmenu", onContextMenu, true);
 
   globalThis[INSTANCE_KEY] = {
     announce() {

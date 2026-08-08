@@ -1,5 +1,5 @@
 import { putCapturedStep } from "../core/capture-store.js";
-import { buildSolidRedactionPlan } from "../core/redaction.js";
+import { buildPendingRedactionRegions } from "../core/redaction.js";
 
 function canvasBlob(canvas, type = "image/jpeg", quality = 0.86) {
   return new Promise((resolve, reject) => {
@@ -113,16 +113,15 @@ async function processScreenshot(message) {
     const context = canvas.getContext("2d", { alpha: false });
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-    const plan = buildSolidRedactionPlan({
+    // Redactions are no longer baked into pixels here. The masked regions
+    // are captured as normalized, reversible metadata; the author reviews
+    // and (un)blurs them in the app editor. They only become permanent once
+    // the guide's first review submission flattens the pixels server-side.
+    const redactions = buildPendingRedactionRegions({
       rects: message.masks || [],
       viewport: message.viewport,
-      bitmap: { width: canvas.width, height: canvas.height },
       padding: 5,
     });
-    context.fillStyle = "#111827";
-    for (const rect of plan) {
-      context.fillRect(rect.x, rect.y, rect.width, rect.height);
-    }
 
     const compressed = await compressCanvas(
       canvas,
@@ -149,14 +148,16 @@ async function processScreenshot(message) {
       imageBlob: compressed.blob,
       imageWidth: compressedCanvas.width,
       imageHeight: compressedCanvas.height,
-      automaticMaskCount: plan.length,
+      pendingRedactions: redactions,
+      automaticMaskCount: 0,
       manualMaskCount: 0,
       updatedAt: new Date().toISOString(),
     });
     return {
       ok: true,
       bytes: compressed.blob.size,
-      automaticMaskCount: plan.length,
+      automaticMaskCount: 0,
+      pendingRedactionCount: redactions.length,
     };
   } finally {
     if (bitmap) bitmap.close();
@@ -176,7 +177,7 @@ if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (
       message?.target !== "offscreen" ||
-      message.type !== "RIVET_PROCESS_SCREENSHOT"
+      message.type !== "KNOWHOW_PROCESS_SCREENSHOT"
     ) {
       return false;
     }

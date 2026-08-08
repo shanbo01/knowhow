@@ -3,7 +3,7 @@
 import { ID, type Models } from "appwrite";
 import { Building2, CheckCircle2, LoaderCircle, LogOut, Plus } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AuthGate,
   VerificationGate,
@@ -12,23 +12,32 @@ import {
 import {
   AssignAdminDialog,
   PlatformView,
-  RivetWorkspaceApp,
+  KnowHowWorkspaceApp,
   SupportRequestDialog,
-} from "./components/rivet-workspace-app";
+} from "./components/knowhow-workspace-app";
 import { account, client } from "../lib/appwrite";
-import { clearApiCredential, rivetApi, rivetCommand } from "../lib/rivet-client";
-import type { BootstrapResponse, PlatformWorkspace, WorkspaceRole, WorkspaceSummary } from "../lib/rivet-types";
+import { clearApiCredential, knowhowApi, knowhowCommand } from "../lib/knowhow-client";
+import type { NavigationGuard } from "../lib/navigation-guard";
+import type { BootstrapResponse, PlatformWorkspace, WorkspaceRole, WorkspaceSummary } from "../lib/knowhow-types";
+import {
+  guideEditorHref,
+  guideHref,
+  parseAppRoute,
+  routeWorkspaceSlug,
+  workspaceHref,
+  type AppRoute,
+} from "../lib/workspace-routes";
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Something went wrong. Please try again.";
 }
 
-const PENDING_INVITE_KEY = "rivet-pending-invite";
+const PENDING_INVITE_KEY = "knowhow-pending-invite";
 
-function requestedWorkspaceFromLocation() {
-  if (typeof window === "undefined") return undefined;
-  return new URLSearchParams(window.location.search).get("workspaceId") ?? undefined;
+function locationKeyFromWindow() {
+  if (typeof window === "undefined") return "/";
+  return `${window.location.pathname}${window.location.search}`;
 }
 
 function rememberInviteFromLocation() {
@@ -38,12 +47,12 @@ function rememberInviteFromLocation() {
   return token ?? window.sessionStorage.getItem(PENDING_INVITE_KEY);
 }
 
-function OpeningRivet() {
+function OpeningKnowHow() {
   return (
     <main className="opening-screen" aria-live="polite">
-      <div className="opening-mark">R</div>
+      <div className="opening-mark">K</div>
       <LoaderCircle className="spin" aria-hidden="true" />
-      <h1>Opening Rivet</h1>
+      <h1>Opening KnowHow</h1>
       <p>Verifying Appwrite and restoring your secure session.</p>
     </main>
   );
@@ -66,15 +75,15 @@ function AppointmentPrompt({
     <main className="onboarding-shell">
       <header className="onboarding-header">
         <Link className="brand-lockup" href="/">
-          <span className="brand-mark">R</span>
-          <span>Rivet</span>
+          <span className="brand-mark">K</span>
+          <span>KnowHow</span>
         </Link>
       </header>
       <section className="onboarding-card">
         <p className="eyebrow">Administrator appointment</p>
         <h1>Become a workspace administrator</h1>
         <p className="lede">
-          A Rivet platform administrator appointed <strong>{email}</strong> as the administrator
+          A KnowHow platform administrator appointed <strong>{email}</strong> as the administrator
           of a client workspace. Accepting adds you as that workspace&apos;s administrator and is
           recorded in its audit history. This appointment is single-use and expires within 14 days.
         </p>
@@ -106,8 +115,8 @@ function WorkspaceRecovery({
 }) {
   return (
     <main className="opening-screen recovery-screen" role="alert">
-      <div className="opening-mark">R</div>
-      <h1>Rivet could not open your workspace</h1>
+      <div className="opening-mark">K</div>
+      <h1>KnowHow could not open your workspace</h1>
       <p>{message || "The workspace service is temporarily unavailable."}</p>
       <div className="recovery-actions">
         <button className="button primary" type="button" disabled={busy} onClick={() => void onRetry()}>
@@ -162,8 +171,8 @@ function WorkspaceOnboarding({
     <main className="onboarding-shell">
       <header className="onboarding-header">
         <Link className="brand-lockup" href="/">
-          <span className="brand-mark">R</span>
-          <span>Rivet</span>
+          <span className="brand-mark">K</span>
+          <span>KnowHow</span>
         </Link>
         <button className="button ghost" type="button" onClick={onSignOut}>
           <LogOut /> Sign out
@@ -284,6 +293,7 @@ function WorkspaceOnboarding({
 export default function Home() {
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [backendMessage, setBackendMessage] = useState("");
+  const [locationKey, setLocationKey] = useState("/");
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -294,6 +304,62 @@ export default function Home() {
   const [pendingWorkspaceIds, setPendingWorkspaceIds] = useState<string[]>([]);
   const [appointmentToken, setAppointmentToken] = useState<string | null>(null);
   const inviteAttempted = useRef<string | null>(null);
+  const locationKeyRef = useRef(locationKey);
+  const navigationGuardRef = useRef<NavigationGuard | null>(null);
+
+  const route = useMemo<AppRoute>(() => {
+    const location = new URL(locationKey, "https://knowhow.local");
+    return parseAppRoute(location.pathname, location.search);
+  }, [locationKey]);
+
+  const commitLocation = useCallback((nextLocation: string) => {
+    locationKeyRef.current = nextLocation;
+    setLocationKey(nextLocation);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
+
+  const navigate = useCallback((href: string, options: { replace?: boolean } = {}) => {
+    if (typeof window === "undefined") return;
+    if (href === locationKeyRef.current) return;
+    const proceed = () => {
+      window.history[options.replace ? "replaceState" : "pushState"]({}, "", href);
+      commitLocation(locationKeyFromWindow());
+    };
+    const guard = navigationGuardRef.current;
+    if (guard?.shouldBlock()) {
+      guard.requestConfirmation({ href, proceed });
+      return;
+    }
+    proceed();
+  }, [commitLocation]);
+
+  const registerNavigationGuard = useCallback((guard: NavigationGuard | null) => {
+    navigationGuardRef.current = guard;
+  }, []);
+
+  useEffect(() => {
+    const updateLocation = () => {
+      const nextLocation = locationKeyFromWindow();
+      const currentLocation = locationKeyRef.current;
+      if (nextLocation === currentLocation) return;
+      const proceed = () => {
+        window.history.pushState({}, "", nextLocation);
+        commitLocation(locationKeyFromWindow());
+      };
+      const guard = navigationGuardRef.current;
+      if (guard?.shouldBlock()) {
+        // Browser back/forward has already changed the URL. Restore the
+        // current editor route before rendering the custom confirmation.
+        window.history.pushState({}, "", currentLocation);
+        guard.requestConfirmation({ href: nextLocation, proceed });
+        return;
+      }
+      commitLocation(nextLocation);
+    };
+    updateLocation();
+    window.addEventListener("popstate", updateLocation);
+    return () => window.removeEventListener("popstate", updateLocation);
+  }, [commitLocation]);
 
   const appointmentFromLocation = useCallback(() => {
     if (typeof window === "undefined") return null;
@@ -319,12 +385,19 @@ export default function Home() {
     const query = workspaceId
       ? `?workspaceId=${encodeURIComponent(workspaceId)}`
       : "";
-    const next = await rivetApi<BootstrapResponse>(`/api/rivet${query}`);
+    const next = await knowhowApi<BootstrapResponse>(`/api/knowhow${query}`);
     setBootstrap(next);
     const selected = next.activeWorkspace?.workspace.id ?? next.workspaces[0]?.id ?? "";
     setActiveWorkspaceId(selected);
     return next;
   }, []);
+
+  const openWorkspace = useCallback(async (workspaceId: string, replace = false) => {
+    const next = await loadBootstrap(workspaceId);
+    const workspace = next.activeWorkspace?.workspace;
+    if (workspace) navigate(workspaceHref(workspace.slug), { replace });
+    return next;
+  }, [loadBootstrap, navigate]);
 
   const restore = useCallback(async () => {
     setBooting(true);
@@ -344,7 +417,7 @@ export default function Home() {
     setUser(nextUser);
     try {
       if (nextUser.emailVerification) {
-        await loadBootstrap(requestedWorkspaceFromLocation());
+        await loadBootstrap();
       }
     } catch (nextError) {
       setBootstrap(null);
@@ -360,20 +433,76 @@ export default function Home() {
   }, [restore]);
 
   useEffect(() => {
+    if (!user?.emailVerification || !bootstrap || appointmentToken) return;
+    const frame = window.requestAnimationFrame(() => {
+      const activeWorkspace = bootstrap.activeWorkspace?.workspace;
+      const fallback = activeWorkspace?.status === "active" ? activeWorkspace : undefined;
+      const params = new URLSearchParams(window.location.search);
+
+    if (route.kind === "root") {
+      // Invitation and appointment tokens must stay on the root route until
+      // their one-time flows have completed.
+      if (params.has("invite") || params.has("appointment")) return;
+      const requestedWorkspaceId = params.get("workspaceId");
+      const requestedWorkspace = requestedWorkspaceId
+        ? bootstrap.workspaces.find((workspace) => workspace.id === requestedWorkspaceId && workspace.status === "active")
+        : fallback;
+      if (!requestedWorkspace) return;
+      if (activeWorkspace?.id !== requestedWorkspace.id) {
+        void loadBootstrap(requestedWorkspace.id).catch((nextError) => setError(errorMessage(nextError)));
+        return;
+      }
+      const guideId = params.get("guide");
+      if (guideId) {
+        const href = params.get("edit") === "1"
+          ? guideEditorHref(requestedWorkspace.slug, guideId)
+          : guideHref(requestedWorkspace.slug, guideId, "published");
+        navigate(href, { replace: true });
+        return;
+      }
+      navigate(workspaceHref(requestedWorkspace.slug), { replace: true });
+      return;
+    }
+
+    if (route.kind === "invalid") {
+      setError("The requested workspace is unavailable.");
+      if (fallback) navigate(workspaceHref(fallback.slug), { replace: true });
+      return;
+    }
+
+    const requestedSlug = routeWorkspaceSlug(route);
+    if (!requestedSlug) return;
+    const matches = bootstrap.workspaces.filter(
+      (workspace) => workspace.slug === requestedSlug && workspace.status === "active",
+    );
+    if (matches.length !== 1) {
+      setError("The requested workspace is unavailable.");
+      if (fallback && fallback.slug !== requestedSlug) {
+        navigate(workspaceHref(fallback.slug), { replace: true });
+      }
+      return;
+    }
+      if (activeWorkspace?.id !== matches[0].id) {
+        void loadBootstrap(matches[0].id).catch((nextError) => setError(errorMessage(nextError)));
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [appointmentToken, bootstrap, loadBootstrap, navigate, route, user]);
+
+  useEffect(() => {
     if (!user?.emailVerification || !bootstrap) return;
     const token = rememberInviteFromLocation();
     if (!token || inviteAttempted.current === token) return;
     inviteAttempted.current = token;
     setBusy(true);
-    rivetCommand<{ workspaceId: string }>("redeemInvite", { token })
+    knowhowCommand<{ workspaceId: string }>("redeemInvite", { token })
       .then(async ({ workspaceId }) => {
         window.sessionStorage.removeItem(PENDING_INVITE_KEY);
-        window.history.replaceState({}, "", window.location.pathname);
-        await loadBootstrap(workspaceId);
+        await openWorkspace(workspaceId, true);
       })
       .catch((nextError) => setError(errorMessage(nextError)))
       .finally(() => setBusy(false));
-  }, [bootstrap, loadBootstrap, user]);
+  }, [bootstrap, openWorkspace, user]);
 
   const signIn = async (email: string, password: string) => {
     setBusy(true);
@@ -385,7 +514,7 @@ export default function Home() {
       setUser(nextUser);
       if (nextUser.emailVerification) {
         try {
-          await loadBootstrap(requestedWorkspaceFromLocation());
+          await loadBootstrap();
         } catch (nextError) {
           setBootstrap(null);
           setError(errorMessage(nextError));
@@ -430,6 +559,7 @@ export default function Home() {
       clearApiCredential();
       setUser(null);
       setBootstrap(null);
+      navigate("/", { replace: true });
       setBusy(false);
     }
   };
@@ -441,7 +571,7 @@ export default function Home() {
       const nextUser = await account.get();
       setUser(nextUser);
       if (nextUser.emailVerification) {
-        await loadBootstrap(requestedWorkspaceFromLocation());
+        await loadBootstrap();
       }
       else setError("The email is not verified yet. Open the link in your inbox first.");
     } catch (nextError) {
@@ -468,8 +598,7 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      setActiveWorkspaceId(workspaceId);
-      await loadBootstrap(workspaceId);
+      await openWorkspace(workspaceId);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -484,8 +613,8 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await rivetCommand("setWorkspaceStatus", { targetWorkspaceId: workspaceId, status });
-      await loadBootstrap(requestedWorkspaceFromLocation());
+      await knowhowCommand("setWorkspaceStatus", { targetWorkspaceId: workspaceId, status });
+      await loadBootstrap(activeWorkspaceId || undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
       throw nextError;
@@ -498,11 +627,11 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await rivetCommand("assignWorkspaceAdministrator", {
+      await knowhowCommand("assignWorkspaceAdministrator", {
         targetWorkspaceId: workspaceId,
         email,
       });
-      await loadBootstrap(requestedWorkspaceFromLocation());
+      await loadBootstrap(activeWorkspaceId || undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
       throw nextError;
@@ -520,13 +649,13 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await rivetCommand("requestSupportAccess", {
+      await knowhowCommand("requestSupportAccess", {
         workspaceId,
         requestedRole,
         reason,
         requestedDurationHours,
       });
-      await loadBootstrap(requestedWorkspaceFromLocation());
+      await loadBootstrap(activeWorkspaceId || undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
       throw nextError;
@@ -539,8 +668,8 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await rivetCommand("updatePlatformSettings", { selfServiceWorkspaceLimit: limit });
-      await loadBootstrap(requestedWorkspaceFromLocation());
+      await knowhowCommand("updatePlatformSettings", { selfServiceWorkspaceLimit: limit });
+      await loadBootstrap(activeWorkspaceId || undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
       throw nextError;
@@ -553,8 +682,8 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      await rivetCommand("revokeAppointment", { appointmentId });
-      await loadBootstrap(requestedWorkspaceFromLocation());
+      await knowhowCommand("revokeAppointment", { appointmentId });
+      await loadBootstrap(activeWorkspaceId || undefined);
     } catch (nextError) {
       setError(errorMessage(nextError));
       throw nextError;
@@ -568,12 +697,11 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      const result = await rivetCommand<{ workspaceId: string }>("acceptAppointment", {
+      const result = await knowhowCommand<{ workspaceId: string }>("acceptAppointment", {
         token: appointmentToken,
       });
       setAppointmentToken(null);
-      window.history.replaceState({}, "", window.location.pathname);
-      await loadBootstrap(result.workspaceId);
+      await openWorkspace(result.workspaceId, true);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -584,10 +712,10 @@ export default function Home() {
   const dismissAppointment = () => {
     setAppointmentToken(null);
     setError("");
-    window.history.replaceState({}, "", window.location.pathname);
+    navigate("/", { replace: true });
   };
 
-  if (booting) return <OpeningRivet />;
+  if (booting) return <OpeningKnowHow />;
 
   if (!user) {
     return (
@@ -627,7 +755,7 @@ export default function Home() {
           setError("");
           try {
             await checkBackend();
-            await loadBootstrap(requestedWorkspaceFromLocation());
+            await loadBootstrap();
           } catch (nextError) {
             setError(errorMessage(nextError));
           } finally {
@@ -665,8 +793,8 @@ export default function Home() {
           setBusy(true);
           setError("");
           try {
-            const result = await rivetCommand<{ workspaceId: string }>("createWorkspace", { name });
-            await loadBootstrap(result.workspaceId);
+            const result = await knowhowCommand<{ workspaceId: string }>("createWorkspace", { name });
+            await openWorkspace(result.workspaceId, true);
           } catch (nextError) {
             setError(errorMessage(nextError));
           } finally {
@@ -677,7 +805,7 @@ export default function Home() {
           setBusy(true);
           setError("");
           try {
-            await rivetCommand("requestDomainJoin", { workspaceId });
+            await knowhowCommand("requestDomainJoin", { workspaceId });
             setPendingWorkspaceIds((items) => [...new Set([...items, workspaceId])]);
           } catch (nextError) {
             setError(errorMessage(nextError));
@@ -695,11 +823,24 @@ export default function Home() {
     );
   }
 
+  const activeWorkspace = bootstrap.activeWorkspace.workspace;
+  const requestedWorkspaceSlug = routeWorkspaceSlug(route);
+  const requestedWorkspace = requestedWorkspaceSlug
+    ? bootstrap.workspaces.filter((workspace) => workspace.slug === requestedWorkspaceSlug && workspace.status === "active")
+    : [];
+  if (requestedWorkspaceSlug && (requestedWorkspace.length !== 1 || requestedWorkspace[0].id !== activeWorkspace.id)) {
+    return <OpeningKnowHow />;
+  }
+  const workspaceRoute: AppRoute = route.kind === "root" || route.kind === "invalid"
+    ? { kind: "workspace-section", workspaceSlug: activeWorkspace.slug, section: "overview" }
+    : route;
+
   return (
-    <RivetWorkspaceApp
+    <KnowHowWorkspaceApp
       key={activeWorkspaceId}
       data={bootstrap}
       activeWorkspaceId={activeWorkspaceId}
+      route={workspaceRoute}
       busy={busy}
       globalError={error}
       onSelectWorkspace={selectWorkspace}
@@ -707,6 +848,8 @@ export default function Home() {
       onSignOut={signOut}
       onBusyChange={setBusy}
       onError={setError}
+      onNavigate={navigate}
+      onRegisterNavigationGuard={registerNavigationGuard}
     />
   );
 }

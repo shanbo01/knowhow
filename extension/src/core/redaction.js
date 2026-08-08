@@ -142,6 +142,26 @@ export function buildSolidRedactionPlan({
   );
 }
 
+/**
+ * Computes non-destructive pending redaction regions (0-1 normalized,
+ * relative to the final screenshot image) instead of baking pixels. These
+ * become reversible blur overlays in the app editor until the guide's first
+ * review submission flattens them permanently.
+ */
+export function buildPendingRedactionRegions({ rects = [], viewport, padding = 4 }) {
+  const width = Math.max(1, finite(viewport?.width, 1));
+  const height = Math.max(1, finite(viewport?.height, 1));
+  const normalized = rects.map((rect) => normalizeRect(rect, viewport, padding));
+  return mergeRects(normalized).map((rect, index) => ({
+    id: `pending_${index}_${Math.round(rect.x)}_${Math.round(rect.y)}`,
+    x: clamp(rect.x / width, 0, 1),
+    y: clamp(rect.y / height, 0, 1),
+    width: clamp(rect.width / width, 0, 1),
+    height: clamp(rect.height / height, 0, 1),
+    applied: false,
+  }));
+}
+
 export function detectSensitiveRanges(text, options = {}) {
   const input = String(text || "");
   const findings = [];

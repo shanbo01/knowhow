@@ -5,7 +5,7 @@ import {
   authorize,
   clonePrivateMedia,
   deletePrivateMedia,
-  D1RivetRepository,
+  D1KnowHowRepository,
   evaluateGuideVisibility,
   extractExactEmailDomain,
   hashToken,
@@ -53,7 +53,7 @@ import type {
   WorkspaceSettings,
   WorkspaceStatus,
   WorkspaceSummary,
-} from "../../../lib/rivet-types";
+} from "../../../lib/knowhow-types";
 import type {
   GuideActor,
   GuideAudience,
@@ -77,7 +77,7 @@ function dbBinding() {
 }
 
 async function repositoryFor(db: D1DatabaseLike) {
-  const repository = new D1RivetRepository(db);
+  const repository = new D1KnowHowRepository(db);
   if (initializedBinding !== db) {
     await repository.ensureSecurityGuards();
     initializedBinding = db;
@@ -86,7 +86,7 @@ async function repositoryFor(db: D1DatabaseLike) {
 }
 
 function signingKey() {
-  return env.RIVET_TOKEN_SIGNING_KEY;
+  return env.KNOWHOW_TOKEN_SIGNING_KEY;
 }
 
 function statement(
@@ -320,7 +320,7 @@ function actor(identity: AuthenticatedIdentity) {
 
 function platformOwnerEmails() {
   return new Set(
-    (env.RIVET_PLATFORM_OWNER_EMAILS ?? "")
+    (env.KNOWHOW_PLATFORM_OWNER_EMAILS ?? "")
       .split(",")
       .map((item) => item.trim().toLowerCase())
       .filter(Boolean),
@@ -329,7 +329,7 @@ function platformOwnerEmails() {
 
 async function platformAdministrator(
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
 ) {
   const configured =
@@ -364,7 +364,7 @@ function policyContext(
 }
 
 async function requireWorkspace(
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
   workspaceId: string,
   isPlatformAdministrator: boolean,
@@ -376,7 +376,7 @@ async function requireWorkspace(
 }
 
 async function audit(
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
   workspaceId: string,
   event: {
@@ -616,12 +616,13 @@ async function loadGuides(
     current_published_revision_id: string | null;
     working_draft_revision_id: string | null;
     archived_at: string | null;
+    screenshots_locked_at: string | null;
     created_at: string;
     updated_at: string;
   }>(
     db,
     `SELECT id, workspace_id, title, author_user_id, current_published_revision_id,
-            working_draft_revision_id, archived_at, created_at, updated_at
+            working_draft_revision_id, archived_at, screenshots_locked_at, created_at, updated_at
      FROM guides WHERE workspace_id = ? ORDER BY updated_at DESC`,
     access.workspaceId,
   );
@@ -709,8 +710,10 @@ async function loadGuides(
       canEdit: visibility.canEdit,
       canReview: visibility.canReview,
       canPublish: visibility.canPublish,
+      canDelete: visibility.canDelete,
       createdAt: guide.created_at,
       updatedAt: guide.updated_at,
+      ...(guide.screenshots_locked_at ? { screenshotsLockedAt: guide.screenshots_locked_at } : {}),
       publishedRevision: visibility.published,
       workingRevision: visibility.working,
       revisionHistory: visibility.revisionHistory,
@@ -878,7 +881,7 @@ async function loadVaultItems(db: D1DatabaseLike, workspaceId: string): Promise<
 
 async function loadWorkspaceBundle(
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   summary: WorkspaceSummary,
   access: WorkspaceAccess,
   identity: AuthenticatedIdentity,
@@ -1400,6 +1403,8 @@ function normalizedAnnotations(
     "y",
     "width",
     "height",
+    "x2",
+    "y2",
     "text",
     "color",
   ]);
@@ -1435,6 +1440,12 @@ function normalizedAnnotations(
     if ((width !== undefined && x + width > 1) || (height !== undefined && y + height > 1)) {
       throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} is outside the screenshot.`);
     }
+    const x2 = annotation.x2 === undefined
+      ? undefined
+      : normalizedCoordinate(annotation.x2, `${label} ${index + 1} x2`);
+    const y2 = annotation.y2 === undefined
+      ? undefined
+      : normalizedCoordinate(annotation.y2, `${label} ${index + 1} y2`);
     const annotationText = annotation.text === undefined
       ? undefined
       : textValue(annotation.text, `${label} ${index + 1} text`, { max: 2_000 });
@@ -1454,9 +1465,44 @@ function normalizedAnnotations(
       y,
       ...(width !== undefined ? { width } : {}),
       ...(height !== undefined ? { height } : {}),
+      ...(x2 !== undefined ? { x2 } : {}),
+      ...(y2 !== undefined ? { y2 } : {}),
       ...(annotationText !== undefined ? { text: annotationText } : {}),
       ...(color !== undefined ? { color } : {}),
     };
+  });
+}
+
+function normalizedRedactions(
+  value: unknown,
+  label: string,
+): NonNullable<EditorBlock["redactions"]> {
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} is invalid.`);
+  }
+  const allowedKeys = new Set(["id", "x", "y", "width", "height", "applied"]);
+  const seen = new Set<string>();
+  return value.map((candidate, index) => {
+    const region = asObject(candidate, `${label} ${index + 1}`);
+    if (Object.keys(region).some((key) => !allowedKeys.has(key))) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} has invalid fields.`);
+    }
+    const regionId = textValue(region.id, `${label} ${index + 1} ID`, { min: 1, max: 128 });
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(regionId) || seen.has(regionId)) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} IDs must be unique and valid.`);
+    }
+    seen.add(regionId);
+    const x = normalizedCoordinate(region.x, `${label} ${index + 1} x`);
+    const y = normalizedCoordinate(region.y, `${label} ${index + 1} y`);
+    const width = normalizedCoordinate(region.width, `${label} ${index + 1} width`, { positive: true });
+    const height = normalizedCoordinate(region.height, `${label} ${index + 1} height`, { positive: true });
+    if (x + width > 1 || y + height > 1) {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} is outside the screenshot.`);
+    }
+    if (typeof region.applied !== "boolean") {
+      throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} ${index + 1} is missing its applied state.`);
+    }
+    return { id: regionId, x, y, width, height, applied: region.applied };
   });
 }
 
@@ -1487,7 +1533,10 @@ function normalizeBlocks(value: unknown): EditorBlock[] {
     const annotations = item.annotations === undefined
       ? undefined
       : normalizedAnnotations(item.annotations, `Block ${index + 1} annotations`);
-    if (!screenshotMediaId && (crop || (annotations && annotations.length))) {
+    const redactions = item.redactions === undefined
+      ? undefined
+      : normalizedRedactions(item.redactions, `Block ${index + 1} redactions`);
+    if (!screenshotMediaId && (crop || (annotations && annotations.length) || (redactions && redactions.length))) {
       throw new HttpError(400, "GUIDE_STEPS_INVALID", `Block ${index + 1} media edits need a screenshot.`);
     }
     return {
@@ -1498,6 +1547,7 @@ function normalizeBlocks(value: unknown): EditorBlock[] {
       ...(screenshotMediaId ? { screenshotMediaId } : {}),
       ...(crop ? { crop } : {}),
       ...(annotations ? { annotations } : {}),
+      ...(redactions ? { redactions } : {}),
     };
   });
 }
@@ -1599,7 +1649,7 @@ function validateCanonicalRevision(input: {
 
 async function createWorkspace(
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
   payload: Record<string, unknown>,
   options: { selfServe: boolean; administratorEmail?: string; inviteEmails?: string[] },
@@ -1658,7 +1708,7 @@ async function createWorkspace(
  */
 async function createAppointmentToken(
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
   workspaceId: string,
   rawEmail: string,
@@ -1704,7 +1754,7 @@ async function createAppointmentToken(
 
 async function createScopedInvitations(
   db: D1DatabaseLike,
-  repository: D1RivetRepository,
+  repository: D1KnowHowRepository,
   identity: AuthenticatedIdentity,
   workspaceId: string,
   emails: string[],
@@ -2815,7 +2865,7 @@ async function handleCommand(
 
   if (actionName === "saveGuide") {
     const guideId = typeof payload.guideId === "string" ? textValue(payload.guideId, "Guide", { min: 1, max: 128 }) : id("guide");
-    const existing = await first<{ author_user_id: string; working_draft_revision_id: string | null; current_published_revision_id: string | null; archived_at: string | null }>(db, `SELECT author_user_id, working_draft_revision_id, current_published_revision_id, archived_at FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId);
+    const existing = await first<{ author_user_id: string; working_draft_revision_id: string | null; current_published_revision_id: string | null; archived_at: string | null; screenshots_locked_at: string | null }>(db, `SELECT author_user_id, working_draft_revision_id, current_published_revision_id, archived_at, screenshots_locked_at FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId);
     if (existing?.archived_at) throw new HttpError(409, "GUIDE_ARCHIVED", "Restore an archived revision before editing it.");
     const title = textValue(payload.title, "Guide title", { min: 3, max: 500 });
     const summary = textValue(payload.summary, "Guide summary", { min: 1, max: 5000 });
@@ -2827,6 +2877,25 @@ async function handleCommand(
     const source = payload.source === "browser-capture" ? "browser-capture" : "manual";
     const privacyReviewed = booleanValue(payload.privacyReviewed, "Privacy review");
     const transition = payload.transition === "review" ? "review" : "draft";
+    const screenshotsLocked = Boolean(existing?.screenshots_locked_at);
+    const firstReviewSubmission = !screenshotsLocked && transition === "review";
+    const hasUnappliedRedaction = blocks.some((block) =>
+      (block.redactions ?? []).some((region) => !region.applied),
+    );
+    if (screenshotsLocked && hasUnappliedRedaction) {
+      throw new HttpError(
+        409,
+        "SCREENSHOTS_LOCKED",
+        "This guide's screenshots were locked at its first review and can no longer have reversible redactions.",
+      );
+    }
+    if (firstReviewSubmission && hasUnappliedRedaction) {
+      throw new HttpError(
+        409,
+        "REDACTIONS_NOT_FLATTENED",
+        "Flatten every redaction into its screenshot before requesting the first review.",
+      );
+    }
     const settings = await loadSettings(db, workspaceId);
     const revisionId = existing?.working_draft_revision_id ?? id("revision");
     let version = 1;
@@ -2867,6 +2936,7 @@ async function handleCommand(
       width: number;
       height: number;
       sha256: string;
+      redactionState: "pending" | "redacted";
     }> = [];
     const clonedObjectKeys: string[] = [];
     const cleanupInheritedMedia = async () => {
@@ -2921,17 +2991,24 @@ async function handleCommand(
       if (existing && createRevision) {
         try {
           const bucket = requireR2Binding(env.MEDIA);
-          const clonedBySourceId = new Map<string, { id: string; objectKey: string }>();
+          const clonedBySourceId = new Map<
+            string,
+            { id: string; objectKey: string; redactionState: "pending" | "redacted" }
+          >();
           for (const sourceMediaId of referencedMediaIds) {
             const sourceMediaRow = sourceMediaById.get(sourceMediaId)!;
-            const objectKey = await clonePrivateMedia(bucket, {
+            const cloned = await clonePrivateMedia(bucket, {
               sourceObjectKey: sourceMediaRow.object_key,
               workspaceId,
               revisionId,
               uploadedBy: identity.userId,
             });
-            clonedObjectKeys.push(objectKey);
-            clonedBySourceId.set(sourceMediaId, { id: id("media"), objectKey });
+            clonedObjectKeys.push(cloned.objectKey);
+            clonedBySourceId.set(sourceMediaId, {
+              id: id("media"),
+              objectKey: cloned.objectKey,
+              redactionState: cloned.redactionState,
+            });
           }
           blocks = blocks.map((block) => {
             if (!block.screenshotMediaId) return block;
@@ -2953,6 +3030,7 @@ async function handleCommand(
               width: sourceMediaRow.width,
               height: sourceMediaRow.height,
               sha256: sourceMediaRow.sha256,
+              redactionState: cloned.redactionState,
             });
           }
         } catch (error) {
@@ -2968,16 +3046,16 @@ async function handleCommand(
       ...(settings.logoUrl ? { logoMediaId: settings.logoUrl } : {}),
       accentColor: settings.accentColor,
       clickTargetColor: settings.clickTargetColor,
-      showRivetBranding: !settings.removeBranding,
+      showKnowHowBranding: !settings.removeBranding,
       };
       validateCanonicalRevision({ guideId, revisionId, workspaceId, version, lifecycle: transition, source, title, summary, createdAt, identity, blocks, audiences, privacyReviewed, branding });
       const statements: D1PreparedStatementLike[] = [];
     if (!existing) {
-      statements.push(statement(db, `INSERT INTO guides (id, workspace_id, title, slug, author_user_id, working_draft_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, guideId, workspaceId, title, `${slug(title)}-${guideId.slice(-6)}`, identity.userId, revisionId));
+      statements.push(statement(db, `INSERT INTO guides (id, workspace_id, title, slug, author_user_id, working_draft_revision_id, screenshots_locked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, guideId, workspaceId, title, `${slug(title)}-${guideId.slice(-6)}`, identity.userId, revisionId, firstReviewSubmission ? nowIso() : null));
     } else if (createRevision) {
-      statements.push(statement(db, `UPDATE guides SET working_draft_revision_id = ?, title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, revisionId, title, guideId, workspaceId));
+      statements.push(statement(db, `UPDATE guides SET working_draft_revision_id = ?, title = ?, screenshots_locked_at = COALESCE(screenshots_locked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, revisionId, title, firstReviewSubmission ? nowIso() : null, guideId, workspaceId));
     } else {
-      statements.push(statement(db, `UPDATE guides SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, title, guideId, workspaceId));
+      statements.push(statement(db, `UPDATE guides SET title = ?, screenshots_locked_at = COALESCE(screenshots_locked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND workspace_id = ?`, title, firstReviewSubmission ? nowIso() : null, guideId, workspaceId));
     }
     if (createRevision) {
       statements.push(statement(db, `INSERT INTO guide_revisions (id, guide_id, workspace_id, version, status, source_type, title, summary, category, tags_json, system_references_json, privacy_reviewed_at, privacy_reviewed_by, created_by, submitted_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, revisionId, guideId, workspaceId, version, transition, source === "browser-capture" ? "capture" : "manual", title, summary, category || null, JSON.stringify(tags), JSON.stringify(systems), privacyReviewed && source === "browser-capture" ? nowIso() : null, privacyReviewed && source === "browser-capture" ? identity.userId : null, identity.userId, transition === "review" ? nowIso() : null, createdAt, nowIso()));
@@ -2998,6 +3076,7 @@ async function handleCommand(
           ...(block.screenshotMediaId ? { screenshotMediaId: block.screenshotMediaId } : {}),
           ...(block.crop ? { crop: block.crop } : {}),
           ...(block.annotations ? { annotations: block.annotations } : {}),
+          ...(block.redactions ? { redactions: block.redactions } : {}),
         }),
       })),
     );
@@ -3028,7 +3107,7 @@ async function handleCommand(
                   json_extract(value, '$.objectKey'), json_extract(value, '$.contentType'),
                   json_extract(value, '$.byteSize'), json_extract(value, '$.width'),
                   json_extract(value, '$.height'), json_extract(value, '$.sha256'),
-                  'redacted', 1, ?, CURRENT_TIMESTAMP
+                  json_extract(value, '$.redactionState'), 1, ?, CURRENT_TIMESTAMP
            FROM json_each(?)`,
           workspaceId,
           revisionId,
@@ -3128,6 +3207,69 @@ async function handleCommand(
     return { archived: true };
   }
 
+  if (actionName === "deleteGuide") {
+    const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
+    const guide = await first<{ title: string; author_user_id: string }>(
+      db,
+      `SELECT title, author_user_id FROM guides WHERE id = ? AND workspace_id = ?`,
+      guideId,
+      workspaceId,
+    );
+    if (!guide) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    const everPublished = Boolean(
+      await first<{ id: string }>(
+        db,
+        `SELECT id FROM guide_revisions WHERE guide_id = ? AND workspace_id = ? AND published_at IS NOT NULL LIMIT 1`,
+        guideId,
+        workspaceId,
+      ),
+    );
+    const isAuthor = guide.author_user_id === identity.userId;
+    const canDelete =
+      isPlatformAdministrator ||
+      access.roles.includes("administrator") ||
+      access.roles.includes("publisher") ||
+      (isAuthor && access.roles.includes("creator") && !everPublished);
+    if (!canDelete) {
+      throw new HttpError(
+        403,
+        "GUIDE_DELETE_FORBIDDEN",
+        everPublished
+          ? "Only an administrator or publisher can delete a guide that has been published."
+          : "You cannot delete this guide.",
+      );
+    }
+    const mediaObjectKeys = (
+      await rows<{ object_key: string }>(
+        db,
+        `SELECT object_key FROM guide_media
+         WHERE workspace_id = ? AND revision_id IN (SELECT id FROM guide_revisions WHERE guide_id = ?)`,
+        workspaceId,
+        guideId,
+      )
+    ).map((row) => row.object_key);
+    await audit(
+      repository,
+      identity,
+      workspaceId,
+      {
+        action: "guide.deleted",
+        targetType: "guide",
+        targetId: guideId,
+        targetLabel: guide.title,
+        summary: `${guide.title} deleted`,
+      },
+      [statement(db, `DELETE FROM guides WHERE id = ? AND workspace_id = ?`, guideId, workspaceId)],
+    );
+    if (mediaObjectKeys.length) {
+      const bucket = requireR2Binding(env.MEDIA);
+      for (const objectKey of mediaObjectKeys) {
+        await deletePrivateMedia(bucket, objectKey, workspaceId).catch(() => undefined);
+      }
+    }
+    return { deleted: true };
+  }
+
   if (actionName === "restoreRevision") {
     const guideId = textValue(payload.guideId, "Guide", { min: 1, max: 128 });
     const sourceRevisionId = textValue(payload.revisionId, "Revision", { min: 1, max: 128 });
@@ -3175,19 +3317,26 @@ async function handleCommand(
     }
     const clonedObjectKeys: string[] = [];
     try {
-      const mediaIdMap = new Map<string, { id: string; objectKey: string }>();
+      const mediaIdMap = new Map<
+        string,
+        { id: string; objectKey: string; redactionState: "pending" | "redacted" }
+      >();
       if (referencedMediaIds.length) {
         const bucket = requireR2Binding(env.MEDIA);
         for (const sourceMediaId of referencedMediaIds) {
           const media = sourceMedia.find((item) => item.id === sourceMediaId)!;
-          const objectKey = await clonePrivateMedia(bucket, {
+          const cloned = await clonePrivateMedia(bucket, {
             sourceObjectKey: media.object_key,
             workspaceId,
             revisionId,
             uploadedBy: identity.userId,
           });
-          clonedObjectKeys.push(objectKey);
-          mediaIdMap.set(sourceMediaId, { id: id("media"), objectKey });
+          clonedObjectKeys.push(cloned.objectKey);
+          mediaIdMap.set(sourceMediaId, {
+            id: id("media"),
+            objectKey: cloned.objectKey,
+            redactionState: cloned.redactionState,
+          });
         }
       }
       const restoredSteps = sourceSteps.map((step) => {
@@ -3223,6 +3372,7 @@ async function handleCommand(
           width: sourceRow.width,
           height: sourceRow.height,
           sha256: sourceRow.sha256,
+          redactionState: cloned.redactionState,
         };
       });
       const statements: D1PreparedStatementLike[] = [
@@ -3263,7 +3413,7 @@ async function handleCommand(
                   json_extract(value, '$.objectKey'), json_extract(value, '$.contentType'),
                   json_extract(value, '$.byteSize'), json_extract(value, '$.width'),
                   json_extract(value, '$.height'), json_extract(value, '$.sha256'),
-                  'redacted', 1, ?, CURRENT_TIMESTAMP
+                  json_extract(value, '$.redactionState'), 1, ?, CURRENT_TIMESTAMP
            FROM json_each(?)`,
           workspaceId,
           revisionId,

@@ -46,10 +46,18 @@ test("wildcard exclusions match a domain and its subdomains", () => {
   );
 });
 
-test("sanitized URLs remove queries, fragments and sensitive path segments", () => {
-  const sanitized = sanitizeCaptureUrl(
-    "https://example.com/users/alice%40example.com/orders/12345678?token=secret#card",
-  );
+test("sanitized URLs remove queries and fragments; sensitive path segments redact when Smart Blur categories are enabled", () => {
+  const url =
+    "https://example.com/users/alice%40example.com/orders/12345678?token=secret#card";
+  const withoutBlur = sanitizeCaptureUrl(url);
+  assert.equal(withoutBlur.includes("secret"), false);
+  assert.equal(withoutBlur.includes("token="), false);
+  assert.equal(withoutBlur.includes("#card"), false);
+
+  const sanitized = sanitizeCaptureUrl(url, {
+    redactEmails: true,
+    redactIds: true,
+  });
   assert.equal(
     sanitized,
     "https://example.com/users/[redacted]/orders/[redacted]",
@@ -95,7 +103,10 @@ test("workspace context enforces server exclusions and automatic privacy rules",
 
 test("sanitized URLs redact formatted phone and financial path segments", () => {
   assert.equal(
-    sanitizeCaptureUrl("https://example.com/call/%2B974%205555%201234/card/4111-1111-1111-1111"),
+    sanitizeCaptureUrl(
+      "https://example.com/call/%2B974%205555%201234/card/4111-1111-1111-1111",
+      { redactPhoneNumbers: true, redactFinancialNumbers: true },
+    ),
     "https://example.com/call/[redacted]/card/[redacted]",
   );
 });

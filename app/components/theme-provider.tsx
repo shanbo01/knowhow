@@ -19,7 +19,7 @@ type ThemeContextValue = {
   setPreference: (preference: ThemePreference) => void;
 };
 
-const STORAGE_KEY = "rivet-theme";
+const STORAGE_KEY = "knowhow-theme";
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function isThemePreference(value: string | null): value is ThemePreference {

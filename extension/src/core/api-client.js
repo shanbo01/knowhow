@@ -1,4 +1,4 @@
-import { API_PREFIX, RIVET_ORIGIN, STORAGE_KEYS } from "./config.js";
+import { API_PREFIX, KNOWHOW_ORIGIN, STORAGE_KEYS } from "./config.js";
 import { sanitizeCapturedText } from "./redaction.js";
 
 function randomBase64Url(bytes = 32) {
@@ -12,7 +12,7 @@ function randomBase64Url(bytes = 32) {
 }
 
 function apiUrl(path) {
-  return new URL(API_PREFIX + path, RIVET_ORIGIN).href;
+  return new URL(API_PREFIX + path, KNOWHOW_ORIGIN).href;
 }
 
 async function readAuth() {
@@ -56,7 +56,7 @@ async function parseResponse(response) {
     throw new Error(
       body.error ||
         body.message ||
-        "Rivet API returned HTTP " + String(response.status) + ".",
+        "KnowHow API returned HTTP " + String(response.status) + ".",
     );
   }
   return body;
@@ -64,7 +64,7 @@ async function parseResponse(response) {
 
 async function refreshAccessToken(auth) {
   if (!auth.refreshToken) {
-    throw new Error("Connect Rivet before submitting a private draft.");
+    throw new Error("Connect KnowHow before submitting a private draft.");
   }
   const response = await fetch(apiUrl("/token/refresh"), {
     method: "POST",
@@ -102,15 +102,15 @@ export function isValidPairingCode(value) {
   );
 }
 
-export async function beginRivetPairing(code) {
+export async function beginKnowHowPairing(code) {
   const pairingCode = String(code || "").trim().toUpperCase();
   if (!isValidPairingCode(pairingCode)) {
-    throw new Error("Enter the 12-character one-time pairing code shown in Rivet.");
+    throw new Error("Enter the 12-character one-time pairing code shown in KnowHow.");
   }
-  const local = await chrome.storage.local.get("rivet.capture.device-id");
+  const local = await chrome.storage.local.get("knowhow.capture.device-id");
   const deviceId =
-    local["rivet.capture.device-id"] || "browser-" + randomBase64Url(18);
-  await chrome.storage.local.set({ "rivet.capture.device-id": deviceId });
+    local["knowhow.capture.device-id"] || "browser-" + randomBase64Url(18);
+  await chrome.storage.local.set({ "knowhow.capture.device-id": deviceId });
 
   const tokenResponse = await fetch(apiUrl("/pair"), {
     method: "POST",
@@ -130,7 +130,7 @@ export async function getConnectionState() {
   };
 }
 
-export async function getRivetContext() {
+export async function getKnowHowContext() {
   return authorizedFetch("/context");
 }
 
@@ -198,12 +198,7 @@ export function preparePrivateDraftSteps(steps, policy = {}) {
   }));
 }
 
-export async function submitPrivateDraft({
-  capture,
-  steps,
-  privacyReview,
-  policy = {},
-}) {
+export async function submitPrivateDraft({ capture, steps, policy = {} }) {
   const preparedSteps = preparePrivateDraftSteps(steps, policy);
   let created = { captureId: capture.remoteCaptureId };
   if (!created.captureId) {
@@ -215,7 +210,7 @@ export async function submitPrivateDraft({
   for (const step of preparedSteps) {
     const imageType = step.imageBlob?.type || "";
     if (!isAcceptedScreenshotType(imageType)) {
-      throw new Error("Rivet accepts only locally rasterized JPEG or PNG screenshots.");
+      throw new Error("KnowHow accepts only locally rasterized JPEG or PNG screenshots.");
     }
     const path =
       "/captures/" +
@@ -227,12 +222,16 @@ export async function submitPrivateDraft({
       method: "PUT",
       headers: {
         "Content-Type": imageType,
-        "X-Rivet-Redacted": "true",
-        "X-Rivet-Source-Rasterized": "true",
-        "X-Rivet-Image-Width": String(step.imageWidth || 1),
-        "X-Rivet-Image-Height": String(step.imageHeight || 1),
+        // Screenshots leave the extension unredacted (pending): the author
+        // reviews and adds reversible blur in the app editor. They only
+        // become permanent once the guide's first review submission
+        // flattens them.
+        "X-KnowHow-Redacted": "false",
+        "X-KnowHow-Source-Rasterized": "true",
+        "X-KnowHow-Image-Width": String(step.imageWidth || 1),
+        "X-KnowHow-Image-Height": String(step.imageHeight || 1),
         "Idempotency-Key": capture.sessionId + ":" + step.id,
-        "X-Rivet-Step-Title": encodeURIComponent(step.title.slice(0, 100)),
+        "X-KnowHow-Step-Title": encodeURIComponent(step.title.slice(0, 100)),
       },
       body: step.imageBlob,
     });
@@ -256,8 +255,22 @@ export async function submitPrivateDraft({
           sourceEvent: step.sourceEvent,
           automaticMaskCount: step.automaticMaskCount || 0,
           manualMaskCount: step.manualMaskCount || 0,
+          redactions: Array.isArray(step.pendingRedactions)
+            ? step.pendingRedactions
+            : [],
         })),
-        privacyReview,
+        privacyReview: {
+          completedAt: new Date().toISOString(),
+          policyVersion: capture.policyVersion,
+          automaticMaskCount: preparedSteps.reduce(
+            (total, step) => total + (Number(step.automaticMaskCount) || 0),
+            0,
+          ),
+          manualMaskCount: preparedSteps.reduce(
+            (total, step) => total + (Number(step.manualMaskCount) || 0),
+            0,
+          ),
+        },
       }),
     },
   );

@@ -13,7 +13,7 @@ import {
 
 export const APPWRITE_ENDPOINT = "https://sgp.cloud.appwrite.io/v1";
 export const APPWRITE_PROJECT_ID = "6a6a53ac002ca43c7ea4";
-export const DATABASE_ID = "rivet";
+export const DATABASE_ID = "rivet"; // Appwrite resource id (legacy collection; not product branding)
 export const RECORDS_COLLECTION_ID = "records";
 
 const client = new Client()

@@ -12,7 +12,7 @@ let outputDirectory;
 let access;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-access-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-access-"));
   await build({
     root,
     configFile: false,
@@ -108,7 +108,7 @@ function seedWorkspace(database, { workspaceId = "w1", name = "Customer Co" } = 
   );
 }
 
-function seedPendingSupportRequest(database, { id = "req-1", requester = "u-support", email = "support@rivet.app", role = "viewer", hours = 4 } = {}) {
+function seedPendingSupportRequest(database, { id = "req-1", requester = "u-support", email = "support@knowhow.app", role = "viewer", hours = 4 } = {}) {
   database.exec(
     `INSERT INTO support_access_requests
        (id, workspace_id, requester_user_id, requester_email, requester_name,
@@ -133,7 +133,7 @@ function insertGrant(database, { requestId = "req-1", grantId = "grant-1", expir
     `INSERT INTO support_access_grants
        (id, request_id, workspace_id, user_id, email, display_name, role,
         status, approved_by, granted_at, expires_at)
-     VALUES ('${grantId}', '${requestId}', 'w1', '${user}', 'support@rivet.app', 'Platform Support',
+     VALUES ('${grantId}', '${requestId}', 'w1', '${user}', 'support@knowhow.app', 'Platform Support',
              '${role}', 'active', '${approvedBy}', CURRENT_TIMESTAMP, '${expiresAt}')`,
   );
 }
@@ -145,7 +145,7 @@ test("expired support grants vanish from workspace access and expire via sweep",
   approveRequest(database);
   insertGrant(database, { expiresAt: "2099-01-01T00:00:00Z" });
 
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const active = await repository.listWorkspaceAccess("u-support");
   assert.equal(active.length, 1);
   assert.equal(active[0].workspaceId, "w1");
@@ -176,13 +176,13 @@ test("a real membership always takes precedence over a support grant", async () 
   insertGrant(database);
   // The support user later becomes a real member.
   database.exec(
-    `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status) VALUES ('w1', 'u-support', 'support@rivet.app', 'Support', 'active')`,
+    `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status) VALUES ('w1', 'u-support', 'support@knowhow.app', 'Support', 'active')`,
   );
   database.exec(
     `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by) VALUES ('w1', 'u-support', 'viewer', 'u-admin')`,
   );
 
-  const repository = new access.D1RivetRepository(d1Adapter(database));
+  const repository = new access.D1KnowHowRepository(d1Adapter(database));
   const [entry] = await repository.listWorkspaceAccess("u-support");
   assert.equal(entry.workspaceId, "w1");
   assert.equal(entry.supportGrant, undefined, "membership access must not carry the support grant tag");

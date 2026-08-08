@@ -1,6 +1,6 @@
-# Rivet
+# KnowHow
 
-Rivet is a privacy-first SOP platform for capturing, reviewing, publishing, and sharing step-by-step guides inside governed workspaces.
+KnowHow is a privacy-first SOP platform for capturing, reviewing, publishing, and sharing step-by-step guides inside governed workspaces.
 
 ## MVP capabilities
 
@@ -26,11 +26,11 @@ Asset inventory is intentionally not part of the product.
 - `lib/guide-contracts.ts`: canonical guide and revision contracts
 - `lib/exports/`: policy-aware PDF, HTML, and Markdown renderers
 - `extension/`: Manifest V3 Chrome/Edge capture extension
-- `public/rivet-extension.zip`: installable extension package produced from the validated build
+- `public/knowhow-extension.zip`: installable extension package produced from the validated build
 
 Appwrite provides browser authentication and verified identities. The application exchanges the browser session for a short-lived Appwrite JWT and validates it on the server. D1 is the canonical store for tenants, memberships, roles, guides, invitations, and audit records. Private R2 contains only locally redacted and rasterized screenshots. The extension pairs with a one-time workspace code and receives a revocable, workspace-scoped device token; it never receives Appwrite credentials.
 
-The earlier Appwrite `rivet/records` collection is not used by the MVP runtime. Keep it read-only until any desired historical migration is complete.
+The earlier Appwrite `knowhow/records` collection is not used by the MVP runtime. Keep it read-only until any desired historical migration is complete.
 
 ## Prerequisites
 
@@ -42,12 +42,12 @@ The earlier Appwrite `rivet/records` collection is not used by the MVP runtime. 
 
 Copy `.dev.vars.example` to `.dev.vars`, then set:
 
-- `RIVET_TOKEN_SIGNING_KEY` — secret random value of at least 32 bytes; signs invite and extension device credentials
-- `RIVET_PLATFORM_OWNER_EMAILS` — comma-separated, lowercase verified emails allowed to bootstrap platform administration
+- `KNOWHOW_TOKEN_SIGNING_KEY` — secret random value of at least 32 bytes; signs invite and extension device credentials
+- `KNOWHOW_PLATFORM_OWNER_EMAILS` — comma-separated, lowercase verified emails allowed to bootstrap platform administration
 - `APPWRITE_ENDPOINT` — optional server override; defaults to `https://sgp.cloud.appwrite.io/v1`
 - `APPWRITE_PROJECT_ID` — optional server override; defaults to the project currently configured in `lib/appwrite.ts`
 
-The public Appwrite endpoint and project ID used by the browser live in `lib/appwrite.ts`. If you change Appwrite projects, update that public configuration and the matching optional server values together. Add `localhost` to the Appwrite project’s Web platform allowlist and configure the email-verification callback as `http://localhost:3001/verify`; use `http://localhost:3001` locally rather than `127.0.0.1`, because Appwrite treats them as different web origins. Rivet does not grant workspace access until Appwrite reports a verified email.
+The public Appwrite endpoint and project ID used by the browser live in `lib/appwrite.ts`. If you change Appwrite projects, update that public configuration and the matching optional server values together. Add `localhost` to the Appwrite project’s Web platform allowlist and configure the email-verification callback as `http://localhost:3001/verify`; use `http://localhost:3001` locally rather than `127.0.0.1`, because Appwrite treats them as different web origins. KnowHow does not grant workspace access until Appwrite reports a verified email.
 
 The development extension is pinned to `http://localhost:3001` in `extension/src/core/config.js` and to the exact `http://localhost/*` manifest host permission. Change both values and rebuild the package when a production origin is selected.
 
@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` applies any pending local D1 migrations and starts Rivet at [http://localhost:3001](http://localhost:3001). D1 and R2 state persist under the ignored `.wrangler/` directory. `npm start` intentionally launches the same workerd-backed localhost server; the Node-only Vinext production runner cannot provide Cloudflare bindings.
+`npm run dev` applies any pending local D1 migrations and starts KnowHow at [http://localhost:3001](http://localhost:3001). D1 and R2 state persist under the ignored `.wrangler/` directory. `npm start` intentionally launches the same workerd-backed localhost server; the Node-only Vinext production runner cannot provide Cloudflare bindings.
 
 Run the complete verification suite before handing off a change:
 
@@ -97,9 +97,9 @@ npm --prefix extension test
 npm --prefix extension run build
 ```
 
-Then load `extension/dist` as an unpacked extension in `chrome://extensions` or `edge://extensions`, or install the packaged `public/rivet-extension.zip` through an appropriate enterprise/developer workflow.
+Then load `extension/dist` as an unpacked extension in `chrome://extensions` or `edge://extensions`, or install the packaged `public/knowhow-extension.zip` through an appropriate enterprise/developer workflow.
 
-From a Rivet workspace, generate a one-time pairing code and enter it in the extension's native Chrome side panel. On the first Start, Chrome asks for optional website access so its visible-tab screenshot API can work reliably from the persistent panel. The page and Rivet remain visible side by side while capture is limited to the selected foreground tab, and numbered redacted previews appear live in the panel; cross-origin navigation pauses until explicitly resumed. Raw screenshots exist only in memory while local redaction is applied, and only the redacted base raster is retained. Post-capture crop, manual blur, drawing, and click-target layers stay reversible until they are flattened for private-draft upload. A human privacy review is mandatory before a captured draft can be published.
+From a KnowHow workspace, generate a one-time pairing code and enter it in the extension's native Chrome side panel. On the first Start, Chrome asks for optional website access so its visible-tab screenshot API can work reliably from the persistent panel. The page and KnowHow remain visible side by side while capture is limited to the selected foreground tab, and numbered redacted previews appear live in the panel; cross-origin navigation pauses until explicitly resumed. Raw screenshots exist only in memory while local redaction is applied, and only the redacted base raster is retained. Post-capture crop, manual blur, drawing, and click-target layers stay reversible until they are flattened for private-draft upload. A human privacy review is mandatory before a captured draft can be published.
 
 See `extension/README.md` for capture behavior, privacy guarantees, and MVP limits.
 

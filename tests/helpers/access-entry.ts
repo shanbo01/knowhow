@@ -2,7 +2,7 @@ export {
   securityTriggerStatements,
   governedAccessTriggerStatements,
 } from "../../db/schema";
-export { D1RivetRepository } from "../../lib/server/repository";
+export { D1KnowHowRepository } from "../../lib/server/repository";
 export {
   searchGuides,
   splitSearchTerms,

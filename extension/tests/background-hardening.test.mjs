@@ -26,7 +26,7 @@ test("start remains preparing through remote setup and seeds step one before cap
   assert.ok(start.indexOf("beginRemoteCapture(prepared)") < start.indexOf("injectCaptureContent(prepared, policy)"));
   assert.ok(start.indexOf("injectCaptureContent(prepared, policy)") < start.indexOf("CaptureEvent.READY"));
   assert.ok(start.indexOf("CaptureEvent.READY") < start.indexOf("snapshotCaptureJob(recording"));
-  assert.ok(start.indexOf("captureStep(initialJob)") < start.indexOf('type: "RIVET_SET_STATUS"'));
+  assert.ok(start.indexOf("captureStep(initialJob)") < start.indexOf('type: "KNOWHOW_SET_STATUS"'));
   assert.match(start, /sourceEvent: "navigation"/);
   assert.match(start, /Navigate to /);
 });

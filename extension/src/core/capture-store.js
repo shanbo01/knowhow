@@ -1,4 +1,4 @@
-const DATABASE_NAME = "rivet-capture";
+const DATABASE_NAME = "knowhow-capture";
 const DATABASE_VERSION = 1;
 const STEP_STORE = "steps";
 

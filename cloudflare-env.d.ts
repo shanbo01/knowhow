@@ -51,7 +51,7 @@ declare module "cloudflare:workers" {
   export const env: {
     DB: D1Database;
     MEDIA: R2Bucket;
-    RIVET_TOKEN_SIGNING_KEY?: string;
-    RIVET_PLATFORM_OWNER_EMAILS?: string;
+    KNOWHOW_TOKEN_SIGNING_KEY?: string;
+    KNOWHOW_PLATFORM_OWNER_EMAILS?: string;
   };
 }

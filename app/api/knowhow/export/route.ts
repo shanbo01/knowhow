@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import {
   allRows,
   authorize,
-  D1RivetRepository,
+  D1KnowHowRepository,
   HttpError,
   readPrivateMedia,
   readWorkspaceLogo,
@@ -61,7 +61,7 @@ function safeFileName(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80);
-  return normalized || "rivet-guide";
+  return normalized || "knowhow-guide";
 }
 
 type ExportRevisionRow = {
@@ -342,7 +342,7 @@ async function buildPublishedRevision(
       ...(revision.logo_object_key ? { logoMediaId: revision.logo_object_key } : {}),
       accentColor: revision.accent_color,
       clickTargetColor: revision.click_target_color,
-      showRivetBranding: revision.remove_branding !== 1,
+      showKnowHowBranding: revision.remove_branding !== 1,
     },
     exportPolicy: {
       allowedFormats: ["live-link", "pdf", "html", "markdown"],
@@ -418,7 +418,7 @@ export async function GET(request: Request) {
   let db: D1DatabaseLike | null = null;
   let exportContext:
     | {
-        repository: D1RivetRepository;
+        repository: D1KnowHowRepository;
         identity: Awaited<ReturnType<typeof requireVerifiedIdentity>>;
         workspaceId: string;
         guideId: string;
@@ -434,7 +434,7 @@ export async function GET(request: Request) {
       throw new HttpError(400, "EXPORT_REQUEST_INVALID", "Workspace, guide, and export format are required.");
     }
     db = requireD1Binding(env.DB);
-    const repository = new D1RivetRepository(db);
+    const repository = new D1KnowHowRepository(db);
     await repository.ensureSecurityGuards();
     const identity = await requireVerifiedIdentity(request);
     const access = await repository.getWorkspaceAccess(workspaceId, identity.userId);

@@ -12,7 +12,7 @@ let outputDirectory;
 let security;
 
 before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "rivet-security-"));
+  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-security-"));
   await build({
     root,
     configFile: false,

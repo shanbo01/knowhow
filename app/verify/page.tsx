@@ -18,14 +18,14 @@ export default function VerifyEmailPage() {
       const secret = params.get("secret");
       if (!userId || !secret) {
         setState("failed");
-        setMessage("This verification link is incomplete. Request a new one from Rivet.");
+        setMessage("This verification link is incomplete. Request a new one from KnowHow.");
         return;
       }
       account
         .updateVerification({ userId, secret })
         .then(() => {
           setState("verified");
-          setMessage("Your email is verified. Rivet can now evaluate invitations and exact-domain eligibility.");
+          setMessage("Your email is verified. KnowHow can now evaluate invitations and exact-domain eligibility.");
         })
         .catch((error: unknown) => {
           setState("failed");
@@ -41,13 +41,13 @@ export default function VerifyEmailPage() {
 
   return (
     <main className="opening-screen verify-page">
-      <div className="opening-mark">R</div>
+      <div className="opening-mark">K</div>
       {state === "checking" ? <LoaderCircle className="spin" /> : null}
       {state === "verified" ? <CheckCircle2 className="verify-result success" /> : null}
       {state === "failed" ? <CircleAlert className="verify-result failed" /> : null}
       <h1>{state === "verified" ? "Email verified" : state === "failed" ? "Verification failed" : "Verifying email"}</h1>
       <p>{message}</p>
-      {state !== "checking" ? <Link className="button primary" href="/">Continue to Rivet</Link> : null}
+      {state !== "checking" ? <Link className="button primary" href="/">Continue to KnowHow</Link> : null}
     </main>
   );
 }

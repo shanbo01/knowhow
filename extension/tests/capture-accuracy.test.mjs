@@ -106,7 +106,7 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   );
   assert.doesNotMatch(interactionContextSource, /collectMasks\(/);
   assert.match(backgroundSource, /\{ documentId: request\.documentId \}/);
-  assert.match(backgroundSource, /type: "RIVET_VERIFY_DOCUMENT"/);
+  assert.match(backgroundSource, /type: "KNOWHOW_VERIFY_DOCUMENT"/);
   assert.match(backgroundSource, /clickPoint: context\.clickPoint/);
   assert.match(backgroundSource, /function clickJobIsLatest\(request\)/);
   assert.match(backgroundSource, /interactionSequencer\.confirm\(state\.sessionId/);
@@ -175,24 +175,39 @@ test("capture defers interactive clicks until a pre-click screenshot is ready", 
   assert.doesNotMatch(preflightSlice, /clickJobMayProceed/);
 });
 
-test("content capture does not inject duplicate recording controls", async () => {
+test("the recording flash never leaks into a screenshot and can be turned off", async () => {
   const source = await readFile(
     new URL("../src/content/capture.js", import.meta.url),
     "utf8",
   );
 
-  assert.doesNotMatch(source, /rivet-capture-indicator/);
-  assert.doesNotMatch(source, /attachShadow\(/);
-  assert.doesNotMatch(source, /document\.createElement\(/);
-  assert.doesNotMatch(source, /function (?:render|hide|restore)Indicator\(/);
+  assert.match(source, /function showRecordingFlash\(label\)/);
+  assert.match(
+    source,
+    /if \(state\.policy\.showRecordingIndicator === false\) return;/,
+  );
+  assert.match(source, /pointer-events:none/);
   assert.match(
     source,
     /function waitForPagePaint\(\) \{\s+return new Promise\(\(resolve\) =>\s+requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)/,
   );
-  assert.match(
-    source,
-    /if \(message\?\.type === "RIVET_PREPARE_SCREENSHOT"\) \{\s+void waitForPagePaint\(\)\.then\(\(\) =>\s+sendResponse\(\{ ok: true, context: pageContext\(\) \}\),\s+\);\s+return true;/,
+  // The flash is force-removed at every point that immediately precedes a
+  // real screenshot, so it can never appear in captured pixels.
+  const prepareSlice = source.slice(
+    source.indexOf('message?.type === "KNOWHOW_PREPARE_SCREENSHOT"'),
+    source.indexOf('message?.type === "KNOWHOW_PREPARE_SCREENSHOT"') + 200,
   );
+  assert.match(prepareSlice, /removeRecordingFlash\(\)/);
+  const pageContextSlice = source.slice(
+    source.indexOf('message?.type === "KNOWHOW_GET_PAGE_CONTEXT"'),
+    source.indexOf('message?.type === "KNOWHOW_GET_PAGE_CONTEXT"') + 150,
+  );
+  assert.match(pageContextSlice, /removeRecordingFlash\(\)/);
+  const deferredSlice = source.slice(
+    source.indexOf("function beginDeferredClick"),
+    source.indexOf("function beginDeferredClick") + 150,
+  );
+  assert.match(deferredSlice, /removeRecordingFlash\(\)/);
 });
 
 test("newer confirmed clicks supersede older queued capture jobs", () => {

@@ -6,7 +6,7 @@ const MIN_PBKDF2_ITERATIONS = 210_000;
 const MAX_PBKDF2_ITERATIONS = 2_000_000;
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
-const ADDITIONAL_DATA = new TextEncoder().encode("rivet:secret:v1");
+const ADDITIONAL_DATA = new TextEncoder().encode("knowhow:secret:v1");
 
 export type SecretCryptoErrorCode =
   | "UNAVAILABLE"

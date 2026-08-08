@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("the production build contains the governed Rivet application shell", async () => {
+test("the production build contains the governed KnowHow application shell", async () => {
   const [layout, page, serverBundle] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -11,9 +11,9 @@ test("the production build contains the governed Rivet application shell", async
   const html = `${layout}\n${page}`;
   assert.match(
     html,
-    /Rivet — SOPs captured, governed, and shared/i,
+    /KnowHow — SOPs captured, governed, and shared/i,
   );
-  assert.match(html, /Opening Rivet/);
+  assert.match(html, /Opening KnowHow/);
   assert.match(html, /Verifying Appwrite and restoring your secure session/);
   assert.doesNotMatch(html, /asset inventory|Import assets|Interactive prototype/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
@@ -27,39 +27,40 @@ test("ships the trusted D1 and R2 architecture instead of browser-writable produ
     api,
     exportRoute,
     extensionRoute,
-    hosting,
+    localConfigText,
     schema,
     records,
   ] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(
-      new URL("../app/components/rivet-workspace-app.tsx", import.meta.url),
+      new URL("../app/components/knowhow-workspace-app.tsx", import.meta.url),
       "utf8",
     ),
-    readFile(new URL("../app/api/rivet/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/knowhow/route.ts", import.meta.url), "utf8"),
     readFile(
-      new URL("../app/api/rivet/export/route.ts", import.meta.url),
+      new URL("../app/api/knowhow/export/route.ts", import.meta.url),
       "utf8",
     ),
     readFile(
       new URL("../app/api/extension/[[...path]]/route.ts", import.meta.url),
       "utf8",
     ),
-    readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
+    readFile(new URL("../wrangler.local.jsonc", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/records.ts", import.meta.url), "utf8"),
   ]);
+  const localConfig = JSON.parse(localConfigText);
 
   assert.match(page, /await client\.ping\(\)/);
   assert.match(page, /emailVerification/);
   assert.doesNotMatch(appShell, /\bAssets\b|asset inventory|Import assets/i);
-  assert.match(hosting, /"d1"\s*:\s*"DB"/);
-  assert.match(hosting, /"r2"\s*:\s*"MEDIA"/);
+  assert.equal(localConfig.d1_databases[0].binding, "DB");
+  assert.equal(localConfig.r2_buckets[0].binding, "MEDIA");
   assert.match(api, /requireVerifiedIdentity/);
   assert.match(api, /executeAuditedMutation|audit\(/);
   assert.match(api, /working_draft_revision_id/);
   assert.match(exportRoute, /renderGuideToPdf/);
-  assert.match(extensionRoute, /storeRedactedScreenshot/);
+  assert.match(extensionRoute, /storeScreenshot/);
   assert.match(extensionRoute, /REDACTION_ATTESTATION_REQUIRED/);
   assert.match(extensionRoute, /function captureEditUrl/);
   assert.match(extensionRoute, /url\.searchParams\.set\("workspaceId", workspaceId\)/);
@@ -92,7 +93,7 @@ test("the extension manifest keeps high-risk browser capabilities out", async ()
   assert.ok(!manifest.permissions.includes("tabCapture"));
   assert.ok(!manifest.host_permissions.includes("<all_urls>"));
   assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
-  assert.match(apiClient, /X-Rivet-Redacted/);
+  assert.match(apiClient, /X-KnowHow-Redacted/);
   assert.match(apiClient, /one-time pairing code/i);
   assert.doesNotMatch(captureSource, /\.value\b/);
 });

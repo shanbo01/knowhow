@@ -46,7 +46,7 @@ export function requireR2Binding(value: unknown): R2BucketLike {
   return value as R2BucketLike;
 }
 
-export interface RedactedScreenshotInput {
+export interface ScreenshotUploadInput {
   workspaceId: string;
   revisionId: string;
   captureId?: string;
@@ -55,9 +55,13 @@ export interface RedactedScreenshotInput {
   bytes: ArrayBuffer | Uint8Array;
   width: number;
   height: number;
-  /** Must describe the already-redacted, rasterized bytes passed in `bytes`. */
-  redactionAttested: true;
-  /** Canvas/raster output strips DOM data and source image metadata. */
+  /**
+   * "pending" means any redaction/blur regions are still non-destructive
+   * overlays that the author can edit; "redacted" means they (if any) have
+   * already been flattened into these exact bytes and are now permanent.
+   */
+  redactionState: "pending" | "redacted";
+  /** Canvas/raster output strips DOM data and source image metadata. Required either way. */
   sourceRasterized: true;
 }
 
@@ -68,7 +72,7 @@ export interface StoredPrivateMedia {
   sha256: string;
   width: number;
   height: number;
-  redactionState: "redacted";
+  redactionState: "pending" | "redacted";
   sourceRasterized: true;
 }
 
@@ -160,16 +164,19 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function storeRedactedScreenshot(
+export async function storeScreenshot(
   bucket: R2BucketLike,
-  input: RedactedScreenshotInput,
+  input: ScreenshotUploadInput,
 ): Promise<StoredPrivateMedia> {
-  if (input.redactionAttested !== true || input.sourceRasterized !== true) {
+  if (input.sourceRasterized !== true) {
     throw new HttpError(
       400,
       "REDACTION_REQUIRED",
-      "Only locally redacted, rasterized screenshots may be uploaded.",
+      "Only locally rasterized screenshots may be uploaded.",
     );
+  }
+  if (input.redactionState !== "pending" && input.redactionState !== "redacted") {
+    throw new HttpError(400, "REDACTION_REQUIRED", "The screenshot redaction state is invalid.");
   }
   const bytes = asBytes(input.bytes);
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_SCREENSHOT_BYTES) {
@@ -219,7 +226,7 @@ export async function storeRedactedScreenshot(
       captureId,
       uploadedBy,
       sha256: digest,
-      redactionState: "redacted",
+      redactionState: input.redactionState,
       sourceRasterized: "true",
     },
   });
@@ -231,7 +238,7 @@ export async function storeRedactedScreenshot(
     sha256: digest,
     width: input.width,
     height: input.height,
-    redactionState: "redacted",
+    redactionState: input.redactionState,
     sourceRasterized: true,
   };
 }
@@ -304,9 +311,10 @@ export async function readPrivateMedia(
   }
   const object = await bucket.get(objectKey);
   if (!object) throw new HttpError(404, "MEDIA_NOT_FOUND", "Media not found.");
+  const redactionState = object.customMetadata?.redactionState;
   if (
     object.customMetadata?.workspaceId !== safeWorkspace ||
-    object.customMetadata?.redactionState !== "redacted" ||
+    (redactionState !== "pending" && redactionState !== "redacted") ||
     object.customMetadata?.sourceRasterized !== "true"
   ) {
     throw new HttpError(500, "MEDIA_BOUNDARY_INVALID", "Media failed its privacy boundary.", {
@@ -346,7 +354,7 @@ export async function clonePrivateMedia(
     revisionId: string;
     uploadedBy: string;
   },
-): Promise<string> {
+): Promise<{ objectKey: string; redactionState: "pending" | "redacted"; sourceRasterized: boolean }> {
   const workspaceId = safeId(input.workspaceId, "Workspace ID");
   const revisionId = safeId(input.revisionId, "Revision ID");
   const uploadedBy = safeId(input.uploadedBy, "Uploader ID");
@@ -359,6 +367,9 @@ export async function clonePrivateMedia(
   ) {
     throw new HttpError(415, "MEDIA_TYPE_INVALID", "The source media cannot be restored.");
   }
+  const redactionState: "pending" | "redacted" =
+    source.customMetadata?.redactionState === "redacted" ? "redacted" : "pending";
+  const sourceRasterized = source.customMetadata?.sourceRasterized === "true";
   const extension = contentType === "image/png" ? "png" : contentType === "image/jpeg" ? "jpg" : "webp";
   const objectKey = `workspaces/${workspaceId}/revisions/${revisionId}/${crypto.randomUUID()}.${extension}`;
   await bucket.put(objectKey, source.body, {
@@ -373,11 +384,11 @@ export async function clonePrivateMedia(
       captureId: "restored",
       uploadedBy,
       sha256: source.customMetadata?.sha256 ?? "unknown",
-      redactionState: "redacted",
-      sourceRasterized: "true",
+      redactionState,
+      sourceRasterized: sourceRasterized ? "true" : "false",
     },
   });
-  return objectKey;
+  return { objectKey, redactionState, sourceRasterized };
 }
 
 export function deletePrivateMedia(

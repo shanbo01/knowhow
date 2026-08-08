@@ -17,7 +17,7 @@ test("capture cannot start before connection, state, and policy initialization",
 
   assert.match(html, /id="start-button"[^>]*disabled/);
   const policyControls = [...html.matchAll(/<input[^>]*data-policy(?:=|-color)[^>]*>/g)];
-  assert.equal(policyControls.length, 11);
+  assert.equal(policyControls.length, 12);
   assert.ok(policyControls.every(([input]) => /\bdisabled\b/.test(input)));
   assert.match(controls, /!captureInitialized/);
   assert.match(controls, /!connectionInitialized/);
@@ -82,25 +82,15 @@ test("uploading locks destructive review actions", async () => {
   assert.match(controls, /elements\.openReviewButton\.disabled =\s*captureActionPending \|\| status !== "reviewing"/);
 });
 
-test("Open review focuses an existing session tab before creating one", async () => {
+test("retry upload only fires while reviewing (a failed upload) and delegates to the background service worker", async () => {
   const source = await readFile(popupSourceUrl, "utf8");
-  const openReview = source.slice(
-    source.indexOf("async function openOrFocusReview"),
+  const retry = source.slice(
+    source.indexOf('elements.openReviewButton.addEventListener("click"'),
     source.indexOf('elements.excludeButton.addEventListener("click"'),
   );
 
-  assert.match(openReview, /chrome\.tabs\.query\(\{\}\)/);
-  assert.match(openReview, /candidate\.protocol === expectedPage\.protocol/);
-  assert.match(openReview, /candidate\.pathname === expectedPage\.pathname/);
-  assert.match(openReview, /searchParams\.get\("session"\) === sessionId/);
-  assert.match(
-    openReview,
-    /chrome\.windows\s*\.update\(existing\.windowId, \{ focused: true \}\)/,
-  );
-  assert.match(openReview, /chrome\.tabs\.update\(existing\.id, \{ active: true \}\)/);
-  assert.ok(
-    openReview.indexOf("if (existing") <
-      openReview.indexOf("chrome.tabs.create({ url: reviewUrl })"),
-  );
-  assert.match(openReview, /currentState\?\.status !== "reviewing"/);
+  assert.match(retry, /currentState\?\.status !== "reviewing"/);
+  assert.match(retry, /type: "RETRY_DRAFT_UPLOAD"/);
+  assert.doesNotMatch(source, /openOrFocusReview\(/);
+  assert.doesNotMatch(source, /review\.html/);
 });

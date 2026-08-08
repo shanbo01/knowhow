@@ -1,9 +1,6 @@
 import vinext from "vinext";
 import { defineConfig, type Plugin } from "vite";
-import { sites } from "./build/sites-vite-plugin";
 
-// macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
-const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const trustedDevelopmentOrigins = [
   /^https?:\/\/(?:(?:[^:]+\.)?localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/,
   /^chrome-extension:\/\/phbofjenfnnnnndghhinoldlfbpaedpo$/,
@@ -11,7 +8,7 @@ const trustedDevelopmentOrigins = [
 
 function consoleTaskCompatibility(): Plugin {
   return {
-    name: "rivet:console-task-compatibility",
+    name: "knowhow:console-task-compatibility",
     enforce: "post",
     transform(code, id) {
       if (!id.includes("virtual:vinext-app-ssr-entry")) {
@@ -39,14 +36,10 @@ export default defineConfig(async () => {
   return {
     server: {
       cors: { origin: trustedDevelopmentOrigins },
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
-        : {}),
     },
     plugins: [
       vinext(),
       consoleTaskCompatibility(),
-      sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         configPath: "./wrangler.local.jsonc",

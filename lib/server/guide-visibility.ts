@@ -6,7 +6,7 @@ import type {
   RevisionStatus,
   WorkspaceMember,
   WorkspaceSettings,
-} from "../rivet-types";
+} from "../knowhow-types";
 import { authorize } from "./policy";
 import type { GuideAccessFacts, WorkspaceAccess } from "./repository";
 import type { AuthenticatedIdentity } from "./appwrite-identity";
@@ -147,6 +147,9 @@ export function loadRevisionFromRows(
         ...(Array.isArray(annotations.annotations)
           ? { annotations: annotations.annotations as NonNullable<EditorBlock["annotations"]> }
           : {}),
+        ...(Array.isArray(annotations.redactions)
+          ? { redactions: annotations.redactions as NonNullable<EditorBlock["redactions"]> }
+          : {}),
       };
     }),
     audiences,
@@ -215,6 +218,7 @@ export interface GuideVisibilityResult {
   canEdit: boolean;
   canReview: boolean;
   canPublish: boolean;
+  canDelete: boolean;
   revisionHistory: Guide["revisionHistory"];
 }
 
@@ -323,6 +327,12 @@ export function evaluateGuideVisibility(
       authorize("guide.publish", policyContextFor(access, isPlatformAdministrator, workingFacts)).allowed,
   );
   const historyRows = revisions.filter((item) => item.guide_id === guide.id);
+  const everPublished = historyRows.some((item) => Boolean(item.published_at));
+  const canDelete =
+    access.workspaceStatus === "active" &&
+    (admin ||
+      access.roles.includes("publisher") ||
+      (author && access.roles.includes("creator") && !everPublished));
   const restricted = !display.audiences.some((item) => item.kind === "workspace");
   return {
     working: visibleWorking,
@@ -334,6 +344,7 @@ export function evaluateGuideVisibility(
     canEdit,
     canReview,
     canPublish,
+    canDelete,
     revisionHistory: historyRows
       .filter(
         (item) =>

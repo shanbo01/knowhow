@@ -34,7 +34,7 @@ interface RecordsDocument extends Models.Document {
   archived: boolean;
 }
 
-export interface RivetRecord<K extends RecordKind = RecordKind> {
+export interface KnowHowRecord<K extends RecordKind = RecordKind> {
   id: string;
   $id: string;
   createdAt: string;
@@ -53,7 +53,7 @@ export interface RivetRecord<K extends RecordKind = RecordKind> {
   archived: boolean;
 }
 
-export type StoredRecord<K extends RecordKind = RecordKind> = RivetRecord<K>;
+export type StoredRecord<K extends RecordKind = RecordKind> = KnowHowRecord<K>;
 
 export interface CreateRecordInput<K extends RecordKind> {
   kind: K;
@@ -155,7 +155,7 @@ export function normalizeRecordsError(error: unknown): RecordsRepositoryError {
     ) {
       return new RecordsRepositoryError(
         "SETUP_REQUIRED",
-        "The Rivet Appwrite database schema has not been provisioned.",
+        "The KnowHow Appwrite database schema has not been provisioned.",
         { status, appwriteType, cause: error },
       );
     }
@@ -204,7 +204,7 @@ export function normalizeRecordsError(error: unknown): RecordsRepositoryError {
   if (error instanceof TypeError) {
     return new RecordsRepositoryError(
       "NETWORK",
-      "Rivet could not reach Appwrite. Check your connection and try again.",
+      "KnowHow could not reach Appwrite. Check your connection and try again.",
       { cause: error },
     );
   }
@@ -300,7 +300,7 @@ function serializePayload<K extends RecordKind>(
   return serialized;
 }
 
-function parseDocument(document: RecordsDocument): RivetRecord {
+function parseDocument(document: RecordsDocument): KnowHowRecord {
   if (
     !isRecordKind(document.kind) ||
     typeof document.teamId !== "string" ||
@@ -382,9 +382,9 @@ export class RecordsRepository {
   async list(
     teamId: string,
     options: ListRecordsOptions = {},
-  ): Promise<RivetRecord[]> {
+  ): Promise<KnowHowRecord[]> {
     const requiredTeamId = requireText(teamId, "Team ID");
-    const records: RivetRecord[] = [];
+    const records: KnowHowRecord[] = [];
     let cursor: string | undefined;
 
     try {
@@ -437,8 +437,8 @@ export class RecordsRepository {
 
   async listAccessible(
     options: ListRecordsOptions = {},
-  ): Promise<RivetRecord[]> {
-    const records: RivetRecord[] = [];
+  ): Promise<KnowHowRecord[]> {
+    const records: KnowHowRecord[] = [];
     let cursor: string | undefined;
 
     try {
@@ -485,7 +485,7 @@ export class RecordsRepository {
     }
   }
 
-  async getAccessible(recordId: string): Promise<RivetRecord> {
+  async getAccessible(recordId: string): Promise<KnowHowRecord> {
     try {
       const document = await this.service.getDocument<RecordsDocument>({
         databaseId: this.databaseId,
@@ -498,7 +498,7 @@ export class RecordsRepository {
     }
   }
 
-  async get(teamId: string, recordId: string): Promise<RivetRecord> {
+  async get(teamId: string, recordId: string): Promise<KnowHowRecord> {
     const requiredTeamId = requireText(teamId, "Team ID");
     try {
       const document = await this.service.getDocument<RecordsDocument>({
@@ -519,7 +519,7 @@ export class RecordsRepository {
   async create<K extends RecordKind>(
     teamId: string,
     input: CreateRecordInput<K>,
-  ): Promise<RivetRecord<K>> {
+  ): Promise<KnowHowRecord<K>> {
     const requiredTeamId = requireText(teamId, "Team ID");
     const title = requireText(input.title, "Title", MAX_TITLE_CHARACTERS);
     const payload = serializePayload(input.kind, input.payload);
@@ -545,7 +545,7 @@ export class RecordsRepository {
         },
         permissions: permissionsFor(requiredTeamId, input.kind),
       });
-      return parseDocument(document) as RivetRecord<K>;
+      return parseDocument(document) as KnowHowRecord<K>;
     } catch (error) {
       throw normalizeRecordsError(error);
     }
@@ -555,7 +555,7 @@ export class RecordsRepository {
     teamId: string,
     recordId: string,
     input: UpdateRecordInput<K>,
-  ): Promise<RivetRecord<K>> {
+  ): Promise<KnowHowRecord<K>> {
     const current = await this.get(teamId, recordId);
     if (current.kind === "audit") {
       throw new RecordsRepositoryError(
@@ -598,7 +598,7 @@ export class RecordsRepository {
       data.archived = input.archived;
     }
     if (Object.keys(data).length === 0) {
-      return current as RivetRecord<K>;
+      return current as KnowHowRecord<K>;
     }
 
     try {
@@ -609,7 +609,7 @@ export class RecordsRepository {
         data,
         permissions: permissionsFor(current.teamId, current.kind),
       });
-      return parseDocument(document) as RivetRecord<K>;
+      return parseDocument(document) as KnowHowRecord<K>;
     } catch (error) {
       throw normalizeRecordsError(error);
     }
@@ -619,7 +619,7 @@ export class RecordsRepository {
     teamId: string,
     recordId: string,
     archived = true,
-  ): Promise<RivetRecord> {
+  ): Promise<KnowHowRecord> {
     const current = await this.get(teamId, recordId);
     if (current.kind === "audit") {
       throw new RecordsRepositoryError(

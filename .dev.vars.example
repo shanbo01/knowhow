@@ -1,8 +1,8 @@
 # Copy this file to .dev.vars before exercising signed invites or extension pairing.
-RIVET_TOKEN_SIGNING_KEY=replace-with-a-private-random-value-of-at-least-32-bytes
-RIVET_PLATFORM_OWNER_EMAILS=owner@example.com
+KNOWHOW_TOKEN_SIGNING_KEY=replace-with-a-private-random-value-of-at-least-32-bytes
+KNOWHOW_PLATFORM_OWNER_EMAILS=owner@example.com
 
 # These optional server overrides must match the public browser configuration
-# in lib/appwrite.ts when using an Appwrite project other than Rivet's default.
+# in lib/appwrite.ts when using an Appwrite project other than KnowHow's default.
 # APPWRITE_ENDPOINT=https://your-region.cloud.appwrite.io/v1
 # APPWRITE_PROJECT_ID=your-appwrite-project-id

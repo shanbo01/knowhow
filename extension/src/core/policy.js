@@ -8,22 +8,51 @@ const DEFAULT_EXCLUDED_HOSTS = Object.freeze([
   "app.dashlane.com",
 ]);
 
+// Bumped whenever the meaning of a persisted policy flag's default changes.
+// mergePolicy() uses this to migrate policies saved under an older schema so
+// stale stored values (like the previous "Smart Blur on by default") don't
+// silently keep overriding a new, safer default forever.
+export const CAPTURE_POLICY_SCHEMA_VERSION = 2;
+
+// Keys whose *default* changed at CAPTURE_POLICY_SCHEMA_VERSION 2 (Smart Blur
+// flipped from opt-out to opt-in). A policy persisted under an older schema
+// version has these values discarded in favor of the current defaults below,
+// instead of being merged over them.
+const MIGRATED_DEFAULT_KEYS = Object.freeze([
+  "redactEmails",
+  "redactPhoneNumbers",
+  "redactFinancialNumbers",
+  "redactIds",
+  "redactAllNumbers",
+  "redactFormFields",
+  "redactImages",
+  "redactTableRows",
+  "redactLongText",
+  "redactCommonNames",
+]);
+
 export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   version: "local-v1",
+  schemaVersion: CAPTURE_POLICY_SCHEMA_VERSION,
   excludedSites: DEFAULT_EXCLUDED_HOSTS,
   allowedSites: [],
   blockInsecureHttp: false,
-  redactEmails: true,
-  redactPhoneNumbers: true,
-  redactFinancialNumbers: true,
-  redactIds: true,
+  // Smart Blur is opt-in: the author reviews and adds blur in the app editor
+  // instead of the extension guessing and baking it in automatically.
+  redactEmails: false,
+  redactPhoneNumbers: false,
+  redactFinancialNumbers: false,
+  redactIds: false,
   redactAllNumbers: false,
-  redactFormFields: true,
+  redactFormFields: false,
   redactImages: false,
   redactTableRows: false,
   redactLongText: false,
   redactCommonNames: false,
   clickTargetColor: "#ff5d2e",
+  // Shown briefly on-page when a capture starts or resumes; never present
+  // while a screenshot is actually taken. Toggled from the side panel.
+  showRecordingIndicator: true,
 });
 
 export function normalizeHostname(hostname) {
@@ -100,7 +129,7 @@ export function evaluateCaptureUrl(value, policy = DEFAULT_CAPTURE_POLICY) {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     return {
       allowed: false,
-      reason: "Rivet captures only regular HTTP and HTTPS pages.",
+      reason: "KnowHow captures only regular HTTP and HTTPS pages.",
     };
   }
   if (url.username || url.password) {
@@ -127,7 +156,7 @@ export function evaluateCaptureUrl(value, policy = DEFAULT_CAPTURE_POLICY) {
   ) {
     return {
       allowed: false,
-      reason: "This site is excluded by Rivet capture policy.",
+      reason: "This site is excluded by KnowHow capture policy.",
       origin: url.origin,
     };
   }
@@ -165,9 +194,20 @@ export function sameOrigin(left, right) {
 }
 
 export function mergePolicy(stored = {}) {
+  const isLegacySchema =
+    !Number.isInteger(stored.schemaVersion) ||
+    stored.schemaVersion < CAPTURE_POLICY_SCHEMA_VERSION;
+  const carryForward = isLegacySchema
+    ? Object.fromEntries(
+        Object.entries(stored).filter(
+          ([key]) => !MIGRATED_DEFAULT_KEYS.includes(key),
+        ),
+      )
+    : stored;
   return {
     ...DEFAULT_CAPTURE_POLICY,
-    ...stored,
+    ...carryForward,
+    schemaVersion: CAPTURE_POLICY_SCHEMA_VERSION,
     excludedSites: Array.from(
       new Set([
         ...DEFAULT_EXCLUDED_HOSTS,

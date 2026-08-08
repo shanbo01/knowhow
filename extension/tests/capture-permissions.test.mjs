@@ -129,7 +129,7 @@ test("background validates access, tab identity, and readable HTTP URLs", async 
     backgroundSource,
     /resumeCapture\(message\.options\)/,
   );
-  assert.match(backgroundSource, /Chrome removed Rivet's website access/i);
+  assert.match(backgroundSource, /Chrome removed KnowHow's website access/i);
 });
 
 test("build permits only an optional all-sites capture grant", async () => {
