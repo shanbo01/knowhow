@@ -5,6 +5,7 @@ import {
   deletePrivateMedia,
   D1KnowHowRepository,
   hashToken,
+  readPrivateMedia,
   HttpError,
   jsonResponse,
   readJsonObject,
@@ -474,6 +475,72 @@ async function contextResponse(request: Request, db: D1DatabaseLike, repository:
       // explicit master switch remains off until the recorder enables it.
       automatic: ["email", "phone-number", "financial-number", "identifier", "form-field"],
       assisted: ["common-name", "long-text"],
+    },
+  });
+}
+
+/**
+ * Serves a guide screenshot to the paired extension so its side panel can show
+ * illustrated steps instead of bare text. The paired device stands in for the
+ * signed-in member, so the same per-guide read check the app performs applies
+ * here: a restricted guide the member cannot open stays invisible.
+ */
+async function guideMedia(
+  request: Request,
+  db: D1DatabaseLike,
+  repository: D1KnowHowRepository,
+  mediaId: string,
+) {
+  const { credential, access } = await authenticateDevice(request, db, repository, [
+    "capture:write",
+  ]);
+  const workspaceId = credential.claims.workspaceId;
+  const media = await first<{
+    object_key: string;
+    content_type: "image/png" | "image/jpeg" | "image/webp";
+    guide_id: string;
+    revision_id: string;
+    archived_at: string | null;
+  }>(
+    db,
+    `SELECT m.object_key, m.content_type, r.guide_id, r.id AS revision_id, g.archived_at
+     FROM guide_media m
+     JOIN guide_revisions r ON r.id = m.revision_id AND r.workspace_id = m.workspace_id
+     JOIN guides g ON g.id = r.guide_id AND g.workspace_id = r.workspace_id
+     WHERE m.id = ? AND m.workspace_id = ?`,
+    mediaId,
+    workspaceId,
+  );
+  if (!media || media.archived_at !== null) {
+    throw new HttpError(404, "MEDIA_NOT_FOUND", "Media not found.");
+  }
+  const facts = await repository.getGuideAccessFacts(
+    workspaceId,
+    media.guide_id,
+    credential.claims.userId,
+    media.revision_id,
+  );
+  const context = {
+    isVerifiedIdentity: true,
+    membershipStatus: access.membershipStatus,
+    workspaceStatus: access.workspaceStatus,
+    roles: access.roles,
+    capabilities: access.capabilities,
+  } as const;
+  if (!facts || !authorize("guide.read", { ...context, guide: facts }).allowed) {
+    throw new HttpError(404, "MEDIA_NOT_FOUND", "Media not found.");
+  }
+  const object = await readPrivateMedia(
+    requireR2Binding(env.MEDIA),
+    media.object_key,
+    workspaceId,
+  );
+  return new Response(object.body, {
+    headers: {
+      "content-type": media.content_type,
+      "cache-control": "private, no-store",
+      "content-security-policy": "default-src 'none'; sandbox",
+      "x-content-type-options": "nosniff",
     },
   });
 }
@@ -1293,6 +1360,9 @@ async function dispatch(request: Request, context: RouteContext) {
   }
   if (request.method === "GET" && path.length === 1 && path[0] === "context") {
     return contextResponse(request, db, repository);
+  }
+  if (request.method === "GET" && path.length === 2 && path[0] === "media") {
+    return guideMedia(request, db, repository, safeId(path[1], "Media ID"));
   }
   if (request.method === "POST" && path.length === 1 && path[0] === "captures") {
     return startCapture(request, db, repository);

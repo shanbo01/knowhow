@@ -77,8 +77,7 @@ import { decryptSecretValue, encryptSecretValue } from "../../lib/crypto";
 import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
 import {
-  connectKnowHowExtension,
-  inspectKnowHowExtension,
+  ensureKnowHowExtension,
   syncKnowHowExtension,
   type ExtensionCompanion,
 } from "../../lib/extension-bridge";
@@ -1280,29 +1279,15 @@ function GlobalGuideSearch({ guides, onOpen }: {
   );
 }
 
-function ExtensionDialog({ busy, companion, onClose, onPair, onRevoke }: { busy: boolean; companion: ExtensionCompanion; onClose: () => void; onPair: () => Promise<{ code: string; expiresAt: string }>; onRevoke: () => Promise<void> }) {
-  const [extensionState, setExtensionState] = useState<"checking" | "missing" | "ready" | "connected">("checking");
+function ExtensionDialog({ busy, companion, state, onClose, onLink, onRevoke }: { busy: boolean; companion: ExtensionCompanion; state: "checking" | "missing" | "connected"; onClose: () => void; onLink: (options?: { force?: boolean }) => Promise<unknown>; onRevoke: () => Promise<void> }) {
   const [connectionError, setConnectionError] = useState("");
 
-  useEffect(() => {
-    let active = true;
-    void inspectKnowHowExtension()
-      .then((result) => {
-        if (!active) return;
-        setExtensionState(result.connected && result.workspaceId === companion.workspaceId ? "connected" : "ready");
-      })
-      .catch(() => {
-        if (active) setExtensionState("missing");
-      });
-    return () => { active = false; };
-  }, [companion.workspaceId]);
-
-  async function connectExtension() {
+  async function relink() {
     setConnectionError("");
     try {
-      const pairing = await onPair();
-      await connectKnowHowExtension(pairing.code, companion);
-      setExtensionState("connected");
+      // A revoked or stale credential still reports as connected inside the
+      // extension, so an explicit retry always mints a fresh one.
+      await onLink({ force: true });
       toast.success("Capture extension connected");
     } catch (error) {
       setConnectionError(messageFromError(error));
@@ -1312,17 +1297,18 @@ function ExtensionDialog({ busy, companion, onClose, onPair, onRevoke }: { busy:
   async function revokeDevices() {
     if (!window.confirm("Revoke every browser paired by your account in this workspace?")) return;
     await onRevoke();
-    setExtensionState("ready");
+    await relink();
   }
 
   return (
-    <Modal title="Connect the capture extension" eyebrow="Chrome & Edge" onClose={onClose} wide>
+    <Modal title="The capture extension" eyebrow="Chrome & Edge" onClose={onClose} wide>
       <div className="modal-form">
         <ol className="pairing-steps">
           <li><span>1</span><div><strong>Install the KnowHow extension</strong><p>Download the packaged extension, unzip it, then load the folder through your browser&apos;s extension developer mode.</p><a className="button secondary" href="/knowhow-extension.zip" download><Download /> Download extension</a></div></li>
-          <li><span>2</span><div><strong>Connect this browser</strong><p>KnowHow securely hands the signed-in workspace to the installed extension. There is no code to copy or type.</p>{extensionState === "checking" ? <button className="button primary" disabled><LoaderCircle className="spin" /> Checking extension</button> : extensionState === "missing" ? <p className="form-error">Install or reload the extension, then reopen this dialog.</p> : extensionState === "connected" ? <span className="extension-connected"><CheckCircle2 /> Connected to {companion.workspaceName}</span> : <button className="button primary" type="button" disabled={busy} onClick={() => { void connectExtension(); }}>{busy ? <LoaderCircle className="spin" /> : <Link2 />} Connect extension</button>}</div></li>
-          <li><span>3</span><div><strong>Capture and follow guides side by side</strong><p>The extension receives your app theme and the guides you can already access, so its side panel stays in sync with KnowHow.</p><button className="button ghost small" type="button" disabled={busy || extensionState === "missing"} onClick={() => { void revokeDevices().catch(() => undefined); }}><Trash2 /> Revoke browser access</button></div></li>
+          <li><span>2</span><div><strong>Nothing to pair</strong><p>Because you are signed in here, KnowHow hands this workspace to the installed extension by itself. There is no code to copy and no button to press.</p>{state === "checking" ? <button className="button primary" disabled><LoaderCircle className="spin" /> Checking extension</button> : state === "missing" ? <button className="button primary" type="button" disabled={busy} onClick={() => { void relink(); }}><Link2 /> Retry connection</button> : <span className="extension-connected"><CheckCircle2 /> Connected to {companion.workspaceName}</span>}</div></li>
+          <li><span>3</span><div><strong>Capture and follow guides side by side</strong><p>The side panel records your clicks and reads your guides with their screenshots, blur regions, and click markers intact.</p><button className="button ghost small" type="button" disabled={busy} onClick={() => { void revokeDevices().catch(() => undefined); }}><Trash2 /> Revoke browser access</button></div></li>
         </ol>
+        {state === "missing" ? <p className="form-error">KnowHow could not reach the extension. Install or reload it, then retry.</p> : null}
         {connectionError ? <p className="form-error" role="alert">{connectionError}</p> : null}
         <p className="privacy-caption"><ShieldCheck /> Connection, capture uploads, and device revocation are audited for workspace administrators.</p>
         <footer className="modal-footer"><span /><button className="button primary" onClick={onClose}>Done</button></footer>
@@ -1399,6 +1385,7 @@ export function KnowHowWorkspaceApp({
         ? "Guides"
         : "Overview";
 
+  const [extensionLink, setExtensionLink] = useState<"checking" | "missing" | "connected">("checking");
   const extensionCompanion = useMemo<ExtensionCompanion>(() => ({
     workspaceId: workspace.id,
     workspaceName: workspace.name,
@@ -1415,24 +1402,78 @@ export function KnowHowWorkspaceApp({
         restricted: guide.restricted,
         updatedAt: guide.updatedAt,
         href: guideHref(workspace.slug, guide.id, mode),
-        steps: revision.steps.map((step) => ({
-          id: step.id,
-          kind: step.kind,
-          title: step.title,
-          description: step.description,
-        })),
+        steps: revision.steps.map((step) => {
+          const click = step.annotations?.find((annotation) => annotation.kind === "click");
+          const pendingRedactions = (step.redactions ?? []).filter((region) => !region.applied);
+          return {
+            id: step.id,
+            kind: step.kind,
+            title: step.title,
+            description: step.description,
+            ...(step.screenshotMediaId
+              ? {
+                  media: {
+                    mediaId: step.screenshotMediaId,
+                    ...(step.crop ? { crop: step.crop } : {}),
+                    ...(click
+                      ? {
+                          click: {
+                            x: click.x,
+                            y: click.y,
+                            radius: click.width ?? 0.035,
+                            ...(click.color ? { color: click.color } : {}),
+                          },
+                        }
+                      : {}),
+                    ...(pendingRedactions.length
+                      ? {
+                          redactions: pendingRedactions.map((region) => ({
+                            x: region.x,
+                            y: region.y,
+                            width: region.width,
+                            height: region.height,
+                          })),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+          };
+        }),
       }];
     }),
   }), [guides, resolvedTheme, workspace.id, workspace.name, workspace.slug]);
 
+  // The extension is handed the signed-in workspace automatically: being in the
+  // app is the proof of identity, so nobody copies a pairing code. Credentials
+  // are minted only when the installed extension is not already holding this
+  // workspace, which keeps repeat visits to a single ping.
+  const linkExtension = useCallback(async (options: { force?: boolean } = {}) => {
+    const state = await ensureKnowHowExtension(
+      extensionCompanion,
+      () =>
+        knowhowCommand<{ code: string; expiresAt: string }>("createPairingCode", {
+          workspaceId: workspace.id,
+        }),
+      options,
+    );
+    setExtensionLink(state.installed ? "connected" : "missing");
+    return state;
+  }, [extensionCompanion, workspace.id]);
+
   useEffect(() => {
-    const syncExtension = () => {
-      void syncKnowHowExtension(extensionCompanion).catch(() => undefined);
+    const link = () => {
+      const attempt = canCapture
+        ? linkExtension()
+        : syncKnowHowExtension(extensionCompanion).then(() =>
+            setExtensionLink("connected"),
+          );
+      void attempt.catch(() => setExtensionLink("missing"));
     };
-    syncExtension();
-    window.addEventListener("focus", syncExtension);
-    return () => window.removeEventListener("focus", syncExtension);
-  }, [extensionCompanion]);
+    link();
+    window.addEventListener("focus", link);
+    return () => window.removeEventListener("focus", link);
+  }, [canCapture, extensionCompanion, linkExtension]);
 
   const recordPublishedView = useCallback((guide: Guide) => {
     if (!guide.publishedRevision) return;
@@ -1687,7 +1728,7 @@ export function KnowHowWorkspaceApp({
       {dialog?.type === "group" && isAdmin && workspaceMutable ? <GroupDialog group={dialog.group} members={members} busy={busy} onClose={() => setDialog(null)} onSave={async (payload) => { await command("saveGroup", payload, payload.id ? "Group updated" : "Group created"); setDialog(null); }} onDelete={async (groupId) => { await command("deleteGroup", { groupId }, "Group deleted"); setDialog(null); }} /> : null}
       {dialog?.type === "member" && isAdmin && workspaceMutable ? <MemberDialog member={dialog.member} busy={busy} onClose={() => setDialog(null)} onSave={async (nextRoles, capabilities) => { await command("updateMember", { memberId: dialog.member.id, roles: nextRoles, capabilities, status: dialog.member.status }, "Member access updated"); setDialog(null); }} onSuspend={async () => { await command("updateMember", { memberId: dialog.member.id, roles: dialog.member.roles, capabilities: dialog.member.capabilities ?? [], status: dialog.member.status === "suspended" ? "active" : "suspended" }, dialog.member.status === "suspended" ? "Member restored" : "Member suspended"); setDialog(null); }} /> : null}
       {dialog?.type === "invite" && isAdmin && workspaceMutable ? <InviteDialog busy={busy} origin={window.location.origin} onClose={() => setDialog(null)} onCreate={(payload) => command<{ token: string }>("createInvite", payload, "Invitation created")} /> : null}
-      {dialog?.type === "extension" && canCapture ? <ExtensionDialog busy={busy} companion={extensionCompanion} onClose={() => setDialog(null)} onPair={() => command<{ code: string; expiresAt: string }>("createPairingCode", {}, "")} onRevoke={() => command("revokeCaptureDevices", {}, "Paired browser access revoked")} /> : null}
+      {dialog?.type === "extension" && canCapture ? <ExtensionDialog busy={busy} companion={extensionCompanion} state={extensionLink} onClose={() => setDialog(null)} onLink={linkExtension} onRevoke={() => command("revokeCaptureDevices", {}, "Paired browser access revoked")} /> : null}
       {dialog?.type === "platform-create" && data.viewer.platformAdministrator ? <PlatformCreateDialog busy={busy} onClose={() => setDialog(null)} onCreate={async (name, administratorEmail, inviteEmails) => { const result = await command<{ workspaceId: string; appointmentToken: string | null; invitations: string[] }>("createWorkspace", { name, ...(administratorEmail ? { administratorEmail } : {}), ...(inviteEmails.length ? { inviteEmails } : {}) }, "Workspace created"); setDialog(null); return { appointmentUrl: result.appointmentToken ? `${window.location.origin}/?appointment=${encodeURIComponent(result.appointmentToken)}` : null, inviteUrls: (result.invitations ?? []).map((token) => `${window.location.origin}/?invite=${encodeURIComponent(token)}`) }; }} /> : null}
       {dialog?.type === "assign-admin" && data.viewer.platformAdministrator ? <AssignAdminDialog workspace={dialog.workspace} busy={busy} onClose={() => setDialog(null)} onAssign={async (email) => { await command("assignWorkspaceAdministrator", { targetWorkspaceId: dialog.workspace.id, email }, "Workspace administrator assigned"); setDialog(null); }} /> : null}
       {dialog?.type === "support-request" && data.viewer.platformAdministrator ? <SupportRequestDialog workspace={dialog.workspace} busy={busy} onClose={() => setDialog(null)} onRequest={async (requestedRole, reason, requestedDurationHours) => { await command("requestSupportAccess", { workspaceId: dialog.workspace.id, requestedRole, reason, requestedDurationHours }, "Support request submitted for approval"); setDialog(null); }} /> : null}

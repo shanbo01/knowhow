@@ -130,16 +130,39 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(offscreenSource, /\{ clickTarget \}/);
 });
 
-test("capture preserves native controls and records the painted result", async () => {
+test("capture photographs the page as it looked when the pointer went down", async () => {
   const [contentSource, backgroundSource] = await Promise.all([
     readFile(new URL("../src/content/capture.js", import.meta.url), "utf8"),
     readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
   ]);
 
+  // The screenshot is taken early, but the click itself is never intercepted,
+  // cancelled, or replayed: dropdowns and menus behave exactly as they would
+  // without KnowHow attached.
   assert.doesNotMatch(contentSource, /event\.preventDefault\(\)/);
   assert.doesNotMatch(contentSource, /event\.stopImmediatePropagation\(\)/);
   assert.doesNotMatch(contentSource, /\.element\.click\(\)/);
-  assert.doesNotMatch(contentSource, /type: "PREFLIGHT_CAPTURE"/);
+  assert.match(contentSource, /type: "PREFLIGHT_CAPTURE"/);
+  assert.match(
+    contentSource,
+    /requestPreflightCapture\(element, context\);\s*\}/,
+  );
+  assert.match(contentSource, /function claimPreflight\(element\)/);
+  assert.match(
+    contentSource,
+    /function emitInteraction\(element, context, options = \{\}\) \{\s+if \(claimPreflight\(element\)\)/,
+  );
+  // Anything that turns out not to be a click releases the reserved frame.
+  const drag = contentSource.slice(
+    contentSource.indexOf("function onPointerMove"),
+    contentSource.indexOf("function onContextMenu"),
+  );
+  assert.match(drag, /discardPreflight\(\)/);
+  assert.match(contentSource, /type: "PREFLIGHT_DISCARD"/);
+  assert.match(backgroundSource, /if \(request\.preflight === true\)/);
+  assert.match(backgroundSource, /stash\.generation === generation/);
+  // Without a usable pre-click frame the step still lands, photographed after
+  // the page paints instead of being dropped.
   assert.match(contentSource, /function emitAfterPaint\(context, options = \{\}\)/);
   assert.match(contentSource, /waitForPagePaint\(\)\.then/);
   assert.match(contentSource, /DOUBLE_CLICK_WINDOW_MS = 260/);
@@ -151,6 +174,8 @@ test("capture preserves native controls and records the painted result", async (
   );
   assert.match(contentSource, /function onDoubleClick\(event\)/);
   assert.match(contentSource, /title: "Double-click " \+ name/);
+  assert.match(contentSource, /function targetName\(element\)/);
+  assert.match(contentSource, /const quoted = '"' \+ label\.replace/);
   assert.match(
     backgroundSource,
     /sourceEvent: \["contextmenu", "dblclick"\]\.includes\(message\.sourceEvent\)/,

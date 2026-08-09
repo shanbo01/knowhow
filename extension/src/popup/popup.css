@@ -252,7 +252,10 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .step-delete:hover:not(:disabled) { border-color: color-mix(in srgb, var(--danger) 22%, var(--border)); background: var(--danger-soft); color: var(--danger); }
 .step-thumbnail { position: relative; width: calc(100% - 18px); margin: 0 9px 9px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--card-muted); }
 .step-thumbnail img { position: absolute; height: auto; max-width: none; object-fit: unset; user-select: none; pointer-events: none; }
-.step-click-ring { position: absolute; width: 34px; height: 34px; border: 3px solid var(--click-color, #d97706); border-radius: 50%; background: color-mix(in srgb, var(--click-color, #d97706) 22%, transparent); box-shadow: 0 0 0 5px color-mix(in srgb, var(--click-color, #d97706) 13%, transparent); transform: translate(-50%, -50%); pointer-events: none; }
+.step-click-ring { position: absolute; width: 34px; aspect-ratio: 1; height: auto; border: 3px solid var(--click-color, #d97706); border-radius: 50%; background: color-mix(in srgb, var(--click-color, #d97706) 22%, transparent); box-shadow: 0 0 0 5px color-mix(in srgb, var(--click-color, #d97706) 13%, transparent); transform: translate(-50%, -50%); pointer-events: none; }
+/* Pending redactions are overlays, never baked pixels: the same soft frosted
+   treatment the on-page preview and the app editor use. */
+.step-blur { position: absolute; border-radius: 4px; background: color-mix(in srgb, var(--foreground) 12%, transparent); backdrop-filter: blur(9px) saturate(0.6); -webkit-backdrop-filter: blur(9px) saturate(0.6); pointer-events: none; }
 .step-card[data-source-event="navigation"] .step-card-copy { min-height: 48px; align-items: center; }
 .step-card[data-source-event="navigation"] .step-number { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--muted); }
 
@@ -314,6 +317,11 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .guide-follow-step p { margin: 2px 0 0; color: var(--muted); font-size: 9px; }
 .guide-follow-step.active button > span:first-child { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
 .guide-follow-step.complete { opacity: 0.7; }
+.guide-step-figure { position: relative; grid-column: 2; width: 100%; margin: 7px 0 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--card-muted); }
+.guide-step-figure img { position: absolute; height: auto; max-width: none; user-select: none; pointer-events: none; }
+.guide-step-figure[data-state="loading"], .guide-step-figure[data-state="failed"] { aspect-ratio: 16 / 9; display: grid; place-items: center; }
+.guide-step-figure[data-state="loading"]::after { content: "Loading screenshot…"; color: var(--muted); font-size: 8px; }
+.guide-step-figure[data-state="failed"]::after { content: attr(data-message); padding: 0 10px; color: var(--muted); text-align: center; font-size: 8px; }
 .guide-follow-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .guide-follow-actions .text-button { grid-column: 1 / -1; justify-self: center; }
 

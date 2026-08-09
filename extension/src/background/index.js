@@ -17,6 +17,7 @@ import {
   beginRemoteCapture,
   beginKnowHowPairing,
   discardRemoteCapture,
+  fetchGuideMedia,
   getConnectionState,
   getKnowHowContext,
   pauseRemoteCapture,
@@ -100,6 +101,10 @@ function enqueueRemoteLifecycle(operation) {
 
 const PREFLIGHT_STORAGE_KEY = "knowhow-pending-preflight";
 const PREFLIGHT_TTL_MS = 10_000;
+// A pre-click screenshot that cannot start within this window is skipped: the
+// click has already landed by then, so the step falls back to photographing
+// the painted result instead of storing a frame from the wrong moment.
+const PREFLIGHT_DEADLINE_MS = 320;
 
 async function getPendingPreflight(sessionId) {
   if (typeof sessionId !== "string" || !sessionId) return null;
@@ -274,6 +279,62 @@ function boundedCompanionText(value, maximum = 240) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maximum);
 }
 
+function normalizedUnitRegion(value) {
+  const region = ["x", "y", "width", "height"].map((axis) => Number(value?.[axis]));
+  if (!region.every((item) => Number.isFinite(item) && item >= 0 && item <= 1)) {
+    return null;
+  }
+  const [x, y, width, height] = region;
+  if (width <= 0 || height <= 0 || x + width > 1.0001 || y + height > 1.0001) {
+    return null;
+  }
+  return { x, y, width, height };
+}
+
+/**
+ * Screenshot metadata for the guide reader: which private media object to
+ * fetch, how the author framed it, where the click ring sits, and which blur
+ * regions are still overlays rather than baked pixels.
+ */
+function normalizeCompanionMedia(value) {
+  const mediaId = boundedCompanionText(value?.mediaId, 160);
+  if (!mediaId || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(mediaId)) return null;
+  const click = value?.click;
+  const clickX = Number(click?.x);
+  const clickY = Number(click?.y);
+  const radius = Number(click?.radius);
+  return {
+    mediaId,
+    crop: normalizedUnitRegion(value?.crop),
+    click:
+      Number.isFinite(clickX) &&
+      Number.isFinite(clickY) &&
+      clickX >= 0 &&
+      clickX <= 1 &&
+      clickY >= 0 &&
+      clickY <= 1
+        ? {
+            x: clickX,
+            y: clickY,
+            radius:
+              Number.isFinite(radius) && radius > 0 && radius <= 0.25
+                ? radius
+                : 0.035,
+            color: /^#[0-9a-f]{6}$/i.test(String(click?.color || ""))
+              ? click.color
+              : "#d97706",
+          }
+        : null,
+    redactions: Array.isArray(value?.redactions)
+      ? value.redactions
+          .slice(0, 200)
+          .filter((region) => region?.applied !== true)
+          .map(normalizedUnitRegion)
+          .filter(Boolean)
+      : [],
+  };
+}
+
 function normalizeCompanionGuide(value) {
   const id = boundedCompanionText(value?.id, 160);
   const title = boundedCompanionText(value?.title, 240);
@@ -293,6 +354,7 @@ function normalizeCompanionGuide(value) {
           : "action",
         title: boundedCompanionText(step?.title, 300) || `Step ${index + 1}`,
         description: boundedCompanionText(step?.description, 2_000),
+        media: normalizeCompanionMedia(step?.media),
       }))
     : [];
   return {
@@ -828,8 +890,8 @@ async function startCapture(options = {}) {
       targetRect: null,
       clickPoint: null,
     });
-    const capturedInitialStep = await enqueueScreenshot(() =>
-      captureStep(initialJob),
+    const capturedInitialStep = await enqueueScreenshot((reserveSlot) =>
+      captureStep(initialJob, reserveSlot),
     );
     if (!capturedInitialStep) {
       throw new Error(
@@ -1240,8 +1302,16 @@ async function validateActiveCaptureTab(state, policy, expectedSanitizedUrl) {
   return { tab, verdict };
 }
 
-async function captureVisiblePage(state, policy, expectedSanitizedUrl) {
+async function captureVisiblePage(
+  state,
+  policy,
+  expectedSanitizedUrl,
+  reserveSlot,
+) {
   await requireCaptureHostAccess();
+  // The rate-limit wait happens before validation so the checks below describe
+  // the tab as it is at the instant the screenshot is taken.
+  if (!(await reserveSlot())) return null;
   const activationEpoch = windowActivationEpochs.current(state.windowId);
   await validateActiveCaptureTab(state, policy, expectedSanitizedUrl);
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
@@ -1283,7 +1353,7 @@ async function captureVisiblePage(state, policy, expectedSanitizedUrl) {
   return { dataUrl, ...verified };
 }
 
-async function captureStep(request) {
+async function captureStep(request, reserveSlot) {
   const snapshot = await getCaptureState();
   const generation = request.generation;
   if (!Number.isInteger(generation)) return false;
@@ -1352,7 +1422,9 @@ async function captureStep(request) {
     snapshot,
     policy,
     activeVerdict.sanitizedUrl,
+    reserveSlot,
   );
+  if (!captured) return false;
   let dataUrl = captured.dataUrl;
 
   const afterCapture = await getCaptureState();
@@ -1615,7 +1687,7 @@ async function followNewTabNavigation(details) {
       targetRect: null,
       clickPoint: null,
     });
-    await enqueueScreenshot(() => captureStep(job));
+    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
   } catch (error) {
     await pauseCapture(
       "KnowHow could not continue after opening a new tab: " +
@@ -1701,7 +1773,7 @@ async function followActiveTabSwitch({ tabId, windowId }) {
       targetRect: null,
       clickPoint: null,
     });
-    await enqueueScreenshot(() => captureStep(job));
+    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
   } catch (error) {
     await pauseCapture(
       "KnowHow could not continue after switching tabs: " +
@@ -1801,7 +1873,7 @@ async function captureNavigation(details) {
           ? { documentId: details.documentId }
           : {}),
       });
-    await enqueueScreenshot(() => captureStep(job));
+    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
   } catch (error) {
     await pauseCapture(
       "KnowHow could not continue after navigation: " +
@@ -1838,6 +1910,10 @@ async function handleMessage(message, sender) {
       };
     case "EXCLUDE_CURRENT_SITE":
       return { ok: true, ...(await excludeCurrentSite(message.options)) };
+    // Guide screenshots are private objects: the side panel asks the worker,
+    // which is the only context holding the paired device credential.
+    case "GET_GUIDE_MEDIA":
+      return { ok: true, ...(await fetchGuideMedia(message.mediaId)) };
     case "CONNECT_KNOWHOW":
       return { ok: true, context: await connectKnowHow(message.code) };
     case "UPDATE_CAPTURE_POLICY":
@@ -1877,9 +1953,17 @@ async function handleMessage(message, sender) {
         return { ok: false };
       }
       try {
-        const captured = await enqueueScreenshot(() =>
-          captureVisiblePage(state, policy, verdict.sanitizedUrl),
+        const captured = await enqueueScreenshot(
+          (reserveSlot) =>
+            captureVisiblePage(
+              state,
+              policy,
+              verdict.sanitizedUrl,
+              reserveSlot,
+            ),
+          { deadlineMs: PREFLIGHT_DEADLINE_MS },
         );
+        if (!captured) return { ok: false, abandoned: true };
         await setPendingPreflight({
           sessionId: state.sessionId,
           generation: state.generation,
@@ -1946,7 +2030,9 @@ async function handleMessage(message, sender) {
             ? { documentId: sender.documentId }
             : {}),
         });
-      void enqueueScreenshot(() => captureStep(job)).catch(async (error) => {
+      void enqueueScreenshot((reserveSlot) =>
+        captureStep(job, reserveSlot),
+      ).catch(async (error) => {
         const latest = await getCaptureState();
         if (isCollecting(latest)) {
           await pauseCapture(

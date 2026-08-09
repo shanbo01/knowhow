@@ -28,31 +28,58 @@ intentionally ignored by Git.
 
 For Edge, use edge://extensions and the same extension/dist directory.
 
+## Connecting
+
+There is nothing to pair. Open KnowHow while signed in with the extension
+installed and the app hands this browser a scoped device credential by itself,
+then keeps the side panel's guide library and theme in sync on every visit. The
+extension dialog only reports the connection and offers a retry; the Revoke
+browser access action ends every credential your account holds in the
+workspace, and the next KnowHow visit connects the browser again.
+
+If a credential is revoked or expires, the extension drops it as soon as the
+server rejects it, so no one is left with a browser that silently fails to
+upload.
+
 ## Capture workflow
 
-1. Open the extension dialog in a signed-in KnowHow workspace and choose
-   Connect extension. The website performs the scoped device handoff directly;
-   there is no code to copy or type.
-2. Open the page to document and select the KnowHow toolbar action.
-3. Search the Guides tab to open an authorized guide in the side panel and
-   follow it beside the current page, or stay in Capture to record a new guide.
-4. Enter a guide title and choose Start capturing. The first capture
+1. Open the page to document and select the KnowHow toolbar action.
+2. Search the Guides tab to open an authorized guide in the side panel and
+   follow it beside the current page — each step shows its screenshot, framed to
+   the author's crop with click markers and blur regions intact — or stay in
+   Capture to record a new guide.
+3. Enter a guide title and choose Start capturing. The first capture
    asks you to allow KnowHow to access websites; this runtime permission is what
    lets Chrome capture the foreground tab from its persistent side panel.
-5. Smart Blur appears only after recording starts and is off by default. When
-   enabled, its masks appear live on the page so you can see what will be
-   protected before the screenshot is taken.
-6. Keep KnowHow docked in Chrome's native side panel while the captured page
-   remains usable beside it. Numbered, locally redacted step previews appear
-   in the panel as you click, double-click, switch tabs, and navigate. Use the
-   trash action on a preview to remove a mistaken step immediately.
-7. Use Pause and Resume from the native side panel.
-8. Choose Finish & review to open the full post-capture editor.
-9. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
+4. Smart Blur appears only after recording starts and is off by default. When
+   enabled, merged frosted regions appear live on the page, and the pill reports
+   how many areas are covered, so you see what will be protected before the
+   screenshot is taken.
+5. Keep KnowHow docked in Chrome's native side panel while the captured page
+   remains usable beside it. Numbered step previews appear in the panel as you
+   click, double-click, switch tabs, and navigate, each zoomed to the control you
+   used. Use the trash action on a preview to remove a mistaken step immediately.
+6. Use Pause and Resume from the native side panel.
+7. Choose Finish & review to open the full post-capture editor.
+8. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
    crop, add or remove manual blur regions, draw freehand, and move or remove
    the click target. Undo and redo operate on these editable layers.
-10. Confirm the privacy review and submit a private KnowHow draft. The selected
+9. Confirm the privacy review and submit a private KnowHow draft. The selected
    crop and editable layers are flattened once into the upload raster.
+
+## How a step is photographed
+
+The screenshot is taken when the pointer goes down, not after the click has been
+handled, so the image shows the interface the way it looked at the moment of the
+click and the marker lands on the control that was actually pressed — even when
+the click navigates, closes a menu, or replaces the page. The click itself is
+never intercepted, cancelled, or replayed.
+
+A drag, a cancelled press, or a press that lands somewhere else releases the
+reserved screenshot. Chrome allows only two screenshots per second, so during
+very fast clicking a step falls back to photographing the painted result instead
+of waiting for a frame that would no longer be the right one. Step titles quote
+the control's own label, so a step reads `Click "Encrypted vault access"`.
 
 Capture follows regular, policy-allowed foreground tabs in the recording
 window. Opening a link in a new tab or switching to another capturable tab adds
@@ -99,6 +126,12 @@ credential exchange internally; the user never sees or enters a pairing code:
     POST /api/extension/pair
     POST /api/extension/token/refresh
     GET /api/extension/context
+    GET /api/extension/media/:mediaId
+
+Guide screenshots are private objects. The side panel asks the service worker,
+which is the only context holding the device credential, and the server repeats
+the same per-guide read check the app performs, so a restricted guide stays
+invisible in the panel too.
 
 Private draft submission expects:
 

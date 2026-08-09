@@ -1,10 +1,30 @@
 export const KNOWHOW_EXTENSION_ID = "phbofjenfnnnnndghhinoldlfbpaedpo";
 
+export type ExtensionCompanionRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Everything the extension side panel needs to draw a step screenshot the same
+ * way the app does: the private media object to request, the author's crop, the
+ * click ring, and the blur regions that are still overlays.
+ */
+export type ExtensionCompanionMedia = {
+  mediaId: string;
+  crop?: ExtensionCompanionRegion;
+  click?: { x: number; y: number; radius: number; color?: string };
+  redactions?: ExtensionCompanionRegion[];
+};
+
 export type ExtensionCompanionStep = {
   id: string;
   kind: "action" | "heading" | "note" | "warning";
   title: string;
   description: string;
+  media?: ExtensionCompanionMedia;
 };
 
 export type ExtensionCompanionGuide = {
@@ -96,4 +116,44 @@ export async function connectKnowHowExtension(
     pairingCode,
     companion,
   });
+}
+
+export type ExtensionLinkState =
+  | { installed: false }
+  | { installed: true; connected: boolean; workspaceId: string | null; paired: boolean };
+
+/**
+ * Hands the signed-in workspace to the installed extension without asking
+ * anyone to copy a code. Pairing credentials are minted only when the extension
+ * is installed and not already holding this workspace, so a returning browser
+ * costs one ping and a content refresh.
+ */
+export async function ensureKnowHowExtension(
+  companion: ExtensionCompanion,
+  mintPairingCode: () => Promise<{ code: string }>,
+  { force = false }: { force?: boolean } = {},
+): Promise<ExtensionLinkState> {
+  let status: Awaited<ReturnType<typeof inspectKnowHowExtension>>;
+  try {
+    status = await inspectKnowHowExtension();
+  } catch {
+    return { installed: false };
+  }
+  if (!force && status.connected && status.workspaceId === companion.workspaceId) {
+    await syncKnowHowExtension(companion);
+    return {
+      installed: true,
+      connected: true,
+      workspaceId: status.workspaceId,
+      paired: false,
+    };
+  }
+  const pairing = await mintPairingCode();
+  await connectKnowHowExtension(pairing.code, companion);
+  return {
+    installed: true,
+    connected: true,
+    workspaceId: companion.workspaceId,
+    paired: true,
+  };
 }

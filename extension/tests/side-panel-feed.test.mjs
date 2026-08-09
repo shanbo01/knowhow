@@ -278,18 +278,65 @@ test("live thumbnails use a contextual 16:9 crop and project the click ring", ()
     clickTarget: { x: 0.5, y: 0.4, color: "#ef6f47" },
   });
 
-  assert.ok(Math.abs(geometry.crop.x - 0.14) < 0.001);
-  assert.ok(Math.abs(geometry.crop.y - 0.04) < 0.001);
-  assert.ok(Math.abs(geometry.crop.width - 0.72) < 0.001);
-  assert.ok(Math.abs(geometry.crop.height - 0.72) < 0.001);
-  assert.ok(Math.abs(geometry.image.left + 19.444) < 0.01);
-  assert.ok(Math.abs(geometry.image.top + 5.556) < 0.01);
-  assert.ok(Math.abs(geometry.image.width - 138.889) < 0.01);
+  assert.ok(Math.abs(geometry.crop.x - 0.23) < 0.001);
+  assert.ok(Math.abs(geometry.crop.y - 0.13) < 0.001);
+  assert.ok(Math.abs(geometry.crop.width - 0.54) < 0.001);
+  assert.ok(Math.abs(geometry.crop.height - 0.54) < 0.001);
+  assert.ok(Math.abs(geometry.image.left + 42.593) < 0.01);
+  assert.ok(Math.abs(geometry.image.top + 24.074) < 0.01);
+  assert.ok(Math.abs(geometry.image.width - 185.185) < 0.01);
   assert.equal(Object.hasOwn(geometry.image, "height"), false);
   assert.ok(Math.abs(geometry.aspectRatio - 1920 / 1080) < 0.001);
   assert.ok(Math.abs(geometry.clickTarget.x - 0.5) < 0.001);
   assert.ok(Math.abs(geometry.clickTarget.y - 0.5) < 0.001);
+  assert.ok(Math.abs(geometry.clickTarget.radius - 0.035 / 0.54) < 0.001);
   assert.equal(geometry.clickTarget.color, "#ef6f47");
+});
+
+test("a small control is zoomed to the maximum, never past it", () => {
+  const tiny = thumbnailGeometry({
+    id: "tiny",
+    imageWidth: 1600,
+    imageHeight: 900,
+    focusRegion: { x: 0.5, y: 0.5, width: 0.02, height: 0.02 },
+    clickTarget: { x: 0.51, y: 0.51 },
+  });
+  const wide = thumbnailGeometry({
+    id: "wide",
+    imageWidth: 1600,
+    imageHeight: 900,
+    focusRegion: { x: 0.1, y: 0.4, width: 0.75, height: 0.06 },
+    clickTarget: { x: 0.8, y: 0.43 },
+  });
+
+  assert.ok(Math.abs(tiny.crop.width - 1 / 2.6) < 0.001);
+  assert.ok(tiny.crop.width < wide.crop.width);
+  // A wide control still fits inside its frame, even though the click that
+  // opened it sits near the right edge.
+  assert.ok(wide.crop.x <= 0.1 + 0.0001);
+  assert.ok(wide.crop.x + wide.crop.width >= 0.85 - 0.0001);
+});
+
+test("pending blur regions are clipped to the visible crop", () => {
+  const geometry = thumbnailGeometry({
+    id: "step-2",
+    imageWidth: 1600,
+    imageHeight: 900,
+    crop: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
+    clickTarget: { x: 0.5, y: 0.5 },
+    pendingRedactions: [
+      { id: "inside", x: 0.3, y: 0.3, width: 0.1, height: 0.1 },
+      { id: "straddling", x: 0.2, y: 0.3, width: 0.1, height: 0.1 },
+      { id: "outside", x: 0.85, y: 0.85, width: 0.1, height: 0.1 },
+      { id: "applied", x: 0.3, y: 0.6, width: 0.1, height: 0.1, applied: true },
+    ],
+  });
+
+  assert.equal(geometry.redactions.length, 2);
+  assert.ok(Math.abs(geometry.redactions[0].x - 0.1) < 0.001);
+  assert.ok(Math.abs(geometry.redactions[0].width - 0.2) < 0.001);
+  assert.equal(geometry.redactions[1].x, 0);
+  assert.ok(Math.abs(geometry.redactions[1].width - 0.1) < 0.001);
 });
 
 test("redacted thumbnail URLs are reused, replaced, pruned, and disposed", () => {
@@ -428,4 +475,35 @@ test("the native side panel wires the local live feed and bottom dock", async ()
     storeSource,
     /export async function deleteCapturedStepAndCompact[\s\S]*remainingIds\.entries\(\)[\s\S]*store\.put/,
   );
+});
+
+test("captured steps and guide steps share one illustrated presentation", async () => {
+  const [css, source, backgroundSource, apiClient] = await Promise.all([
+    readFile(new URL("../src/popup/popup.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/popup/popup.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/core/api-client.js", import.meta.url), "utf8"),
+  ]);
+
+  // One painter draws the crop, the pending blurs, and the click ring, so a
+  // step cannot look different in the live feed and in the guide reader.
+  assert.match(source, /function paintStepFigure\(figure, geometry, source\)/);
+  assert.match(source, /paintStepFigure\(thumbnail, thumbnailGeometry\(step\), thumbnailUrl\)/);
+  assert.match(source, /blur\.className = "step-blur"/);
+  assert.match(source, /geometry\.clickTarget\.radius \* 200/);
+  assert.match(css, /\.step-blur \{[^}]*backdrop-filter/);
+
+  // Guide screenshots are private: the panel asks the worker, which holds the
+  // device credential, and only for steps scrolled into view.
+  assert.match(source, /type: "GET_GUIDE_MEDIA"/);
+  assert.match(source, /new IntersectionObserver/);
+  assert.match(source, /root: elements\.guideFollowSteps/);
+  assert.match(source, /guideStepGeometry\(pending, result\)/);
+  assert.match(source, /step\.media\?\.mediaId && currentConnection\?\.connected/);
+  assert.match(backgroundSource, /case "GET_GUIDE_MEDIA":/);
+  assert.match(backgroundSource, /media: normalizeCompanionMedia\(step\?\.media\)/);
+  assert.match(backgroundSource, /\.filter\(\(region\) => region\?\.applied !== true\)/);
+  assert.match(apiClient, /export async function fetchGuideMedia\(mediaId\)/);
+  assert.match(apiClient, /\/media\/" \+ encodeURIComponent\(id\)/);
+  assert.match(apiClient, /isAcceptedScreenshotType\(contentType\)/);
 });

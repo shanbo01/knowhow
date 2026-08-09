@@ -299,13 +299,76 @@
     return masks;
   }
 
+  // Detected regions arrive as one rectangle per text run, form control, or
+  // client rect. Painting them individually is what made the old live preview
+  // look like a pile of stickers: dozens of overlapping outlined boxes across
+  // a single field. Growing each rectangle slightly and merging the ones that
+  // touch produces the few calm frosted panels the author actually expects,
+  // and matches how the uploaded pending regions are merged before storage.
+  const MASK_PADDING = 4;
+  const MASK_MERGE_GAP = 6;
+
+  function grownMask(mask) {
+    const left = Math.max(0, mask.x - MASK_PADDING);
+    const top = Math.max(0, mask.y - MASK_PADDING);
+    const right = Math.min(innerWidth, mask.x + mask.width + MASK_PADDING);
+    const bottom = Math.min(innerHeight, mask.y + mask.height + MASK_PADDING);
+    return {
+      x: left,
+      y: top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+      reason: mask.reason,
+    };
+  }
+
+  function masksTouch(left, right) {
+    return !(
+      left.x + left.width + MASK_MERGE_GAP < right.x ||
+      right.x + right.width + MASK_MERGE_GAP < left.x ||
+      left.y + left.height + MASK_MERGE_GAP < right.y ||
+      right.y + right.height + MASK_MERGE_GAP < left.y
+    );
+  }
+
+  function mergedMasks(masks) {
+    const merged = [];
+    for (const mask of masks.map(grownMask)) {
+      if (mask.width <= 0 || mask.height <= 0) continue;
+      let current = mask;
+      let index = 0;
+      while (index < merged.length) {
+        if (masksTouch(current, merged[index])) {
+          const other = merged.splice(index, 1)[0];
+          const x = Math.min(current.x, other.x);
+          const y = Math.min(current.y, other.y);
+          current = {
+            x,
+            y,
+            width: Math.max(current.x + current.width, other.x + other.width) - x,
+            height: Math.max(current.y + current.height, other.y + other.height) - y,
+            reason:
+              current.reason === other.reason
+                ? current.reason
+                : "multiple-sensitive-items",
+          };
+          index = 0;
+          continue;
+        }
+        index += 1;
+      }
+      merged.push(current);
+    }
+    return merged;
+  }
+
   function collectMasks() {
-    return [
+    return mergedMasks([
       ...formFieldMasks(),
       ...textMasks(),
       ...embeddedFrameMasks(),
       ...optionalSurfaceMasks(),
-    ];
+    ]);
   }
 
   let blurPreviewRoot = null;
@@ -317,6 +380,7 @@
   let blurPreviewSuspended = false;
   let smartBlurUiRoot = null;
   let smartBlurPanelOpen = false;
+  let lastMaskCount = 0;
 
   const SMART_BLUR_OPTIONS = [
     ["redactEmails", "Email addresses"],
@@ -364,6 +428,16 @@
     return root;
   }
 
+  // A frosted patch that reads as "this content is protected" without drawing
+  // borders, rings, or drop shadows over the author's page. The blur is strong
+  // enough that text is unreadable, and a whisper-thin tint keeps the region
+  // discoverable on both light and dark backgrounds.
+  const BLUR_REGION_STYLE =
+    "position:absolute;display:block;box-sizing:border-box;border:0;" +
+    "border-radius:5px;background:rgba(127,127,132,.14);" +
+    "backdrop-filter:blur(11px) saturate(.55) contrast(.94);" +
+    "-webkit-backdrop-filter:blur(11px) saturate(.55) contrast(.94);";
+
   function renderBlurPreview() {
     clearBlurPreviewSchedule();
     if (
@@ -372,23 +446,22 @@
       state.policy.smartBlurEnabled !== true
     ) {
       blurPreviewRoot?.replaceChildren();
+      if (state.policy.smartBlurEnabled !== true) lastMaskCount = 0;
       return;
     }
     const masks = collectMasks();
     const root = ensureBlurPreviewRoot();
     const fragment = document.createDocumentFragment();
-    for (const mask of masks.slice(0, 300)) {
+    for (const mask of masks.slice(0, 160)) {
       const region = document.createElement("span");
       region.style.cssText =
-        "position:absolute;display:block;box-sizing:border-box;" +
-        "border:1px solid rgba(255,255,255,.66);border-radius:6px;" +
-        "background:rgba(24,24,27,.10);backdrop-filter:blur(13px) saturate(.65);" +
-        "-webkit-backdrop-filter:blur(13px) saturate(.65);" +
-        "box-shadow:0 0 0 1px rgba(24,24,27,.26),0 3px 12px rgba(0,0,0,.15);" +
+        BLUR_REGION_STYLE +
         `left:${mask.x}px;top:${mask.y}px;width:${mask.width}px;height:${mask.height}px;`;
       fragment.append(region);
     }
     root.replaceChildren(fragment);
+    lastMaskCount = masks.length;
+    syncBlurCoverageCopy();
   }
 
   function scheduleBlurPreview(delay = 0) {
@@ -412,11 +485,20 @@
     void send({ type: "UPDATE_CAPTURE_POLICY", policy: { [key]: checked } });
   }
 
-  function smartBlurSwitch(key, label) {
+  const PANEL_FONT =
+    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+  function smartBlurSwitch(key, label, { compact = false } = {}) {
     const row = document.createElement("label");
     row.style.cssText =
-      "display:flex;align-items:center;justify-content:space-between;gap:16px;" +
-      "min-height:34px;color:#f4f4f5;font-size:14px;font-weight:600;cursor:pointer;";
+      "display:flex;align-items:center;justify-content:space-between;gap:14px;" +
+      "min-height:" +
+      (compact ? "26px" : "32px") +
+      ";color:#e7e7ea;font:600 " +
+      (compact ? "12px" : "13px") +
+      "/1.3 " +
+      PANEL_FONT +
+      ";cursor:pointer;";
     const text = document.createElement("span");
     text.textContent = label;
     const input = document.createElement("input");
@@ -426,12 +508,12 @@
     const track = document.createElement("span");
     track.dataset.knowhowSwitch = "";
     track.style.cssText =
-      "position:relative;display:block;width:40px;height:22px;flex:0 0 auto;" +
-      "border-radius:999px;background:#52525b;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);";
+      "position:relative;display:block;width:34px;height:19px;flex:0 0 auto;" +
+      "border-radius:999px;background:#3f3f46;transition:background .14s ease;";
     const thumb = document.createElement("i");
     thumb.style.cssText =
-      "position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;" +
-      "background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.38);transition:transform .14s ease;";
+      "position:absolute;left:2.5px;top:2.5px;width:14px;height:14px;border-radius:50%;" +
+      "background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.4);transition:transform .14s ease;";
     track.append(thumb);
     input.addEventListener("change", () => setPagePolicy(key, input.checked));
     row.append(text, input, track);
@@ -443,54 +525,106 @@
     const root = document.createElement("div");
     root.dataset.knowhowUi = "smart-blur";
     root.style.cssText =
-      "position:fixed;right:18px;bottom:18px;z-index:2147483647;" +
-      "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff;";
+      "position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;" +
+      "flex-direction:column;align-items:flex-end;font-family:" +
+      PANEL_FONT +
+      ";color:#fff;";
+
     const panel = document.createElement("section");
     panel.dataset.knowhowBlurPanel = "";
     panel.style.cssText =
-      "display:none;width:min(320px,calc(100vw - 36px));max-height:min(540px,calc(100vh - 92px));" +
-      "margin-bottom:10px;overflow:auto;border:1px solid rgba(255,255,255,.10);" +
-      "border-radius:16px;background:#171717;box-shadow:0 18px 50px rgba(0,0,0,.36);";
+      "display:none;width:min(292px,calc(100vw - 32px));" +
+      "max-height:min(520px,calc(100vh - 96px));margin-bottom:9px;overflow:auto;" +
+      "border-radius:14px;background:#121215;" +
+      "box-shadow:0 0 0 1px rgba(255,255,255,.07),0 22px 60px rgba(0,0,0,.42);";
+
     const heading = document.createElement("div");
     heading.style.cssText =
-      "display:flex;align-items:center;justify-content:space-between;gap:16px;" +
-      "padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08);";
+      "position:sticky;top:0;display:grid;gap:2px;padding:13px 15px 11px;" +
+      "background:#121215;border-bottom:1px solid rgba(255,255,255,.07);";
+    const headingRow = document.createElement("div");
+    headingRow.style.cssText =
+      "display:flex;align-items:center;justify-content:space-between;gap:14px;";
     const title = document.createElement("strong");
     title.textContent = "Smart Blur";
-    title.style.cssText = "font-size:17px;letter-spacing:-.02em;";
-    heading.append(title, smartBlurSwitch("smartBlurEnabled", ""));
+    title.style.cssText = "font-size:14px;letter-spacing:-.01em;";
+    headingRow.append(title, smartBlurSwitch("smartBlurEnabled", ""));
+    const summary = document.createElement("small");
+    summary.dataset.knowhowBlurSummary = "";
+    summary.style.cssText = "color:#8f8f99;font-size:11px;line-height:1.4;";
+    heading.append(headingRow, summary);
+
     const options = document.createElement("div");
     options.dataset.knowhowBlurOptions = "";
-    options.style.cssText = "display:grid;padding:10px 16px 14px;";
+    options.style.cssText = "display:grid;padding:9px 15px 13px;";
+    const optionsLabel = document.createElement("span");
+    optionsLabel.textContent = "Detect and cover";
+    optionsLabel.style.cssText =
+      "padding-bottom:5px;color:#8f8f99;font:700 9px/1 " +
+      PANEL_FONT +
+      ";letter-spacing:.1em;text-transform:uppercase;";
+    options.append(optionsLabel);
     for (const [key, label] of SMART_BLUR_OPTIONS) {
-      options.append(smartBlurSwitch(key, label));
+      options.append(smartBlurSwitch(key, label, { compact: true }));
     }
+
     const note = document.createElement("p");
-    note.textContent = "Protected regions update live and are hidden from the final screenshot overlay.";
+    note.textContent =
+      "Covered areas stay reversible: KnowHow stores them as editable blur regions, never as burnt-in pixels, until you submit the guide for review.";
     note.style.cssText =
-      "margin:0;padding:0 16px 15px;color:#a1a1aa;font-size:11px;line-height:1.45;";
+      "margin:0;padding:0 15px 14px;color:#71717a;font-size:10.5px;line-height:1.5;";
     panel.append(heading, options, note);
+
     const trigger = document.createElement("button");
     trigger.type = "button";
     trigger.dataset.knowhowBlurTrigger = "";
     trigger.style.cssText =
-      "display:flex;align-items:center;gap:9px;margin-left:auto;padding:10px 14px;" +
-      "border:1px solid rgba(255,255,255,.12);border-radius:999px;background:#171717;" +
-      "color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.28);font:700 13px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer;";
-    const triggerIcon = document.createElement("span");
-    triggerIcon.textContent = "✦";
-    triggerIcon.style.cssText = "color:#fb923c;font-size:15px;";
+      "display:flex;align-items:center;gap:8px;padding:9px 14px 9px 12px;border:0;" +
+      "border-radius:999px;background:#121215;color:#fff;" +
+      "box-shadow:0 0 0 1px rgba(255,255,255,.08),0 10px 30px rgba(0,0,0,.34);" +
+      "font:700 12px/1 " +
+      PANEL_FONT +
+      ";cursor:pointer;";
+    const triggerDot = document.createElement("span");
+    triggerDot.dataset.knowhowBlurDot = "";
+    triggerDot.style.cssText =
+      "width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#52525b;";
     const triggerLabel = document.createElement("span");
     triggerLabel.dataset.knowhowBlurLabel = "";
-    trigger.append(triggerIcon, triggerLabel);
+    trigger.append(triggerDot, triggerLabel);
     trigger.addEventListener("click", () => {
       smartBlurPanelOpen = !smartBlurPanelOpen;
       syncSmartBlurUi();
     });
+
     root.append(panel, trigger);
     (document.body || document.documentElement).append(root);
     smartBlurUiRoot = root;
     return root;
+  }
+
+  function coveredAreaCopy(count) {
+    if (!count) return "No sensitive areas detected on this screen yet.";
+    return count === 1 ? "1 area covered on this screen" : count + " areas covered on this screen";
+  }
+
+  function syncBlurCoverageCopy() {
+    if (!smartBlurUiRoot?.isConnected) return;
+    const enabled = state.policy.smartBlurEnabled === true;
+    const label = smartBlurUiRoot.querySelector("[data-knowhow-blur-label]");
+    if (label) {
+      label.textContent = enabled
+        ? lastMaskCount
+          ? "Smart Blur · " + lastMaskCount
+          : "Smart Blur on"
+        : "Smart Blur off";
+    }
+    const summary = smartBlurUiRoot.querySelector("[data-knowhow-blur-summary]");
+    if (summary) {
+      summary.textContent = enabled
+        ? coveredAreaCopy(lastMaskCount)
+        : "Turn on to cover sensitive details live, before each screenshot.";
+    }
   }
 
   function syncSmartBlurUi() {
@@ -504,19 +638,23 @@
     const enabled = state.policy.smartBlurEnabled === true;
     const panel = root.querySelector("[data-knowhow-blur-panel]");
     panel.style.display = smartBlurPanelOpen ? "block" : "none";
-    const label = root.querySelector("[data-knowhow-blur-label]");
-    label.textContent = enabled ? "Smart Blur on" : "Smart Blur off";
+    const dot = root.querySelector("[data-knowhow-blur-dot]");
+    if (dot) {
+      dot.style.background = enabled ? "#34d399" : "#52525b";
+      dot.style.boxShadow = enabled ? "0 0 0 3px rgba(52,211,153,.18)" : "none";
+    }
     for (const input of root.querySelectorAll("[data-knowhow-policy]")) {
       input.checked = state.policy[input.dataset.knowhowPolicy] === true;
       const track = input.nextElementSibling;
       if (track) {
-        track.style.background = input.checked ? "#10b981" : "#52525b";
+        track.style.background = input.checked ? "#22c55e" : "#3f3f46";
         const thumb = track.firstElementChild;
-        if (thumb) thumb.style.transform = input.checked ? "translateX(18px)" : "none";
+        if (thumb) thumb.style.transform = input.checked ? "translateX(15px)" : "none";
       }
     }
     const options = root.querySelector("[data-knowhow-blur-options]");
-    if (options) options.style.opacity = enabled ? "1" : ".58";
+    if (options) options.style.opacity = enabled ? "1" : ".5";
+    syncBlurCoverageCopy();
   }
 
   function hideCaptureOverlays() {
@@ -631,9 +769,12 @@
     );
   }
 
-  function targetContext(target, point, viewport = viewportSnapshot()) {
-    const element = captureElement(target);
-    const targetRect = rectFor(element, "click-target");
+  /**
+   * Names the clicked control the way a reader would say it out loud, so a
+   * step reads `Click "Encrypted vault access"` instead of a bare selector or
+   * a generic `Click button`. Labels are always sanitized first.
+   */
+  function targetName(element) {
     const label = labelFor(element);
     const role =
       element.getAttribute("role") ||
@@ -641,11 +782,23 @@
         ? "link"
         : element.tagName === "BUTTON"
           ? "button"
-          : element.tagName === "INPUT"
+          : element.tagName === "INPUT" || element.tagName === "TEXTAREA"
             ? "field"
-            : "control");
+            : element.tagName === "SELECT"
+              ? "menu"
+              : "control");
     const safeRole = sanitizedText(role) || "control";
-    const name = label || "the highlighted " + safeRole;
+    if (!label) return "the highlighted " + safeRole;
+    const quoted = '"' + label.replace(/"/g, "'") + '"';
+    return safeRole === "field" || safeRole === "menu"
+      ? quoted + " " + safeRole
+      : quoted;
+  }
+
+  function targetContext(target, point, viewport = viewportSnapshot()) {
+    const element = captureElement(target);
+    const targetRect = rectFor(element, "click-target");
+    const name = targetName(element);
     const clickPoint = {
       x: Math.min(viewport.width, Math.max(0, Number(point?.x) || 0)),
       y: Math.min(viewport.height, Math.max(0, Number(point?.y) || 0)),
@@ -777,10 +930,62 @@
     });
   }
 
-  // Native click behavior is never cancelled or replayed. The old preflight
-  // path synthesized a second click, which made dropdowns open and close in a
-  // single frame on frameworks that already handled the real click. We wait
-  // for the page to paint, then record the resulting UI state.
+  // Native click behavior is never cancelled, replayed, or synthesized. The
+  // page-changing screenshot problem is solved by taking the screenshot when
+  // the pointer goes down instead: the reader then sees the interface as it
+  // looked at the moment of the click, with the marker on the control that was
+  // actually clicked, exactly like a hand-authored guide.
+  let preflightSequence = 0;
+  let preflightElement = null;
+
+  function discardPreflight() {
+    if (!preflightElement) return;
+    preflightElement = null;
+    void send({ type: "PREFLIGHT_DISCARD", sessionId: state.sessionId });
+  }
+
+  function requestPreflightCapture(element, context) {
+    preflightSequence += 1;
+    preflightElement = null;
+    const token = preflightSequence;
+    removeRecordingFlash();
+    hideBlurPreviewForCapture();
+    void waitForPagePaint().then(() => {
+      if (token !== preflightSequence || state.status !== "recording") {
+        restoreBlurPreviewAfterCapture();
+        return;
+      }
+      void send({
+        type: "PREFLIGHT_CAPTURE",
+        sessionId: state.sessionId,
+        context: { ...context, masks: collectMasks() },
+      }).then((response) => {
+        restoreBlurPreviewAfterCapture();
+        if (token !== preflightSequence) return;
+        preflightElement = response?.ok === true ? element : null;
+      });
+    });
+  }
+
+  function claimPreflight(element) {
+    const claimed = preflightElement === element;
+    preflightElement = null;
+    return claimed;
+  }
+
+  /**
+   * Records the interaction. When a pre-click screenshot is waiting, the step
+   * adopts it immediately; otherwise KnowHow falls back to photographing the
+   * painted result, which is still better than dropping the step.
+   */
+  function emitInteraction(element, context, options = {}) {
+    if (claimPreflight(element)) {
+      sendCapturedInteraction(context, { ...options, preflight: true });
+      return;
+    }
+    emitAfterPaint(context, options);
+  }
+
   function emitAfterPaint(context, options = {}) {
     void waitForPagePaint().then(() => {
       if (state.status === "recording") {
@@ -794,21 +999,23 @@
     pendingSingleClick = null;
   }
 
-  function flushPendingSingleClick({ afterPaint = false } = {}) {
+  function flushPendingSingleClick() {
     const pending = pendingSingleClick;
     if (!pending) return;
     clearPendingSingleClick();
-    if (afterPaint) emitAfterPaint(pending.context);
-    else sendCapturedInteraction(pending.context);
+    emitInteraction(pending.element, pending.context);
   }
 
+  // The click is held for one double-click window so a double-click is not
+  // recorded as two steps. The screenshot was already taken on pointerdown, so
+  // the wait costs nothing visually.
   function scheduleSingleClick(element, context) {
     clearPendingSingleClick();
     const pending = { element, context, timer: null };
     pending.timer = setTimeout(() => {
       if (pendingSingleClick !== pending) return;
       pendingSingleClick = null;
-      emitAfterPaint(context);
+      emitInteraction(element, context);
     }, DOUBLE_CLICK_WINDOW_MS);
     pendingSingleClick = pending;
   }
@@ -844,6 +1051,7 @@
       startedAt: performance.now(),
       context,
     };
+    requestPreflightCapture(element, context);
   }
 
   function onPointerMove(event) {
@@ -857,12 +1065,16 @@
     ) {
       return;
     }
+    // A drag is not a click: drop the staged pointer and the screenshot it
+    // reserved so the next real click is not attributed to this element.
     pendingPointer = null;
+    discardPreflight();
   }
 
   function onPointerCancel(event) {
     if (pendingPointer && event.pointerId === pendingPointer.pointerId) {
       pendingPointer = null;
+      discardPreflight();
     }
   }
 
@@ -919,8 +1131,13 @@
     const staged = pendingPointer;
     pendingPointer = null;
     if (!staged) return;
-    if (performance.now() - staged.startedAt > POINTER_COMMIT_WINDOW_MS) return;
-    if (!event.composedPath().includes(staged.element)) return;
+    if (
+      performance.now() - staged.startedAt > POINTER_COMMIT_WINDOW_MS ||
+      !event.composedPath().includes(staged.element)
+    ) {
+      discardPreflight();
+      return;
+    }
     if (event.detail > 1) {
       if (pendingSingleClick?.element === staged.element) {
         clearPendingSingleClick();
@@ -943,7 +1160,8 @@
     );
     if (!context.targetRect) return;
     const name = context.title.replace(/^Click /, "");
-    emitAfterPaint(
+    emitInteraction(
+      element,
       {
         ...context,
         title: "Double-click " + name,

@@ -34,15 +34,33 @@ function normalizedRegion(value) {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
+/** Keeps `value` inside an interval whose ends may arrive in either order. */
+function clampBetween(value, first, second) {
+  return clamp(value, Math.min(first, second), Math.max(first, second));
+}
+
+export const CROP_ASPECT_RATIO = 16 / 9;
+export const CROP_MAX_ZOOM = 2.6;
+
 /**
- * Produce a Scribe-style contextual frame around the clicked control while
- * retaining a predictable 16:9 presentation ratio. The raw screenshot stays
- * untouched; this crop is presentation metadata that remains editable.
+ * Produce a contextual frame around the clicked control: tight enough that a
+ * small button fills the reader's eye, wide enough that the surrounding
+ * interface still tells them where they are. The raw screenshot stays
+ * untouched; this crop is presentation metadata that remains editable in the
+ * app editor.
+ *
+ * The crop keeps a predictable 16:9 presentation ratio in *pixel* terms, so
+ * `width` and `height` are normalized against differently shaped screenshots
+ * rather than being equal fractions.
  */
-export function contextualCrop(
-  step,
-  { aspectRatio = 16 / 9, preferredWidth = 0.72, padding = 0.12 } = {},
-) {
+export function contextualCrop(step, options = {}) {
+  const {
+    aspectRatio = CROP_ASPECT_RATIO,
+    maxZoom = CROP_MAX_ZOOM,
+    minContextX = 0.1,
+    minContextY = 0.13,
+    contextRatio = 0.85,
+  } = options;
   const imageWidth = finitePositive(step?.imageWidth);
   const imageHeight = finitePositive(step?.imageHeight);
   const imageAspect = imageWidth / imageHeight;
@@ -50,31 +68,47 @@ export function contextualCrop(
   const click = normalizedPoint(step?.clickTarget);
   if (!focus && !click) return { x: 0, y: 0, width: 1, height: 1 };
 
+  const widestForRatio = Math.min(1, aspectRatio / imageAspect);
+  const heightForWidth = (width) => (width * imageAspect) / aspectRatio;
+  const widthForHeight = (height) => (height * aspectRatio) / imageAspect;
+
+  const target = focus || {
+    x: click.x,
+    y: click.y,
+    width: 0,
+    height: 0,
+  };
+  const neededWidth = target.width + Math.max(minContextX, target.width * contextRatio) * 2;
+  const neededHeight = target.height + Math.max(minContextY, target.height * contextRatio) * 2;
+  const closestWidth = Math.min(widestForRatio, 1 / Math.max(1, maxZoom));
+  const width = clampBetween(
+    Math.max(neededWidth, widthForHeight(neededHeight), closestWidth),
+    closestWidth,
+    widestForRatio,
+  );
+  const height = clamp(heightForWidth(width), 0.01, 1);
+
   const center = click || {
-    x: focus.x + focus.width / 2,
-    y: focus.y + focus.height / 2,
+    x: target.x + target.width / 2,
+    y: target.y + target.height / 2,
   };
-  const maximumWidthForRatio = Math.min(1, aspectRatio / imageAspect);
-  const requiredForFocusWidth = focus ? focus.width + padding * 2 : 0;
-  const requiredForFocusHeight = focus
-    ? ((focus.height + padding * 2) * aspectRatio) / imageAspect
-    : 0;
-  const cropWidth = clamp(
-    Math.max(preferredWidth, requiredForFocusWidth, requiredForFocusHeight),
-    Math.min(0.42, maximumWidthForRatio),
-    maximumWidthForRatio,
-  );
-  const cropHeight = clamp(
-    (cropWidth * imageAspect) / aspectRatio,
-    0.01,
-    1,
-  );
-  return {
-    x: clamp(center.x - cropWidth / 2, 0, 1 - cropWidth),
-    y: clamp(center.y - cropHeight / 2, 0, 1 - cropHeight),
-    width: cropWidth,
-    height: cropHeight,
-  };
+  let x = clamp(center.x - width / 2, 0, Math.max(0, 1 - width));
+  let y = clamp(center.y - height / 2, 0, Math.max(0, 1 - height));
+  if (focus) {
+    // Centering on the click point alone can push a wide or tall target
+    // partly out of frame. Slide the crop back until the whole control fits.
+    x = clampBetween(
+      x,
+      clamp(focus.x + focus.width - width, 0, Math.max(0, 1 - width)),
+      clamp(focus.x, 0, Math.max(0, 1 - width)),
+    );
+    y = clampBetween(
+      y,
+      clamp(focus.y + focus.height - height, 0, Math.max(0, 1 - height)),
+      clamp(focus.y, 0, Math.max(0, 1 - height)),
+    );
+  }
+  return { x, y, width, height };
 }
 
 export function projectClickToCrop(clickTarget, crop) {
@@ -91,28 +125,61 @@ export function projectClickToCrop(clickTarget, crop) {
   ) {
     return null;
   }
+  const radius = Number(clickTarget.radius);
   return {
     x: (x - crop.x) / crop.width,
     y: (y - crop.y) / crop.height,
+    // Radii arrive as a fraction of the screenshot; re-express them against the
+    // crop so the ring keeps covering the same control after zooming in.
+    radius:
+      (Number.isFinite(radius) && radius > 0 ? radius : 0.035) / crop.width,
     color: clickTarget.color,
   };
 }
 
+/**
+ * Clip a region normalized to the full screenshot into crop-relative
+ * coordinates. Returns null when the region is entirely outside the crop, so
+ * callers never render an off-frame blur.
+ */
+export function projectRegionToCrop(region, crop) {
+  const normalized = normalizedRegion(region);
+  if (!normalized || !crop) return null;
+  const left = Math.max(normalized.x, crop.x);
+  const top = Math.max(normalized.y, crop.y);
+  const right = Math.min(normalized.x + normalized.width, crop.x + crop.width);
+  const bottom = Math.min(normalized.y + normalized.height, crop.y + crop.height);
+  if (right <= left || bottom <= top) return null;
+  return {
+    x: (left - crop.x) / crop.width,
+    y: (top - crop.y) / crop.height,
+    width: (right - left) / crop.width,
+    height: (bottom - top) / crop.height,
+  };
+}
+
 export function thumbnailGeometry(step) {
-  const crop = step?.crop || contextualCrop(step);
-  const clickTarget =
-    step?.sourceEvent === "navigation"
-      ? null
-      : projectClickToCrop(step?.clickTarget || null, crop);
+  const crop = normalizedRegion(step?.crop) || contextualCrop(step);
+  const isNavigation = step?.sourceEvent === "navigation";
+  const clickTarget = isNavigation
+    ? null
+    : projectClickToCrop(step?.clickTarget || null, crop);
+  const redactions = (
+    Array.isArray(step?.pendingRedactions) ? step.pendingRedactions : []
+  )
+    .filter((region) => region?.applied !== true)
+    .map((region) => projectRegionToCrop(region, crop))
+    .filter(Boolean);
   const imageWidth = finitePositive(step?.imageWidth);
   const imageHeight = finitePositive(step?.imageHeight);
   return {
     crop,
     clickTarget,
+    redactions,
     aspectRatio: (imageWidth * crop.width) / (imageHeight * crop.height),
     image: {
-      left: ((-crop.x / crop.width) * 100) + 0,
-      top: ((-crop.y / crop.height) * 100) + 0,
+      left: (-crop.x / crop.width) * 100,
+      top: (-crop.y / crop.height) * 100,
       width: (1 / crop.width) * 100,
     },
   };

@@ -165,6 +165,49 @@ test("published screenshots are cloned into a revision-scoped working draft", as
   assert.match(route, /clonedMediaCount: inheritedMedia\.length/);
 });
 
+test("the signed-in app connects the extension without a pairing code", async () => {
+  const [bridge, shell] = await Promise.all([
+    source("../lib/extension-bridge.ts"),
+    source("../app/components/knowhow-workspace-app.tsx"),
+  ]);
+
+  // Being signed in is the proof of identity: credentials are minted only when
+  // the installed extension is not already holding this workspace.
+  assert.match(bridge, /export async function ensureKnowHowExtension/);
+  assert.match(
+    bridge,
+    /if \(!force && status\.connected && status\.workspaceId === companion\.workspaceId\)/,
+  );
+  assert.match(bridge, /return \{ installed: false \}/);
+  assert.match(shell, /ensureKnowHowExtension\(\s*extensionCompanion/);
+  assert.match(shell, /createPairingCode/);
+  assert.match(shell, /window\.addEventListener\("focus", link\)/);
+  assert.match(shell, /Nothing to pair/);
+  assert.doesNotMatch(shell, /connectKnowHowExtension/);
+});
+
+test("the extension reads guide screenshots through the same per-guide check as the app", async () => {
+  const [route, bridge, shell] = await Promise.all([
+    source("../app/api/extension/[[...path]]/route.ts"),
+    source("../lib/extension-bridge.ts"),
+    source("../app/components/knowhow-workspace-app.tsx"),
+  ]);
+  const media = route.slice(
+    route.indexOf("async function guideMedia"),
+    route.indexOf("async function startCapture"),
+  );
+
+  assert.match(media, /authenticateDevice\(request, db, repository, \[\s*"capture:write",\s*\]\)/);
+  assert.match(media, /getGuideAccessFacts\(/);
+  assert.match(media, /authorize\("guide.read", \{ \.\.\.context, guide: facts \}\)/);
+  assert.match(media, /media\.archived_at !== null/);
+  assert.match(media, /"cache-control": "private, no-store"/);
+  assert.match(route, /path\.length === 2 && path\[0\] === "media"/);
+  assert.match(bridge, /export type ExtensionCompanionMedia/);
+  assert.match(shell, /mediaId: step\.screenshotMediaId/);
+  assert.match(shell, /\(step\.redactions \?\? \[\]\)\.filter\(\(region\) => !region\.applied\)/);
+});
+
 test("admin audit exports and vault operations stay on trusted boundaries", async () => {
   const [client, shell, route] = await Promise.all([
     source("../lib/knowhow-client.ts"),

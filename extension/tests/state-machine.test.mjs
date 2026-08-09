@@ -137,6 +137,42 @@ test("a queued pre-pause job stays invalid after resume", async () => {
   assert.equal(captured, false);
 });
 
+test("only tasks that take a screenshot pay the capture interval", async () => {
+  let clock = 10_000;
+  const enqueue = createScreenshotQueue({
+    minimumIntervalMs: 550,
+    now: () => clock,
+  });
+  const startedAt = [];
+
+  // A step that adopts an already-taken pre-click screenshot never reserves a
+  // slot, so it must not push the next real capture into the future.
+  await enqueue(async (reserveSlot) => {
+    startedAt.push(await reserveSlot());
+  });
+  await enqueue(async () => startedAt.push("adopted-preflight"));
+  clock += 600;
+  await enqueue(async (reserveSlot) => {
+    startedAt.push(await reserveSlot());
+  });
+
+  assert.deepEqual(startedAt, [true, "adopted-preflight", true]);
+
+  // Inside the interval, a task that cannot wait past its deadline gives up
+  // instead of returning a frame from the wrong moment.
+  const abandoned = await enqueue(
+    async (reserveSlot) => (await reserveSlot() ? "captured" : "abandoned"),
+    { deadlineMs: 320 },
+  );
+  assert.equal(abandoned, "abandoned");
+
+  const patient = enqueue(
+    async (reserveSlot) => (await reserveSlot() ? "captured" : "abandoned"),
+  );
+  clock += 550;
+  assert.equal(await patient, "captured");
+});
+
 test("invalid state transitions are rejected", () => {
   const idle = createIdleState(0);
   assert.throws(

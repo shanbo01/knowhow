@@ -62,15 +62,30 @@ async function parseResponse(response) {
   return body;
 }
 
+async function forgetAuth() {
+  await Promise.all([
+    chrome.storage.local.remove(STORAGE_KEYS.auth),
+    chrome.storage.session.remove(STORAGE_KEYS.auth),
+  ]);
+}
+
 async function refreshAccessToken(auth) {
   if (!auth.refreshToken) {
-    throw new Error("Connect KnowHow before submitting a private draft.");
+    throw new Error("Open KnowHow while signed in to connect this browser.");
   }
   const response = await fetch(apiUrl("/token/refresh"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken: auth.refreshToken }),
   });
+  // A revoked or expired credential is dropped rather than retried forever:
+  // once it is gone, opening KnowHow reconnects this browser automatically.
+  if (response.status === 401 || response.status === 403) {
+    await forgetAuth();
+    throw new Error(
+      "This browser's KnowHow access ended. Open KnowHow to reconnect it.",
+    );
+  }
   const next = await parseResponse(response);
   await storeAuth({ ...auth, ...next });
   return { ...auth, ...next };
@@ -94,6 +109,61 @@ async function authorizedFetch(path, init = {}) {
     },
   });
   return parseResponse(response);
+}
+
+const MAX_GUIDE_MEDIA_BYTES = 6 * 1024 * 1024;
+
+function bytesToDataUrl(bytes, contentType) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return "data:" + contentType + ";base64," + btoa(binary);
+}
+
+/**
+ * Reads a guide screenshot with the paired device credential and returns it as
+ * a data URL. The side panel cannot fetch KnowHow media directly — the objects
+ * are private and the popup has no session cookie — and blob URLs minted in the
+ * service worker are not readable from the panel document, so the bytes travel
+ * inline.
+ */
+export async function fetchGuideMedia(mediaId) {
+  const id = String(mediaId || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) {
+    throw new Error("KnowHow could not read this step screenshot.");
+  }
+  let auth = await readAuth();
+  const expiresAt = Date.parse(auth.expiresAt || "");
+  if (
+    !auth.accessToken ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= Date.now() + 30_000
+  ) {
+    auth = await refreshAccessToken(auth);
+  }
+  const response = await fetch(apiUrl("/media/" + encodeURIComponent(id)), {
+    headers: { Authorization: "Bearer " + auth.accessToken },
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 404
+        ? "This step screenshot is no longer available."
+        : "KnowHow returned HTTP " + String(response.status) + " for a screenshot.",
+    );
+  }
+  const contentType = (response.headers.get("content-type") || "").split(";")[0];
+  if (!isAcceptedScreenshotType(contentType)) {
+    throw new Error("KnowHow returned an unsupported screenshot format.");
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_GUIDE_MEDIA_BYTES) {
+    throw new Error("This step screenshot is too large to preview.");
+  }
+  return {
+    dataUrl: bytesToDataUrl(new Uint8Array(buffer), contentType),
+    contentType,
+  };
 }
 
 export function isValidPairingCode(value) {

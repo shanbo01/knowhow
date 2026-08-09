@@ -26,7 +26,10 @@ test("start remains preparing through remote setup and seeds step one before cap
   assert.ok(start.indexOf("beginRemoteCapture(prepared)") < start.indexOf("injectCaptureContent(prepared, policy)"));
   assert.ok(start.indexOf("injectCaptureContent(prepared, policy)") < start.indexOf("CaptureEvent.READY"));
   assert.ok(start.indexOf("CaptureEvent.READY") < start.indexOf("snapshotCaptureJob(recording"));
-  assert.ok(start.indexOf("captureStep(initialJob)") < start.indexOf('type: "KNOWHOW_SET_STATUS"'));
+  assert.ok(
+    start.indexOf("captureStep(initialJob, reserveSlot)") <
+      start.indexOf('type: "KNOWHOW_SET_STATUS"'),
+  );
   assert.match(start, /sourceEvent: "navigation"/);
   assert.match(start, /Navigate to /);
 });
@@ -54,7 +57,26 @@ test("rapid clicks stay queued independently instead of dropping older interacti
   assert.doesNotMatch(processingTail, /clickJobMayProceed/);
   assert.match(processingTail, /withCapturedStep\(latest, stepId\)/);
   assert.doesNotMatch(source, /rapidInteractionsSkipped|clickJobIsLatest|clickJobMayProceed/);
-  assert.match(source, /void enqueueScreenshot\(\(\) => captureStep\(job\)\)/);
+  assert.match(
+    source,
+    /void enqueueScreenshot\(\(reserveSlot\) =>\s*captureStep\(job, reserveSlot\),\s*\)/,
+  );
+});
+
+test("the capture rate limit is only spent on real screenshots", async () => {
+  const source = await backgroundSource();
+  const visible = functionSlice(source, "captureVisiblePage", "captureStep");
+  const step = functionSlice(source, "captureStep", "captureNavigation");
+
+  // A step that adopts a pre-click screenshot returns before reserving a slot,
+  // so it cannot delay the next capture past the click it belongs to.
+  assert.ok(step.indexOf("commitPreflightStep") < step.indexOf("captureVisiblePage("));
+  assert.match(visible, /if \(!\(await reserveSlot\(\)\)\) return null;/);
+  assert.ok(
+    visible.indexOf("await reserveSlot()") <
+      visible.indexOf("validateActiveCaptureTab"),
+  );
+  assert.match(source, /deadlineMs: PREFLIGHT_DEADLINE_MS/);
 });
 
 test("resume, exclusion, and startup recovery retain exact safe targets", async () => {

@@ -157,14 +157,16 @@ async function processScreenshot(message) {
       imageWidth: compressedCanvas.width,
       imageHeight: compressedCanvas.height,
       pendingRedactions: redactions,
-      automaticMaskCount: 0,
+      // Counted, not baked: the privacy note the author reviews in the app
+      // should say how many regions Smart Blur found, not zero.
+      automaticMaskCount: redactions.length,
       manualMaskCount: 0,
       updatedAt: new Date().toISOString(),
     });
     return {
       ok: true,
       bytes: compressed.blob.size,
-      automaticMaskCount: 0,
+      automaticMaskCount: redactions.length,
       pendingRedactionCount: redactions.length,
     };
   } finally {

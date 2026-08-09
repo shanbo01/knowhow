@@ -212,6 +212,51 @@ function createTrashIcon() {
   return svg;
 }
 
+function clickRingColor(geometry) {
+  return (
+    geometry.clickTarget?.color || currentPolicy?.clickTargetColor || "#d97706"
+  );
+}
+
+/**
+ * Paints one screenshot the way a reader should see it: framed to the author's
+ * crop, pending blur regions covering sensitive details, and a ring on the
+ * control that was clicked. Both the live capture feed and the guide reader
+ * share this so a step never looks different before and after upload.
+ */
+function paintStepFigure(figure, geometry, source) {
+  figure.dataset.state = "ready";
+  figure.style.aspectRatio = String(geometry.aspectRatio);
+  const image = document.createElement("img");
+  image.src = source;
+  image.alt = "";
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.style.left = geometry.image.left + "%";
+  image.style.top = geometry.image.top + "%";
+  image.style.width = geometry.image.width + "%";
+  const layers = [image];
+  for (const region of geometry.redactions) {
+    const blur = document.createElement("span");
+    blur.className = "step-blur";
+    blur.style.left = region.x * 100 + "%";
+    blur.style.top = region.y * 100 + "%";
+    blur.style.width = region.width * 100 + "%";
+    blur.style.height = region.height * 100 + "%";
+    layers.push(blur);
+  }
+  if (geometry.clickTarget) {
+    const ring = document.createElement("span");
+    ring.className = "step-click-ring";
+    ring.style.left = geometry.clickTarget.x * 100 + "%";
+    ring.style.top = geometry.clickTarget.y * 100 + "%";
+    ring.style.width = Math.min(60, geometry.clickTarget.radius * 200) + "%";
+    ring.style.setProperty("--click-color", clickRingColor(geometry));
+    layers.push(ring);
+  }
+  figure.replaceChildren(...layers);
+}
+
 function renderStepFeed(state, rawSteps) {
   const visible = liveFeedVisible(state);
   elements.stepFeed.hidden = !visible;
@@ -295,30 +340,9 @@ function renderStepFeed(state, rawSteps) {
     const thumbnailUrl =
       step.sourceEvent === "navigation" ? null : thumbnailUrls.get(step);
     if (thumbnailUrl) {
-      const geometry = thumbnailGeometry(step);
       const thumbnail = document.createElement("figure");
       thumbnail.className = "step-thumbnail";
-      thumbnail.style.aspectRatio = String(geometry.aspectRatio);
-      const image = document.createElement("img");
-      image.src = thumbnailUrl;
-      image.alt = "";
-      image.loading = "lazy";
-      image.decoding = "async";
-      image.style.left = geometry.image.left + "%";
-      image.style.top = geometry.image.top + "%";
-      image.style.width = geometry.image.width + "%";
-      thumbnail.append(image);
-      if (geometry.clickTarget) {
-        const ring = document.createElement("span");
-        ring.className = "step-click-ring";
-        ring.style.left = geometry.clickTarget.x * 100 + "%";
-        ring.style.top = geometry.clickTarget.y * 100 + "%";
-        ring.style.setProperty(
-          "--click-color",
-          geometry.clickTarget.color || currentPolicy?.clickTargetColor || "#d97706",
-        );
-        thumbnail.append(ring);
-      }
+      paintStepFigure(thumbnail, thumbnailGeometry(step), thumbnailUrl);
       item.append(thumbnail);
     }
     fragment.append(item);
@@ -347,6 +371,118 @@ function renderStepFeed(state, rawSteps) {
 
 function companionGuides() {
   return Array.isArray(currentCompanion?.guides) ? currentCompanion.guides : [];
+}
+
+const GUIDE_MEDIA_CACHE_LIMIT = 14;
+const guideMediaCache = new Map();
+const guideMediaRequests = new Map();
+
+function decodedImageSize(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const probe = new Image();
+    probe.addEventListener("load", () =>
+      resolve({ width: probe.naturalWidth, height: probe.naturalHeight }),
+    );
+    probe.addEventListener("error", () =>
+      reject(new Error("This step screenshot could not be decoded.")),
+    );
+    probe.src = dataUrl;
+  });
+}
+
+function rememberGuideMedia(mediaId, entry) {
+  guideMediaCache.set(mediaId, entry);
+  while (guideMediaCache.size > GUIDE_MEDIA_CACHE_LIMIT) {
+    const oldest = guideMediaCache.keys().next().value;
+    if (oldest === undefined || oldest === mediaId) break;
+    guideMediaCache.delete(oldest);
+  }
+  return entry;
+}
+
+function loadGuideMedia(mediaId) {
+  const cached = guideMediaCache.get(mediaId);
+  if (cached) return Promise.resolve(cached);
+  let pending = guideMediaRequests.get(mediaId);
+  if (!pending) {
+    pending = request({ type: "GET_GUIDE_MEDIA", mediaId })
+      .then(async (response) => {
+        const size = await decodedImageSize(response.dataUrl);
+        return rememberGuideMedia(mediaId, {
+          ok: true,
+          dataUrl: response.dataUrl,
+          ...size,
+        });
+      })
+      // Failures are not cached: reopening the guide retries instead of
+      // showing a permanent placeholder for a transient network error.
+      .catch((error) => ({
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "This step screenshot is unavailable.",
+      }))
+      .finally(() => guideMediaRequests.delete(mediaId));
+    guideMediaRequests.set(mediaId, pending);
+  }
+  return pending;
+}
+
+let guideMediaObserver = null;
+const guideMediaSources = new WeakMap();
+
+function guideStepGeometry(media, image) {
+  return thumbnailGeometry({
+    imageWidth: image.width,
+    imageHeight: image.height,
+    ...(media.crop ? { crop: media.crop } : {}),
+    ...(media.click ? { clickTarget: media.click } : {}),
+    pendingRedactions: Array.isArray(media.redactions) ? media.redactions : [],
+  });
+}
+
+/**
+ * Screenshots load only once their step scrolls into view. A long guide can
+ * hold dozens of private images, and fetching them all on open would stall the
+ * panel and pull megabytes the reader may never look at.
+ */
+function observeGuideMedia(figure, media) {
+  if (!guideMediaObserver) {
+    guideMediaObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const target = entry.target;
+          guideMediaObserver.unobserve(target);
+          const pending = guideMediaSources.get(target);
+          if (!pending) continue;
+          guideMediaSources.delete(target);
+          void loadGuideMedia(pending.mediaId).then((result) => {
+            if (!target.isConnected) return;
+            if (!result.ok) {
+              target.dataset.state = "failed";
+              target.dataset.message = result.message;
+              return;
+            }
+            paintStepFigure(
+              target,
+              guideStepGeometry(pending, result),
+              result.dataUrl,
+            );
+          });
+        }
+      },
+      { root: elements.guideFollowSteps, rootMargin: "220px 0px" },
+    );
+  }
+  guideMediaSources.set(figure, media);
+  guideMediaObserver.observe(figure);
+}
+
+function resetGuideMediaObserver() {
+  guideMediaObserver?.disconnect();
+  guideMediaObserver = null;
 }
 
 function setActivePanel(panel) {
@@ -384,6 +520,7 @@ function renderGuideFollow() {
   elements.guideFollowProgressBar.style.width =
     (steps.length ? (completed / steps.length) * 100 : 0) + "%";
   const fragment = document.createDocumentFragment();
+  const figures = [];
   steps.forEach((step, index) => {
     const item = document.createElement("li");
     item.className = "guide-follow-step";
@@ -408,11 +545,20 @@ function renderGuideFollow() {
       description.textContent = step.description;
       copy.append(description);
     }
+    if (step.media?.mediaId && currentConnection?.connected) {
+      const figure = document.createElement("figure");
+      figure.className = "guide-step-figure";
+      figure.dataset.state = "loading";
+      copy.append(figure);
+      figures.push([figure, step.media]);
+    }
     button.append(number, copy);
     item.append(button);
     fragment.append(item);
   });
+  resetGuideMediaObserver();
   elements.guideFollowSteps.replaceChildren(fragment);
+  for (const [figure, media] of figures) observeGuideMedia(figure, media);
   elements.guidePreviousStep.disabled = activeGuideStep <= 0;
   elements.guideNextStep.disabled = !steps.length || activeGuideStep >= steps.length - 1;
 }
@@ -882,6 +1028,8 @@ addEventListener(
   () => {
     thumbnailUrls.dispose();
     capturedSteps.clear();
+    resetGuideMediaObserver();
+    guideMediaCache.clear();
   },
   { once: true },
 );
