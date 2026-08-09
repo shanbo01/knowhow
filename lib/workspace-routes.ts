@@ -49,7 +49,7 @@ function decodeSegment(value: string) {
 }
 
 function isSafeRouteSegment(value: string | null): value is string {
-  return Boolean(value) && !/[\\/\0]/.test(value);
+  return typeof value === "string" && value.length > 0 && !/[\\/\0]/.test(value);
 }
 
 function isWorkspaceSection(value: string): value is WorkspaceSection {

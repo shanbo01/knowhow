@@ -6,10 +6,12 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
-  useSyncExternalStore,
   type ReactNode,
 } from "react";
+import {
+  ThemeProvider as NextThemesProvider,
+  useTheme as useNextTheme,
+} from "next-themes";
 
 export type ThemePreference = "light" | "dark" | "system";
 
@@ -26,26 +28,14 @@ function isThemePreference(value: string | null): value is ThemePreference {
   return value === "light" || value === "dark" || value === "system";
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [preference, setPreferenceState] = useState<ThemePreference>(
-    () => {
-      if (typeof window === "undefined") return "system";
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      return isThemePreference(stored) ? stored : "system";
-    },
-  );
-  const prefersDark = useSyncExternalStore(
-    (onChange) => {
-      const media = window.matchMedia("(prefers-color-scheme: dark)");
-      media.addEventListener("change", onChange);
-      return () => media.removeEventListener("change", onChange);
-    },
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches,
-    () => false,
-  );
-  const resolvedTheme = preference === "system"
-    ? prefersDark ? "dark" : "light"
-    : preference;
+function ThemeBridge({ children }: { children: ReactNode }) {
+  const { theme, resolvedTheme: nextResolvedTheme, setTheme } = useNextTheme();
+  const candidatePreference = theme ?? null;
+  const preference: ThemePreference = isThemePreference(candidatePreference)
+    ? candidatePreference
+    : "system";
+  const resolvedTheme: "light" | "dark" =
+    nextResolvedTheme === "dark" ? "dark" : "light";
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
@@ -53,9 +43,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [resolvedTheme]);
 
   const setPreference = useCallback((next: ThemePreference) => {
-    window.localStorage.setItem(STORAGE_KEY, next);
-    setPreferenceState(next);
-  }, []);
+    setTheme(next);
+  }, [setTheme]);
 
   const value = useMemo(
     () => ({ preference, resolvedTheme, setPreference }),
@@ -64,6 +53,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  );
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  return (
+    <NextThemesProvider
+      attribute="class"
+      defaultTheme="system"
+      disableTransitionOnChange
+      enableSystem
+      storageKey={STORAGE_KEY}
+    >
+      <ThemeBridge>{children}</ThemeBridge>
+    </NextThemesProvider>
   );
 }
 

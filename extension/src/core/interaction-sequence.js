@@ -1,6 +1,6 @@
 export function createInteractionSequencer() {
   let received = 0;
-  let latest = { sessionId: null, interactionSequence: 0 };
+  const confirmed = new Map();
 
   return {
     reserve() {
@@ -17,20 +17,18 @@ export function createInteractionSequencer() {
       ) {
         throw new TypeError("A confirmed interaction needs a valid sequence.");
       }
-      if (
-        latest.sessionId !== sessionId ||
-        interactionSequence > latest.interactionSequence
-      ) {
-        latest = { sessionId, interactionSequence };
-      }
+      const sequences = confirmed.get(sessionId) || new Set();
+      sequences.add(interactionSequence);
+      confirmed.set(sessionId, sequences);
       return interactionSequence;
     },
 
     isLatest(request) {
-      return (
-        request?.sourceEvent !== "click" ||
-        (latest.sessionId === request.sessionId &&
-          latest.interactionSequence === request.interactionSequence)
+      if (request?.sourceEvent !== "click") return true;
+      return Boolean(
+        confirmed
+          .get(request.sessionId)
+          ?.has(request.interactionSequence),
       );
     },
   };

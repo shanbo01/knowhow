@@ -11,6 +11,7 @@ import {
   ImagePlus,
   ListChecks,
   Plus,
+  Search,
   Save,
   Send,
   ShieldCheck,
@@ -37,6 +38,8 @@ import { flattenScreenshot, needsFlattening } from "../../lib/screenshot-flatten
 import { ScreenshotEditor } from "./screenshot-editor";
 import { SelectMenu } from "./select-menu";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
+import { WorkspaceLogo } from "./workspace-logo";
+import { Button } from "@/components/ui/button";
 
 export type GuideEditorPayload = {
   guideId?: string;
@@ -113,10 +116,12 @@ export function ScreenshotAnnotationPreview({
   step,
   accentColor,
   clickTargetColor,
+  showCropOutline = true,
 }: {
   step: EditorBlock;
   accentColor: string;
   clickTargetColor: string;
+  showCropOutline?: boolean;
 }) {
   const cropScale = step.crop && Math.max(
     step.crop.x,
@@ -125,7 +130,14 @@ export function ScreenshotAnnotationPreview({
     step.crop.height,
   ) <= 1 ? 100 : 1;
   return <>
-    {step.crop ? <span className="annotation-preview-crop" style={{ left: `${Math.max(0, step.crop.x * cropScale)}%`, top: `${Math.max(0, step.crop.y * cropScale)}%`, width: `${Math.max(0, step.crop.width * cropScale)}%`, height: `${Math.max(0, step.crop.height * cropScale)}%` }} /> : null}
+    {showCropOutline && step.crop ? <span className="annotation-preview-crop" style={{ left: `${Math.max(0, step.crop.x * cropScale)}%`, top: `${Math.max(0, step.crop.y * cropScale)}%`, width: `${Math.max(0, step.crop.width * cropScale)}%`, height: `${Math.max(0, step.crop.height * cropScale)}%` }} /> : null}
+    {(step.redactions ?? []).filter((redaction) => !redaction.applied).map((redaction) => {
+      const x = normalizedCoordinate(redaction.x, 0);
+      const y = normalizedCoordinate(redaction.y, 0);
+      const width = normalizedCoordinate(redaction.width, 0.08);
+      const height = normalizedCoordinate(redaction.height, 0.08);
+      return <span className="annotation-preview-redaction" key={redaction.id} style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }} />;
+    })}
     {(step.annotations ?? []).map((annotation) => {
       const x = normalizedCoordinate(annotation.x, 0);
       const y = normalizedCoordinate(annotation.y, 0);
@@ -278,6 +290,8 @@ export function GuideEditor({
   const [insertAfterId, setInsertAfterId] = useState<string | "start" | null>(null);
   const [leavePromptOpen, setLeavePromptOpen] = useState(false);
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
 
   const source = revision?.source ?? "manual";
   const isCaptured = source === "browser-capture";
@@ -353,6 +367,17 @@ export function GuideEditor({
         .filter(Boolean),
     [audiences],
   );
+  const filteredGroups = useMemo(() => {
+    const query = groupSearch.trim().toLocaleLowerCase();
+    if (!query) return groups;
+    return groups.filter((group) => `${group.name} ${group.description ?? ""}`.toLocaleLowerCase().includes(query));
+  }, [groupSearch, groups]);
+  const filteredMembers = useMemo(() => {
+    const query = memberSearch.trim().toLocaleLowerCase();
+    const activeMembers = members.filter((member) => member.status === "active");
+    if (!query) return activeMembers;
+    return activeMembers.filter((member) => `${member.name ?? ""} ${member.email}`.toLocaleLowerCase().includes(query));
+  }, [memberSearch, members]);
 
   function updateStep(id: string, patch: Partial<EditorBlock>) {
     setSteps((items) =>
@@ -629,9 +654,9 @@ export function GuideEditor({
       >
         <header className="editor-header">
           <div className="editor-header-context">
-            <button className="button ghost small editor-back" type="button" onClick={requestClose}>
+            <Button className="editor-back" variant="ghost" size="sm" type="button" onClick={requestClose}>
               <ArrowLeft /> Guides
-            </button>
+            </Button>
             <span className="editor-header-divider" />
             <span className="editor-scope">Private</span>
             <strong
@@ -644,16 +669,16 @@ export function GuideEditor({
             <span className={`editor-save-state${isDirty ? " dirty" : ""}`} role={localError ? "alert" : "status"}>
               {localError || (flattening ? "Preparing screenshots…" : isDirty ? "Unsaved" : "Saved")}
             </span>
-            <button className="button secondary" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
+            <Button variant="outline" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
               <Save /> Save
-            </button>
-            <button className="button primary" type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
+            </Button>
+            <Button type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
               <Send /> Request review
-            </button>
-            <button className={`button ghost editor-inspector-trigger${inspectorOpen ? " active" : ""}`} type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector">
+            </Button>
+            <Button className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector">
               <SlidersHorizontal /> Settings
               {isCaptured && !privacyReviewed ? <span className="editor-attention-dot" aria-label="Privacy review required" /> : null}
-            </button>
+            </Button>
           </div>
         </header>
 
@@ -824,26 +849,40 @@ export function GuideEditor({
                 <span><strong>Entire workspace</strong><small>All active members of {workspace.name}</small></span>
               </label>
               {!isWorkspaceAudience ? (
-                <>
+                <div className="audience-picker-scroll">
                   <div className="choice-section">
                     <span className="field-label">Groups</span>
-                    {groups.map((group) => (
-                      <label className="choice-row" key={group.id}>
-                        <input type="checkbox" checked={audiences.some((item) => item.kind === "group" && item.subjectId === group.id)} onChange={() => toggleAudience("group", group.id, group.name)} />
-                        <span><strong>{group.name}</strong><small>{group.sensitive ? "Sensitive group" : `${group.memberCount} members`}</small></span>
-                      </label>
-                    ))}
+                    <label className="audience-search">
+                      <Search />
+                      <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Search groups" aria-label="Search groups" />
+                    </label>
+                    <div className="audience-option-list">
+                      {filteredGroups.map((group) => (
+                        <label className="choice-row" key={group.id}>
+                          <input type="checkbox" checked={audiences.some((item) => item.kind === "group" && item.subjectId === group.id)} onChange={() => toggleAudience("group", group.id, group.name)} />
+                          <span><strong>{group.name}</strong><small>{group.sensitive ? "Sensitive group" : `${group.memberCount} members`}</small></span>
+                        </label>
+                      ))}
+                      {!filteredGroups.length ? <p className="audience-empty">No matching groups</p> : null}
+                    </div>
                   </div>
-                  <details className="audience-people">
+                  <details className="audience-people" open>
                     <summary>Named people</summary>
-                    {members.filter((member) => member.status === "active").map((member) => (
-                      <label className="choice-row" key={member.id}>
-                        <input type="checkbox" checked={audiences.some((item) => item.kind === "user" && item.subjectId === member.userId)} onChange={() => toggleAudience("user", member.userId, member.name || member.email)} />
-                        <span><strong>{member.name || member.email}</strong><small>{member.email}</small></span>
-                      </label>
-                    ))}
+                    <label className="audience-search">
+                      <Search />
+                      <input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search people" aria-label="Search people" />
+                    </label>
+                    <div className="audience-option-list">
+                      {filteredMembers.map((member) => (
+                        <label className="choice-row" key={member.id}>
+                          <input type="checkbox" checked={audiences.some((item) => item.kind === "user" && item.subjectId === member.userId)} onChange={() => toggleAudience("user", member.userId, member.name || member.email)} />
+                          <span><strong>{member.name || member.email}</strong><small>{member.email}</small></span>
+                        </label>
+                      ))}
+                      {!filteredMembers.length ? <p className="audience-empty">No matching people</p> : null}
+                    </div>
                   </details>
-                </>
+                </div>
               ) : null}
               {!audiences.length ? <p className="inline-warning"><TriangleAlert /> No audience selected</p> : null}
               {restrictedLabels.length ? <p className="privacy-caption"><ShieldCheck /> Restricted to {restrictedLabels.join(", ")}</p> : null}
@@ -864,7 +903,7 @@ export function GuideEditor({
             <section className="card sidebar-card">
               <p className="eyebrow">Brand preview</p>
               <div className="brand-preview" style={{ "--preview-accent": "var(--accent)" } as React.CSSProperties}>
-                <span className="brand-preview-logo">{workspace.name.slice(0, 1).toUpperCase()}</span>
+                <WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="md" />
                 <span><strong>{workspace.name}</strong><small>Click targets use workspace styling</small></span>
               </div>
             </section>

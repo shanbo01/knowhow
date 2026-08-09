@@ -134,6 +134,45 @@ function normalizedStepRedactions(value: unknown, label: string) {
   });
 }
 
+function normalizedCaptureRectangle(value: unknown, label: string) {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} is invalid.`);
+  }
+  const region = value as Record<string, unknown>;
+  const x = normalizedCoordinate(region.x, `${label} x`);
+  const y = normalizedCoordinate(region.y, `${label} y`);
+  const width = normalizedCoordinate(region.width, `${label} width`, { positive: true });
+  const height = normalizedCoordinate(region.height, `${label} height`, { positive: true });
+  if (x + width > 1 || y + height > 1) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} is outside the screenshot.`);
+  }
+  return { x, y, width, height };
+}
+
+function normalizedCaptureClick(value: unknown, label: string) {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} is invalid.`);
+  }
+  const click = value as Record<string, unknown>;
+  const color = typeof click.color === "string" && /^#[0-9a-f]{6}$/i.test(click.color)
+    ? click.color
+    : "#d97706";
+  const radius = normalizedCoordinate(click.radius ?? 0.035, `${label} radius`, {
+    positive: true,
+  });
+  if (radius > 0.25) {
+    throw new HttpError(400, "CAPTURE_PAYLOAD_INVALID", `${label} radius is too large.`);
+  }
+  return {
+    x: normalizedCoordinate(click.x, `${label} x`),
+    y: normalizedCoordinate(click.y, `${label} y`),
+    radius,
+    color,
+  };
+}
+
 /**
  * Capture completion must return the author to the exact tenant and to the
  * draft editor. A guide ID alone is not enough: a user may belong to more than
@@ -399,30 +438,40 @@ async function refresh(request: Request, db: D1DatabaseLike, repository: D1KnowH
 
 async function contextResponse(request: Request, db: D1DatabaseLike, repository: D1KnowHowRepository) {
   const { credential, access } = await authenticateDevice(request, db, repository, ["capture:write"]);
-  const workspace = await first<{
-    name: string;
-    capture_policy_json: string;
-    click_target_color: string;
-  }>(
-    db,
-    `SELECT w.name, s.capture_policy_json, s.click_target_color
-     FROM workspaces w JOIN workspace_settings s ON s.workspace_id = w.id
-     WHERE w.id = ?`,
-    credential.claims.workspaceId,
-  );
+  const [workspace, preference] = await Promise.all([
+    first<{
+      name: string;
+      capture_policy_json: string;
+      click_target_color: string;
+    }>(
+      db,
+      `SELECT w.name, s.capture_policy_json, s.click_target_color
+       FROM workspaces w JOIN workspace_settings s ON s.workspace_id = w.id
+       WHERE w.id = ?`,
+      credential.claims.workspaceId,
+    ),
+    first<{ theme: "light" | "dark" | "system" }>(
+      db,
+      `SELECT theme FROM user_preferences WHERE user_id = ?`,
+      credential.claims.userId,
+    ),
+  ]);
   const policy = safeJson<{ excludedHosts?: string[] }>(workspace?.capture_policy_json ?? "{}", {});
   return jsonResponse({
     workspaceId: credential.claims.workspaceId,
     workspaceName: workspace?.name ?? access.workspaceName,
+    themePreference: preference?.theme ?? "system",
     policyVersion: "privacy-v1",
     excludedOrigins: (policy.excludedHosts ?? []).map((host) => `https://${host}`),
-    clickTargetColor: workspace?.click_target_color ?? "#ef6f47",
+    clickTargetColor: workspace?.click_target_color ?? "#d97706",
     privacy: {
       excludePasswordFields: true,
       captureClipboard: false,
       captureRawKeystrokes: false,
       captureIncognito: false,
       retainUnredactedScreenshots: false,
+      // These categories are available to Smart Blur, but the extension's
+      // explicit master switch remains off until the recorder enables it.
       automatic: ["email", "phone-number", "financial-number", "identifier", "form-field"],
       assisted: ["common-name", "long-text"],
     },
@@ -976,6 +1025,9 @@ async function commitCapture(
       ),
       automaticMaskCount: integer(item.automaticMaskCount ?? 0, "Automatic masks", 0, 10_000),
       manualMaskCount: integer(item.manualMaskCount ?? 0, "Manual masks", 0, 10_000),
+      clickTarget: normalizedCaptureClick(item.clickTarget, `Step ${index + 1} click target`),
+      focusRegion: normalizedCaptureRectangle(item.focusRegion, `Step ${index + 1} focus region`),
+      crop: normalizedCaptureRectangle(item.crop, `Step ${index + 1} crop`),
       redactions: normalizedStepRedactions(item.redactions, `Step ${index + 1} redactions`),
     };
   });
@@ -1048,6 +1100,16 @@ async function commitCapture(
                 sanitized: true as const,
                 sanitizedAt: media.created_at,
                 contentHash: media.sha256,
+                ...(step.crop ? { crop: step.crop } : {}),
+                ...(step.clickTarget
+                  ? {
+                      clickTarget: {
+                        point: { x: step.clickTarget.x, y: step.clickTarget.y },
+                        radius: step.clickTarget.radius,
+                        color: step.clickTarget.color,
+                      },
+                    }
+                  : {}),
                 annotations: [],
                 redactions: step.redactions.map((region) => ({
                   id: region.id,
@@ -1075,8 +1137,8 @@ async function commitCapture(
       workspaceId: credential.claims.workspaceId,
       workspaceName: access.workspaceName,
       ...(settings?.logo_object_key ? { logoMediaId: settings.logo_object_key } : {}),
-      accentColor: settings?.accent_color ?? "#356fe5",
-      clickTargetColor: settings?.click_target_color ?? "#ef6f47",
+      accentColor: settings?.accent_color ?? "#b45309",
+      clickTargetColor: settings?.click_target_color ?? "#d97706",
       showKnowHowBranding: settings?.remove_branding !== 1,
     },
     exportPolicy: {
@@ -1133,6 +1195,23 @@ async function commitCapture(
         sanitizedUrl: step.sanitizedUrl,
         automaticMaskCount: step.automaticMaskCount,
         manualMaskCount: step.manualMaskCount,
+        ...(step.crop ? { crop: step.crop } : {}),
+        ...(step.focusRegion ? { focusRegion: step.focusRegion } : {}),
+        ...(step.clickTarget
+          ? {
+              annotations: [
+                {
+                  id: `click_${step.id}`,
+                  kind: "click",
+                  x: step.clickTarget.x,
+                  y: step.clickTarget.y,
+                  width: step.clickTarget.radius,
+                  height: step.clickTarget.radius,
+                  color: step.clickTarget.color,
+                },
+              ],
+            }
+          : {}),
         ...(step.redactions.length ? { redactions: step.redactions } : {}),
       }),
     })),

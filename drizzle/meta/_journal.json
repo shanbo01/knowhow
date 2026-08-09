@@ -22,6 +22,20 @@
       "when": 1786125449572,
       "tag": "0002_salty_robin_chapel",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786197424602,
+      "tag": "0003_abnormal_micromacro",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786198584994,
+      "tag": "0004_neutral_identity_defaults",
+      "breakpoints": true
     }
   ]
 }

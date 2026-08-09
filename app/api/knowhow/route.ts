@@ -399,8 +399,8 @@ async function audit(
 
 const DEFAULT_SETTINGS: WorkspaceSettings = {
   logoUrl: null,
-  accentColor: "#356fe5",
-  clickTargetColor: "#ef6f47",
+  accentColor: "#b45309",
+  clickTargetColor: "#d97706",
   removeBranding: false,
   allowedDomains: [],
   excludedCaptureHosts: [],
@@ -592,6 +592,7 @@ async function loadGroups(db: D1DatabaseLike, workspaceId: string): Promise<Work
       name: group.name,
       description: group.description,
       sensitive: group.sensitive === 1,
+      kind: group.kind,
       memberCount: group.kind === "all_members" ? Number(activeCount?.count ?? 0) : memberIds.length,
       memberIds,
       createdAt: group.created_at,
@@ -1662,7 +1663,7 @@ async function createWorkspace(
   const statements = [
     statement(db, `INSERT INTO entities (id, name, status, created_by, created_at, updated_at) VALUES (?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, entityId, name, identity.userId),
     statement(db, `INSERT INTO workspaces (id, entity_id, name, slug, status, self_serve, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, entityId, name, workspaceSlug, options.selfServe ? 1 : 0, identity.userId),
-    statement(db, `INSERT INTO workspace_settings (workspace_id, accent_color, click_target_color, remove_branding, restricted_exports_enabled, watermark_restricted_exports, capture_policy_json, created_at, updated_at) VALUES (?, '#356fe5', '#ef6f47', 0, 0, 1, '{"excludedHosts":[]}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId),
+    statement(db, `INSERT INTO workspace_settings (workspace_id, accent_color, click_target_color, remove_branding, restricted_exports_enabled, watermark_restricted_exports, capture_policy_json, created_at, updated_at) VALUES (?, '#b45309', '#d97706', 0, 0, 1, '{"excludedHosts":[]}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId),
     statement(db, `INSERT INTO workspace_members (workspace_id, user_id, email, display_name, status, joined_at, updated_at) VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.email, identity.name),
     statement(db, `INSERT INTO workspace_member_roles (workspace_id, user_id, role, granted_by, granted_at) VALUES (?, ?, 'administrator', ?, CURRENT_TIMESTAMP)`, workspaceId, identity.userId, identity.userId),
     statement(db, `INSERT INTO groups (id, workspace_id, name, slug, description, sensitive, kind, created_by, created_at, updated_at) VALUES (?, ?, 'All Employees', 'all-employees', 'Every active workspace member', 0, 'all_members', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, groupId, workspaceId, identity.userId),

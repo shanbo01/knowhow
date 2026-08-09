@@ -1,17 +1,8 @@
-/**
- * The live step feed thumbnail always shows the full, uncropped screenshot
- * (matching what the app editor starts with): no automatic zoom-to-click
- * framing. The click ring is still drawn at its true position over the full
- * frame so the highlighted control stays visible without cropping anything.
- */
-function contextualCrop() {
-  return { x: 0, y: 0, width: 1, height: 1 };
-}
-
-function finitePositive(value, fallback = 1) {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
-}
+export {
+  contextualCrop,
+  projectClickToCrop,
+  thumbnailGeometry,
+} from "../core/presentation.js";
 
 function imageRevision(step) {
   const blob = step?.imageBlob;
@@ -355,51 +346,6 @@ export function stepCopy(step) {
   return {
     title,
     detail: instructions && instructions !== title ? instructions : "",
-  };
-}
-
-export function projectClickToCrop(clickTarget, crop) {
-  if (!clickTarget || !crop) return null;
-  const x = Number(clickTarget.x);
-  const y = Number(clickTarget.y);
-  if (
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    x < crop.x ||
-    x > crop.x + crop.width ||
-    y < crop.y ||
-    y > crop.y + crop.height
-  ) {
-    return null;
-  }
-  return {
-    x: (x - crop.x) / crop.width,
-    y: (y - crop.y) / crop.height,
-    color: clickTarget.color,
-  };
-}
-
-export function thumbnailGeometry(step) {
-  const crop = contextualCrop(step);
-  const clickTarget =
-    step?.sourceEvent === "navigation"
-      ? null
-      : projectClickToCrop(step?.clickTarget || null, crop);
-  const imageWidth = finitePositive(step?.imageWidth);
-  const imageHeight = finitePositive(step?.imageHeight);
-
-  return {
-    crop,
-    clickTarget,
-    aspectRatio: (imageWidth * crop.width) / (imageHeight * crop.height),
-    image: {
-      // The "+ 0" normalizes the -0 that (-0 / n) * 100 would otherwise
-      // produce when crop.x/crop.y are exactly 0 (the common, un-cropped case).
-      left: ((-crop.x / crop.width) * 100) + 0,
-      top: ((-crop.y / crop.height) * 100) + 0,
-      width: (1 / crop.width) * 100,
-      height: (1 / crop.height) * 100,
-    },
   };
 }
 

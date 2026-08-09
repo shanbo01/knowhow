@@ -31,6 +31,11 @@
   "side_panel": {
     "default_path": "src/popup/popup.html"
   },
+  "externally_connectable": {
+    "matches": [
+      "http://localhost/*"
+    ]
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"
   }

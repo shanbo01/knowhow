@@ -36,7 +36,7 @@ test("click targets clamp to the image boundary and reject invalid geometry", ()
       { width: 1000, height: 800 },
       "not-a-color",
     ),
-    { x: 0, y: 1, radius: 0.035, color: "#ff5d2e" },
+    { x: 0, y: 1, radius: 0.035, color: "#d97706" },
   );
   assert.equal(
     normalizedClickTarget(
@@ -99,7 +99,12 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(contentSource, /Math\.hypot\(/);
   assert.match(contentSource, /if \(event\.detail === 0\)/);
   assert.match(contentSource, /targetRect\.x \+ targetRect\.width \/ 2/);
-  assert.match(contentSource, /sendCapturedInteraction\(staged\.context\)/);
+  assert.match(
+    contentSource,
+    /scheduleSingleClick\(staged\.element, staged\.context\)/,
+  );
+  assert.match(contentSource, /addEventListener\("dblclick", onDoubleClick, true\)/);
+  assert.match(contentSource, /sourceEvent: "dblclick"/);
   const interactionContextSource = contentSource.slice(
     contentSource.indexOf("function targetContext"),
     contentSource.indexOf("function pageContext"),
@@ -108,7 +113,10 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(backgroundSource, /\{ documentId: request\.documentId \}/);
   assert.match(backgroundSource, /type: "KNOWHOW_VERIFY_DOCUMENT"/);
   assert.match(backgroundSource, /clickPoint: context\.clickPoint/);
-  assert.match(backgroundSource, /function clickJobIsLatest\(request\)/);
+  assert.doesNotMatch(
+    backgroundSource,
+    /function clickJobIsLatest\(request\)|clickJobMayProceed|rapidInteractionsSkipped/,
+  );
   assert.match(backgroundSource, /interactionSequencer\.confirm\(state\.sessionId/);
   assert.match(
     backgroundSource,
@@ -122,57 +130,31 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(offscreenSource, /\{ clickTarget \}/);
 });
 
-test("capture defers interactive clicks until a pre-click screenshot is ready", async () => {
+test("capture preserves native controls and records the painted result", async () => {
   const [contentSource, backgroundSource] = await Promise.all([
     readFile(new URL("../src/content/capture.js", import.meta.url), "utf8"),
     readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
   ]);
 
-  assert.match(contentSource, /addEventListener\("pointerup", onPointerUp, true\)/);
-  assert.match(contentSource, /function deferrableTarget\(element\)/);
-  assert.match(contentSource, /event\.preventDefault\(\);/);
-  assert.match(contentSource, /event\.stopImmediatePropagation\(\);/);
-  assert.match(contentSource, /type: "PREFLIGHT_CAPTURE"/);
-  assert.match(contentSource, /type: "PREFLIGHT_DISCARD"/);
+  assert.doesNotMatch(contentSource, /event\.preventDefault\(\)/);
+  assert.doesNotMatch(contentSource, /event\.stopImmediatePropagation\(\)/);
+  assert.doesNotMatch(contentSource, /\.element\.click\(\)/);
+  assert.doesNotMatch(contentSource, /type: "PREFLIGHT_CAPTURE"/);
+  assert.match(contentSource, /function emitAfterPaint\(context, options = \{\}\)/);
+  assert.match(contentSource, /waitForPagePaint\(\)\.then/);
+  assert.match(contentSource, /DOUBLE_CLICK_WINDOW_MS = 260/);
+  assert.match(contentSource, /function scheduleSingleClick\(element, context\)/);
+  assert.match(contentSource, /function flushPendingSingleClick/);
   assert.match(
     contentSource,
-    /document\.elementFromPoint\(deferred\.clientX, deferred\.clientY\)/,
+    /pendingSingleClick && pendingSingleClick\.element !== element[\s\S]*flushPendingSingleClick\(\)/,
   );
-  assert.match(contentSource, /deferred\.element\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(contentSource, /function onDoubleClick\(event\)/);
+  assert.match(contentSource, /title: "Double-click " \+ name/);
   assert.match(
-    contentSource,
-    /preflight: deferred\.screenshotReady === true/,
+    backgroundSource,
+    /sourceEvent: \["contextmenu", "dblclick"\]\.includes\(message\.sourceEvent\)/,
   );
-  assert.match(contentSource, /function tryCommitDeferredClick\(deferred\)/);
-  const deferrableSource = contentSource.slice(
-    contentSource.indexOf("function deferrableTarget"),
-    contentSource.indexOf("function tryCommitDeferredClick"),
-  );
-  assert.match(deferrableSource, /input\[type=text\]/);
-  assert.match(deferrableSource, /textarea/);
-  assert.match(deferrableSource, /\[contenteditable=true\]/);
-
-  assert.match(backgroundSource, /case "PREFLIGHT_CAPTURE":/);
-  assert.match(backgroundSource, /case "PREFLIGHT_DISCARD":/);
-  assert.match(backgroundSource, /PREFLIGHT_TTL_MS = 10_000/);
-  assert.match(backgroundSource, /commitPreflightStep\(stash, request, snapshot\)/);
-  assert.match(backgroundSource, /preflight: message\.preflight === true/);
-  assert.match(backgroundSource, /stash\.generation === generation/);
-  assert.match(backgroundSource, /verdictUrl: verdict\.sanitizedUrl/);
-  const stepSlice = backgroundSource.slice(
-    backgroundSource.indexOf("async function captureStep"),
-    backgroundSource.indexOf("async function commitPreflightStep"),
-  );
-  assert.ok(stepSlice.indexOf("request.preflight === true") < stepSlice.indexOf("captureVisiblePage("));
-  const preflightSlice = backgroundSource.slice(
-    backgroundSource.indexOf("async function commitPreflightStep"),
-    backgroundSource.indexOf("async function captureNavigation"),
-  );
-  assert.match(preflightSlice, /clearPendingPreflight\(\)/);
-  assert.match(preflightSlice, /jobIsCurrent\(latest, snapshot\.sessionId, request\.generation\)/);
-  assert.match(preflightSlice, /withCapturedStep\(current, stepId\)/);
-  assert.doesNotMatch(preflightSlice, /captureVisiblePage\(/);
-  assert.doesNotMatch(preflightSlice, /clickJobMayProceed/);
 });
 
 test("the recording flash never leaks into a screenshot and can be turned off", async () => {
@@ -200,17 +182,18 @@ test("the recording flash never leaks into a screenshot and can be turned off", 
   assert.match(prepareSlice, /removeRecordingFlash\(\)/);
   const pageContextSlice = source.slice(
     source.indexOf('message?.type === "KNOWHOW_GET_PAGE_CONTEXT"'),
-    source.indexOf('message?.type === "KNOWHOW_GET_PAGE_CONTEXT"') + 150,
+    source.indexOf('message?.type === "KNOWHOW_GET_PAGE_CONTEXT"') + 240,
   );
   assert.match(pageContextSlice, /removeRecordingFlash\(\)/);
-  const deferredSlice = source.slice(
-    source.indexOf("function beginDeferredClick"),
-    source.indexOf("function beginDeferredClick") + 150,
-  );
-  assert.match(deferredSlice, /removeRecordingFlash\(\)/);
+  assert.match(prepareSlice, /hideBlurPreviewForCapture\(\)/);
+  assert.match(source, /message\?\.type === "KNOWHOW_RESTORE_PRIVACY_PREVIEW"/);
+  assert.match(source, /restoreBlurPreviewAfterCapture\(\)/);
+  assert.match(source, /let blurPreviewSuspended = false/);
+  assert.match(source, /if \(blurPreviewSuspended\) return/);
+  assert.match(source, /blurPreviewRestoreTimer = setTimeout/);
 });
 
-test("newer confirmed clicks supersede older queued capture jobs", () => {
+test("every confirmed rapid click remains eligible for its queued capture job", () => {
   const sequencer = createInteractionSequencer();
   const firstSequence = sequencer.reserve();
   const secondSequence = sequencer.reserve();
@@ -224,7 +207,7 @@ test("newer confirmed clicks supersede older queued capture jobs", () => {
       sessionId: "session-a",
       interactionSequence: firstSequence,
     }),
-    false,
+    true,
   );
   assert.equal(
     sequencer.isLatest({
@@ -276,6 +259,9 @@ test("manifest key derives the exact development extension allowlist", async () 
   ).join("");
 
   assert.equal(extensionId, "phbofjenfnnnnndghhinoldlfbpaedpo");
+  assert.deepEqual(manifest.externally_connectable, {
+    matches: ["http://localhost/*"],
+  });
   assert.ok(
     viteSource.includes(
       "^chrome-extension:\\/\\/" + extensionId + "$",

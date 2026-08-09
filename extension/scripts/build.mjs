@@ -213,6 +213,22 @@ await mkdir(destination, { recursive: true });
 await cp(resolve(extensionRoot, "src"), resolve(destination, "src"), {
   recursive: true,
 });
+const popupFontDirectory = resolve(destination, "src", "popup", "fonts");
+await mkdir(popupFontDirectory, { recursive: true });
+for (const weight of ["400", "700"]) {
+  await cp(
+    resolve(
+      extensionRoot,
+      "..",
+      "node_modules",
+      "@fontsource",
+      "kumbh-sans",
+      "files",
+      `kumbh-sans-latin-${weight}-normal.woff2`,
+    ),
+    resolve(popupFontDirectory, `kumbh-sans-latin-${weight}-normal.woff2`),
+  );
+}
 await writeFile(
   resolve(destination, "manifest.json"),
   JSON.stringify(manifest, null, 2) + "\n",

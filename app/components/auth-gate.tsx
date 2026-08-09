@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
+import { ProductBrand } from "./product-brand";
 
 export type BackendState = "checking" | "connected" | "failed";
 
@@ -127,10 +128,7 @@ export function AuthGate({
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="auth-brand-title">
         <Link className="auth-brand" href="/" aria-label="KnowHow home">
-          <span className="auth-brand-mark" aria-hidden="true">
-            K
-          </span>
-          <span id="auth-brand-title">KnowHow</span>
+          <ProductBrand id="auth-brand-title" />
         </Link>
 
         <div className="auth-intro-copy">
@@ -342,8 +340,7 @@ export function VerificationGate({
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="verify-brand-title">
         <div className="auth-brand">
-          <span className="auth-brand-mark" aria-hidden="true">K</span>
-          <span id="verify-brand-title">KnowHow</span>
+          <ProductBrand id="verify-brand-title" />
         </div>
         <div className="auth-intro-copy">
           <p className="auth-eyebrow">Account protection</p>
@@ -427,10 +424,7 @@ export function WorkspaceSetup({
     <main className="auth-shell">
       <section className="auth-intro" aria-labelledby="auth-brand-title">
         <Link className="auth-brand" href="/" aria-label="KnowHow home">
-          <span className="auth-brand-mark" aria-hidden="true">
-            K
-          </span>
-          <span id="auth-brand-title">KnowHow</span>
+          <ProductBrand id="auth-brand-title" />
         </Link>
 
         <div className="auth-intro-copy">

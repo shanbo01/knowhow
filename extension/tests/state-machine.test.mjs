@@ -11,6 +11,7 @@ import {
   snapshotCaptureJob,
   transitionCapture,
   withCapturedStep,
+  withoutCapturedStep,
   withStepCount,
 } from "../src/core/state-machine.js";
 import { createScreenshotQueue } from "../src/background/screenshot-queue.js";
@@ -177,6 +178,18 @@ test("captured step commits preserve ordered IDs and legacy counts", () => {
   );
   assert.equal(legacy.stepCount, 5);
   assert.deepEqual(legacy.stepIds, ["step-5"]);
+});
+
+test("captured steps can be removed without reordering the remaining IDs", () => {
+  const recording = withCapturedStep(
+    withCapturedStep(withCapturedStep(startRecording(), "first", 3), "second", 4),
+    "third",
+    5,
+  );
+  const removed = withoutCapturedStep(recording, "second", 6);
+  assert.deepEqual(removed.stepIds, ["first", "third"]);
+  assert.equal(removed.stepCount, 2);
+  assert.equal(withoutCapturedStep(removed, "missing", 7), removed);
 });
 
 test("window activation epochs reveal an A to B to A switch", () => {

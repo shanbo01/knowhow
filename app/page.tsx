@@ -15,6 +15,7 @@ import {
   KnowHowWorkspaceApp,
   SupportRequestDialog,
 } from "./components/knowhow-workspace-app";
+import { ProductBrand } from "./components/product-brand";
 import { account, client } from "../lib/appwrite";
 import { clearApiCredential, knowhowApi, knowhowCommand } from "../lib/knowhow-client";
 import type { NavigationGuard } from "../lib/navigation-guard";
@@ -50,7 +51,7 @@ function rememberInviteFromLocation() {
 function OpeningKnowHow() {
   return (
     <main className="opening-screen" aria-live="polite">
-      <div className="opening-mark">K</div>
+      <ProductBrand markOnly className="opening-product-brand" />
       <LoaderCircle className="spin" aria-hidden="true" />
       <h1>Opening KnowHow</h1>
       <p>Verifying Appwrite and restoring your secure session.</p>
@@ -75,8 +76,7 @@ function AppointmentPrompt({
     <main className="onboarding-shell">
       <header className="onboarding-header">
         <Link className="brand-lockup" href="/">
-          <span className="brand-mark">K</span>
-          <span>KnowHow</span>
+          <ProductBrand compact />
         </Link>
       </header>
       <section className="onboarding-card">
@@ -115,7 +115,7 @@ function WorkspaceRecovery({
 }) {
   return (
     <main className="opening-screen recovery-screen" role="alert">
-      <div className="opening-mark">K</div>
+      <ProductBrand markOnly className="opening-product-brand" />
       <h1>KnowHow could not open your workspace</h1>
       <p>{message || "The workspace service is temporarily unavailable."}</p>
       <div className="recovery-actions">
@@ -171,8 +171,7 @@ function WorkspaceOnboarding({
     <main className="onboarding-shell">
       <header className="onboarding-header">
         <Link className="brand-lockup" href="/">
-          <span className="brand-mark">K</span>
-          <span>KnowHow</span>
+          <ProductBrand compact />
         </Link>
         <button className="button ghost" type="button" onClick={onSignOut}>
           <LogOut /> Sign out

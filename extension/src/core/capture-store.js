@@ -116,6 +116,31 @@ export async function deleteCapturedStep(sessionId, stepId) {
   );
 }
 
+export async function deleteCapturedStepAndCompact(
+  sessionId,
+  stepId,
+  orderedStepIds,
+) {
+  if (!sessionId || !stepId) return;
+  const remainingIds = Array.isArray(orderedStepIds)
+    ? [...new Set(orderedStepIds.filter(Boolean))]
+    : [];
+  return withStore("readwrite", async (store) => {
+    await requestResult(store.delete([sessionId, stepId]));
+    for (const [order, remainingId] of remainingIds.entries()) {
+      const current = await requestResult(store.get([sessionId, remainingId]));
+      if (!current || current.order === order) continue;
+      await requestResult(
+        store.put({
+          ...current,
+          order,
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+    }
+  });
+}
+
 export async function deleteCaptureSession(sessionId) {
   if (!sessionId) return;
   return withStore("readwrite", async (store) => {

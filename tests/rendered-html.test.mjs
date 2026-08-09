@@ -63,6 +63,8 @@ test("ships the trusted D1 and R2 architecture instead of browser-writable produ
   assert.match(extensionRoute, /storeScreenshot/);
   assert.match(extensionRoute, /REDACTION_ATTESTATION_REQUIRED/);
   assert.match(extensionRoute, /function captureEditUrl/);
+  assert.match(extensionRoute, /kind: "click"/);
+  assert.match(extensionRoute, /normalizedCaptureClick/);
   assert.match(extensionRoute, /url\.searchParams\.set\("workspaceId", workspaceId\)/);
   assert.match(extensionRoute, /url\.searchParams\.set\("edit", "1"\)/);
   assert.doesNotMatch(extensionRoute, /editUrl:\s*`\/\?guide=/);
@@ -94,6 +96,8 @@ test("the extension manifest keeps high-risk browser capabilities out", async ()
   assert.ok(!manifest.host_permissions.includes("<all_urls>"));
   assert.deepEqual(manifest.optional_host_permissions, ["<all_urls>"]);
   assert.match(apiClient, /X-KnowHow-Redacted/);
+  assert.match(apiClient, /clickTarget: step\.clickTarget/);
+  assert.match(apiClient, /crop: step\.crop/);
   assert.match(apiClient, /one-time pairing code/i);
   assert.doesNotMatch(captureSource, /\.value\b/);
 });

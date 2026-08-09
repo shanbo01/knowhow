@@ -272,6 +272,21 @@ export function withCapturedStep(state, stepId, now = Date.now()) {
   };
 }
 
+export function withoutCapturedStep(state, stepId, now = Date.now()) {
+  if (typeof stepId !== "string" || !stepId) {
+    throw new TypeError("Removing a captured step requires a non-empty ID.");
+  }
+  const currentStepIds = Array.isArray(state?.stepIds) ? state.stepIds : [];
+  if (!currentStepIds.includes(stepId)) return state;
+  const stepIds = currentStepIds.filter((item) => item !== stepId);
+  return {
+    ...state,
+    stepIds,
+    stepCount: stepIds.length,
+    updatedAt: timestamp(now),
+  };
+}
+
 export function createWindowActivationEpochs() {
   const epochs = new Map();
   return {

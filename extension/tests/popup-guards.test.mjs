@@ -17,7 +17,7 @@ test("capture cannot start before connection, state, and policy initialization",
 
   assert.match(html, /id="start-button"[^>]*disabled/);
   const policyControls = [...html.matchAll(/<input[^>]*data-policy(?:=|-color)[^>]*>/g)];
-  assert.equal(policyControls.length, 12);
+  assert.equal(policyControls.length, 13);
   assert.ok(policyControls.every(([input]) => /\bdisabled\b/.test(input)));
   assert.match(controls, /!captureInitialized/);
   assert.match(controls, /!connectionInitialized/);
@@ -29,10 +29,7 @@ test("capture cannot start before connection, state, and policy initialization",
 
 test("privacy saves are debounced, serialized, and rolled back after failure", async () => {
   const source = await readFile(popupSourceUrl, "utf8");
-  const policyFlow = source.slice(
-    source.indexOf("async function flushPolicySave()"),
-    source.indexOf("function setPairingFormVisible"),
-  );
+  const policyFlow = source.slice(source.indexOf("async function flushPolicySave()"));
 
   assert.match(policyFlow, /if \(policySaveInFlight \|\| !policySaveDraft\) return/);
   assert.match(policyFlow, /policySaveInFlight = true/);
@@ -45,30 +42,42 @@ test("privacy saves are debounced, serialized, and rolled back after failure", a
   assert.match(policyFlow, /previous settings were restored/i);
 });
 
-test("connection and pairing controls lock for the whole capture lifecycle", async () => {
-  const source = await readFile(popupSourceUrl, "utf8");
-  const lifecycle = source.slice(
-    source.indexOf("function captureLifecycleLocksConnection()"),
-    source.indexOf("function policySavePending()"),
-  );
-  for (const status of [
-    "preparing",
-    "recording",
-    "paused",
-    "reviewing",
-    "uploading",
-  ]) {
-    assert.match(lifecycle, new RegExp(`"${status}"`));
-  }
+test("the side panel uses the signed-in app companion instead of a pairing-code form", async () => {
+  const [source, html, background, manifestText] = await Promise.all([
+    readFile(popupSourceUrl, "utf8"),
+    readFile(popupHtmlUrl, "utf8"),
+    readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../manifest.json", import.meta.url), "utf8"),
+  ]);
+  const manifest = JSON.parse(manifestText);
 
-  const controls = source.slice(
-    source.indexOf("function syncConnectionControls()"),
-    source.indexOf("function beginCaptureAction()"),
-  );
-  assert.match(controls, /elements\.connectButton\.hidden = locked/);
-  assert.match(controls, /elements\.connectButton\.disabled = locked \|\| pairingPending/);
-  assert.match(controls, /if \(locked\) elements\.pairingForm\.hidden = true/);
-  assert.match(source, /if \(captureLifecycleLocksConnection\(\) \|\| pairingPending\) return/);
+  assert.doesNotMatch(html, /pairing-code|pairing-form/i);
+  assert.match(source, /chrome\.tabs\.create\(\{ url: KNOWHOW_ORIGIN \}\)/);
+  assert.match(source, /STORAGE_KEYS\.companion/);
+  assert.match(source, /function applySharedTheme\(\)/);
+  assert.match(source, /currentCompanion\?\.theme/);
+  assert.match(background, /chrome\.runtime\.onMessageExternal\.addListener/);
+  assert.match(background, /case "KNOWHOW_WEB_CONNECT":/);
+  assert.match(background, /case "KNOWHOW_WEB_SYNC":/);
+  assert.deepEqual(manifest.externally_connectable.matches, ["http://localhost/*"]);
+});
+
+test("guide follow mode, search, Smart Blur, and per-step deletion are wired", async () => {
+  const [source, html] = await Promise.all([
+    readFile(popupSourceUrl, "utf8"),
+    readFile(popupHtmlUrl, "utf8"),
+  ]);
+
+  assert.match(html, /id="guide-search"/);
+  assert.match(html, /id="guide-follow"/);
+  assert.match(html, /data-policy="smartBlurEnabled"/);
+  assert.match(source, /function renderGuideLibrary\(\)/);
+  assert.match(source, /searchable\.includes\(query\)/);
+  assert.match(source, /type: "DELETE_CAPTURED_STEP"/);
+  assert.match(source, /className = "step-delete"/);
+  assert.match(html, /id="blur-panel-button"/);
+  assert.match(source, /elements\.privacySettings\.hidden = true/);
+  assert.match(source, /type: "TOGGLE_SMART_BLUR_PANEL"/);
 });
 
 test("uploading locks destructive review actions", async () => {

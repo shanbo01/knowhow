@@ -1,7 +1,14 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import "@fontsource/kumbh-sans/latin-400.css";
+import "@fontsource/kumbh-sans/latin-500.css";
+import "@fontsource/kumbh-sans/latin-600.css";
+import "@fontsource/kumbh-sans/latin-700.css";
+import "@fontsource/kumbh-sans/latin-800.css";
 import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 
 const title = "KnowHow — SOPs captured, governed, and shared";
 const description =
@@ -54,7 +61,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <TooltipProvider delay={200}>{children}</TooltipProvider>
+          <Toaster position="bottom-right" closeButton richColors />
+        </ThemeProvider>
       </body>
     </html>
   );

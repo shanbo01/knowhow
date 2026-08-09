@@ -44,7 +44,7 @@ test("screenshot capture rejects an A to B to A activation epoch", async () => {
   );
 });
 
-test("rapid-click freshness ends after the visible screenshot is known safe", async () => {
+test("rapid clicks stay queued independently instead of dropping older interactions", async () => {
   const source = await backgroundSource();
   const capture = functionSlice(source, "captureStep", "captureNavigation");
   const safelyCapturedAt = capture.indexOf("const captured = await captureVisiblePage(");
@@ -53,7 +53,8 @@ test("rapid-click freshness ends after the visible screenshot is known safe", as
   assert.ok(safelyCapturedAt > 0);
   assert.doesNotMatch(processingTail, /clickJobMayProceed/);
   assert.match(processingTail, /withCapturedStep\(latest, stepId\)/);
-  assert.match(source, /rapidInteractionsSkipped/);
+  assert.doesNotMatch(source, /rapidInteractionsSkipped|clickJobIsLatest|clickJobMayProceed/);
+  assert.match(source, /void enqueueScreenshot\(\(\) => captureStep\(job\)\)/);
 });
 
 test("resume, exclusion, and startup recovery retain exact safe targets", async () => {
@@ -68,4 +69,27 @@ test("resume, exclusion, and startup recovery retain exact safe targets", async 
   assert.match(source, /excludeCurrentSite\(message\.options\)/);
   assert.match(source, /state\.status === CaptureStatus\.PREPARING/);
   assert.match(source, /cleanupRemoteCapture\(state\.remoteCaptureId \|\| state\.sessionId\)/);
+});
+
+test("multi-tab capture waits for final URLs and deduplicates new-tab handoffs", async () => {
+  const source = await backgroundSource();
+  const opened = functionSlice(
+    source,
+    "followNewTabNavigation",
+    "followActiveTabSwitch",
+  );
+  const switched = functionSlice(
+    source,
+    "followActiveTabSwitch",
+    "captureNavigation",
+  );
+
+  assert.match(source, /chrome\.webNavigation\.onCreatedNavigationTarget\.addListener/);
+  assert.match(source, /chrome\.tabs\.onActivated\.addListener/);
+  assert.ok(opened.indexOf("waitForTabComplete(details.tabId)") < opened.indexOf("chrome.tabs.get(details.tabId)"));
+  assert.match(opened, /latest\.tabId !== details\.sourceTabId/);
+  assert.match(opened, /latest\.tabId === tab\.id/);
+  assert.ok(switched.indexOf("waitForTabComplete(tabId)") < switched.indexOf("chrome.tabs.get(tabId)"));
+  assert.match(switched, /chrome\.tabs\.query\(\{ active: true, windowId \}\)/);
+  assert.match(switched, /title: context\.context\.title[\s\S]*"Switch to "/);
 });

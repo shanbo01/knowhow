@@ -12,13 +12,14 @@ const DEFAULT_EXCLUDED_HOSTS = Object.freeze([
 // mergePolicy() uses this to migrate policies saved under an older schema so
 // stale stored values (like the previous "Smart Blur on by default") don't
 // silently keep overriding a new, safer default forever.
-export const CAPTURE_POLICY_SCHEMA_VERSION = 2;
+export const CAPTURE_POLICY_SCHEMA_VERSION = 3;
 
-// Keys whose *default* changed at CAPTURE_POLICY_SCHEMA_VERSION 2 (Smart Blur
+// Keys whose *default* changed before CAPTURE_POLICY_SCHEMA_VERSION 3 (Smart Blur
 // flipped from opt-out to opt-in). A policy persisted under an older schema
 // version has these values discarded in favor of the current defaults below,
 // instead of being merged over them.
 const MIGRATED_DEFAULT_KEYS = Object.freeze([
+  "smartBlurEnabled",
   "redactEmails",
   "redactPhoneNumbers",
   "redactFinancialNumbers",
@@ -37,6 +38,10 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   excludedSites: DEFAULT_EXCLUDED_HOSTS,
   allowedSites: [],
   blockInsecureHttp: false,
+  // Smart Blur has one explicit session control. Workspace categories can
+  // recommend what to detect, but they never turn the feature on for the
+  // author. Password fields and embedded frames remain mandatory protections.
+  smartBlurEnabled: false,
   // Smart Blur is opt-in: the author reviews and adds blur in the app editor
   // instead of the extension guessing and baking it in automatically.
   redactEmails: false,
@@ -49,7 +54,7 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   redactTableRows: false,
   redactLongText: false,
   redactCommonNames: false,
-  clickTargetColor: "#ff5d2e",
+  clickTargetColor: "#d97706",
   // Shown briefly on-page when a capture starts or resumes; never present
   // while a screenshot is actually taken. Toggled from the side panel.
   showRecordingIndicator: true,
@@ -249,6 +254,7 @@ export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
         : local.version,
     excludedSites: [...local.excludedSites, ...workspaceExcluded],
     clickTargetColor,
+    smartBlurEnabled: local.smartBlurEnabled === true,
     redactEmails: automatic.has("email") || local.redactEmails,
     redactPhoneNumbers:
       automatic.has("phone-number") || local.redactPhoneNumbers,

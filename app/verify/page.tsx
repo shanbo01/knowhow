@@ -4,6 +4,7 @@ import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { account } from "../../lib/appwrite";
+import { ProductBrand } from "../components/product-brand";
 
 type State = "checking" | "verified" | "failed";
 
@@ -41,7 +42,7 @@ export default function VerifyEmailPage() {
 
   return (
     <main className="opening-screen verify-page">
-      <div className="opening-mark">K</div>
+      <ProductBrand markOnly className="opening-product-brand" />
       {state === "checking" ? <LoaderCircle className="spin" /> : null}
       {state === "verified" ? <CheckCircle2 className="verify-result success" /> : null}
       {state === "failed" ? <CircleAlert className="verify-result failed" /> : null}

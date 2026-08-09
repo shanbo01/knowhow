@@ -253,6 +253,9 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
           instructions: step.instructions,
           sanitizedUrl: step.sanitizedUrl,
           sourceEvent: step.sourceEvent,
+          ...(step.clickTarget ? { clickTarget: step.clickTarget } : {}),
+          ...(step.focusRegion ? { focusRegion: step.focusRegion } : {}),
+          ...(step.crop ? { crop: step.crop } : {}),
           automaticMaskCount: step.automaticMaskCount || 0,
           manualMaskCount: step.manualMaskCount || 0,
           redactions: Array.isArray(step.pendingRedactions)

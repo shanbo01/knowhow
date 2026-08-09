@@ -154,6 +154,13 @@ export async function loadAuthorizedMediaUrl(
   return URL.createObjectURL(blob);
 }
 
+/** Loads the current workspace logo through the existing private media boundary. */
+export async function loadAuthorizedWorkspaceLogoUrl(workspaceId: string) {
+  const params = new URLSearchParams({ workspaceId, kind: "logo" });
+  const blob = await authorizedBlob(`/api/knowhow/media?${params}`);
+  return URL.createObjectURL(blob);
+}
+
 export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
   const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, kind: "logo" });

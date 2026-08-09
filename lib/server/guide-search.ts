@@ -68,8 +68,8 @@ async function loadSettingsForSearch(
   if (!row) {
     return {
       logoUrl: null,
-      accentColor: "#356fe5",
-      clickTargetColor: "#ef6f47",
+      accentColor: "#b45309",
+      clickTargetColor: "#d97706",
       removeBranding: false,
       allowedDomains: [],
       excludedCaptureHosts: [],

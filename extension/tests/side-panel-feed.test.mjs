@@ -269,7 +269,7 @@ test("live step cards keep capture order and navigation copy", () => {
   assert.equal(stepCopy(steps[1]).title, "Select New chat");
 });
 
-test("live thumbnails show the full screenshot with the click ring at its true position", () => {
+test("live thumbnails use a contextual 16:9 crop and project the click ring", () => {
   const geometry = thumbnailGeometry({
     id: "step-1",
     imageWidth: 1920,
@@ -278,11 +278,17 @@ test("live thumbnails show the full screenshot with the click ring at its true p
     clickTarget: { x: 0.5, y: 0.4, color: "#ef6f47" },
   });
 
-  assert.deepEqual(geometry.crop, { x: 0, y: 0, width: 1, height: 1 });
-  assert.deepEqual(geometry.image, { left: 0, top: 0, width: 100, height: 100 });
+  assert.ok(Math.abs(geometry.crop.x - 0.14) < 0.001);
+  assert.ok(Math.abs(geometry.crop.y - 0.04) < 0.001);
+  assert.ok(Math.abs(geometry.crop.width - 0.72) < 0.001);
+  assert.ok(Math.abs(geometry.crop.height - 0.72) < 0.001);
+  assert.ok(Math.abs(geometry.image.left + 19.444) < 0.01);
+  assert.ok(Math.abs(geometry.image.top + 5.556) < 0.01);
+  assert.ok(Math.abs(geometry.image.width - 138.889) < 0.01);
+  assert.equal(Object.hasOwn(geometry.image, "height"), false);
   assert.ok(Math.abs(geometry.aspectRatio - 1920 / 1080) < 0.001);
   assert.ok(Math.abs(geometry.clickTarget.x - 0.5) < 0.001);
-  assert.ok(Math.abs(geometry.clickTarget.y - 0.4) < 0.001);
+  assert.ok(Math.abs(geometry.clickTarget.y - 0.5) < 0.001);
   assert.equal(geometry.clickTarget.color, "#ef6f47");
 });
 
@@ -400,7 +406,7 @@ test("the native side panel wires the local live feed and bottom dock", async ()
   assert.match(html, /id="step-feed"/);
   assert.ok(html.indexOf('id="step-feed"') < html.indexOf('id="capture-actions"'));
   assert.match(css, /body\[data-capture-mode="active"\]/);
-  assert.match(css, /\.step-feed-scroll[\s\S]*overflow-y:\s*auto/);
+  assert.match(css, /\.step-feed-scroll[\s\S]*overflow:\s*auto/);
   assert.match(source, /capturedSteps\.load\(capture\.state\)/);
   assert.match(source, /getSteps: getCapturedSteps/);
   assert.match(source, /capturedSteps\.clear\(renderedFeedSessionId\)/);
@@ -417,5 +423,9 @@ test("the native side panel wires the local live feed and bottom dock", async ()
   assert.match(
     storeSource,
     /export async function getCapturedSteps\(sessionId, stepIds\)[\s\S]*Promise\.all\([\s\S]*store\.get\(\[sessionId, stepId\]\)/,
+  );
+  assert.match(
+    storeSource,
+    /export async function deleteCapturedStepAndCompact[\s\S]*remainingIds\.entries\(\)[\s\S]*store\.put/,
   );
 });

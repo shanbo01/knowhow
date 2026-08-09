@@ -3,7 +3,7 @@ import {
   getCapturedSteps,
   listCapturedSteps,
 } from "../core/capture-store.js";
-import { STORAGE_KEYS } from "../core/config.js";
+import { KNOWHOW_ORIGIN, STORAGE_KEYS } from "../core/config.js";
 import {
   createCapturedStepCache,
   createRefreshGate,
@@ -18,9 +18,9 @@ const elements = {
   connectionDot: document.querySelector("#connection-dot"),
   connectionLabel: document.querySelector("#connection-label"),
   connectButton: document.querySelector("#connect-button"),
-  pairingForm: document.querySelector("#pairing-form"),
-  pairingCode: document.querySelector("#pairing-code"),
-  cancelPairingButton: document.querySelector("#cancel-pairing-button"),
+  panelTabs: Array.from(document.querySelectorAll("[data-panel-tab]")),
+  capturePanel: document.querySelector("#capture-panel"),
+  guidesPanel: document.querySelector("#guides-panel"),
   statusLabel: document.querySelector("#status-label"),
   statusDetail: document.querySelector("#status-detail"),
   stepCount: document.querySelector("#step-count"),
@@ -36,27 +36,48 @@ const elements = {
   captureActions: document.querySelector("#capture-actions"),
   reviewActions: document.querySelector("#review-actions"),
   pauseButton: document.querySelector("#pause-button"),
+  blurPanelButton: document.querySelector("#blur-panel-button"),
   finishButton: document.querySelector("#finish-button"),
   discardButton: document.querySelector("#discard-button"),
   reviewDiscardButton: document.querySelector("#review-discard-button"),
   openReviewButton: document.querySelector("#open-review-button"),
   privacySettings: document.querySelector("#privacy-settings"),
+  smartBlurToggle: document.querySelector("#smart-blur-toggle"),
+  smartBlurOptions: document.querySelector("#smart-blur-options"),
   excludeButton: document.querySelector("#exclude-button"),
   error: document.querySelector("#error"),
   policyInputs: Array.from(document.querySelectorAll("[data-policy]")),
   policyColor: document.querySelector("[data-policy-color]"),
+  guideSearch: document.querySelector("#guide-search"),
+  guideLibraryCount: document.querySelector("#guide-library-count"),
+  guideLibraryEmpty: document.querySelector("#guide-library-empty"),
+  guideResults: document.querySelector("#guide-results"),
+  guideFollow: document.querySelector("#guide-follow"),
+  guideFollowBack: document.querySelector("#guide-follow-back"),
+  guideFollowStatus: document.querySelector("#guide-follow-status"),
+  guideFollowTitle: document.querySelector("#guide-follow-title"),
+  guideFollowSummary: document.querySelector("#guide-follow-summary"),
+  guideFollowProgress: document.querySelector("#guide-follow-progress"),
+  guideFollowProgressBar: document.querySelector("#guide-follow-progress-bar"),
+  guideFollowSteps: document.querySelector("#guide-follow-steps"),
+  guidePreviousStep: document.querySelector("#guide-previous-step"),
+  guideNextStep: document.querySelector("#guide-next-step"),
+  guideOpenApp: document.querySelector("#guide-open-app"),
 };
 
 let currentState;
 let currentPolicy;
 let currentContext;
 let currentConnection;
+let currentCompanion;
+let activePanel = "capture";
+let activeGuideId = null;
+let activeGuideStep = 0;
 let renderedFeedRevision = "";
 let renderedFeedSessionId = null;
 let captureActionPending = false;
 let captureInitialized = false;
 let connectionInitialized = false;
-let pairingPending = false;
 let policySaveTimer = null;
 let policySaveDraft = null;
 let policySaveInFlight = false;
@@ -97,16 +118,6 @@ function showError(message) {
   elements.error.hidden = !message;
 }
 
-function captureLifecycleLocksConnection() {
-  return [
-    "preparing",
-    "recording",
-    "paused",
-    "reviewing",
-    "uploading",
-  ].includes(currentState?.status);
-}
-
 function policySavePending() {
   return Boolean(policySaveTimer || policySaveDraft || policySaveInFlight);
 }
@@ -114,7 +125,7 @@ function policySavePending() {
 function policyControlsLocked() {
   return (
     !captureInitialized ||
-    ["preparing", "recording", "paused", "reviewing", "uploading"].includes(
+    ["preparing", "reviewing", "uploading"].includes(
       currentState?.status,
     )
   );
@@ -133,7 +144,15 @@ function applyPolicyControls(policy) {
   for (const input of elements.policyInputs) {
     input.checked = Boolean(policy?.[input.dataset.policy]);
   }
-  elements.policyColor.value = policy?.clickTargetColor || "#ff5d2e";
+  elements.policyColor.value = policy?.clickTargetColor || "#d97706";
+  elements.smartBlurOptions.dataset.enabled =
+    policy?.smartBlurEnabled === true ? "true" : "false";
+  const smartBlurEnabled = policy?.smartBlurEnabled === true;
+  elements.blurPanelButton.classList.toggle("active", smartBlurEnabled);
+  elements.blurPanelButton.setAttribute("aria-pressed", String(smartBlurEnabled));
+  elements.blurPanelButton.title = smartBlurEnabled
+    ? "Smart Blur is on — open settings"
+    : "Smart Blur is off — open settings";
 }
 
 async function request(message) {
@@ -172,6 +191,25 @@ function statusDescription(state) {
 function nearFeedBottom() {
   const feed = elements.stepFeedScroll;
   return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 72;
+}
+
+function createTrashIcon() {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const paths = ["M3 6h18", "M8 6V4h8v2", "M19 6l-1 14H6L5 6", "M10 11v5", "M14 11v5"];
+  for (const data of paths) {
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", data);
+    svg.append(path);
+  }
+  return svg;
 }
 
 function renderStepFeed(state, rawSteps) {
@@ -232,7 +270,26 @@ function renderStepFeed(state, rawSteps) {
       detail.textContent = copy.detail;
       text.append(detail);
     }
-    copyRow.append(number, text);
+    const remove = document.createElement("button");
+    remove.className = "step-delete";
+    remove.type = "button";
+    remove.title = "Delete this captured step";
+    remove.setAttribute("aria-label", `Delete step ${index + 1}`);
+    remove.append(createTrashIcon());
+    remove.addEventListener("click", async () => {
+      if (remove.disabled) return;
+      remove.disabled = true;
+      showError("");
+      try {
+        await request({ type: "DELETE_CAPTURED_STEP", stepId: step.id });
+        renderedFeedRevision = "";
+        await refreshCapture();
+      } catch (error) {
+        remove.disabled = false;
+        showError(error instanceof Error ? error.message : "Could not delete this step.");
+      }
+    });
+    copyRow.append(number, text, remove);
     item.append(copyRow);
 
     const thumbnailUrl =
@@ -250,7 +307,6 @@ function renderStepFeed(state, rawSteps) {
       image.style.left = geometry.image.left + "%";
       image.style.top = geometry.image.top + "%";
       image.style.width = geometry.image.width + "%";
-      image.style.height = geometry.image.height + "%";
       thumbnail.append(image);
       if (geometry.clickTarget) {
         const ring = document.createElement("span");
@@ -259,7 +315,7 @@ function renderStepFeed(state, rawSteps) {
         ring.style.top = geometry.clickTarget.y * 100 + "%";
         ring.style.setProperty(
           "--click-color",
-          geometry.clickTarget.color || currentPolicy?.clickTargetColor || "#ef6f47",
+          geometry.clickTarget.color || currentPolicy?.clickTargetColor || "#d97706",
         );
         thumbnail.append(ring);
       }
@@ -289,6 +345,129 @@ function renderStepFeed(state, rawSteps) {
   }
 }
 
+function companionGuides() {
+  return Array.isArray(currentCompanion?.guides) ? currentCompanion.guides : [];
+}
+
+function setActivePanel(panel) {
+  activePanel = panel === "guides" ? "guides" : "capture";
+  elements.capturePanel.hidden = activePanel !== "capture";
+  elements.guidesPanel.hidden = activePanel !== "guides";
+  for (const tab of elements.panelTabs) {
+    const selected = tab.dataset.panelTab === activePanel;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+  }
+  if (activePanel === "guides") renderGuideLibrary();
+}
+
+function renderGuideFollow() {
+  const guide = companionGuides().find((item) => item.id === activeGuideId);
+  if (!guide) {
+    activeGuideId = null;
+    elements.guideFollow.hidden = true;
+    elements.guideResults.hidden = false;
+    return;
+  }
+  const steps = Array.isArray(guide.steps) ? guide.steps : [];
+  activeGuideStep = Math.max(0, Math.min(activeGuideStep, Math.max(0, steps.length - 1)));
+  elements.guideResults.hidden = true;
+  elements.guideLibraryEmpty.hidden = true;
+  elements.guideFollow.hidden = false;
+  elements.guideFollowStatus.textContent = guide.restricted ? "Restricted guide" : guide.status;
+  elements.guideFollowTitle.textContent = guide.title;
+  elements.guideFollowSummary.textContent = guide.summary || "Follow each step in order.";
+  const completed = steps.length ? activeGuideStep + 1 : 0;
+  elements.guideFollowProgress.textContent = steps.length
+    ? `Step ${completed} of ${steps.length}`
+    : "No steps";
+  elements.guideFollowProgressBar.style.width =
+    (steps.length ? (completed / steps.length) * 100 : 0) + "%";
+  const fragment = document.createDocumentFragment();
+  steps.forEach((step, index) => {
+    const item = document.createElement("li");
+    item.className = "guide-follow-step";
+    if (index === activeGuideStep) item.classList.add("active");
+    if (index < activeGuideStep) item.classList.add("complete");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.addEventListener("click", () => {
+      activeGuideStep = index;
+      renderGuideFollow();
+    });
+    const number = document.createElement("span");
+    number.textContent = index < activeGuideStep ? "✓" : String(index + 1);
+    const copy = document.createElement("span");
+    const kind = document.createElement("small");
+    kind.textContent = step.kind || "action";
+    const title = document.createElement("strong");
+    title.textContent = step.title || `Step ${index + 1}`;
+    copy.append(kind, title);
+    if (step.description) {
+      const description = document.createElement("p");
+      description.textContent = step.description;
+      copy.append(description);
+    }
+    button.append(number, copy);
+    item.append(button);
+    fragment.append(item);
+  });
+  elements.guideFollowSteps.replaceChildren(fragment);
+  elements.guidePreviousStep.disabled = activeGuideStep <= 0;
+  elements.guideNextStep.disabled = !steps.length || activeGuideStep >= steps.length - 1;
+}
+
+function renderGuideLibrary() {
+  applySharedTheme();
+  const guides = companionGuides();
+  elements.guideLibraryCount.textContent = String(guides.length);
+  if (activeGuideId) {
+    renderGuideFollow();
+    return;
+  }
+  elements.guideFollow.hidden = true;
+  elements.guideResults.hidden = false;
+  const query = elements.guideSearch.value.trim().toLowerCase();
+  const filtered = guides.filter((guide) => {
+    if (!query) return true;
+    const searchable = [
+      guide.title,
+      guide.summary,
+      ...(guide.steps || []).flatMap((step) => [step.title, step.description]),
+    ].join(" ").toLowerCase();
+    return searchable.includes(query);
+  });
+  elements.guideLibraryEmpty.hidden = filtered.length > 0;
+  elements.guideLibraryEmpty.textContent = guides.length
+    ? `No guides match “${elements.guideSearch.value.trim()}”.`
+    : "Open KnowHow once to sync the guides you can access.";
+  const fragment = document.createDocumentFragment();
+  for (const guide of filtered) {
+    const button = document.createElement("button");
+    button.className = "guide-result";
+    button.type = "button";
+    button.addEventListener("click", () => {
+      activeGuideId = guide.id;
+      activeGuideStep = 0;
+      renderGuideFollow();
+    });
+    const icon = document.createElement("span");
+    icon.className = "guide-result-icon";
+    icon.textContent = "↗";
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = guide.title;
+    const summary = document.createElement("small");
+    summary.textContent = guide.summary || `${guide.steps?.length || 0} steps`;
+    const meta = document.createElement("span");
+    meta.textContent = `${guide.steps?.length || 0} steps · ${guide.status}`;
+    copy.append(title, summary, meta);
+    button.append(icon, copy);
+    fragment.append(button);
+  }
+  elements.guideResults.replaceChildren(fragment);
+}
+
 function renderState(state, policy) {
   currentState = state;
   if (!policySavePending() || !currentPolicy) {
@@ -298,10 +477,7 @@ function renderState(state, policy) {
     state.status.charAt(0).toUpperCase() + state.status.slice(1);
   elements.statusLabel.textContent = label;
   elements.statusDetail.textContent = statusDescription(state);
-  elements.stepCount.textContent =
-    String(state.stepCount || 0) +
-    " step" +
-    (state.stepCount === 1 ? "" : "s");
+  elements.stepCount.textContent = String(state.stepCount || 0);
 
   const preparing = state.status === "preparing";
   const active = state.status === "recording" || state.status === "paused";
@@ -316,7 +492,10 @@ function renderState(state, policy) {
       : "idle";
   elements.startForm.hidden = preparing || active || reviewing;
   elements.stepFeed.hidden = !active;
-  elements.privacySettings.hidden = preparing || active || reviewing;
+  // The full policy controls now live in the page-level Smart Blur panel so
+  // they can preview protected regions in context. These inputs remain wired
+  // here as the single source of truth for policy persistence.
+  elements.privacySettings.hidden = true;
   elements.captureActions.hidden = !(preparing || active);
   elements.reviewActions.hidden = !reviewing;
   elements.pauseButton.textContent =
@@ -356,16 +535,12 @@ function syncCaptureActionControls() {
     captureActionPending || status !== "reviewing";
   elements.excludeButton.disabled =
     captureActionPending || policySavePending() || !captureInitialized;
+  elements.blurPanelButton.disabled =
+    captureActionPending || !["recording", "paused"].includes(status);
 }
 
 function syncConnectionControls() {
-  const locked = captureLifecycleLocksConnection();
-  elements.connectButton.hidden = locked;
-  elements.connectButton.disabled = locked || pairingPending;
-  if (locked) elements.pairingForm.hidden = true;
-  const submitButton = elements.pairingForm.querySelector("button[type=submit]");
-  submitButton.disabled = locked || pairingPending;
-  elements.cancelPairingButton.disabled = locked || pairingPending;
+  elements.connectButton.disabled = captureActionPending;
 }
 
 function beginCaptureAction() {
@@ -406,13 +581,36 @@ function renderConnection() {
     currentConnection.connected,
   );
   elements.connectionLabel.textContent = currentConnection.connected
-    ? "Connected to " + (currentContext?.workspaceName || "KnowHow")
-    : "Pair KnowHow to capture";
-  elements.connectButton.textContent = currentConnection.connected
-    ? "Reconnect"
-    : "Connect";
+    ? currentCompanion?.workspaceName || currentContext?.workspaceName || "Connected to KnowHow"
+    : "Open KnowHow to connect";
+  const connectLabel = currentConnection.connected
+    ? "Open KnowHow"
+    : "Connect in KnowHow";
+  elements.connectButton.title = connectLabel;
+  elements.connectButton.setAttribute("aria-label", connectLabel);
   syncConnectionControls();
   syncCaptureActionControls();
+}
+
+function applySharedTheme() {
+  const shared = currentCompanion?.theme;
+  const preferred = currentContext?.themePreference;
+  const resolved = shared === "dark" || shared === "light"
+    ? shared
+    : preferred === "dark" || preferred === "light"
+      ? preferred
+      : matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+  document.documentElement.dataset.theme = resolved;
+}
+
+async function refreshCompanion() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.companion);
+  currentCompanion = stored[STORAGE_KEYS.companion] || null;
+  applySharedTheme();
+  renderGuideLibrary();
+  renderConnection();
 }
 
 async function refreshConnection() {
@@ -427,6 +625,7 @@ async function refresh() {
   const results = await Promise.allSettled([
     refreshCapture(),
     refreshConnection(),
+    refreshCompanion(),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure?.status === "rejected") {
@@ -482,6 +681,20 @@ elements.pauseButton.addEventListener("click", async () => {
     showError(error instanceof Error ? error.message : "Could not change capture state.");
   } finally {
     endCaptureAction();
+  }
+});
+
+elements.blurPanelButton.addEventListener("click", async () => {
+  if (elements.blurPanelButton.disabled) return;
+  showError("");
+  try {
+    await request({ type: "TOGGLE_SMART_BLUR_PANEL" });
+  } catch (error) {
+    showError(
+      error instanceof Error
+        ? error.message
+        : "Could not open Smart Blur settings.",
+    );
   }
 });
 
@@ -617,52 +830,32 @@ for (const input of elements.policyInputs) {
 }
 elements.policyColor.addEventListener("change", schedulePolicySave);
 
-function setPairingFormVisible(visible) {
-  if (visible && captureLifecycleLocksConnection()) return;
-  elements.pairingForm.hidden = !visible;
-  if (visible) {
-    elements.pairingCode.value = "";
-    elements.pairingCode.focus();
-  }
+elements.connectButton.addEventListener("click", () => {
+  void chrome.tabs.create({ url: KNOWHOW_ORIGIN });
+});
+
+for (const tab of elements.panelTabs) {
+  tab.addEventListener("click", () => setActivePanel(tab.dataset.panelTab));
 }
 
-elements.connectButton.addEventListener("click", () => {
-  if (captureLifecycleLocksConnection() || pairingPending) return;
-  showError("");
-  setPairingFormVisible(elements.pairingForm.hidden);
+elements.guideSearch.addEventListener("input", renderGuideLibrary);
+elements.guideFollowBack.addEventListener("click", () => {
+  activeGuideId = null;
+  activeGuideStep = 0;
+  renderGuideLibrary();
 });
-
-elements.cancelPairingButton.addEventListener("click", () => {
-  setPairingFormVisible(false);
+elements.guidePreviousStep.addEventListener("click", () => {
+  activeGuideStep = Math.max(0, activeGuideStep - 1);
+  renderGuideFollow();
 });
-
-elements.pairingCode.addEventListener("input", () => {
-  elements.pairingCode.value = elements.pairingCode.value
-    .toUpperCase()
-    .replace(/[^A-HJ-NP-Z2-9]/g, "");
+elements.guideNextStep.addEventListener("click", () => {
+  activeGuideStep += 1;
+  renderGuideFollow();
 });
-
-elements.pairingForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (captureLifecycleLocksConnection() || pairingPending) return;
-  showError("");
-  pairingPending = true;
-  syncConnectionControls();
-  elements.connectionLabel.textContent = "Pairing workspace…";
-  try {
-    await request({
-      type: "CONNECT_KNOWHOW",
-      code: elements.pairingCode.value,
-    });
-    setPairingFormVisible(false);
-    await refresh();
-  } catch (error) {
-    await refresh();
-    showError(error instanceof Error ? error.message : "KnowHow pairing failed.");
-  } finally {
-    pairingPending = false;
-    syncConnectionControls();
-  }
+elements.guideOpenApp.addEventListener("click", () => {
+  const guide = companionGuides().find((item) => item.id === activeGuideId);
+  if (!guide?.href) return;
+  void chrome.tabs.create({ url: new URL(guide.href, KNOWHOW_ORIGIN).href });
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -676,6 +869,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
       ),
     );
   }
+  if (
+    area === "local" &&
+    Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.companion)
+  ) {
+    void refreshCompanion().catch(() => undefined);
+  }
 });
 
 addEventListener(
@@ -687,4 +886,5 @@ addEventListener(
   { once: true },
 );
 
+setActivePanel("capture");
 void refresh();

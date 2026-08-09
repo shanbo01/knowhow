@@ -8,142 +8,99 @@
   </head>
   <body>
     <main class="panel-shell">
-      <header class="brand">
-        <span class="brand-mark">K</span>
-        <span class="brand-copy">
-          <strong>KnowHow Capture</strong>
-          <small>Private, privacy-reviewed guides</small>
-        </span>
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span class="brand-copy"><strong>KnowHow</strong><small>Capture</small></span>
+        </div>
+        <button id="connect-button" class="icon-button open-app-button" type="button" title="Open KnowHow" aria-label="Open KnowHow">↗</button>
       </header>
 
-      <section class="connection" aria-label="KnowHow connection">
-        <span class="connection-state">
-          <i id="connection-dot"></i>
-          <span class="connection-copy">
-            <small>Workspace</small>
-            <strong id="connection-label">Checking KnowHow…</strong>
-          </span>
-        </span>
-        <button id="connect-button" class="text-button" type="button">
-          Connect
-        </button>
+      <div class="workspace-bar" aria-label="KnowHow connection">
+        <span id="connection-dot" class="connection-dot"></span>
+        <span class="workspace-copy"><small>Workspace</small><strong id="connection-label">Checking KnowHow…</strong></span>
+        <span class="secure-label">Private</span>
+      </div>
+
+      <nav class="panel-tabs" aria-label="Extension sections">
+        <button class="panel-tab active" data-panel-tab="capture" type="button">Capture</button>
+        <button class="panel-tab" data-panel-tab="guides" type="button">Guides</button>
+      </nav>
+
+      <section id="capture-panel" class="panel-view capture-view">
+        <section id="status-card" class="status-card" aria-live="polite">
+          <span class="recording-state-dot" aria-hidden="true"></span>
+          <span class="status-copy"><small>Capture</small><strong id="status-label">Idle</strong><span id="status-detail">Start from the page you want to document.</span></span>
+          <span id="step-count" class="step-count">0</span>
+        </section>
+
+        <form id="start-form" class="capture-form card">
+          <div class="start-heading"><span class="start-icon" aria-hidden="true">✦</span><span><strong>Record a workflow</strong><small>Turn your clicks into an editable private guide.</small></span></div>
+          <label><span>Guide title</span><input id="guide-title" minlength="2" maxlength="200" placeholder="e.g. Invite a new teammate" required /></label>
+          <label class="workspace-field"><span>Workspace</span><input id="workspace-id" maxlength="128" placeholder="Open KnowHow to connect" readonly /></label>
+          <button id="start-button" class="primary start-button" type="submit" disabled><span aria-hidden="true">●</span> Start capture</button>
+        </form>
+
+        <section id="step-feed" class="step-feed" aria-label="Captured steps" aria-live="polite" hidden>
+          <header class="step-feed-heading"><span><strong>Captured steps</strong><small>Click any action normally—KnowHow handles the rest.</small></span><span id="feed-count">0</span></header>
+          <div id="step-feed-scroll" class="step-feed-scroll">
+            <p id="step-feed-empty" class="step-feed-empty">Your steps will appear here as you work.</p>
+            <ol id="step-list" class="step-list"></ol>
+          </div>
+        </section>
+
+        <section id="privacy-settings" class="policy-wiring" hidden aria-hidden="true">
+          <div id="smart-blur-options">
+            <input id="smart-blur-toggle" data-policy="smartBlurEnabled" type="checkbox" disabled />
+            <input data-policy="showRecordingIndicator" type="checkbox" disabled />
+            <input data-policy="redactEmails" type="checkbox" disabled />
+            <input data-policy="redactPhoneNumbers" type="checkbox" disabled />
+            <input data-policy="redactFinancialNumbers" type="checkbox" disabled />
+            <input data-policy="redactIds" type="checkbox" disabled />
+            <input data-policy="redactFormFields" type="checkbox" disabled />
+            <input data-policy="redactAllNumbers" type="checkbox" disabled />
+            <input data-policy="redactImages" type="checkbox" disabled />
+            <input data-policy="redactTableRows" type="checkbox" disabled />
+            <input data-policy="redactLongText" type="checkbox" disabled />
+            <input data-policy="redactCommonNames" type="checkbox" disabled />
+            <input data-policy-color type="color" value="#d97706" disabled />
+          </div>
+          <button id="exclude-button" type="button" disabled>Exclude site</button>
+        </section>
+
+        <p id="error" class="error" role="alert" hidden></p>
+
+        <section id="capture-actions" class="capture-dock" hidden>
+          <div class="dock-tools">
+            <button id="pause-button" class="dock-action pause-action" type="button">Pause</button>
+            <button id="blur-panel-button" class="dock-action blur-action" type="button">Smart Blur</button>
+            <button id="discard-button" class="dock-action discard-action" type="button">Discard</button>
+          </div>
+          <button id="finish-button" class="primary finish-button" type="button"><span aria-hidden="true">✓</span> Finish capture</button>
+        </section>
+
+        <section id="review-actions" class="capture-dock review-dock" hidden>
+          <button id="open-review-button" class="primary finish-button" type="button">Retry upload</button>
+          <button id="review-discard-button" class="secondary" type="button">Discard</button>
+        </section>
       </section>
 
-      <form id="pairing-form" class="pairing-form card" hidden>
-        <label>
-          <span>One-time pairing code</span>
-          <input
-            id="pairing-code"
-            minlength="12"
-            maxlength="20"
-            pattern="[A-HJ-NP-Z2-9]{12,20}"
-            autocomplete="one-time-code"
-            autocapitalize="characters"
-            spellcheck="false"
-            placeholder="12-character code"
-            required
-          />
-        </label>
-        <div class="pairing-actions">
-          <button class="primary" type="submit">Pair workspace</button>
-          <button id="cancel-pairing-button" class="secondary" type="button">Cancel</button>
-        </div>
-      </form>
-
-      <section id="status-card" class="status-card" aria-live="polite">
-        <div>
-          <small>CAPTURE STATUS</small>
-          <strong id="status-label">Idle</strong>
-        </div>
-        <span id="step-count">0 steps</span>
-        <p id="status-detail">Start from the page you want to document.</p>
-      </section>
-
-      <form id="start-form" class="capture-form">
-        <label>
-          <span>Guide title</span>
-          <input
-            id="guide-title"
-            minlength="2"
-            maxlength="200"
-            placeholder="Captured workflow"
-            required
-          />
-        </label>
-        <label>
-          <span>Connected workspace</span>
-          <input id="workspace-id" maxlength="128" placeholder="Pair KnowHow first" readonly />
-        </label>
-        <button id="start-button" class="primary" type="submit" disabled>
-          Start capturing this tab
-        </button>
-      </form>
-
-      <section
-        id="step-feed"
-        class="step-feed"
-        aria-label="Captured steps"
-        aria-live="polite"
-        hidden
-      >
-        <header class="step-feed-heading">
-          <span>
-            <strong>Live steps</strong>
-            <small>Redacted locally before they appear here</small>
-          </span>
-          <span id="feed-count">0</span>
-        </header>
-        <div id="step-feed-scroll" class="step-feed-scroll">
-          <p id="step-feed-empty" class="step-feed-empty">
-            Your numbered steps will appear here as you click and navigate.
-          </p>
-          <ol id="step-list" class="step-list"></ol>
-        </div>
-      </section>
-
-      <details id="privacy-settings" class="privacy-settings card">
-        <summary>
-          <span>Smart Blur settings</span>
-          <small>Applied before screenshots are stored</small>
-        </summary>
-        <div class="settings-grid">
-          <label><input data-policy="showRecordingIndicator" type="checkbox" disabled /> Show "Recording started" flash</label>
-          <label><input data-policy="redactEmails" type="checkbox" disabled /> Emails</label>
-          <label><input data-policy="redactPhoneNumbers" type="checkbox" disabled /> Phone numbers</label>
-          <label><input data-policy="redactFinancialNumbers" type="checkbox" disabled /> Financial numbers</label>
-          <label><input data-policy="redactIds" type="checkbox" disabled /> Long IDs</label>
-          <label><input data-policy="redactFormFields" type="checkbox" disabled /> Form fields</label>
-          <label><input data-policy="redactAllNumbers" type="checkbox" disabled /> All numbers</label>
-          <label><input data-policy="redactImages" type="checkbox" disabled /> Images and video</label>
-          <label><input data-policy="redactTableRows" type="checkbox" disabled /> Table rows</label>
-          <label><input data-policy="redactLongText" type="checkbox" disabled /> Long text blocks</label>
-          <label><input data-policy="redactCommonNames" type="checkbox" disabled /> Common names (assisted)</label>
-          <label class="color-setting">
-            Click color
-            <input data-policy-color type="color" value="#ef6f47" disabled />
-          </label>
-        </div>
-        <button id="exclude-button" class="text-button exclude" type="button" disabled>
-          Exclude the current site
-        </button>
-        <p>Password fields and embedded frames are always redacted.</p>
-      </details>
-
-      <p id="error" class="error" role="alert" hidden></p>
-
-      <section id="capture-actions" class="capture-actions" hidden>
-        <button id="pause-button" class="secondary" type="button">Pause</button>
-        <button id="finish-button" class="primary" type="button">Finish capture</button>
-        <button id="discard-button" class="danger" type="button">Discard</button>
-      </section>
-
-      <section id="review-actions" class="capture-actions" hidden>
-        <button id="open-review-button" class="primary" type="button">
-          Retry upload
-        </button>
-        <button id="review-discard-button" class="danger" type="button">
-          Discard
-        </button>
+      <section id="guides-panel" class="panel-view guide-library" hidden>
+        <header class="guide-library-heading"><span><small>Follow mode</small><strong>Your guides</strong></span><span id="guide-library-count">0</span></header>
+        <label class="guide-search-field"><span class="search-icon" aria-hidden="true"></span><input id="guide-search" type="search" placeholder="Search guides and steps" autocomplete="off" /></label>
+        <p id="guide-library-empty" class="guide-library-empty">Open KnowHow once to sync the guides you can access.</p>
+        <div id="guide-results" class="guide-results"></div>
+        <article id="guide-follow" class="guide-follow" hidden>
+          <button id="guide-follow-back" class="text-button guide-back" type="button">← All guides</button>
+          <header><span id="guide-follow-status"></span><h2 id="guide-follow-title"></h2><p id="guide-follow-summary"></p></header>
+          <div class="follow-progress"><span id="guide-follow-progress"></span><i><span id="guide-follow-progress-bar"></span></i></div>
+          <ol id="guide-follow-steps" class="guide-follow-steps"></ol>
+          <footer class="guide-follow-actions">
+            <button id="guide-previous-step" class="secondary" type="button">Previous</button>
+            <button id="guide-next-step" class="primary" type="button">Next</button>
+            <button id="guide-open-app" class="text-button" type="button">Open in KnowHow ↗</button>
+          </footer>
+        </article>
       </section>
     </main>
     <script type="module" src="./popup.js"></script>

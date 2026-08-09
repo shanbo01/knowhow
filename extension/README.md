@@ -30,26 +30,35 @@ For Edge, use edge://extensions and the same extension/dist directory.
 
 ## Capture workflow
 
-1. Pair the extension with the one-time code shown in a KnowHow workspace.
+1. Open the extension dialog in a signed-in KnowHow workspace and choose
+   Connect extension. The website performs the scoped device handoff directly;
+   there is no code to copy or type.
 2. Open the page to document and select the KnowHow toolbar action.
-3. Optionally configure Smart Blur and the click-target color.
-4. Enter a guide title and choose Start capturing this tab. The first capture
+3. Search the Guides tab to open an authorized guide in the side panel and
+   follow it beside the current page, or stay in Capture to record a new guide.
+4. Enter a guide title and choose Start capturing. The first capture
    asks you to allow KnowHow to access websites; this runtime permission is what
    lets Chrome capture the foreground tab from its persistent side panel.
-5. Keep KnowHow docked in Chrome's native side panel while the captured page
+5. Smart Blur appears only after recording starts and is off by default. When
+   enabled, its masks appear live on the page so you can see what will be
+   protected before the screenshot is taken.
+6. Keep KnowHow docked in Chrome's native side panel while the captured page
    remains usable beside it. Numbered, locally redacted step previews appear
-   in the panel as you click and navigate.
-6. Use Pause and Resume from the native side panel.
-7. Choose Finish & review to open the full post-capture editor.
-8. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
+   in the panel as you click, double-click, switch tabs, and navigate. Use the
+   trash action on a preview to remove a mistaken step immediately.
+7. Use Pause and Resume from the native side panel.
+8. Choose Finish & review to open the full post-capture editor.
+9. Reorder or remove steps, edit the generated copy, zoom or pan the contextual
    crop, add or remove manual blur regions, draw freehand, and move or remove
    the click target. Undo and redo operate on these editable layers.
-9. Confirm the privacy review and submit a private KnowHow draft. The selected
+10. Confirm the privacy review and submit a private KnowHow draft. The selected
    crop and editable layers are flattened once into the upload raster.
 
-The default scope is one foreground tab. Same-origin navigation continues
-automatically. A cross-origin navigation pauses capture and requires an
-explicit Resume action on the destination origin.
+Capture follows regular, policy-allowed foreground tabs in the recording
+window. Opening a link in a new tab or switching to another capturable tab adds
+a navigation step and continues the same session. Same-origin navigation also
+continues automatically. A same-tab cross-origin navigation still pauses and
+requires an explicit Resume action on the destination origin.
 
 ## Privacy properties
 
@@ -57,20 +66,20 @@ explicit Resume action on the destination origin.
 - No static all-site content script is used. All-site host access is optional
   and requested only when the user starts capture; it is required by Chrome's
   visible-tab screenshot API for reliable capture from a persistent side panel.
-- KnowHow still attaches only to the selected foreground tab, and the workspace
-  allowlist, excluded hosts, browser-internal-page, and incognito checks remain
-  enforced at runtime.
+- KnowHow attaches only to the active, policy-allowed foreground tab in the
+  recording window. Workspace allowlists, excluded hosts,
+  browser-internal-page, and incognito checks remain enforced at runtime.
 - Password fields and embedded frames are always redacted.
 - The extension does not request clipboard, tab-capture, desktop-capture, or
   raw keyboard access.
 - It records click events and navigation only; it never installs keyboard
   listeners or reads form-field values.
-- A raw screenshot exists only in memory while the offscreen document applies
-  local redaction. IndexedDB receives only the redacted image Blob.
-- Automatic masks are burned into the locally retained base image and cannot
-  be removed. Manual blur, drawing, crop, and click-target edits remain layered
-  and reversible until submission. "Unblur" removes only a manual blur layer;
-  it can never reveal content hidden by automatic Smart Blur.
+- The offscreen document rasterizes and compresses the screenshot locally.
+  IndexedDB receives that private raster plus normalized Smart Blur regions;
+  the live feed and guide viewer render those regions as blur immediately.
+- Smart Blur, manual blur, drawing, contextual crop, and click-target edits
+  remain layered and reversible while the capture is a private draft. The
+  first review submission flattens the reviewed layers into the private image.
 - Pause increments the capture generation before acknowledging the action.
   Queued or in-flight work from an older generation is discarded.
 - Discard removes every redacted screenshot for the local capture session.
@@ -83,8 +92,9 @@ the final privacy control.
 ## KnowHow API
 
 The development build points to `http://localhost:3001` in src/core/config.js
-and declares only localhost in manifest host_permissions. Pairing uses a signed,
-short-lived one-time code generated inside an authenticated KnowHow workspace:
+and declares only localhost in manifest host_permissions. The signed-in website
+uses `externally_connectable` messaging to perform a short-lived, one-time
+credential exchange internally; the user never sees or enters a pairing code:
 
     POST /api/extension/pair
     POST /api/extension/token/refresh
@@ -111,10 +121,10 @@ the user’s Appwrite session.
 When a production KnowHow origin is selected, update both src/core/config.js and
 the exact manifest host_permissions entry before building.
 
-## MVP limits
+## Current limits
 
 - Visible viewport screenshots only
-- Foreground captured tab only
+- Foreground tabs in the recording window only
 - At most 100 captured steps per session
 - At most two screenshot attempts per second
 - Redacted image target of 2 MB per step

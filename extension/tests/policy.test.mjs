@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_CAPTURE_POLICY,
   applyWorkspaceContext,
   evaluateCaptureUrl,
   hostnameMatchesPattern,
@@ -9,6 +10,17 @@ import {
   normalizeSitePattern,
   sanitizeCaptureUrl,
 } from "../src/core/policy.js";
+
+test("Smart Blur is opt-in even when a workspace recommends detectors", () => {
+  assert.equal(DEFAULT_CAPTURE_POLICY.smartBlurEnabled, false);
+  const policy = applyWorkspaceContext({}, {
+    policyVersion: "privacy-v1",
+    privacy: { automatic: ["email", "form-field"] },
+  });
+  assert.equal(policy.smartBlurEnabled, false);
+  assert.equal(policy.redactEmails, true);
+  assert.equal(policy.redactFormFields, true);
+});
 
 test("only regular HTTP and HTTPS pages are eligible", () => {
   for (const url of [

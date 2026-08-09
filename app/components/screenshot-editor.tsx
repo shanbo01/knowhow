@@ -49,7 +49,7 @@ const MIN_CROP_SIZE = 1 / MAX_ZOOM;
 const MIN_CLICK_RADIUS = 0.018;
 const MAX_CLICK_RADIUS = 0.22;
 const MAX_HISTORY = 50;
-const COLOR_SWATCHES = ["#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#a855f7"];
+const COLOR_SWATCHES = ["#b45309", "#d97706", "#166534", "#8a6d1f", "#7f1d1d", "#44403c"];
 
 type Mode = "view" | "crop" | "redact" | "click" | "box" | "arrow" | "text";
 

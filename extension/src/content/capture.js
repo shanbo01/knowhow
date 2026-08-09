@@ -13,12 +13,12 @@
     policy: {},
   };
   let pendingPointer = null;
-  let deferredClick = null;
+  let pendingSingleClick = null;
   let interactionSequence = 0;
 
   const POINTER_MOVE_TOLERANCE = 6;
   const POINTER_COMMIT_WINDOW_MS = 3_000;
-  const DEFERRED_REPLY_TIMEOUT_MS = 2_500;
+  const DOUBLE_CLICK_WINDOW_MS = 260;
 
   function send(message) {
     return chrome.runtime.sendMessage(message).catch(() => null);
@@ -129,29 +129,35 @@
   }
 
   function formFieldMasks() {
-    const selectors = state.policy.redactFormFields
-      ? [
-          "input:not([type=button]):not([type=submit]):not([type=reset])",
-          "textarea",
-          "select",
-          "[contenteditable=true]",
-        ]
-      : [
-          "input[type=password]",
-          "[autocomplete*=password]",
-          "[autocomplete=one-time-code]",
-          "[autocomplete=cc-number]",
-        ];
-    if (state.policy.redactEmails !== false) {
+    const smartBlurEnabled = state.policy.smartBlurEnabled === true;
+    const selectors = [
+      "input[type=password]",
+      "[autocomplete*=password]",
+      "[autocomplete=one-time-code]",
+      "[autocomplete=cc-number]",
+      "[data-knowhow-redact]",
+    ];
+    if (smartBlurEnabled && state.policy.redactFormFields) {
+      selectors.push(
+        "input:not([type=button]):not([type=submit]):not([type=reset])",
+        "textarea",
+        "select",
+        "[contenteditable=true]",
+      );
+    }
+    if (smartBlurEnabled && state.policy.redactEmails !== false) {
       selectors.push("input[type=email]", "[autocomplete=email]");
     }
-    if (state.policy.redactPhoneNumbers !== false) {
+    if (smartBlurEnabled && state.policy.redactPhoneNumbers !== false) {
       selectors.push("input[type=tel]", "[autocomplete=tel]");
     }
-    selectors.push("[data-knowhow-redact]");
     const selector = selectors.join(",");
     return Array.from(document.querySelectorAll(selector))
-      .filter(visible)
+      .filter(
+        (element) =>
+          visible(element) &&
+          !element.closest("[data-knowhow-ui],[data-knowhow-overlay]"),
+      )
       .map((element) =>
         rectFor(
           element,
@@ -210,6 +216,7 @@
   }
 
   function textMasks() {
+    if (state.policy.smartBlurEnabled !== true) return [];
     const masks = [];
     const walker = document.createTreeWalker(
       document.body || document.documentElement,
@@ -223,7 +230,7 @@
       if (
         !parent ||
         !visible(parent) ||
-        parent.closest("script,style,noscript,svg")
+        parent.closest("script,style,noscript,svg,[data-knowhow-ui],[data-knowhow-overlay]")
       ) {
         continue;
       }
@@ -272,6 +279,7 @@
 
   function optionalSurfaceMasks() {
     const masks = [];
+    if (state.policy.smartBlurEnabled !== true) return masks;
     if (state.policy.redactImages) {
       for (const image of document.querySelectorAll("img,picture,canvas,video")) {
         if (visible(image)) {
@@ -298,6 +306,292 @@
       ...embeddedFrameMasks(),
       ...optionalSurfaceMasks(),
     ];
+  }
+
+  let blurPreviewRoot = null;
+  let blurPreviewTimer = null;
+  let blurPreviewFrame = null;
+  let blurPreviewInterval = null;
+  let blurPreviewObserver = null;
+  let blurPreviewRestoreTimer = null;
+  let blurPreviewSuspended = false;
+  let smartBlurUiRoot = null;
+  let smartBlurPanelOpen = false;
+
+  const SMART_BLUR_OPTIONS = [
+    ["redactEmails", "Email addresses"],
+    ["redactPhoneNumbers", "Phone numbers"],
+    ["redactFinancialNumbers", "Financial numbers"],
+    ["redactIds", "Long IDs"],
+    ["redactFormFields", "Form fields"],
+    ["redactAllNumbers", "All numbers"],
+    ["redactCommonNames", "Common names"],
+    ["redactLongText", "Long text"],
+    ["redactTableRows", "Table rows"],
+    ["redactImages", "Images and video"],
+  ];
+
+  function captureSessionVisible() {
+    return state.status === "recording" || state.status === "paused";
+  }
+
+  function clearBlurPreviewSchedule() {
+    if (blurPreviewTimer) {
+      clearTimeout(blurPreviewTimer);
+      blurPreviewTimer = null;
+    }
+    if (blurPreviewFrame) {
+      cancelAnimationFrame(blurPreviewFrame);
+      blurPreviewFrame = null;
+    }
+  }
+
+  function removeBlurPreview() {
+    clearBlurPreviewSchedule();
+    blurPreviewRoot?.remove();
+    blurPreviewRoot = null;
+  }
+
+  function ensureBlurPreviewRoot() {
+    if (blurPreviewRoot?.isConnected) return blurPreviewRoot;
+    const root = document.createElement("div");
+    root.dataset.knowhowOverlay = "smart-blur-preview";
+    root.setAttribute("aria-hidden", "true");
+    root.style.cssText =
+      "position:fixed;inset:0;z-index:2147483645;pointer-events:none;contain:strict;";
+    (document.body || document.documentElement).append(root);
+    blurPreviewRoot = root;
+    return root;
+  }
+
+  function renderBlurPreview() {
+    clearBlurPreviewSchedule();
+    if (
+      !captureSessionVisible() ||
+      blurPreviewSuspended ||
+      state.policy.smartBlurEnabled !== true
+    ) {
+      blurPreviewRoot?.replaceChildren();
+      return;
+    }
+    const masks = collectMasks();
+    const root = ensureBlurPreviewRoot();
+    const fragment = document.createDocumentFragment();
+    for (const mask of masks.slice(0, 300)) {
+      const region = document.createElement("span");
+      region.style.cssText =
+        "position:absolute;display:block;box-sizing:border-box;" +
+        "border:1px solid rgba(255,255,255,.66);border-radius:6px;" +
+        "background:rgba(24,24,27,.10);backdrop-filter:blur(13px) saturate(.65);" +
+        "-webkit-backdrop-filter:blur(13px) saturate(.65);" +
+        "box-shadow:0 0 0 1px rgba(24,24,27,.26),0 3px 12px rgba(0,0,0,.15);" +
+        `left:${mask.x}px;top:${mask.y}px;width:${mask.width}px;height:${mask.height}px;`;
+      fragment.append(region);
+    }
+    root.replaceChildren(fragment);
+  }
+
+  function scheduleBlurPreview(delay = 0) {
+    if (blurPreviewSuspended) return;
+    clearBlurPreviewSchedule();
+    const queueFrame = () => {
+      blurPreviewTimer = null;
+      blurPreviewFrame = requestAnimationFrame(() => {
+        blurPreviewFrame = null;
+        renderBlurPreview();
+      });
+    };
+    if (delay > 0) blurPreviewTimer = setTimeout(queueFrame, delay);
+    else queueFrame();
+  }
+
+  function setPagePolicy(key, checked) {
+    state.policy = { ...state.policy, [key]: checked };
+    syncSmartBlurUi();
+    scheduleBlurPreview();
+    void send({ type: "UPDATE_CAPTURE_POLICY", policy: { [key]: checked } });
+  }
+
+  function smartBlurSwitch(key, label) {
+    const row = document.createElement("label");
+    row.style.cssText =
+      "display:flex;align-items:center;justify-content:space-between;gap:16px;" +
+      "min-height:34px;color:#f4f4f5;font-size:14px;font-weight:600;cursor:pointer;";
+    const text = document.createElement("span");
+    text.textContent = label;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.knowhowPolicy = key;
+    input.style.cssText = "position:absolute;opacity:0;pointer-events:none;";
+    const track = document.createElement("span");
+    track.dataset.knowhowSwitch = "";
+    track.style.cssText =
+      "position:relative;display:block;width:40px;height:22px;flex:0 0 auto;" +
+      "border-radius:999px;background:#52525b;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);";
+    const thumb = document.createElement("i");
+    thumb.style.cssText =
+      "position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;" +
+      "background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.38);transition:transform .14s ease;";
+    track.append(thumb);
+    input.addEventListener("change", () => setPagePolicy(key, input.checked));
+    row.append(text, input, track);
+    return row;
+  }
+
+  function ensureSmartBlurUi() {
+    if (smartBlurUiRoot?.isConnected) return smartBlurUiRoot;
+    const root = document.createElement("div");
+    root.dataset.knowhowUi = "smart-blur";
+    root.style.cssText =
+      "position:fixed;right:18px;bottom:18px;z-index:2147483647;" +
+      "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#fff;";
+    const panel = document.createElement("section");
+    panel.dataset.knowhowBlurPanel = "";
+    panel.style.cssText =
+      "display:none;width:min(320px,calc(100vw - 36px));max-height:min(540px,calc(100vh - 92px));" +
+      "margin-bottom:10px;overflow:auto;border:1px solid rgba(255,255,255,.10);" +
+      "border-radius:16px;background:#171717;box-shadow:0 18px 50px rgba(0,0,0,.36);";
+    const heading = document.createElement("div");
+    heading.style.cssText =
+      "display:flex;align-items:center;justify-content:space-between;gap:16px;" +
+      "padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08);";
+    const title = document.createElement("strong");
+    title.textContent = "Smart Blur";
+    title.style.cssText = "font-size:17px;letter-spacing:-.02em;";
+    heading.append(title, smartBlurSwitch("smartBlurEnabled", ""));
+    const options = document.createElement("div");
+    options.dataset.knowhowBlurOptions = "";
+    options.style.cssText = "display:grid;padding:10px 16px 14px;";
+    for (const [key, label] of SMART_BLUR_OPTIONS) {
+      options.append(smartBlurSwitch(key, label));
+    }
+    const note = document.createElement("p");
+    note.textContent = "Protected regions update live and are hidden from the final screenshot overlay.";
+    note.style.cssText =
+      "margin:0;padding:0 16px 15px;color:#a1a1aa;font-size:11px;line-height:1.45;";
+    panel.append(heading, options, note);
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.dataset.knowhowBlurTrigger = "";
+    trigger.style.cssText =
+      "display:flex;align-items:center;gap:9px;margin-left:auto;padding:10px 14px;" +
+      "border:1px solid rgba(255,255,255,.12);border-radius:999px;background:#171717;" +
+      "color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.28);font:700 13px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer;";
+    const triggerIcon = document.createElement("span");
+    triggerIcon.textContent = "✦";
+    triggerIcon.style.cssText = "color:#fb923c;font-size:15px;";
+    const triggerLabel = document.createElement("span");
+    triggerLabel.dataset.knowhowBlurLabel = "";
+    trigger.append(triggerIcon, triggerLabel);
+    trigger.addEventListener("click", () => {
+      smartBlurPanelOpen = !smartBlurPanelOpen;
+      syncSmartBlurUi();
+    });
+    root.append(panel, trigger);
+    (document.body || document.documentElement).append(root);
+    smartBlurUiRoot = root;
+    return root;
+  }
+
+  function syncSmartBlurUi() {
+    if (!captureSessionVisible()) {
+      smartBlurUiRoot?.remove();
+      smartBlurUiRoot = null;
+      smartBlurPanelOpen = false;
+      return;
+    }
+    const root = ensureSmartBlurUi();
+    const enabled = state.policy.smartBlurEnabled === true;
+    const panel = root.querySelector("[data-knowhow-blur-panel]");
+    panel.style.display = smartBlurPanelOpen ? "block" : "none";
+    const label = root.querySelector("[data-knowhow-blur-label]");
+    label.textContent = enabled ? "Smart Blur on" : "Smart Blur off";
+    for (const input of root.querySelectorAll("[data-knowhow-policy]")) {
+      input.checked = state.policy[input.dataset.knowhowPolicy] === true;
+      const track = input.nextElementSibling;
+      if (track) {
+        track.style.background = input.checked ? "#10b981" : "#52525b";
+        const thumb = track.firstElementChild;
+        if (thumb) thumb.style.transform = input.checked ? "translateX(18px)" : "none";
+      }
+    }
+    const options = root.querySelector("[data-knowhow-blur-options]");
+    if (options) options.style.opacity = enabled ? "1" : ".58";
+  }
+
+  function hideCaptureOverlays() {
+    if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "hidden";
+  }
+
+  function restoreCaptureOverlays() {
+    if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "visible";
+  }
+
+  function startBlurPreviewTracking() {
+    blurPreviewSuspended = false;
+    if (!blurPreviewInterval) {
+      blurPreviewInterval = setInterval(() => scheduleBlurPreview(), 1_500);
+    }
+    if (!blurPreviewObserver && (document.body || document.documentElement)) {
+      blurPreviewObserver = new MutationObserver((mutations) => {
+        const pageChanged = mutations.some((mutation) => {
+          const target = mutation.target instanceof Element
+            ? mutation.target
+            : mutation.target.parentElement;
+          return !target?.closest("[data-knowhow-ui],[data-knowhow-overlay]");
+        });
+        if (pageChanged) scheduleBlurPreview();
+      });
+      blurPreviewObserver.observe(document.body || document.documentElement, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class", "style", "hidden", "aria-hidden", "value"],
+      });
+    }
+    syncSmartBlurUi();
+    scheduleBlurPreview();
+  }
+
+  function stopBlurPreviewTracking() {
+    if (blurPreviewInterval) {
+      clearInterval(blurPreviewInterval);
+      blurPreviewInterval = null;
+    }
+    blurPreviewObserver?.disconnect();
+    blurPreviewObserver = null;
+    blurPreviewSuspended = false;
+    if (blurPreviewRestoreTimer) {
+      clearTimeout(blurPreviewRestoreTimer);
+      blurPreviewRestoreTimer = null;
+    }
+    removeBlurPreview();
+    syncSmartBlurUi();
+  }
+
+  function hideBlurPreviewForCapture() {
+    blurPreviewSuspended = true;
+    removeBlurPreview();
+    hideCaptureOverlays();
+    if (blurPreviewRestoreTimer) clearTimeout(blurPreviewRestoreTimer);
+    // The background normally restores immediately after capture. This
+    // fallback prevents a failed or cancelled screenshot from leaving the
+    // author without their live privacy preview.
+    blurPreviewRestoreTimer = setTimeout(() => {
+      blurPreviewRestoreTimer = null;
+      restoreBlurPreviewAfterCapture();
+    }, 5_000);
+  }
+
+  function restoreBlurPreviewAfterCapture() {
+    if (blurPreviewRestoreTimer) {
+      clearTimeout(blurPreviewRestoreTimer);
+      blurPreviewRestoreTimer = null;
+    }
+    blurPreviewSuspended = false;
+    restoreCaptureOverlays();
+    scheduleBlurPreview();
   }
 
   function labelFor(element) {
@@ -360,8 +654,8 @@
       targetRect,
       clickPoint,
       viewport,
-      title: "Select " + name,
-      instructions: "Select " + name + ".",
+      title: "Click " + name,
+      instructions: "Click " + name + ".",
       sanitizedUrl: sanitizedPageUrl(),
       pageUrl: sanitizedPageUrl(),
     };
@@ -447,12 +741,21 @@
     const enteringRecording =
       status === "recording" && state.status !== "recording";
     state.status = status;
-    if (status !== "recording") removeRecordingFlash();
+    if (status !== "recording") {
+      removeRecordingFlash();
+      clearPendingSingleClick();
+      pendingPointer = null;
+    }
     if (enteringRecording) {
       recordingActivationCount += 1;
       showRecordingFlash(
         recordingActivationCount === 1 ? "Recording started" : "Recording resumed",
       );
+    }
+    if (status === "recording" || status === "paused") {
+      startBlurPreviewTracking();
+    } else {
+      stopBlurPreviewTracking();
     }
   }
 
@@ -474,105 +777,58 @@
     });
   }
 
-  // A pointerdown on an interactive control is deferred until the pre-click
-  // screenshot is ready, so transient UI (menus, popovers) is still visible in
-  // the captured step. Canceling pointerdown suppresses the compatibility
-  // mousedown/mouseup/click events, then the click is synthesized after the
-  // screenshot so the page still reacts normally.
-  function deferrableTarget(element) {
-    if (!(element instanceof Element)) return false;
-    if (
-      !element.matches(
-        "button,a,input,select,textarea,[role=button],[role=link],[tabindex]",
-      )
-    ) {
-      return false;
-    }
-    // Text-entry fields keep native behavior: caret placement and typing
-    // matter more than transient UI, and their pickers open on click.
-    if (
-      element.matches(
-        "textarea,[contenteditable=true],input:not([type]),input[type=text]," +
-          "input[type=search],input[type=email],input[type=password]," +
-          "input[type=tel],input[type=url],input[type=number]",
-      )
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  function tryCommitDeferredClick(deferred) {
-    if (deferred.cancelled || !deferred.released) return;
-    if (!deferred.screenshotReady && !deferred.preflightFailed) return;
-    commitDeferredClick(deferred);
-  }
-
-  function commitDeferredClick(deferred) {
-    if (deferredClick === deferred) deferredClick = null;
-    if (deferred.timer) clearTimeout(deferred.timer);
-    const hit =
-      document.elementFromPoint(deferred.clientX, deferred.clientY) ||
-      deferred.element;
-    try {
-      hit.click();
-    } catch {
-      // Some pages reject programmatic activation; the page stays unchanged.
-    }
-    if (deferred.element instanceof HTMLElement) {
-      try {
-        deferred.element.focus({ preventScroll: true });
-      } catch {
-        // Focus restoration is best-effort for inputs clicked during capture.
+  // Native click behavior is never cancelled or replayed. The old preflight
+  // path synthesized a second click, which made dropdowns open and close in a
+  // single frame on frameworks that already handled the real click. We wait
+  // for the page to paint, then record the resulting UI state.
+  function emitAfterPaint(context, options = {}) {
+    void waitForPagePaint().then(() => {
+      if (state.status === "recording") {
+        sendCapturedInteraction(context, options);
       }
-    }
-    sendCapturedInteraction(deferred.context, {
-      preflight: deferred.screenshotReady === true,
     });
   }
 
-  function beginDeferredClick(event, element, context) {
-    removeRecordingFlash();
-    const deferred = {
-      pointerId: event.pointerId,
-      element,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      context,
-      screenshotReady: false,
-      preflightFailed: false,
-      released: false,
-      cancelled: false,
-      timer: null,
-    };
-    deferredClick = deferred;
-    deferred.timer = setTimeout(() => {
-      if (deferredClick !== deferred) return;
-      deferred.preflightFailed = true;
-      tryCommitDeferredClick(deferred);
-    }, DEFERRED_REPLY_TIMEOUT_MS);
-    void send({
-      type: "PREFLIGHT_CAPTURE",
-      sessionId: state.sessionId,
-      context: {
-        ...context,
-        masks: collectMasks(),
-      },
-      viewport: context.viewport,
-    }).then((response) => {
-      if (deferredClick !== deferred || deferred.cancelled) return;
-      if (deferred.timer) clearTimeout(deferred.timer);
-      deferred.screenshotReady = response?.ok === true;
-      deferred.preflightFailed = response?.ok !== true;
-      tryCommitDeferredClick(deferred);
-    });
+  function clearPendingSingleClick() {
+    if (pendingSingleClick?.timer) clearTimeout(pendingSingleClick.timer);
+    pendingSingleClick = null;
+  }
+
+  function flushPendingSingleClick({ afterPaint = false } = {}) {
+    const pending = pendingSingleClick;
+    if (!pending) return;
+    clearPendingSingleClick();
+    if (afterPaint) emitAfterPaint(pending.context);
+    else sendCapturedInteraction(pending.context);
+  }
+
+  function scheduleSingleClick(element, context) {
+    clearPendingSingleClick();
+    const pending = { element, context, timer: null };
+    pending.timer = setTimeout(() => {
+      if (pendingSingleClick !== pending) return;
+      pendingSingleClick = null;
+      emitAfterPaint(context);
+    }, DOUBLE_CLICK_WINDOW_MS);
+    pendingSingleClick = pending;
+  }
+
+  function isKnowHowUiEvent(event) {
+    return event.composedPath().some(
+      (item) => item instanceof Element && item.closest("[data-knowhow-ui]"),
+    );
   }
 
   function onPointerDown(event) {
     pendingPointer = null;
+    if (isKnowHowUiEvent(event)) return;
     if (state.status !== "recording" || !event.isTrusted) return;
     if (event.isPrimary === false || event.button !== 0) return;
     const element = captureElement(event.target);
+    if (pendingSingleClick && pendingSingleClick.element !== element) {
+      // Queue the previous action before this new element changes the page.
+      flushPendingSingleClick();
+    }
     const viewport = viewportSnapshot();
     const context = targetContext(
       element,
@@ -580,12 +836,6 @@
       viewport,
     );
     if (!context.targetRect) return;
-    if (deferrableTarget(element)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      beginDeferredClick(event, element, context);
-      return;
-    }
     pendingPointer = {
       pointerId: event.pointerId,
       element,
@@ -597,7 +847,7 @@
   }
 
   function onPointerMove(event) {
-    const active = pendingPointer || deferredClick;
+    const active = pendingPointer;
     if (!active || event.pointerId !== active.pointerId) return;
     if (
       Math.hypot(
@@ -608,35 +858,18 @@
       return;
     }
     pendingPointer = null;
-    if (deferredClick === active) {
-      deferredClick = null;
-      if (active.timer) clearTimeout(active.timer);
-      void send({ type: "PREFLIGHT_DISCARD", sessionId: state.sessionId });
-    }
   }
 
   function onPointerCancel(event) {
     if (pendingPointer && event.pointerId === pendingPointer.pointerId) {
       pendingPointer = null;
     }
-    if (deferredClick && event.pointerId === deferredClick.pointerId) {
-      if (deferredClick.timer) clearTimeout(deferredClick.timer);
-      deferredClick = null;
-      void send({ type: "PREFLIGHT_DISCARD", sessionId: state.sessionId });
-    }
-  }
-
-  function onPointerUp(event) {
-    if (event.isPrimary === false || event.button !== 0) return;
-    const deferred = deferredClick;
-    if (!deferred || event.pointerId !== deferred.pointerId) return;
-    deferred.released = true;
-    tryCommitDeferredClick(deferred);
   }
 
   // A right-click that opens the native context menu is captured as its own
   // step, matching how Scribe documents "right-click X" actions.
   function onContextMenu(event) {
+    if (isKnowHowUiEvent(event)) return;
     if (state.status !== "recording" || !event.isTrusted) return;
     const element = captureElement(event.target);
     const viewport = viewportSnapshot();
@@ -644,7 +877,7 @@
     if (!targetRect) return;
     const point = { x: event.clientX, y: event.clientY };
     const context = targetContext(element, point, viewport);
-    const name = context.title.replace(/^Select /, "");
+    const name = context.title.replace(/^Click /, "");
     sendCapturedInteraction(
       {
         ...context,
@@ -656,6 +889,10 @@
   }
 
   function onClick(event) {
+    if (isKnowHowUiEvent(event)) {
+      pendingPointer = null;
+      return;
+    }
     if (state.status !== "recording" || !event.isTrusted) {
       pendingPointer = null;
       return;
@@ -666,7 +903,7 @@
       const viewport = viewportSnapshot();
       const targetRect = rectFor(element, "click-target");
       if (!targetRect) return;
-      sendCapturedInteraction(
+      emitAfterPaint(
         targetContext(
           element,
           {
@@ -684,7 +921,36 @@
     if (!staged) return;
     if (performance.now() - staged.startedAt > POINTER_COMMIT_WINDOW_MS) return;
     if (!event.composedPath().includes(staged.element)) return;
-    sendCapturedInteraction(staged.context);
+    if (event.detail > 1) {
+      if (pendingSingleClick?.element === staged.element) {
+        clearPendingSingleClick();
+      }
+      return;
+    }
+    scheduleSingleClick(staged.element, staged.context);
+  }
+
+  function onDoubleClick(event) {
+    if (isKnowHowUiEvent(event)) return;
+    if (state.status !== "recording" || !event.isTrusted) return;
+    const element = captureElement(event.target);
+    if (pendingSingleClick?.element === element) clearPendingSingleClick();
+    const viewport = viewportSnapshot();
+    const context = targetContext(
+      element,
+      { x: event.clientX, y: event.clientY },
+      viewport,
+    );
+    if (!context.targetRect) return;
+    const name = context.title.replace(/^Click /, "");
+    emitAfterPaint(
+      {
+        ...context,
+        title: "Double-click " + name,
+        instructions: "Double-click " + name + ".",
+      },
+      { sourceEvent: "dblclick" },
+    );
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -695,16 +961,31 @@
       sendResponse({ ok: true });
       return false;
     }
+    if (message?.type === "KNOWHOW_UPDATE_POLICY") {
+      state.policy = message.policy || {};
+      syncSmartBlurUi();
+      scheduleBlurPreview();
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message?.type === "KNOWHOW_SET_STATUS") {
       setStatus(message.status, message.reason);
       sendResponse({ ok: true });
       return false;
     }
+    if (message?.type === "KNOWHOW_TOGGLE_SMART_BLUR_PANEL") {
+      smartBlurPanelOpen = !smartBlurPanelOpen;
+      syncSmartBlurUi();
+      sendResponse({ ok: true, open: smartBlurPanelOpen });
+      return false;
+    }
     if (message?.type === "KNOWHOW_PREPARE_SCREENSHOT") {
       removeRecordingFlash();
-      void waitForPagePaint().then(() =>
-        sendResponse({ ok: true, context: pageContext() }),
-      );
+      const context = pageContext();
+      hideBlurPreviewForCapture();
+      void waitForPagePaint().then(() => {
+        sendResponse({ ok: true, context });
+      });
       return true;
     }
     if (message?.type === "KNOWHOW_RESTORE_INDICATOR") {
@@ -713,10 +994,19 @@
       sendResponse({ ok: true });
       return false;
     }
+    if (message?.type === "KNOWHOW_RESTORE_PRIVACY_PREVIEW") {
+      restoreBlurPreviewAfterCapture();
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message?.type === "KNOWHOW_GET_PAGE_CONTEXT") {
       removeRecordingFlash();
-      sendResponse({ ok: true, context: pageContext() });
-      return false;
+      const context = pageContext();
+      hideBlurPreviewForCapture();
+      void waitForPagePaint().then(() => {
+        sendResponse({ ok: true, context });
+      });
+      return true;
     }
     if (message?.type === "KNOWHOW_VERIFY_DOCUMENT") {
       sendResponse({ ok: true, sanitizedUrl: sanitizedPageUrl() });
@@ -728,9 +1018,13 @@
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("pointercancel", onPointerCancel, true);
-  document.addEventListener("pointerup", onPointerUp, true);
   document.addEventListener("click", onClick, true);
+  document.addEventListener("dblclick", onDoubleClick, true);
   document.addEventListener("contextmenu", onContextMenu, true);
+  addEventListener("scroll", () => scheduleBlurPreview(), true);
+  addEventListener("resize", () => scheduleBlurPreview());
+  document.addEventListener("input", () => scheduleBlurPreview(), true);
+  document.addEventListener("change", () => scheduleBlurPreview(), true);
 
   globalThis[INSTANCE_KEY] = {
     announce() {

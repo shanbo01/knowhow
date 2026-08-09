@@ -51,7 +51,7 @@ test("capture policy reads and mutations share one serialized queue", async () =
   assert.doesNotMatch(exclude, /getLocalCapturePolicy\(\)/);
 });
 
-test("capture startup freezes policy under the state guard and updates reject active sessions", async () => {
+test("capture startup freezes policy while live sessions can update Smart Blur", async () => {
   const source = await backgroundSource();
   const start = functionSlice(source, "startCapture", "resumeCapture");
   const update = functionSlice(
@@ -66,9 +66,14 @@ test("capture startup freezes policy under the state guard and updates reject ac
   );
   assert.match(update, /withStateMutation/);
   assert.ok(
-    update.indexOf("connectableCaptureStatuses.has(state.status)") <
+    update.indexOf("livePolicyStatuses.has(state.status)") <
       update.indexOf("setCapturePolicy(patch)"),
   );
+  assert.match(
+    source,
+    /livePolicyStatuses = new Set\(\[\s*CaptureStatus\.RECORDING,\s*CaptureStatus\.PAUSED/,
+  );
+  assert.match(update, /type: "KNOWHOW_UPDATE_POLICY"/);
   assert.match(
     source.slice(source.indexOf('case "UPDATE_CAPTURE_POLICY"')),
     /updateCapturePolicy\(message\.policy \|\| \{\}\)/,
@@ -124,6 +129,7 @@ test("finish uploads the reviewed draft itself and opens the app editor tab, wit
   assert.match(openEditor, /chrome\.windows/);
   assert.match(openEditor, /chrome\.tabs\.create\(\{ url: target\.href \}\)/);
   assert.match(upload, /CaptureEvent\.BEGIN_UPLOAD/);
+  assert.match(upload, /getCapturedSteps\(reviewing\.sessionId, reviewing\.stepIds\)/);
   assert.match(upload, /submitPrivateDraft\(/);
   assert.match(upload, /openOrFocusEditorTab\(result\.editUrl\)/);
   assert.match(finish, /performDraftUpload\(reviewing\)/);

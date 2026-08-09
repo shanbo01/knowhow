@@ -2,6 +2,17 @@
 
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export function GuideDeleteDialog({
   title,
@@ -18,20 +29,16 @@ export function GuideDeleteDialog({
   const confirmed = confirmation === title;
 
   return (
-    <div className="danger-confirm-backdrop" role="presentation">
-      <section
-        className="danger-confirm-card"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="delete-guide-title"
-        aria-describedby="delete-guide-description"
-      >
-        <span className="danger-confirm-icon"><Trash2 /></span>
-        <p className="eyebrow">Permanent action</p>
-        <h2 id="delete-guide-title">Delete this guide?</h2>
-        <p id="delete-guide-description">
-          This permanently deletes every revision and stored screenshot. It cannot be undone.
-        </p>
+    <AlertDialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
+      <AlertDialogContent className="danger-confirm-card">
+        <AlertDialogHeader>
+          <AlertDialogMedia className="danger-confirm-icon"><Trash2 /></AlertDialogMedia>
+          <p className="eyebrow">Permanent action</p>
+          <AlertDialogTitle>Delete this guide?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently deletes every revision and stored screenshot. It cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
         <label className="field danger-confirm-field">
           <span>Type <strong>{title}</strong> to confirm</span>
           <input
@@ -42,18 +49,17 @@ export function GuideDeleteDialog({
             spellCheck={false}
           />
         </label>
-        <footer>
-          <button className="button secondary" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button
-            className="button danger-button"
-            type="button"
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy} onClick={onCancel}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
             disabled={busy || !confirmed}
             onClick={() => void onConfirm().catch(() => undefined)}
           >
             <Trash2 /> Delete guide
-          </button>
-        </footer>
-      </section>
-    </div>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

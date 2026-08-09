@@ -70,22 +70,25 @@ test("workspace navigation and direct links remain workspace-scoped", async () =
   assert.doesNotMatch(shell, /guide\.canReview[^\n]*reviewedAt/);
 });
 
-test("interactive dropdowns use the themed accessible menu instead of native selects", async () => {
-  const [shell, editor, menu, styles] = await Promise.all([
+test("interactive dropdowns use the shadcn accessible menu instead of native selects", async () => {
+  const [shell, editor, menu, select, styles] = await Promise.all([
     source("../app/components/knowhow-workspace-app.tsx"),
     source("../app/components/guide-editor.tsx"),
     source("../app/components/select-menu.tsx"),
+    source("../components/ui/select.tsx"),
     source("../app/globals.css"),
   ]);
 
   assert.doesNotMatch(`${shell}\n${editor}`, /<select\b/i);
-  assert.match(menu, /aria-haspopup="listbox"/);
-  assert.match(menu, /role="option"/);
-  assert.match(menu, /ArrowDown/);
-  assert.match(menu, /closeOnOutsideInteraction/);
-  assert.match(styles, /\.select-menu-option\[aria-selected="true"\]/);
-  assert.match(styles, /\.workspace-menu \.select-menu-options/);
-  assert.match(styles, /\.theme-menu \.select-menu-trigger/);
+  assert.match(menu, /from "@\/components\/ui\/select"/);
+  assert.match(menu, /<SelectTrigger/);
+  assert.match(menu, /<SelectContent/);
+  assert.match(menu, /<SelectItem/);
+  assert.match(menu, /onValueChange/);
+  assert.match(select, /alignItemWithTrigger = false/);
+  assert.match(styles, /\.kh-select-option/);
+  assert.match(styles, /\.workspace-menu \.kh-select-trigger/);
+  assert.match(styles, /\.theme-menu \.kh-select-trigger/);
   assert.match(styles, /step-insert-menu-in/);
 });
 
@@ -125,7 +128,29 @@ test("protected screenshots use authenticated media and non-destructive in-app r
   assert.doesNotMatch(screenshotEditor, /shot-toolbar/);
   assert.match(flatten, /context\.filter = `blur\(/);
   assert.match(media, /authorized-media-overlay/);
+  assert.match(media, /authorized-media-stage/);
+  assert.match(media, /className={`authorized-media-frame\$\{normalizedCrop \? " cropped" : ""\}`}/);
+  assert.match(media, /naturalWidth/);
   assert.match(editor, /annotation-preview-crop/);
+  assert.match(editor, /annotation-preview-redaction/);
+  assert.match(editor, /showCropOutline/);
+});
+
+test("browser-feedback layout and input regressions stay fixed", async () => {
+  const [shell, styles] = await Promise.all([
+    source("../app/components/knowhow-workspace-app.tsx"),
+    source("../app/globals.css"),
+  ]);
+
+  assert.match(shell, /const \[pageSize, setPageSize\] = useState\(5\)/);
+  assert.match(shell, /onChange=\{\(event\) => setHours\(event\.target\.value\)\}/);
+  assert.doesNotMatch(shell, /greeting-status"><i \/> Ready/);
+  assert.match(styles, /\[data-slot="sidebar-container"\]\.sidebar \{/);
+  assert.match(styles, /\.editor-canvas \{ width: 100%; max-width: 920px/);
+  assert.match(styles, /\.step-index \{ border-radius: 0\.55rem/);
+  assert.match(styles, /--app-page-max-width: 108rem/);
+  assert.match(styles, /\.sidebar-brand \.product-brand-copy strong \{ text-transform: none/);
+  assert.match(styles, /\.workspace-menu \.workspace-avatar[\s\S]*background: var\(--surface-soft\) !important/);
 });
 
 test("published screenshots are cloned into a revision-scoped working draft", async () => {

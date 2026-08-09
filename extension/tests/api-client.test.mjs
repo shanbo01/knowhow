@@ -55,7 +55,7 @@ test("private draft submission rejects a WebP before any authenticated request",
   );
 });
 
-test("screenshots upload as pending (not attested) and reversible redaction regions ride along in the commit", async () => {
+test("screenshots upload as pending and preserve crop, click, and reversible blur metadata", async () => {
   const apiSource = await readFile(
     new URL("../src/core/api-client.js", import.meta.url),
     "utf8",
@@ -66,6 +66,9 @@ test("screenshots upload as pending (not attested) and reversible redaction regi
   assert.ok(screenshotPath >= 0 && screenshotPath < commitPath);
   assert.match(apiSource, /"X-KnowHow-Redacted":\s*"false"/);
   assert.match(apiSource, /"X-KnowHow-Source-Rasterized":\s*"true"/);
+  assert.match(apiSource, /\{ clickTarget: step\.clickTarget \}/);
+  assert.match(apiSource, /\{ focusRegion: step\.focusRegion \}/);
+  assert.match(apiSource, /\{ crop: step\.crop \}/);
   assert.match(apiSource, /redactions: Array\.isArray\(step\.pendingRedactions\)/);
   assert.doesNotMatch(apiSource, /attestation/);
 });

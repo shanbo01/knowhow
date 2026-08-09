@@ -11,6 +11,7 @@ export const STORAGE_KEYS = Object.freeze({
   workspaceContext: "knowhow.capture.workspace-context",
   pendingRemoteDiscards: "knowhow.capture.pending-remote-discards",
   auth: "knowhow.capture.auth",
+  companion: "knowhow.capture.companion",
 });
 
 export const CAPTURE_LIMITS = Object.freeze({

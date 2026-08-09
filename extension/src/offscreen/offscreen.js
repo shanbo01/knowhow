@@ -1,4 +1,5 @@
 import { putCapturedStep } from "../core/capture-store.js";
+import { contextualCrop } from "../core/presentation.js";
 import { buildPendingRedactionRegions } from "../core/redaction.js";
 
 function canvasBlob(canvas, type = "image/jpeg", quality = 0.86) {
@@ -15,7 +16,7 @@ function canvasBlob(canvas, type = "image/jpeg", quality = 0.86) {
 function validColor(value) {
   return /^#[0-9a-f]{6}$/i.test(String(value || ""))
     ? value
-    : "#ff5d2e";
+    : "#d97706";
 }
 
 function clamp(value, minimum, maximum) {
@@ -141,10 +142,17 @@ async function processScreenshot(message) {
       message.targetRect,
       message.interactionViewport || message.viewport,
     );
+    const crop = contextualCrop({
+      clickTarget,
+      focusRegion,
+      imageWidth: compressedCanvas.width,
+      imageHeight: compressedCanvas.height,
+    });
     await putCapturedStep({
       ...message.step,
       ...(clickTarget ? { clickTarget } : {}),
       ...(focusRegion ? { focusRegion } : {}),
+      ...(clickTarget || focusRegion ? { crop } : {}),
       imageBlob: compressed.blob,
       imageWidth: compressedCanvas.width,
       imageHeight: compressedCanvas.height,

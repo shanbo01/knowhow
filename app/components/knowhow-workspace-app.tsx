@@ -8,9 +8,12 @@ import {
   BarChart3,
   BookOpen,
   Building2,
+  CalendarDays,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   ClipboardCheck,
   Copy,
@@ -31,7 +34,6 @@ import {
   LockKeyhole,
   LogOut,
   Mail,
-  Menu,
   Moon,
   MoreHorizontal,
   Paintbrush,
@@ -53,25 +55,33 @@ import {
   X,
 } from "lucide-react";
 import {
+  Children,
   useEffect,
   useCallback,
+  isValidElement,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import {
   downloadAuditCsv,
   downloadAuthorizedExport,
   removeWorkspaceLogo,
   knowhowCommand,
-  searchGuides,
   uploadWorkspaceLogo,
 } from "../../lib/knowhow-client";
 import { decryptSecretValue, encryptSecretValue } from "../../lib/crypto";
 import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
+import {
+  connectKnowHowExtension,
+  inspectKnowHowExtension,
+  syncKnowHowExtension,
+  type ExtensionCompanion,
+} from "../../lib/extension-bridge";
 import type {
   AdminAppointment,
   AuditEvent,
@@ -109,6 +119,52 @@ import {
 import { AuthorizedMedia } from "./authorized-media";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { SelectMenu } from "./select-menu";
+import { ProductBrand } from "./product-brand";
+import { WorkspaceLogo } from "./workspace-logo";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import {
+  Avatar,
+  AvatarFallback,
+  AvatarGroup,
+  AvatarGroupCount,
+} from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 
 type View =
   | "Overview"
@@ -211,7 +267,14 @@ function titleCase(value: string) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  return <span className={`status-badge status-${status.toLowerCase()}`}>{titleCase(status)}</span>;
+  return (
+    <Badge
+      className={`status-badge status-${status.toLowerCase()}`}
+      variant="outline"
+    >
+      {titleCase(status)}
+    </Badge>
+  );
 }
 
 function EmptyState({
@@ -249,18 +312,17 @@ function Modal({
   wide?: boolean;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal-card${wide ? " modal-wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
-        <header className="modal-header">
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className={cn("kh-dialog-content", wide && "kh-dialog-wide")}>
+        <DialogHeader className="kh-dialog-header">
           <div>
             {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-            <h2 id="modal-title">{title}</h2>
+            <DialogTitle>{title}</DialogTitle>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X /></button>
-        </header>
+        </DialogHeader>
         {children}
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -278,70 +340,274 @@ function MetricCard({
   tone?: "default" | "accent" | "warning";
 }) {
   return (
-    <article className={`metric-card metric-${tone}`}>
-      <div className="metric-top"><span>{label}</span><Icon /></div>
-      <strong>{value}</strong>
-      <small>{hint}</small>
-    </article>
+    <Card className={`metric-card metric-${tone}`} size="sm">
+      <CardHeader className="metric-card-header">
+        <CardDescription>{label}</CardDescription>
+        <span className="metric-icon"><Icon /></span>
+      </CardHeader>
+      <CardContent className="metric-card-content">
+        <strong>{value}</strong>
+        <small>{hint}</small>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardProgress({
+  value,
+  label,
+  tone = "neutral",
+}: {
+  value: number;
+  label: string;
+  tone?: "neutral" | "accent" | "muted";
+}) {
+  const normalized = Math.max(0, Math.min(100, Math.round(value)));
+
+  return (
+    <div
+      className={`dashboard-progress dashboard-progress-${tone}`}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={normalized}
+    >
+      <span style={{ width: `${normalized}%` }} />
+    </div>
+  );
+}
+
+function GreetingCard({ name, workspaceName }: { name: string; workspaceName: string }) {
+  const firstName = name.trim().split(/\s+/)[0] || "there";
+  const messages = useMemo(() => [
+    `Let’s keep ${workspaceName} clear and current.`,
+    "Ready to make the next step obvious?",
+    "A small update can save someone hours.",
+    "Keep the team moving with trusted guidance.",
+  ], [workspaceName]);
+  const [messageIndex, setMessageIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setMessageIndex((current) => (current + 1) % messages.length);
+    }, 9000);
+    return () => window.clearInterval(timer);
+  }, [messages.length]);
+
+  return (
+    <Card className="metric-card greeting-card" size="sm">
+      <CardContent className="greeting-card-content">
+        <span className="greeting-avatar">{initials(name)}</span>
+        <span className="greeting-copy">
+          <strong>Hi, {firstName} <span aria-hidden="true">👋</span></strong>
+          <span className="greeting-message" key={messageIndex}>{messages[messageIndex]}</span>
+        </span>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ListPagination({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  total: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const start = total ? safePage * pageSize + 1 : 0;
+  const end = Math.min(total, (safePage + 1) * pageSize);
+
+  return (
+    <div className="list-pagination" aria-label="List pagination">
+      <span>Showing {start}–{end} of {total}</span>
+      <div>
+        <SelectMenu
+          className="display-limit-select"
+          value={String(pageSize)}
+          onChange={(value) => onPageSizeChange(Number(value))}
+          ariaLabel="Items per page"
+          options={[5, 10, 25, 50].map((value) => ({ value: String(value), label: `${value} per page` }))}
+        />
+        <Button variant="outline" size="icon-sm" type="button" disabled={safePage === 0} onClick={() => onPageChange(safePage - 1)} aria-label="Previous page"><ChevronLeft /></Button>
+        <span>Page {safePage + 1} of {pageCount}</span>
+        <Button variant="outline" size="icon-sm" type="button" disabled={safePage >= pageCount - 1} onClick={() => onPageChange(safePage + 1)} aria-label="Next page"><ChevronRight /></Button>
+      </div>
+    </div>
   );
 }
 
 function OverviewView({
   data,
+  viewerName,
   canCreate,
   canCapture,
+  canManageAccess,
   onNewGuide,
   onOpenGuide,
   onNavigate,
 }: {
   data: NonNullable<BootstrapResponse["activeWorkspace"]>;
+  viewerName: string;
   canCreate: boolean;
   canCapture: boolean;
+  canManageAccess: boolean;
   onNewGuide: () => void;
   onOpenGuide: (guide: Guide) => void;
   onNavigate: (view: View) => void;
 }) {
   const { metrics, guides, groups, members } = data;
   const recent = [...guides].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+  const attention = [...guides]
+    .filter((guide) => guide.status === "review" || guide.status === "draft")
+    .sort((a, b) => {
+      if (a.status === b.status) return b.updatedAt.localeCompare(a.updatedAt);
+      return a.status === "review" ? -1 : 1;
+    })
+    .slice(0, 4);
+  const activeMembers = members.filter((item) => item.status === "active").length;
+  const restrictedGuides = guides.filter((item) => item.restricted).length;
+  const lifecycleTotal = metrics.drafts + metrics.reviews + metrics.published;
+  const safeLifecycleTotal = Math.max(1, lifecycleTotal);
+  const publishedStop = (metrics.published / safeLifecycleTotal) * 100;
+  const reviewStop = publishedStop + (metrics.reviews / safeLifecycleTotal) * 100;
+  const lifecycleBackground = `conic-gradient(var(--foreground) 0 ${publishedStop}%, var(--brand) ${publishedStop}% ${reviewStop}%, var(--chart-muted) ${reviewStop}% 100%)`;
+  const activityValues = [
+    { label: "Views", value: metrics.views, icon: Eye, tone: "neutral" as const },
+    { label: "Completions", value: metrics.completions, icon: CheckCircle2, tone: "accent" as const },
+    { label: "Captures", value: metrics.captures, icon: Sparkles, tone: "muted" as const },
+    { label: "Exports", value: metrics.exports, icon: Download, tone: "muted" as const },
+  ];
+  const maxActivity = Math.max(1, ...activityValues.map((item) => item.value));
+  const completionRate = metrics.views > 0 ? Math.min(100, (metrics.completions / metrics.views) * 100) : 0;
+  const activeMemberRate = members.length > 0 ? (activeMembers / members.length) * 100 : 0;
+  const audienceAssigned = guides.filter((guide) => {
+    const revision = guide.workingRevision ?? guide.publishedRevision;
+    return Boolean(revision?.audiences.length);
+  }).length;
+  const audienceCoverage = guides.length > 0 ? (audienceAssigned / guides.length) * 100 : 0;
+  const visibleMembers = members.filter((item) => item.status === "active").slice(0, 4);
 
   return (
-    <div className="view-stack">
-      <section className="hero-panel">
-        <div>
-          <p className="eyebrow">Governed knowledge</p>
-          <h1>Make the next correct action obvious.</h1>
-          <p>Capture privately, review deliberately, then publish each revision to exactly the people who need it.</p>
-          <div className="hero-actions">
-            <button className="button primary" type="button" disabled={!canCreate} onClick={onNewGuide}><Plus /> Create guide</button>
-            <button className="button secondary" type="button" disabled={!canCapture} onClick={() => onNavigate("Capture")}><Sparkles /> Capture a workflow</button>
-          </div>
+    <div className="workspace-overview">
+      <section className="overview-page-header">
+        <div className="overview-heading">
+          <h1>Dashboard</h1>
+          <p>Monitor knowledge, reviews, engagement, and audience coverage.</p>
         </div>
-        <div className="governance-flow" aria-label="Guide lifecycle">
-          <span><FileText /> Draft</span><ArrowRight /><span><ClipboardCheck /> Review</span><ArrowRight /><span className="active"><Globe2 /> Published</span>
+        <div className="overview-header-actions">
+          <Button variant="outline" size="sm" type="button" disabled={!canCapture} onClick={() => onNavigate("Capture")}><Sparkles /> Capture workflow</Button>
+          <Button size="sm" type="button" disabled={!canCreate} onClick={onNewGuide}><Plus /> New guide</Button>
         </div>
       </section>
 
-      <section className="metric-grid">
-        <MetricCard label="Published" value={metrics.published} hint="Available to assigned audiences" icon={Globe2} tone="accent" />
-        <MetricCard label="Private drafts" value={metrics.drafts} hint={`${metrics.reviews} awaiting review`} icon={FileText} />
-        <MetricCard label="Members" value={metrics.members} hint={`${groups.length} audience groups`} icon={Users} />
-        <MetricCard label="Usage" value={metrics.views + metrics.completions} hint={`${metrics.completions} completed guides`} icon={BarChart3} />
+      <section className="metric-grid overview-metric-grid">
+        <GreetingCard name={viewerName} workspaceName={data.workspace.name} />
+        <MetricCard label="Published guides" value={metrics.published} hint="Available to assigned audiences" icon={Globe2} tone="accent" />
+        <MetricCard label="Review queue" value={metrics.reviews} hint={`${metrics.drafts} private drafts in progress`} icon={ClipboardCheck} tone="warning" />
+        <MetricCard label="Total engagement" value={metrics.views + metrics.completions} hint={`${metrics.completions} guide completions`} icon={BarChart3} />
       </section>
 
-      <div className="overview-grid">
-        <section className="card table-card">
-          <div className="section-heading">
-            <div><p className="eyebrow">Recently changed</p><h2>Guides</h2></div>
-            <button className="button ghost small" type="button" onClick={() => onNavigate("Guides")}>View all <ArrowRight /></button>
-          </div>
+      <section className="dashboard-insight-grid">
+        <Card className="lifecycle-card">
+          <CardHeader className="dashboard-card-header">
+            <div>
+              <CardTitle>Knowledge lifecycle</CardTitle>
+              <CardDescription>Current distribution across every release stage.</CardDescription>
+            </div>
+            <Badge variant="outline">{lifecycleTotal} total</Badge>
+          </CardHeader>
+          <CardContent className="lifecycle-card-content">
+            <div
+              className="lifecycle-donut"
+              style={{ background: lifecycleBackground }}
+              aria-label={`${metrics.published} published, ${metrics.reviews} in review, ${metrics.drafts} drafts`}
+            >
+              <div><strong>{lifecycleTotal}</strong><span>guides</span></div>
+            </div>
+            <div className="lifecycle-legend">
+              <button type="button" onClick={() => onNavigate("Guides")}><i className="lifecycle-published" /><span>Published<small>Ready for audiences</small></span><strong>{metrics.published}</strong></button>
+              <button type="button" onClick={() => onNavigate("Guides")}><i className="lifecycle-review" /><span>In review<small>Waiting on a decision</small></span><strong>{metrics.reviews}</strong></button>
+              <button type="button" onClick={() => onNavigate("Guides")}><i className="lifecycle-draft" /><span>Drafts<small>Work still in progress</small></span><strong>{metrics.drafts}</strong></button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="engagement-card">
+          <CardHeader className="dashboard-card-header">
+            <div>
+              <CardTitle>Workspace activity</CardTitle>
+              <CardDescription>Real usage totals from capture through completion.</CardDescription>
+            </div>
+            <div className="engagement-summary"><strong>{metrics.views + metrics.completions}</strong><span>interactions</span></div>
+          </CardHeader>
+          <CardContent className="engagement-bars">
+            {activityValues.map(({ label, value, icon: Icon, tone }) => (
+              <div className="engagement-bar-row" key={label}>
+                <span className="engagement-bar-label"><Icon /><span>{label}</span></span>
+                <DashboardProgress value={(value / maxActivity) * 100} label={`${label}: ${value}`} tone={tone} />
+                <strong>{value}</strong>
+              </div>
+            ))}
+            <div className="completion-rate">
+              <div><span>Completion rate</span><strong>{Math.round(completionRate)}%</strong></div>
+              <DashboardProgress value={completionRate} label="Guide completion rate" tone="accent" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="review-queue-card">
+          <CardHeader className="dashboard-card-header">
+            <div>
+              <CardTitle>Review queue</CardTitle>
+              <CardDescription>Items that need the next action.</CardDescription>
+            </div>
+            <Button variant="ghost" size="icon-sm" type="button" onClick={() => onNavigate("Guides")} aria-label="Open guide library"><ArrowRight /></Button>
+          </CardHeader>
+          <CardContent className="review-queue-content">
+            {attention.length ? attention.map((guide) => {
+              const revision = guide.workingRevision ?? guide.publishedRevision;
+              const isReview = guide.status === "review";
+              return (
+                <button className="review-queue-row" type="button" key={guide.id} onClick={() => onOpenGuide(guide)}>
+                  <span className={cn("review-state-icon", isReview && "is-review")}>{isReview ? <ClipboardCheck /> : <FileText />}</span>
+                  <span><strong>{revision?.title ?? guide.title}</strong><small>{isReview ? "Decision required" : "Draft in progress"}</small></span>
+                  <ArrowRight />
+                </button>
+              );
+            }) : (
+              <div className="queue-clear-state"><CheckCircle2 /><strong>Queue is clear</strong><span>No drafts or reviews need attention.</span></div>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <div className="dashboard-work-grid">
+        <Card className="dashboard-guide-queue">
+          <CardHeader className="dashboard-card-header">
+            <div>
+              <CardTitle>Recently changed guides</CardTitle>
+              <CardDescription>Continue where the workspace last left off.</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" type="button" onClick={() => onNavigate("Guides")}>View library <ArrowRight /></Button>
+          </CardHeader>
+          <CardContent className="dashboard-queue-content">
           {recent.length ? (
-            <div className="guide-list compact-list">
+            <div className="dashboard-queue-list">
               {recent.map((guide) => {
                 const revision = guide.workingRevision ?? guide.publishedRevision;
                 return (
-                  <button className="guide-row" type="button" key={guide.id} onClick={() => onOpenGuide(guide)}>
-                    <span className="guide-icon"><BookOpen /></span>
-                    <span className="guide-row-main"><strong>{revision?.title ?? guide.title}</strong><small>{revision?.category || "Uncategorized"} · Updated {formatDate(guide.updatedAt)}</small></span>
+                  <button className="dashboard-queue-row" type="button" key={guide.id} onClick={() => onOpenGuide(guide)}>
+                    <span className="queue-guide-icon"><BookOpen /></span>
+                    <span className="queue-guide-main"><strong>{revision?.title ?? guide.title}</strong><small>{revision?.category || "Uncategorized"} · Updated {formatDate(guide.updatedAt)}</small></span>
                     <StatusBadge status={guide.status} />
                     {guide.restricted ? <LockKeyhole className="restricted-icon" aria-label="Restricted" /> : null}
                     <ArrowRight />
@@ -350,17 +616,45 @@ function OverviewView({
               })}
             </div>
           ) : (
-            <EmptyState icon={BookOpen} title="No guides yet" description="Create the first private draft for this workspace." action={canCreate ? <button className="button primary" onClick={onNewGuide}><Plus /> Create guide</button> : undefined} />
+            <EmptyState icon={BookOpen} title="No guides yet" description="Create the first private draft for this workspace." action={canCreate ? <Button onClick={onNewGuide}><Plus /> Create guide</Button> : undefined} />
           )}
-        </section>
+          </CardContent>
+        </Card>
 
-        <aside className="card access-summary">
-          <div className="section-heading compact"><div><p className="eyebrow">Access model</p><h2>Healthy boundaries</h2></div><ShieldCheck /></div>
-          <div className="summary-stat"><span><Users /> Active people</span><strong>{members.filter((item) => item.status === "active").length}</strong></div>
-          <div className="summary-stat"><span><Group /> Audience groups</span><strong>{groups.length}</strong></div>
-          <div className="summary-stat"><span><LockKeyhole /> Restricted guides</span><strong>{guides.filter((item) => item.restricted).length}</strong></div>
-          <p className="privacy-caption"><Shield /> Roles control actions. Audiences independently control who can receive published content.</p>
-        </aside>
+        <Card className="access-health-card">
+          <CardHeader className="dashboard-card-header">
+            <div>
+              <CardTitle>Audience coverage</CardTitle>
+              <CardDescription>People, groups, and publishing boundaries.</CardDescription>
+            </div>
+            <span className="access-shield"><ShieldCheck /></span>
+          </CardHeader>
+          <CardContent className="access-health-content">
+            <div className="audience-people-row">
+              <AvatarGroup>
+                {visibleMembers.map((member) => (
+                  <Avatar size="sm" key={member.id}><AvatarFallback>{initials(member.name, member.email)}</AvatarFallback></Avatar>
+                ))}
+                {activeMembers > visibleMembers.length ? <AvatarGroupCount>+{activeMembers - visibleMembers.length}</AvatarGroupCount> : null}
+              </AvatarGroup>
+              <div><strong>{activeMembers} active people</strong><span>across {groups.length} audience groups</span></div>
+            </div>
+            <div className="coverage-metric">
+              <div><span>Active membership</span><strong>{Math.round(activeMemberRate)}%</strong></div>
+              <DashboardProgress value={activeMemberRate} label="Active workspace membership" />
+            </div>
+            <div className="coverage-metric">
+              <div><span>Audience assignment</span><strong>{Math.round(audienceCoverage)}%</strong></div>
+              <DashboardProgress value={audienceCoverage} label="Guides assigned to an audience" tone="accent" />
+            </div>
+            <div className="access-health-stats">
+              <button type="button" disabled={!canManageAccess} onClick={() => onNavigate("Members")}><span><Users /> Members</span><strong>{members.length}</strong></button>
+              <button type="button" disabled={!canManageAccess} onClick={() => onNavigate("Groups")}><span><Group /> Groups</span><strong>{groups.length}</strong></button>
+              <button type="button" onClick={() => onNavigate("Guides")}><span><LockKeyhole /> Restricted</span><strong>{restrictedGuides}</strong></button>
+            </div>
+            <p className="access-health-note"><Shield /> Roles grant actions. Audiences control delivery.</p>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -385,28 +679,33 @@ function GuidesView({
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
+  const [pageSize, setPageSize] = useState(5);
+  const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
   const filtered = guides.filter((guide) => {
     const revision = guide.workingRevision ?? guide.publishedRevision;
     const text = `${guide.title} ${revision?.summary ?? ""} ${revision?.tags.join(" ") ?? ""}`.toLowerCase();
     return text.includes(query.toLowerCase()) && (status === "all" || guide.status === status);
   });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleGuides = filtered.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
   return (
     <div className="view-stack">
       <div className="page-heading">
         <div><p className="eyebrow">Knowledge library</p><h1>Guides</h1><p>Draft privately, review with context, and publish without interrupting the live revision.</p></div>
-        <button className="button primary" type="button" disabled={!canCreate} onClick={onNew}><Plus /> New guide</button>
+        <Button type="button" disabled={!canCreate} onClick={onNew}><Plus /> New guide</Button>
       </div>
       <section className="card table-card">
         <div className="filter-bar">
-          <label className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search guides" /></label>
-          <SelectMenu className="filter-select" leading={<Filter />} value={status} onChange={setStatus} ariaLabel="Filter guides by lifecycle state" options={[{ value: "all", label: "All lifecycle states" }, { value: "draft", label: "Draft" }, { value: "review", label: "In review" }, { value: "published", label: "Published" }, { value: "archived", label: "Archived" }]} />
+          <label className="search-field"><Search /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} placeholder="Search guides" /></label>
+          <SelectMenu className="filter-select" leading={<Filter />} value={status} onChange={(value) => { setStatus(value); setPage(0); }} ariaLabel="Filter guides by lifecycle state" options={[{ value: "all", label: "All lifecycle states" }, { value: "draft", label: "Draft" }, { value: "review", label: "In review" }, { value: "published", label: "Published" }, { value: "archived", label: "Archived" }]} />
           <span className="result-count">{filtered.length} {filtered.length === 1 ? "guide" : "guides"}</span>
         </div>
         {filtered.length ? (
           <div className="guide-table">
-            {filtered.map((guide) => {
+            {visibleGuides.map((guide) => {
               const revision = guide.workingRevision ?? guide.publishedRevision;
               const live = guide.publishedRevision;
               return (
@@ -435,6 +734,7 @@ function GuidesView({
             })}
           </div>
         ) : <EmptyState icon={Search} title="No matching guides" description="Try another search or lifecycle filter." />}
+        {filtered.length ? <ListPagination total={filtered.length} page={safePage} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); setPage(0); }} /> : null}
       </section>
       {deleteTarget ? (
         <GuideDeleteDialog
@@ -455,6 +755,7 @@ function GuideViewer({
   guide,
   workspaceId,
   workspaceName,
+  logoKey,
   accentColor,
   clickTargetColor,
   initialRevision,
@@ -474,6 +775,7 @@ function GuideViewer({
   guide: Guide;
   workspaceId: string;
   workspaceName: string;
+  logoKey: string | null;
   accentColor: string;
   clickTargetColor: string;
   initialRevision: GuideRevisionMode;
@@ -508,7 +810,7 @@ function GuideViewer({
           <div className="reader-nav-context">
             <button className="button ghost small" type="button" onClick={onClose}><ArrowLeft /> Guides</button>
             <span className="reader-header-divider" />
-            <span className="reader-workspace"><strong>{workspaceName}</strong><small>Revision {revision.number}</small></span>
+            <span className="reader-workspace"><WorkspaceLogo workspaceId={workspaceId} workspaceName={workspaceName} logoKey={logoKey} size="sm" /><span><strong>{workspaceName}</strong><small>Revision {revision.number}</small></span></span>
           </div>
           <div className="viewer-toolbar">
           <div className="revision-toggle">
@@ -518,10 +820,14 @@ function GuideViewer({
           <div className="viewer-actions">
             {guide.publishedRevision ? <button className="button ghost small" type="button" onClick={async () => navigator.clipboard.writeText(liveUrl)}><Link2 /> Copy live link</button> : null}
             {canExport && guide.publishedRevision ? (
-              <details className="export-menu">
-                <summary className="button secondary small"><Download /> Export</summary>
-                <div><button type="button" onClick={() => onExport("pdf")}>PDF</button><button type="button" onClick={() => onExport("html")}>HTML</button><button type="button" onClick={() => onExport("markdown")}>Markdown</button></div>
-              </details>
+              <DropdownMenu>
+                <DropdownMenuTrigger className="button secondary small" type="button"><Download /> Export</DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="export-menu">
+                  <DropdownMenuItem onClick={() => onExport("pdf")}>PDF</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onExport("html")}>HTML</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onExport("markdown")}>Markdown</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : null}
             {revisionMode === "published" && guide.publishedRevision ? <button className="button secondary small" type="button" disabled={busy} onClick={onComplete}><CheckCircle2 /> Mark complete</button> : null}
             {guide.canEdit ? <button className="button primary small" type="button" onClick={onEdit}>Edit draft</button> : null}
@@ -543,7 +849,7 @@ function GuideViewer({
               {step.kind === "action" ? <span className="document-step-number">{index + 1}</span> : null}
               <div>
                 <h2>{step.title}</h2>
-                {step.screenshotMediaId ? <AuthorizedMedia workspaceId={workspaceId} mediaId={step.screenshotMediaId} alt={`Redacted screenshot for ${step.title}`} overlay={<ScreenshotAnnotationPreview step={step} accentColor={accentColor} clickTargetColor={clickTargetColor} />} /> : null}
+                {step.screenshotMediaId ? <AuthorizedMedia workspaceId={workspaceId} mediaId={step.screenshotMediaId} alt={`Redacted screenshot for ${step.title}`} crop={step.crop} overlay={<ScreenshotAnnotationPreview step={step} accentColor={accentColor} clickTargetColor={clickTargetColor} showCropOutline={false} />} /> : null}
               </div>
             </section>
           ))}
@@ -578,7 +884,7 @@ function GuideViewer({
 function CaptureView({ onOpenExtension, canCapture }: { onOpenExtension: () => void; canCapture: boolean }) {
   return (
     <div className="view-stack">
-      <div className="page-heading"><div><p className="eyebrow">Chrome & Edge</p><h1>Capture a workflow</h1><p>Record clicks and navigation, redact locally, then send an editable private draft to KnowHow.</p></div><button className="button primary" type="button" disabled={!canCapture} onClick={onOpenExtension}><Laptop /> Pair extension</button></div>
+      <div className="page-heading"><div><p className="eyebrow">Chrome & Edge</p><h1>Capture a workflow</h1><p>Record clicks and navigation, redact locally, then send an editable private draft to KnowHow.</p></div><Button type="button" disabled={!canCapture} onClick={onOpenExtension}><Laptop /> Pair extension</Button></div>
       <section className="capture-hero card">
         <div className="capture-demo">
           <div className="fake-browser"><div className="fake-browser-top"><span /><span /><span /><div>portal.example.com</div></div><div className="fake-browser-body"><span className="recording-pill"><span /> Recording · portal.example.com</span><div className="capture-target" /><div className="blur-block blur-one" /><div className="blur-block blur-two" /></div></div>
@@ -595,13 +901,13 @@ function CaptureView({ onOpenExtension, canCapture }: { onOpenExtension: () => v
 
 function GroupsView({ groups, busy, onNew, onEdit }: { groups: WorkspaceGroup[]; busy: boolean; onNew: () => void; onEdit: (group: WorkspaceGroup) => void }) {
   return (
-    <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Content audiences</p><h1>Groups</h1><p>People can belong to several groups. Group membership never changes their workspace role.</p></div><button className="button primary" type="button" disabled={busy} onClick={onNew}><Plus /> New group</button></div><section className="card table-card">{groups.length ? <div className="group-grid">{groups.map((group) => <button className="group-card" type="button" disabled={busy || group.kind === "all_members"} key={group.id} onClick={() => onEdit(group)}><span className={`group-icon${group.sensitive ? " sensitive" : ""}`}>{group.sensitive ? <LockKeyhole /> : <Group />}</span><span><strong>{group.name}</strong><small>{group.kind === "all_members" ? "Managed automatically for all active members" : group.description || "No description"}</small></span><span className="group-count"><Users /> {group.memberCount}</span>{group.kind === "all_members" ? <ShieldCheck /> : <ArrowRight />}</button>)}</div> : <EmptyState icon={Group} title="No audience groups" description="Create Finance, Security, All Employees, or another audience." action={!busy ? <button className="button primary" onClick={onNew}><Plus /> New group</button> : undefined} />}</section></div>
+    <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Content audiences</p><h1>Groups</h1><p>People can belong to several groups. Group membership never changes their workspace role.</p></div><Button type="button" disabled={busy} onClick={onNew}><Plus /> New group</Button></div><section className="group-directory-card">{groups.length ? <div className="group-grid">{groups.map((group) => <button className="group-card" type="button" disabled={busy || group.kind === "all_members"} key={group.id} onClick={() => onEdit(group)}><span className={`group-icon${group.sensitive ? " sensitive" : ""}`}>{group.sensitive ? <LockKeyhole /> : <Group />}</span><span><strong>{group.name}</strong><small>{group.kind === "all_members" ? "Built-in audience for publishing a guide to every active workspace member." : group.description || "No description"}</small></span><span className="group-count"><Users /> {group.memberCount}</span>{group.kind === "all_members" ? <ShieldCheck /> : <ArrowRight />}</button>)}</div> : <EmptyState icon={Group} title="No audience groups" description="Create Finance, Security, All Employees, or another audience." action={!busy ? <Button onClick={onNew}><Plus /> New group</Button> : undefined} />}</section></div>
   );
 }
 
 function GroupDialog({ group, members, busy, onClose, onSave, onDelete }: { group: WorkspaceGroup | null; members: WorkspaceMember[]; busy: boolean; onClose: () => void; onSave: (payload: { id?: string; name: string; description: string; sensitive: boolean; memberIds: string[] }) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [name, setName] = useState(group?.name ?? ""); const [description, setDescription] = useState(group?.description ?? ""); const [sensitive, setSensitive] = useState(group?.sensitive ?? false); const [memberIds, setMemberIds] = useState(group?.memberIds ?? []);
-  return <Modal title={group ? `Edit ${group.name}` : "Create audience group"} eyebrow="Workspace sharing" onClose={onClose}><form className="modal-form" onSubmit={async (event) => { event.preventDefault(); await onSave({ id: group?.id, name: name.trim(), description: description.trim(), sensitive, memberIds }); }}><label className="field"><span>Group name</span><input required minLength={2} value={name} onChange={(event) => setName(event.target.value)} placeholder="Finance" /></label><label className="field"><span>Description</span><textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="People who handle billing and financial operations" /></label><label className="choice-row emphasized"><input type="checkbox" checked={sensitive} onChange={(event) => setSensitive(event.target.checked)} /><span><strong>Sensitive group</strong><small>Membership can only be assigned by an administrator, never by a generic invite.</small></span></label><div className="member-picker"><span className="field-label">Members</span>{members.filter((member) => member.status === "active").map((member) => <label className="choice-row" key={member.id}><input type="checkbox" checked={memberIds.includes(member.userId)} onChange={() => setMemberIds((items) => items.includes(member.userId) ? items.filter((id) => id !== member.userId) : [...items, member.userId])} /><span className="member-choice-avatar">{initials(member.name, member.email)}</span><span><strong>{member.name || member.email}</strong><small>{member.email}</small></span></label>)}</div><footer className="modal-footer">{group ? <button className="button danger-button" type="button" disabled={busy} onClick={() => onDelete(group.id)}><Trash2 /> Delete</button> : <span />}<button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || name.trim().length < 2}>{busy ? <LoaderCircle className="spin" /> : <Check />} Save group</button></footer></form></Modal>;
+  return <Modal title={group ? `Edit ${group.name}` : "Create audience group"} eyebrow="Workspace sharing" onClose={onClose}><form className="modal-form" onSubmit={async (event) => { event.preventDefault(); await onSave({ id: group?.id, name: name.trim(), description: description.trim(), sensitive, memberIds }); }}><label className="field"><span>Group name</span><input required minLength={2} value={name} onChange={(event) => setName(event.target.value)} placeholder="Finance" /></label><label className="field"><span>Description</span><textarea rows={2} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="People who handle billing and financial operations" /></label><label className="choice-row emphasized"><input type="checkbox" checked={sensitive} onChange={(event) => setSensitive(event.target.checked)} /><span><strong>Sensitive group</strong><small>Membership can only be assigned by an administrator, never by a generic invite.</small></span></label><div className="member-picker"><span className="field-label">Members</span>{members.filter((member) => member.status === "active").map((member) => <label className="choice-row" key={member.id}><input type="checkbox" checked={memberIds.includes(member.userId)} onChange={() => setMemberIds((items) => items.includes(member.userId) ? items.filter((id) => id !== member.userId) : [...items, member.userId])} /><span className="member-choice-avatar">{initials(member.name, member.email)}</span><span><strong>{member.name || member.email}</strong><small>{member.email}</small></span></label>)}</div><footer className="modal-footer">{group ? <button className="button danger-button" type="button" disabled={busy} onClick={() => onDelete(group.id)}><Trash2 /> Delete</button> : <span />}<button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || name.trim().length < 2}>{busy ? <LoaderCircle className="spin" /> : <Check />} Save</button></footer></form></Modal>;
 }
 
 function MembersView({ members, invitations, joinRequests, supportRequests, supportGrants, busy, onInvite, onEdit, onApprove, onRevoke, onResolveSupport, onRevokeSupport }: {
@@ -621,12 +927,18 @@ function MembersView({ members, invitations, joinRequests, supportRequests, supp
   const pending = joinRequests.filter((item) => item.status === "pending");
   const pendingSupport = supportRequests.filter((item) => item.status === "pending");
   const [renderedAt] = useState(() => Date.now());
+  const [memberQuery, setMemberQuery] = useState("");
+  const visibleMembers = useMemo(() => {
+    const query = memberQuery.trim().toLocaleLowerCase();
+    if (!query) return members;
+    return members.filter((member) => `${member.name ?? ""} ${member.email} ${member.roles.join(" ")}`.toLocaleLowerCase().includes(query));
+  }, [memberQuery, members]);
   return (
     <div className="view-stack">
       <div className="page-heading"><div><p className="eyebrow">Workspace access</p><h1>Members & invitations</h1><p>Roles grant actions. Groups decide which published guides each person receives.</p></div><button className="button primary" disabled={busy} onClick={onInvite}><UserPlus /> Create invite link</button></div>
-      {pendingSupport.length ? <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Needs a decision</p><h2>Temporary support requests</h2></div><CircleAlert /></div>{pendingSupport.map((request) => <div className="member-row" key={request.id}><span className="avatar">{initials(request.requesterName, request.requesterEmail)}</span><span className="member-main"><strong>{request.requesterName || request.requesterEmail}</strong><small>{request.requesterEmail} · requests {titleCase(request.requestedRole)} access for {request.requestedDurationHours} hours</small><small className="support-reason">{request.reason}</small></span><button className="button ghost small" disabled={busy} onClick={() => onResolveSupport(request)}><ShieldCheck /> Review</button></div>)}</section> : null}
+      {pendingSupport.length ? <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Needs a decision</p><h2>Temporary support requests</h2></div><CircleAlert /></div>{pendingSupport.map((request) => <div className="member-row" key={request.id}><span className="avatar">{initials(request.requesterName, request.requesterEmail)}</span><span className="member-main"><strong>{request.requesterName || request.requesterEmail}</strong><small>{request.requesterEmail} · requests {titleCase(request.requestedRole)} access for {request.requestedDurationHours} {request.requestedDurationHours === 1 ? "hour" : "hours"}</small><small className="support-reason">{request.reason}</small></span><button className="button ghost small" disabled={busy} onClick={() => onResolveSupport(request)}><ShieldCheck /> Review</button></div>)}</section> : null}
       {pending.length ? <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Needs a decision</p><h2>Domain join requests</h2></div><CircleAlert /></div>{pending.map((request) => <div className="member-row" key={request.id}><span className="avatar">{initials(request.name, request.email)}</span><span className="member-main"><strong>{request.name || request.email}</strong><small>{request.email} · eligible domain, no access yet</small></span><button className="button ghost small" disabled={busy} onClick={() => onApprove(request.id, false)}>Deny</button><button className="button primary small" disabled={busy} onClick={() => onApprove(request.id, true)}><UserCheck /> Approve viewer</button></div>)}</section> : null}
-      <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">People</p><h2>{members.length} workspace members</h2></div></div><div className="member-table">{members.map((member) => <button className="member-row clickable" disabled={busy} type="button" key={member.id} onClick={() => onEdit(member)}><span className="avatar">{initials(member.name, member.email)}</span><span className="member-main"><strong>{member.name || member.email}</strong><small>{member.email}</small></span><StatusBadge status={member.status} /><span className="role-list">{member.roles.map((role) => <span key={role}>{titleCase(role)}</span>)}{member.capabilities?.includes("vault") ? <span>Vault</span> : null}</span><span className="group-list">{member.groupIds.length} groups</span><ArrowRight /></button>)}</div></section>
+      <section className="card table-card members-directory"><div className="section-heading compact"><div><p className="eyebrow">People</p><h2>{visibleMembers.length === members.length ? `${members.length} workspace members` : `${visibleMembers.length} of ${members.length} members`}</h2></div><label className="search-field member-search"><Search /><input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="Search members" aria-label="Search workspace members" /></label></div><div className="member-table">{visibleMembers.length ? visibleMembers.map((member) => <button className="member-row clickable" disabled={busy} type="button" key={member.id} onClick={() => onEdit(member)}><span className="avatar">{initials(member.name, member.email)}</span><span className="member-main"><strong>{member.name || member.email}</strong><small>{member.email}</small></span><StatusBadge status={member.status} /><span className="role-list">{member.roles.map((role) => <span key={role}>{titleCase(role)}</span>)}{member.capabilities?.includes("vault") ? <span>Vault</span> : null}</span><span className="group-list">{member.groupIds.length} groups</span><ArrowRight /></button>) : <div className="member-search-empty"><Search /><span>No members match “{memberQuery.trim()}”.</span></div>}</div></section>
       {supportGrants.length ? <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Temporary identities</p><h2>Active support access</h2></div><LockKeyhole /></div>{supportGrants.map((grant) => <div className="member-row" key={grant.id}><span className="avatar">{initials(grant.displayName, grant.email)}</span><span className="member-main"><strong>{grant.displayName || grant.email}</strong><small>{grant.email} · {titleCase(grant.role)} access granted {formatDate(grant.grantedAt)}</small><small>Expires {formatDate(grant.expiresAt, true)} — every action is recorded in this workspace&apos;s audit history</small></span><StatusBadge status="active" />{grant.status === "active" ? <button className="button danger-button small" disabled={busy} onClick={() => onRevokeSupport(grant)}><Trash2 /> Revoke now</button> : null}</div>)}</section> : null}
       <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Signed links</p><h2>Invitations</h2></div></div>{invitations.length ? invitations.map((invite) => {
         const expired = Date.parse(invite.expiresAt) <= renderedAt;
@@ -652,7 +964,33 @@ function SupportDecisionDialog({ request, busy, onClose, onDecide }: {
 function MemberDialog({ member, busy, onClose, onSave, onSuspend }: { member: WorkspaceMember; busy: boolean; onClose: () => void; onSave: (roles: WorkspaceRole[], capabilities: Array<"vault">) => Promise<void>; onSuspend: () => Promise<void> }) {
   const [roles, setRoles] = useState(member.roles);
   const [vault, setVault] = useState(member.capabilities?.includes("vault") ?? false);
-  return <Modal title={member.name || member.email} eyebrow="Member permissions" onClose={onClose}><div className="modal-form"><div className="identity-card"><span className="avatar large">{initials(member.name, member.email)}</span><span><strong>{member.name || member.email}</strong><small>{member.email}</small></span><StatusBadge status={member.status} /></div><div className="role-picker"><span className="field-label">Workspace roles</span>{WORKSPACE_ROLES.map((role) => <label className="choice-row" key={role}><input type="checkbox" checked={roles.includes(role)} onChange={() => setRoles((items) => items.includes(role) ? items.filter((item) => item !== role) : [...items, role])} /><span><strong>{titleCase(role)}</strong><small>{ROLE_COPY[role]}</small></span></label>)}</div><label className="choice-row emphasized"><input type="checkbox" checked={vault} onChange={(event) => setVault(event.target.checked)} /><span><strong>Encrypted vault access</strong><small>Separate capability for storing and decrypting workspace credentials.</small></span></label><p className="privacy-caption"><Shield /> Changing roles or vault access does not add the member to any content audience.</p><footer className="modal-footer"><button className="button danger-button" type="button" disabled={busy} onClick={onSuspend}>{member.status === "suspended" ? "Restore member" : "Suspend member"}</button><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="button" disabled={busy || roles.length === 0} onClick={() => onSave(roles, vault ? ["vault"] : [])}><Check /> Save access</button></footer></div></Modal>;
+  return (
+    <Modal title={member.name || member.email} eyebrow="Member permissions" onClose={onClose}>
+      <div className="modal-form member-permissions-form">
+        <div className="identity-card">
+          <span className="avatar large">{initials(member.name, member.email)}</span>
+          <span><strong>{member.name || member.email}</strong><small>{member.email}</small></span>
+          <StatusBadge status={member.status} />
+        </div>
+        <div className="role-picker">
+          <span className="field-label">Workspace roles</span>
+          {WORKSPACE_ROLES.map((role) => (
+            <label className="choice-row" key={role}>
+              <input type="checkbox" checked={roles.includes(role)} onChange={() => setRoles((items) => items.includes(role) ? items.filter((item) => item !== role) : [...items, role])} />
+              <span><strong>{titleCase(role)}</strong><small>{ROLE_COPY[role]}</small></span>
+            </label>
+          ))}
+        </div>
+        <label className="choice-row emphasized"><input type="checkbox" checked={vault} onChange={(event) => setVault(event.target.checked)} /><span><strong>Encrypted vault access</strong><small>Separate capability for storing and decrypting workspace credentials.</small></span></label>
+        <p className="privacy-caption"><Shield /> Changing roles or vault access does not add the member to any content audience.</p>
+        <footer className="modal-footer">
+          <button className="button danger-button" type="button" disabled={busy} onClick={onSuspend}>{member.status === "suspended" ? "Restore" : "Suspend"}</button>
+          <button className="button secondary" type="button" onClick={onClose}>Cancel</button>
+          <button className="button primary" type="button" disabled={busy || roles.length === 0} onClick={() => onSave(roles, vault ? ["vault"] : [])}><Check /> Save</button>
+        </footer>
+      </div>
+    </Modal>
+  );
 }
 
 function InviteDialog({ busy, origin, onClose, onCreate }: { busy: boolean; origin: string; onClose: () => void; onCreate: (payload: { label: string; role: WorkspaceRole; expiresInHours: number; maxUses: number }) => Promise<{ token: string } | void> }) {
@@ -661,22 +999,91 @@ function InviteDialog({ busy, origin, onClose, onCreate }: { busy: boolean; orig
 }
 
 function ActivityView({ audits, workspaceId, busy, onBusyChange, onError, onRefresh }: { audits: AuditEvent[]; workspaceId: string; busy: boolean; onBusyChange: (busy: boolean) => void; onError: (message: string) => void; onRefresh: () => Promise<BootstrapResponse> }) {
-  const [query, setQuery] = useState(""); const [action, setAction] = useState("all"); const [from, setFrom] = useState(""); const [to, setTo] = useState("");
+  const [query, setQuery] = useState("");
+  const [action, setAction] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [pageSize, setPageSize] = useState(25);
+  const [page, setPage] = useState(0);
   const actions = [...new Set(audits.map((item) => item.action))].sort();
   const fromTime = from ? Date.parse(`${from}T00:00:00`) : Number.NEGATIVE_INFINITY;
   const toTime = to ? Date.parse(`${to}T23:59:59.999`) : Number.POSITIVE_INFINITY;
-  const filtered = audits.filter((item) => { const occurredAt = Date.parse(item.occurredAt); return (`${item.action} ${item.actorName} ${item.actorEmail} ${item.targetLabel} ${item.summary}`).toLowerCase().includes(query.toLowerCase()) && (action === "all" || item.action === action) && occurredAt >= fromTime && occurredAt <= toTime; });
-  async function exportCsv() { onBusyChange(true); onError(""); try { await downloadAuditCsv(workspaceId, { action: action === "all" ? undefined : action, from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined, to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined }); await onRefresh(); } catch (error) { onError(messageFromError(error)); } finally { onBusyChange(false); } }
-  return <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Append-only history</p><h1>Activity</h1><p>Trusted server operations record access and governance events. Existing events cannot be changed or deleted.</p></div><button className="button secondary" disabled={busy || Boolean(from && to && from > to)} onClick={() => void exportCsv()}><FileDown /> Export filtered CSV</button></div><section className="card table-card"><div className="filter-bar"><label className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search loaded activity" /></label><SelectMenu className="filter-select" leading={<Filter />} value={action} onChange={setAction} ariaLabel="Filter activity by event type" options={[{ value: "all", label: "All event types" }, ...actions.map((item) => ({ value: item, label: item }))]} /><label className="date-filter"><span>From</span><input type="date" value={from} max={to || undefined} onChange={(event) => setFrom(event.target.value)} /></label><label className="date-filter"><span>To</span><input type="date" value={to} min={from || undefined} onChange={(event) => setTo(event.target.value)} /></label><span className="result-count">{filtered.length} loaded events</span></div>{query ? <p className="filter-note">Text search filters the loaded activity list only. The audited CSV export includes the complete server history matching event type and date filters.</p> : null}<div className="audit-list">{filtered.map((event) => <article className="audit-row" key={event.id}><span className="audit-sequence">#{event.sequence}</span><span className="audit-dot" /><span className="audit-main"><strong>{event.summary}</strong><small>{event.actorName || event.actorEmail} · {event.action} · {formatDate(event.occurredAt, true)}</small></span><span className="audit-target"><small>{titleCase(event.targetType)}</small><strong>{event.targetLabel || event.targetId}</strong></span></article>)}</div>{!filtered.length ? <EmptyState icon={Activity} title="No matching events" description="Try a broader activity filter." /> : null}</section></div>;
+  const filtered = audits.filter((item) => {
+    const occurredAt = Date.parse(item.occurredAt);
+    return (`${item.action} ${item.actorName} ${item.actorEmail} ${item.targetLabel} ${item.summary}`).toLowerCase().includes(query.toLowerCase())
+      && (action === "all" || item.action === action)
+      && occurredAt >= fromTime
+      && occurredAt <= toTime;
+  });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const visibleEvents = filtered.slice(safePage * pageSize, (safePage + 1) * pageSize);
+
+  async function exportCsv() {
+    onBusyChange(true);
+    onError("");
+    try {
+      await downloadAuditCsv(workspaceId, {
+        action: action === "all" ? undefined : action,
+        from: from ? new Date(`${from}T00:00:00`).toISOString() : undefined,
+        to: to ? new Date(`${to}T23:59:59.999`).toISOString() : undefined,
+      });
+      await onRefresh();
+    } catch (error) {
+      onError(messageFromError(error));
+    } finally {
+      onBusyChange(false);
+    }
+  }
+
+  function resetPage() {
+    setPage(0);
+  }
+
+  return (
+    <div className="view-stack">
+      <div className="page-heading">
+        <div><p className="eyebrow">Append-only history</p><h1>Activity</h1><p>Trusted server operations record access and governance events. Existing events cannot be changed or deleted.</p></div>
+        <button className="button secondary" disabled={busy || Boolean(from && to && from > to)} onClick={() => void exportCsv()}><FileDown /> Export filtered CSV</button>
+      </div>
+      <section className="card table-card">
+        <div className="filter-bar activity-filter-bar">
+          <label className="search-field"><Search /><input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search activity" /></label>
+          <SelectMenu className="filter-select" leading={<Filter />} value={action} onChange={(value) => { setAction(value); resetPage(); }} ariaLabel="Filter activity by event type" options={[{ value: "all", label: "All event types" }, ...actions.map((item) => ({ value: item, label: titleCase(item) }))]} />
+          <div className="date-range-filter" aria-label="Activity date range">
+            <CalendarDays />
+            <label><span>From date</span><input type="date" value={from} max={to || undefined} onChange={(event) => { setFrom(event.target.value); resetPage(); }} /></label>
+            <span className="date-range-separator">to</span>
+            <label><span>To date</span><input type="date" value={to} min={from || undefined} onChange={(event) => { setTo(event.target.value); resetPage(); }} /></label>
+            {from || to ? <button className="date-clear-button" type="button" onClick={() => { setFrom(""); setTo(""); resetPage(); }}>Clear</button> : null}
+          </div>
+          <span className="result-count">{filtered.length} events</span>
+        </div>
+        {query ? <p className="filter-note">Text search filters the loaded activity list. CSV export includes the complete matching server history.</p> : null}
+        <div className="audit-list">
+          {visibleEvents.map((event) => (
+            <article className="audit-row" key={event.id}>
+              <span className="audit-sequence">#{event.sequence}</span>
+              <span className="audit-dot" />
+              <span className="audit-main"><strong>{event.summary}</strong><small>{event.actorName || event.actorEmail} · {event.action} · {formatDate(event.occurredAt, true)}</small></span>
+              <span className="audit-target"><small>{titleCase(event.targetType)}</small><strong>{event.targetLabel || event.targetId}</strong></span>
+            </article>
+          ))}
+        </div>
+        {!filtered.length ? <EmptyState icon={Activity} title="No matching events" description="Try a broader activity filter." /> : null}
+        {filtered.length ? <ListPagination total={filtered.length} page={safePage} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); resetPage(); }} /> : null}
+      </section>
+    </div>
+  );
 }
 
-function SettingsView({ workspaceId, initial, busy, onSave, onSaveDomains, onRefresh }: { workspaceId: string; initial: WorkspaceSettings; busy: boolean; onSave: (settings: WorkspaceSettings) => Promise<void>; onSaveDomains: (domains: string[]) => Promise<void>; onRefresh: () => Promise<BootstrapResponse> }) {
+function SettingsView({ workspaceId, workspaceName, initial, busy, onSave, onSaveDomains, onRefresh }: { workspaceId: string; workspaceName: string; initial: WorkspaceSettings; busy: boolean; onSave: (settings: WorkspaceSettings) => Promise<void>; onSaveDomains: (domains: string[]) => Promise<void>; onRefresh: () => Promise<BootstrapResponse> }) {
   const [settings, setSettings] = useState(initial); const [domains, setDomains] = useState(initial.allowedDomains.join("\n")); const [hosts, setHosts] = useState(initial.excludedCaptureHosts.join("\n")); const [logoBusy, setLogoBusy] = useState(false); const [logoError, setLogoError] = useState(""); const [domainBusy, setDomainBusy] = useState(false);
   const update = <K extends keyof WorkspaceSettings>(key: K, value: WorkspaceSettings[K]) => setSettings((current) => ({ ...current, [key]: value }));
   const disabled = busy || logoBusy;
   const uniqueList = (value: string) => [...new Set(value.split(/\r?\n|,/).map((item) => item.trim().toLowerCase()).filter(Boolean))];
   async function refreshLogoState() { const refreshed = await onRefresh(); const logoUrl = refreshed.activeWorkspace?.workspace.settings.logoUrl; setSettings((current) => ({ ...current, logoUrl: logoUrl ?? null })); }
-  return <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Workspace administration</p><h1>Settings & policies</h1><p>Control identity eligibility, capture boundaries, branding, and restricted exports.</p></div><button className="button primary" disabled={disabled} onClick={() => onSave({ ...settings, excludedCaptureHosts: uniqueList(hosts) })}><Check /> Save settings</button></div><div className="settings-grid"><section className="card settings-card"><div className="settings-title"><span><Paintbrush /></span><div><h2>Document identity</h2><p>Applied to the app and generated guide exports.</p></div></div><div className="logo-upload"><div><strong>{settings.logoUrl ? "Workspace logo configured" : "No workspace logo"}</strong><small>PNG or JPEG, up to 1 MB. The stored identifier remains private.</small></div><label className={`button secondary small${disabled ? " disabled" : ""}`}><ImagePlus /> {settings.logoUrl ? "Replace logo" : "Upload logo"}<input className="visually-hidden" type="file" accept="image/png,image/jpeg" disabled={disabled} onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; setLogoError(""); if (!(["image/png", "image/jpeg"] as string[]).includes(file.type) || file.size > 1024 * 1024) { setLogoError("Choose a PNG or JPEG logo no larger than 1 MB."); return; } setLogoBusy(true); try { await uploadWorkspaceLogo(workspaceId, file); await refreshLogoState(); } catch (error) { setLogoError(messageFromError(error)); } finally { setLogoBusy(false); } }} /></label>{settings.logoUrl ? <button className="button ghost small" type="button" disabled={disabled} onClick={async () => { setLogoBusy(true); setLogoError(""); try { await removeWorkspaceLogo(workspaceId); await refreshLogoState(); } catch (error) { setLogoError(messageFromError(error)); } finally { setLogoBusy(false); } }}><Trash2 /> Remove</button> : null}</div>{logoError ? <p className="form-error" role="alert">{logoError}</p> : null}<div className="form-grid two"><label className="field color-field"><span>Accent color</span><span><input type="color" value={settings.accentColor} onChange={(event) => update("accentColor", event.target.value)} /><input value={settings.accentColor} onChange={(event) => update("accentColor", event.target.value)} /></span></label><label className="field color-field"><span>Click target</span><span><input type="color" value={settings.clickTargetColor} onChange={(event) => update("clickTargetColor", event.target.value)} /><input value={settings.clickTargetColor} onChange={(event) => update("clickTargetColor", event.target.value)} /></span></label></div><label className="choice-row emphasized"><input type="checkbox" checked={settings.removeBranding} onChange={(event) => update("removeBranding", event.target.checked)} /><span><strong>Remove KnowHow branding</strong><small>Available as a workspace or subscription entitlement.</small></span></label></section><section className="card settings-card"><div className="settings-title"><span><Mail /></span><div><h2>Approved email domains</h2><p>Eligibility only. Administrators still approve each join request.</p></div></div><label className="field"><span>One exact domain per line</span><textarea rows={6} value={domains} onChange={(event) => setDomains(event.target.value)} placeholder={"example.com\nsubsidiary.co.uk"} /></label><p className="privacy-caption"><ShieldCheck /> Subdomains do not match unless listed explicitly. Consumer lookalikes and suffix matches are rejected.</p><button className="button secondary" type="button" disabled={disabled || domainBusy} onClick={async () => { setDomainBusy(true); try { await onSaveDomains(uniqueList(domains)); } finally { setDomainBusy(false); } }}>{domainBusy ? <LoaderCircle className="spin" /> : <Check />} Save domains</button></section><section className="card settings-card"><div className="settings-title"><span><Laptop /></span><div><h2>Capture policy</h2><p>Blocked hosts are enforced by the paired extension.</p></div></div><label className="field"><span>Excluded hostnames</span><textarea rows={6} value={hosts} onChange={(event) => setHosts(event.target.value)} placeholder={"vault.example.com\npasswords.example.net"} /></label><p className="privacy-caption"><LockKeyhole /> Password managers, browser internals, extension pages, and incognito sessions are always blocked.</p></section><section className="card settings-card"><div className="settings-title"><span><FileDown /></span><div><h2>Export controls</h2><p>Live links always retain audience checks.</p></div></div><label className="choice-row emphasized"><input type="checkbox" checked={settings.allowRestrictedExports} onChange={(event) => update("allowRestrictedExports", event.target.checked)} /><span><strong>Allow restricted-guide exports</strong><small>Each permitted export is recorded in the audit history.</small></span></label><label className="choice-row emphasized"><input type="checkbox" checked={settings.watermarkExports} onChange={(event) => update("watermarkExports", event.target.checked)} /><span><strong>Watermark exports</strong><small>Add viewer, workspace, and export date to generated files.</small></span></label></section></div></div>;
+  return <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Workspace administration</p><h1>Settings & policies</h1><p>Control identity eligibility, capture boundaries, branding, and restricted exports.</p></div><button className="button primary" disabled={disabled} onClick={() => onSave({ ...settings, excludedCaptureHosts: uniqueList(hosts) })}><Check /> Save settings</button></div><div className="settings-grid"><section className="card settings-card"><div className="settings-title"><span><Paintbrush /></span><div><h2>Document identity</h2><p>Applied to the app and generated guide exports.</p></div></div><div className="logo-upload"><WorkspaceLogo workspaceId={workspaceId} workspaceName={workspaceName} logoKey={settings.logoUrl} size="lg" /><div><strong>{settings.logoUrl ? "Workspace logo configured" : "Workspace logo placeholder"}</strong><small>PNG or JPEG, up to 1 MB. The stored identifier remains private.</small></div><label className={`button secondary small${disabled ? " disabled" : ""}`}><ImagePlus /> {settings.logoUrl ? "Replace logo" : "Upload logo"}<input className="visually-hidden" type="file" accept="image/png,image/jpeg" disabled={disabled} onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; setLogoError(""); if (!(["image/png", "image/jpeg"] as string[]).includes(file.type) || file.size > 1024 * 1024) { setLogoError("Choose a PNG or JPEG logo no larger than 1 MB."); return; } setLogoBusy(true); try { await uploadWorkspaceLogo(workspaceId, file); await refreshLogoState(); } catch (error) { setLogoError(messageFromError(error)); } finally { setLogoBusy(false); } }} /></label>{settings.logoUrl ? <button className="button ghost small" type="button" disabled={disabled} onClick={async () => { setLogoBusy(true); setLogoError(""); try { await removeWorkspaceLogo(workspaceId); await refreshLogoState(); } catch (error) { setLogoError(messageFromError(error)); } finally { setLogoBusy(false); } }}><Trash2 /> Remove</button> : null}</div>{logoError ? <p className="form-error" role="alert">{logoError}</p> : null}<div className="form-grid two"><label className="field color-field"><span>Document accent</span><span><input type="color" value={settings.accentColor} onChange={(event) => update("accentColor", event.target.value)} /><input value={settings.accentColor} onChange={(event) => update("accentColor", event.target.value)} /></span><small>Used in guide branding and annotations, not the application interface.</small></label><label className="field color-field"><span>Click target</span><span><input type="color" value={settings.clickTargetColor} onChange={(event) => update("clickTargetColor", event.target.value)} /><input value={settings.clickTargetColor} onChange={(event) => update("clickTargetColor", event.target.value)} /></span></label></div><label className="choice-row emphasized"><input type="checkbox" checked={settings.removeBranding} onChange={(event) => update("removeBranding", event.target.checked)} /><span><strong>Remove KnowHow branding</strong><small>Available as a workspace or subscription entitlement.</small></span></label></section><section className="card settings-card"><div className="settings-title"><span><Mail /></span><div><h2>Approved email domains</h2><p>Eligibility only. Administrators still approve each join request.</p></div></div><label className="field"><span>One exact domain per line</span><textarea rows={6} value={domains} onChange={(event) => setDomains(event.target.value)} placeholder={"example.com\nsubsidiary.co.uk"} /></label><p className="privacy-caption"><ShieldCheck /> Subdomains do not match unless listed explicitly. Consumer lookalikes and suffix matches are rejected.</p><button className="button secondary" type="button" disabled={disabled || domainBusy} onClick={async () => { setDomainBusy(true); try { await onSaveDomains(uniqueList(domains)); } finally { setDomainBusy(false); } }}>{domainBusy ? <LoaderCircle className="spin" /> : <Check />} Save domains</button></section><section className="card settings-card"><div className="settings-title"><span><Laptop /></span><div><h2>Capture policy</h2><p>Blocked hosts are enforced by the paired extension.</p></div></div><label className="field"><span>Excluded hostnames</span><textarea rows={6} value={hosts} onChange={(event) => setHosts(event.target.value)} placeholder={"vault.example.com\npasswords.example.net"} /></label><p className="privacy-caption"><LockKeyhole /> Password managers, browser internals, extension pages, and incognito sessions are always blocked.</p></section><section className="card settings-card"><div className="settings-title"><span><FileDown /></span><div><h2>Export controls</h2><p>Live links always retain audience checks.</p></div></div><label className="choice-row emphasized"><input type="checkbox" checked={settings.allowRestrictedExports} onChange={(event) => update("allowRestrictedExports", event.target.checked)} /><span><strong>Allow restricted-guide exports</strong><small>Each permitted export is recorded in the audit history.</small></span></label><label className="choice-row emphasized"><input type="checkbox" checked={settings.watermarkExports} onChange={(event) => update("watermarkExports", event.target.checked)} /><span><strong>Watermark exports</strong><small>Add viewer, workspace, and export date to generated files.</small></span></label></section></div></div>;
 }
 
 function vaultMetadata(item: VaultItem | null) {
@@ -715,49 +1122,24 @@ function VaultRevealDialog({ item, busy, onClose }: { item: VaultItem; busy: boo
   return <Modal title={item.title} eyebrow="Decrypt in this browser" onClose={onClose}><div className="modal-form">{plaintext ? <div className="revealed-secret"><span className="field-label">Decrypted value</span><pre>{plaintext}</pre><button className="button secondary" type="button" onClick={() => void navigator.clipboard.writeText(plaintext)}><Copy /> Copy value</button></div> : <><label className="field"><span>Vault passphrase</span><input type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="current-password" onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }} /></label><button className="button primary" type="button" disabled={busy || !passphrase} onClick={async () => { setError(""); try { const envelope = JSON.parse(item.encryptedEnvelopeJson) as EncryptedSecretEnvelope; setPlaintext(await decryptSecretValue(envelope, passphrase)); setPassphrase(""); } catch (nextError) { setError(messageFromError(nextError)); } }}><Eye /> Decrypt locally</button></>}{error ? <p className="form-error" role="alert">{error}</p> : null}<p className="privacy-caption"><LockKeyhole /> Closing this dialog removes the decrypted value from KnowHow&apos;s UI state.</p><footer className="modal-footer"><span /><button className="button primary" type="button" onClick={onClose}>Close</button></footer></div></Modal>;
 }
 
-// Row action menu for table rows inside scroll containers (the platform
-// table card clips absolutely-positioned dropdowns). The menu is portaled to
-// document.body with fixed coordinates so it always spans over the section.
+// The platform table can scroll horizontally, so its row actions use the
+// portaled shadcn menu rather than a locally positioned overlay.
 function RowMenu({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const [rect, setRect] = useState<{ top: number; right: number } | null>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (buttonRef.current?.contains(target)) return;
-      if (popupRef.current?.contains(target)) return;
-      close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [open]);
-
-  return <span className="row-menu">{open && rect ? createPortal(
-    <div ref={popupRef} className="row-menu-pop" role="menu" style={{ top: rect.top + 6, left: rect.right - 6, transform: "translateX(-100%)" }} onClick={() => setOpen(false)}>{children}</div>,
-    document.body,
-  ) : null}<button ref={buttonRef} className="icon-button" type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => {
-    if (!open) {
-      const bounds = buttonRef.current?.getBoundingClientRect();
-      if (bounds) setRect({ top: bounds.bottom, right: bounds.right });
-    }
-    setOpen((current) => !current);
-  }}><MoreHorizontal /></button></span>;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className="icon-button" type="button" aria-label="Workspace actions"><MoreHorizontal /></DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="row-menu-pop">
+        {Children.map(children, (child) => {
+          if (!isValidElement<{ disabled?: boolean; onClick?: () => void; children?: ReactNode }>(child)) return null;
+          return (
+            <DropdownMenuItem disabled={child.props.disabled} onClick={child.props.onClick}>
+              {child.props.children}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export function PlatformView({ platform, busy, onStatus, onAssign, onRequestSupport, onUpdateSettings, onRevokeAppointment }: {
@@ -787,20 +1169,64 @@ export function PlatformView({ platform, busy, onStatus, onAssign, onRequestSupp
   return <div className="view-stack"><div className="page-heading"><div><p className="eyebrow">Product owner</p><h1>Platform administration</h1><p>Manage tenant health and aggregate usage without opening customer document contents or secrets.</p></div><span className="platform-shield"><ShieldCheck /> Content-private metrics</span></div><section className="metric-grid platform-metrics"><MetricCard label="Users" value={metrics.users} hint="Across all workspaces" icon={Users} /><MetricCard label="Active workspaces" value={metrics.activeWorkspaces} hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`} icon={Building2} tone="accent" /><MetricCard label="Guides" value={metrics.published + metrics.drafts} hint={`${metrics.published} published · ${metrics.drafts} drafts`} icon={BookOpen} /><MetricCard label="Captures" value={metrics.captures} hint={`${metrics.failedOperations} failed operations`} icon={Sparkles} /><MetricCard label="Views" value={metrics.views} hint={`${metrics.completions} completions`} icon={Eye} /><MetricCard label="Exports" value={metrics.exports} hint={formatBytes(metrics.storageBytes)} icon={FileDown} /></section><section className="card table-card"><div className="section-heading"><div><p className="eyebrow">Tenant directory</p><h2>Every workspace</h2></div><span className="privacy-caption"><LockKeyhole /> Metadata only</span></div><div className="filter-bar"><label className="search-field"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search workspaces, slugs, or administrators" /></label><span className="result-count">{filtered.length} {filtered.length === 1 ? "workspace" : "workspaces"}</span></div><div className="platform-table"><div className="platform-row platform-head"><span>Workspace</span><span>Administrators</span><span>Guides</span><span>Usage</span><span>Storage</span><span>Status</span><span /></div>{filtered.map((workspace) => <div className="platform-row" key={workspace.id}><span className="workspace-cell"><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span><span><strong>{workspace.name}</strong><small>{workspace.memberCount} members · created {formatDate(workspace.createdAt)}{workspace.supportGrant ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}` : workspace.supportRequest?.status === "pending" ? " · support request pending" : ""}</small></span></span><span>{workspace.administrators.length ? workspace.administrators.map((admin) => <small key={admin.userId}>{admin.name || admin.email}</small>) : <small>None assigned</small>}<button className="text-button" onClick={() => onAssign(workspace)}><UserCog /> Assign</button></span><span><strong>{workspace.publishedCount}</strong><small>{workspace.draftCount} drafts</small></span><span><strong>{workspace.views} views</strong><small>{workspace.exports} exports</small></span><span>{formatBytes(workspace.storageBytes)}</span><span><StatusBadge status={workspace.status} /></span><span><RowMenu>{workspace.status === "active" && !workspace.supportGrant ? <button disabled={busy} onClick={() => onRequestSupport(workspace)}><ShieldCheck /> Request support access</button> : null}{workspace.status !== "active" ? <button disabled={busy} onClick={() => onStatus(workspace.id, "active")}><RefreshCw /> Restore</button> : null}{workspace.status === "active" ? <button disabled={busy} onClick={() => onStatus(workspace.id, "suspended")}><Pause /> Suspend</button> : null}{workspace.status !== "archived" ? <button disabled={busy} onClick={() => onStatus(workspace.id, "archived")}><Archive /> Archive</button> : null}</RowMenu></span></div>)}</div></section><section className="card settings-card"><div className="settings-title"><span><UserPlus /></span><div><h2>Self-serve workspace limit</h2><p>How many personal workspaces one verified user may create. This is a platform policy, editable as a future subscription entitlement.</p></div></div><div className="form-grid two"><label className="field"><span>Workspaces per user (0 disables self-serve)</span><input type="number" min={0} max={1000} value={limit} onChange={(event) => setLimit(Math.max(0, Math.min(1000, Number(event.target.value) || 0)))} /></label><div className="settings-save"><button className="button secondary" type="button" disabled={busy || limitBusy || limit === settings.selfServiceWorkspaceLimit} onClick={async () => { setLimitBusy(true); try { await onUpdateSettings(limit); } finally { setLimitBusy(false); } }}>{limitBusy ? <LoaderCircle className="spin" /> : <Check />} Save limit</button></div></div></section>{appointments.length ? <section className="card table-card"><div className="section-heading compact"><div><p className="eyebrow">Client administrator appointments</p><h2>Pending appointments</h2></div><LockKeyhole /></div>{appointments.map((appointment) => <div className="invite-row" key={appointment.id}><span className="invite-icon"><UserCog /></span><span className="member-main"><strong>{appointment.email}</strong><small>Appointed administrator · expires {formatDate(appointment.expiresAt, true)} · the acceptance link was shown once at creation</small></span><StatusBadge status="active" /><button className="button ghost small" disabled={busy} onClick={() => onRevokeAppointment(appointment)}>Revoke</button></div>)}</section> : null}</div>;
 }
 
-function GlobalGuideSearch({ workspaceId, workspaceSlug, guides, onOpen, onNavigate }: {
-  workspaceId: string;
-  workspaceSlug: string;
+function GlobalGuideSearch({ guides, onOpen }: {
   guides: Guide[];
   onOpen: (guide: Guide) => void;
-  onNavigate: (href: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<GuideSearchResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
-  const [error, setError] = useState("");
-  const timer = useRef<number | null>(null);
   const box = useRef<HTMLDivElement | null>(null);
+  const results = useMemo<GuideSearchResult[] | null>(() => {
+    const phrase = query.trim().toLowerCase();
+    if (!phrase) return null;
+    const terms = [...new Set(phrase.split(/\s+/).filter(Boolean))];
+
+    return guides
+      .map((guide) => {
+        const revision = guide.workingRevision ?? guide.publishedRevision;
+        if (!revision) return null;
+        const fields = {
+          title: `${revision.title} ${guide.title}`.toLowerCase(),
+          summary: revision.summary.toLowerCase(),
+          category: revision.category.toLowerCase(),
+          tags: revision.tags.join(" ").toLowerCase(),
+          steps: revision.steps.map((step) => `${step.title} ${step.description}`).join(" ").toLowerCase(),
+        };
+        const combined = Object.values(fields).join(" ");
+        if (!terms.every((term) => combined.includes(term))) return null;
+
+        let score = combined.includes(phrase) ? 20 : 0;
+        if (fields.title === phrase) score += 120;
+        else if (fields.title.startsWith(phrase)) score += 80;
+        else if (fields.title.includes(phrase)) score += 55;
+        for (const term of terms) {
+          if (fields.title.includes(term)) score += 24;
+          if (fields.tags.includes(term)) score += 16;
+          if (fields.category.includes(term)) score += 12;
+          if (fields.steps.includes(term)) score += 10;
+          if (fields.summary.includes(term)) score += 7;
+        }
+
+        const excerptFields = [revision.summary, revision.category, ...revision.tags, ...revision.steps.flatMap((step) => [step.title, step.description])].filter(Boolean);
+        const excerpt = excerptFields.find((field) => field.toLowerCase().includes(terms[0])) ?? revision.summary ?? revision.title;
+        return {
+          score,
+          result: {
+            guideId: guide.id,
+            revisionId: revision.id,
+            title: revision.title || guide.title,
+            excerpt: excerpt.slice(0, 180),
+            status: guide.status,
+            restricted: guide.restricted,
+            updatedAt: guide.updatedAt,
+          } satisfies GuideSearchResult,
+        };
+      })
+      .filter((item): item is { score: number; result: GuideSearchResult } => Boolean(item))
+      .sort((a, b) => b.score - a.score || b.result.updatedAt.localeCompare(a.result.updatedAt))
+      .slice(0, 8)
+      .map((item) => item.result);
+  }, [guides, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -811,68 +1237,33 @@ function GlobalGuideSearch({ workspaceId, workspaceSlug, guides, onOpen, onNavig
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
-  useEffect(() => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    const term = query.trim();
-    timer.current = window.setTimeout(() => {
-      if (term.length < 2) {
-        setResults(null);
-        setBusy(false);
-        setError("");
-        return;
-      }
-      setBusy(true);
-      searchGuides(workspaceId, term)
-        .then((response) => {
-          setResults(response.results);
-          setError("");
-        })
-        .catch((nextError) => {
-          setResults(null);
-          setError(messageFromError(nextError));
-        })
-        .finally(() => setBusy(false));
-    }, term.length < 2 ? 0 : 350);
-    return () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    };
-  }, [query, workspaceId]);
-
   function openResult(result: GuideSearchResult) {
     setOpen(false);
     setQuery("");
-    setResults(null);
     const guide = guides.find((item) => item.id === result.guideId);
-    if (guide) {
-      onOpen(guide);
-      return;
-    }
-    // The result is already server-authorized by search. When the current
-    // payload is stale, route to its durable guide URL instead of reloading
-    // the app through a query-string deep link.
-    onNavigate(guideHref(workspaceSlug, result.guideId, "published"));
+    if (guide) onOpen(guide);
   }
 
   return (
     <div className="global-search" ref={box}>
-      <label className={`search-field global-search-field${busy ? " busy" : ""}`}>
+      <label className="search-field global-search-field">
         <Search />
         <input
           value={query}
           onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
           onKeyDown={(event) => {
-            if (event.key === "Escape") { setOpen(false); setQuery(""); setResults(null); }
+            if (event.key === "Escape") { setOpen(false); setQuery(""); }
+            if (event.key === "Enter" && results?.[0]) { event.preventDefault(); openResult(results[0]); }
           }}
           placeholder="Search guides, steps, or tags"
           aria-label="Search guides across this workspace"
         />
-        {busy ? <LoaderCircle className="spin" /> : null}
       </label>
-      {open && query.trim().length >= 2 ? (
+      {open && query.trim().length ? (
         <div className="search-results" role="listbox" aria-label="Search results">
-          {error ? <p className="search-error" role="alert">{error}</p> : null}
-          {!busy && results && results.length === 0 ? <p className="search-empty">No guides match &ldquo;{query.trim()}&rdquo; in this workspace.</p> : null}
+          {results && results.length === 0 ? <p className="search-empty">No guides match &ldquo;{query.trim()}&rdquo; in this workspace.</p> : null}
+          {results?.length ? <p className="search-result-count">{results.length} best {results.length === 1 ? "match" : "matches"} · press Enter to open the first</p> : null}
           {results?.map((result) => (
             <button className="search-result" type="button" key={`${result.guideId}:${result.revisionId}`} onClick={() => openResult(result)}>
               <span className="guide-icon"><BookOpen /></span>
@@ -889,22 +1280,51 @@ function GlobalGuideSearch({ workspaceId, workspaceSlug, guides, onOpen, onNavig
   );
 }
 
-function ExtensionDialog({ busy, onClose, onPair, onRevoke }: { busy: boolean; onClose: () => void; onPair: () => Promise<{ code: string; expiresAt: string }>; onRevoke: () => Promise<void> }) {
-  const [pairing, setPairing] = useState<{ code: string; expiresAt: string } | null>(null);
+function ExtensionDialog({ busy, companion, onClose, onPair, onRevoke }: { busy: boolean; companion: ExtensionCompanion; onClose: () => void; onPair: () => Promise<{ code: string; expiresAt: string }>; onRevoke: () => Promise<void> }) {
+  const [extensionState, setExtensionState] = useState<"checking" | "missing" | "ready" | "connected">("checking");
+  const [connectionError, setConnectionError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void inspectKnowHowExtension()
+      .then((result) => {
+        if (!active) return;
+        setExtensionState(result.connected && result.workspaceId === companion.workspaceId ? "connected" : "ready");
+      })
+      .catch(() => {
+        if (active) setExtensionState("missing");
+      });
+    return () => { active = false; };
+  }, [companion.workspaceId]);
+
+  async function connectExtension() {
+    setConnectionError("");
+    try {
+      const pairing = await onPair();
+      await connectKnowHowExtension(pairing.code, companion);
+      setExtensionState("connected");
+      toast.success("Capture extension connected");
+    } catch (error) {
+      setConnectionError(messageFromError(error));
+    }
+  }
+
   async function revokeDevices() {
     if (!window.confirm("Revoke every browser paired by your account in this workspace?")) return;
     await onRevoke();
-    setPairing(null);
+    setExtensionState("ready");
   }
+
   return (
-    <Modal title="Pair the capture extension" eyebrow="Chrome & Edge" onClose={onClose}>
+    <Modal title="Connect the capture extension" eyebrow="Chrome & Edge" onClose={onClose} wide>
       <div className="modal-form">
         <ol className="pairing-steps">
           <li><span>1</span><div><strong>Install the KnowHow extension</strong><p>Download the packaged extension, unzip it, then load the folder through your browser&apos;s extension developer mode.</p><a className="button secondary" href="/knowhow-extension.zip" download><Download /> Download extension</a></div></li>
-          <li><span>2</span><div><strong>Generate a one-time code</strong><p>The code expires quickly and can pair only one browser profile with this workspace.</p>{pairing ? <div className="pairing-code"><code>{pairing.code}</code><button className="icon-button" onClick={() => navigator.clipboard.writeText(pairing.code)}><Copy /></button><small>Expires {formatDate(pairing.expiresAt, true)}</small></div> : <button className="button primary" disabled={busy} onClick={() => { void onPair().then(setPairing).catch(() => undefined); }}>{busy ? <LoaderCircle className="spin" /> : <Link2 />} Generate pairing code</button>}</div></li>
-          <li><span>3</span><div><strong>Enter the code in the extension</strong><p>The extension receives a revocable, workspace-scoped device token—not your Appwrite session or password.</p><button className="button ghost small" type="button" disabled={busy} onClick={() => { void revokeDevices().catch(() => undefined); }}><Trash2 /> Revoke my paired browsers</button></div></li>
+          <li><span>2</span><div><strong>Connect this browser</strong><p>KnowHow securely hands the signed-in workspace to the installed extension. There is no code to copy or type.</p>{extensionState === "checking" ? <button className="button primary" disabled><LoaderCircle className="spin" /> Checking extension</button> : extensionState === "missing" ? <p className="form-error">Install or reload the extension, then reopen this dialog.</p> : extensionState === "connected" ? <span className="extension-connected"><CheckCircle2 /> Connected to {companion.workspaceName}</span> : <button className="button primary" type="button" disabled={busy} onClick={() => { void connectExtension(); }}>{busy ? <LoaderCircle className="spin" /> : <Link2 />} Connect extension</button>}</div></li>
+          <li><span>3</span><div><strong>Capture and follow guides side by side</strong><p>The extension receives your app theme and the guides you can already access, so its side panel stays in sync with KnowHow.</p><button className="button ghost small" type="button" disabled={busy || extensionState === "missing"} onClick={() => { void revokeDevices().catch(() => undefined); }}><Trash2 /> Revoke browser access</button></div></li>
         </ol>
-        <p className="privacy-caption"><ShieldCheck /> Pairing, capture uploads, and device revocation are audited for workspace administrators.</p>
+        {connectionError ? <p className="form-error" role="alert">{connectionError}</p> : null}
+        <p className="privacy-caption"><ShieldCheck /> Connection, capture uploads, and device revocation are audited for workspace administrators.</p>
         <footer className="modal-footer"><span /><button className="button primary" onClick={onClose}>Done</button></footer>
       </div>
     </Modal>
@@ -963,10 +1383,7 @@ export function KnowHowWorkspaceApp({
   const vaultItems = active.vaultItems ?? [];
   const pendingSupportCount = supportRequests.filter((item) => item.status === "pending").length;
   const [dialog, setDialog] = useState<DialogState>(null);
-  const [toast, setToast] = useState("");
-  const [navOpen, setNavOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const { preference, setPreference } = useTheme();
+  const { resolvedTheme, setPreference } = useTheme();
   const roles = workspace.roles;
   const isAdmin = roles.includes("administrator");
   const canCreate = isAdmin || roles.includes("creator");
@@ -981,6 +1398,41 @@ export function KnowHowWorkspaceApp({
       : route.kind === "guide-new" || route.kind === "guide-view" || route.kind === "guide-edit"
         ? "Guides"
         : "Overview";
+
+  const extensionCompanion = useMemo<ExtensionCompanion>(() => ({
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    theme: resolvedTheme === "dark" ? "dark" : "light",
+    guides: guides.flatMap((guide) => {
+      const revision = guide.publishedRevision ?? guide.workingRevision;
+      if (!revision) return [];
+      const mode = guide.publishedRevision ? "published" : "working";
+      return [{
+        id: guide.id,
+        title: revision.title || guide.title,
+        summary: revision.summary,
+        status: guide.status,
+        restricted: guide.restricted,
+        updatedAt: guide.updatedAt,
+        href: guideHref(workspace.slug, guide.id, mode),
+        steps: revision.steps.map((step) => ({
+          id: step.id,
+          kind: step.kind,
+          title: step.title,
+          description: step.description,
+        })),
+      }];
+    }),
+  }), [guides, resolvedTheme, workspace.id, workspace.name, workspace.slug]);
+
+  useEffect(() => {
+    const syncExtension = () => {
+      void syncKnowHowExtension(extensionCompanion).catch(() => undefined);
+    };
+    syncExtension();
+    window.addEventListener("focus", syncExtension);
+    return () => window.removeEventListener("focus", syncExtension);
+  }, [extensionCompanion]);
 
   const recordPublishedView = useCallback((guide: Guide) => {
     if (!guide.publishedRevision) return;
@@ -997,12 +1449,6 @@ export function KnowHowWorkspaceApp({
   }, [onNavigate, recordPublishedView, workspace.slug]);
 
   useEffect(() => {
-    if (!toast) return;
-    const timeout = window.setTimeout(() => setToast(""), 3_500);
-    return () => window.clearTimeout(timeout);
-  }, [toast]);
-
-  useEffect(() => {
     const scopedKey = `knowhow-theme:${data.viewer.id}`;
     const stored = window.localStorage.getItem(scopedKey);
     const next = stored === "light" || stored === "dark" || stored === "system"
@@ -1013,10 +1459,8 @@ export function KnowHowWorkspaceApp({
   }, [data.viewer.id, data.viewer.themePreference, setPreference]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setDialog(null);
-      setNavOpen(false);
-      setProfileOpen(false);
+      const frame = window.requestAnimationFrame(() => {
+        setDialog(null);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [workspace.id]);
@@ -1026,7 +1470,7 @@ export function KnowHowWorkspaceApp({
     try {
       const result = await knowhowCommand<T>(action, { workspaceId: workspace.id, ...((payload ?? {}) as object) });
       await onRefresh();
-      if (success) setToast(success);
+      if (success) toast.success(success);
       return result;
     } catch (error) {
       onError(messageFromError(error));
@@ -1047,7 +1491,6 @@ export function KnowHowWorkspaceApp({
       ? platformHref()
       : workspaceHref(workspace.slug, VIEW_TO_SECTION[nextView]);
     onNavigate(href);
-    setNavOpen(false);
   }
 
   const routeGuideId = route.kind === "guide-view" || route.kind === "guide-edit"
@@ -1089,6 +1532,8 @@ export function KnowHowWorkspaceApp({
     }),
     ...(data.viewer.platformAdministrator ? [{ view: "Platform" as const, icon: Shield }] : []),
   ];
+  const workspaceNavigation = visibleNav.filter(({ view: item }) => ["Overview", "Guides", "Capture"].includes(item));
+  const governanceNavigation = visibleNav.filter(({ view: item }) => !["Overview", "Guides", "Capture"].includes(item));
 
   if (!canAccessCurrentView) {
     return <RouteUnavailable onBack={() => onNavigate(workspaceHref(workspace.slug, "guides"), { replace: true })} />;
@@ -1128,7 +1573,6 @@ export function KnowHowWorkspaceApp({
           onRegisterNavigationGuard={onRegisterNavigationGuard}
         />
         {busy ? <div className="busy-indicator" role="status"><LoaderCircle className="spin" /> Working securely…</div> : null}
-        {toast ? <div className="toast" role="status"><CheckCircle2 /> {toast}</div> : null}
       </div>
     );
   }
@@ -1143,6 +1587,7 @@ export function KnowHowWorkspaceApp({
           guide={routeGuide}
           workspaceId={workspace.id}
           workspaceName={workspace.name}
+          logoKey={workspace.settings.logoUrl}
           accentColor={workspace.settings.accentColor}
           clickTargetColor={workspace.settings.clickTargetColor}
           initialRevision={route.revision}
@@ -1159,47 +1604,82 @@ export function KnowHowWorkspaceApp({
           onRevisionChange={(revision) => onNavigate(guideHref(workspace.slug, routeGuide.id, revision), { replace: true })}
           onPublishedViewed={() => recordPublishedView(routeGuide)}
           onComplete={() => { void command("recordGuideCompletion", { guideId: routeGuide.id }, "Guide marked complete").catch(() => undefined); }}
-          onExport={async (format) => { onBusyChange(true); onError(""); try { await downloadAuthorizedExport(workspace.id, routeGuide.id, format); setToast(`${format.toUpperCase()} export created`); await onRefresh(); } catch (error) { onError(messageFromError(error)); } finally { onBusyChange(false); } }}
+          onExport={async (format) => { onBusyChange(true); onError(""); try { await downloadAuthorizedExport(workspace.id, routeGuide.id, format); toast.success(`${format.toUpperCase()} export created`); await onRefresh(); } catch (error) { onError(messageFromError(error)); } finally { onBusyChange(false); } }}
           onRestore={(revisionId) => { void command("restoreRevision", { guideId: routeGuide.id, revisionId }, "Revision restored as a private draft").then(() => onNavigate(guideEditorHref(workspace.slug, routeGuide.id), { replace: true })).catch(() => undefined); }}
         />
         {busy ? <div className="busy-indicator" role="status"><LoaderCircle className="spin" /> Working securely…</div> : null}
-        {toast ? <div className="toast" role="status"><CheckCircle2 /> {toast}</div> : null}
       </div>
     );
   }
 
   return (
-    <div className="app-shell" style={{ "--workspace-accent": workspace.settings.accentColor, "--click-color": workspace.settings.clickTargetColor } as React.CSSProperties}>
-      <aside className={`sidebar${navOpen ? " sidebar-open" : ""}`}>
-        <div className="sidebar-brand"><span className="brand-mark">K</span><span>KnowHow</span><button className="icon-button sidebar-close" onClick={() => setNavOpen(false)}><X /></button></div>
-        <SelectMenu className="workspace-menu" value={activeWorkspaceId} disabled={busy} onChange={(value) => void onSelectWorkspace(value)} ariaLabel="Switch workspace" options={data.workspaces.map((item) => ({ value: item.id, label: item.name }))} renderValue={() => <><span className="workspace-avatar">{workspace.name.slice(0, 1).toUpperCase()}</span><span className="workspace-menu-copy"><strong>{workspace.name}</strong><small>{roles.map(titleCase).join(" · ")}</small></span></>} />
-        <nav className="main-nav" aria-label="Main navigation">{visibleNav.map(({ view: item, icon: Icon }) => <button className={view === item ? "active" : ""} type="button" key={item} onClick={() => navigateToView(item)}><Icon /><span>{item}</span>{item === "Guides" && active.metrics.reviews ? <small>{active.metrics.reviews}</small> : null}{item === "Members" && pendingSupportCount ? <small className="nav-badge">{pendingSupportCount}</small> : null}</button>)}</nav>
-        <div className="sidebar-privacy"><ShieldCheck /><div><strong>Default deny</strong><p>Every data request is checked by the trusted server.</p></div></div>
-        <button className="capture-shortcut" type="button" disabled={!canCapture} onClick={() => setDialog({ type: "extension" })}><span><Sparkles /></span><span><strong>Capture workflow</strong><small>{canCapture ? "Chrome & Edge extension" : "Creator access required"}</small></span><ArrowRight /></button>
-      </aside>
+    <SidebarProvider>
+      <div className="app-shell" style={{ "--workspace-accent": workspace.settings.accentColor, "--click-color": workspace.settings.clickTargetColor } as React.CSSProperties}>
+      <Sidebar className="sidebar" collapsible="offcanvas">
+        <SidebarHeader className="workspace-sidebar-header">
+          <div className="sidebar-brand"><ProductBrand compact /></div>
+          <p className="sidebar-section-label">Active workspace</p>
+          <SelectMenu className="workspace-menu" contentClassName="workspace-menu-options" value={activeWorkspaceId} disabled={busy} onChange={(value) => void onSelectWorkspace(value)} ariaLabel="Switch workspace" options={data.workspaces.map((item) => ({ value: item.id, label: item.name }))} renderValue={() => <><WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="md" /><span className="workspace-menu-copy"><strong>{workspace.name}</strong><small>{roles.map(titleCase).join(" · ")}</small></span></>} />
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup className="workspace-nav-group">
+            <p className="sidebar-section-label">Workspace</p>
+            <nav className="main-nav" aria-label="Workspace navigation">
+              <SidebarMenu>{workspaceNavigation.map(({ view: item, icon: Icon }) => <SidebarMenuItem key={item}><SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}><Icon /><span>{item}</span></SidebarMenuButton>{item === "Guides" && active.metrics.reviews ? <SidebarMenuBadge>{active.metrics.reviews}</SidebarMenuBadge> : null}</SidebarMenuItem>)}</SidebarMenu>
+            </nav>
+          </SidebarGroup>
+          {governanceNavigation.length ? <SidebarGroup className="workspace-nav-group governance-nav-group">
+            <p className="sidebar-section-label">Governance</p>
+            <nav className="main-nav" aria-label="Governance navigation">
+              <SidebarMenu>{governanceNavigation.map(({ view: item, icon: Icon }) => <SidebarMenuItem key={item}><SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}><Icon /><span>{item}</span></SidebarMenuButton>{item === "Members" && pendingSupportCount ? <SidebarMenuBadge className="nav-badge">{pendingSupportCount}</SidebarMenuBadge> : null}</SidebarMenuItem>)}</SidebarMenu>
+            </nav>
+          </SidebarGroup> : null}
+        </SidebarContent>
+        <SidebarFooter>
+          <div className="sidebar-privacy"><ShieldCheck /><div><strong>Default deny</strong><p>Every data request is checked by the trusted server.</p></div></div>
+          <button className="capture-shortcut" type="button" disabled={!canCapture} onClick={() => setDialog({ type: "extension" })}><span><Sparkles /></span><span><strong>Capture workflow</strong><small>{canCapture ? "Chrome & Edge extension" : "Creator access required"}</small></span><ArrowRight /></button>
+        </SidebarFooter>
+      </Sidebar>
 
       <div className="app-main">
         <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setNavOpen(true)} aria-label="Open navigation"><Menu /></button>
-          <div className="topbar-context"><span className="workspace-status-dot" /><span>{workspace.name}</span><StatusBadge status={workspace.status} /></div>
-          <GlobalGuideSearch workspaceId={workspace.id} workspaceSlug={workspace.slug} guides={guides} onOpen={openGuide} onNavigate={onNavigate} />
+          <div className="topbar-start">
+            <SidebarTrigger className="mobile-menu" />
+            <div className="topbar-workspace"><WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="sm" /><span><small>Workspace</small><strong>{workspace.name}</strong></span><StatusBadge status={workspace.status} /></div>
+          </div>
+          <div className="topbar-search-slot"><GlobalGuideSearch guides={guides} onOpen={openGuide} /></div>
           <div className="topbar-actions">
-            <SelectMenu className="theme-menu" align="end" leading={preference === "dark" ? <Moon /> : preference === "light" ? <Sun /> : <Laptop />} value={preference} onChange={(theme) => { window.localStorage.setItem(`knowhow-theme:${data.viewer.id}`, theme); setPreference(theme); void knowhowCommand("updateTheme", { theme }).catch((error) => onError(messageFromError(error))); }} ariaLabel="Theme" options={[{ value: "system", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
-            <button className="button primary top-create" type="button" disabled={busy || (view === "Platform" ? !data.viewer.platformAdministrator : !canCreate || !workspaceMutable)} onClick={() => view === "Platform" ? setDialog({ type: "platform-create" }) : onNavigate(newGuideHref(workspace.slug))}><Plus /> {view === "Platform" ? "Workspace" : "Create"}</button>
-            <div className="profile-wrap"><button className="profile-button" type="button" onClick={() => setProfileOpen((open) => !open)}><span className="avatar">{initials(data.viewer.name, data.viewer.email)}</span><span><strong>{data.viewer.name}</strong><small>{data.viewer.email}</small></span><ChevronDown /></button>{profileOpen ? <div className="profile-menu"><div><strong>{data.viewer.name}</strong><small>{data.viewer.email}</small></div><button type="button" onClick={onSignOut}><LogOut /> Sign out</button></div> : null}</div>
+            <Button
+              className="theme-toggle"
+              variant="outline"
+              size="icon-sm"
+              type="button"
+              aria-label={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
+              onClick={() => {
+                const theme = resolvedTheme === "dark" ? "light" : "dark";
+                window.localStorage.setItem(`knowhow-theme:${data.viewer.id}`, theme);
+                setPreference(theme);
+                void knowhowCommand("updateTheme", { theme }).catch((error) => onError(messageFromError(error)));
+              }}
+            >
+              {resolvedTheme === "dark" ? <Sun /> : <Moon />}
+            </Button>
+            <Button className="top-create" size="sm" type="button" disabled={busy || (view === "Platform" ? !data.viewer.platformAdministrator : !canCreate || !workspaceMutable)} onClick={() => view === "Platform" ? setDialog({ type: "platform-create" }) : onNavigate(newGuideHref(workspace.slug))}><Plus /> {view === "Platform" ? "Workspace" : "Create"}</Button>
+            <DropdownMenu><DropdownMenuTrigger className="profile-button" aria-label="Open account menu"><span className="avatar">{initials(data.viewer.name, data.viewer.email)}</span><span><strong>{data.viewer.name}</strong><small>{data.viewer.email}</small></span><ChevronDown /></DropdownMenuTrigger><DropdownMenuContent align="end" className="profile-menu"><DropdownMenuGroup><DropdownMenuLabel><strong>{data.viewer.name}</strong><small>{data.viewer.email}</small></DropdownMenuLabel></DropdownMenuGroup><DropdownMenuSeparator /><DropdownMenuItem onClick={onSignOut}><LogOut /> Sign out</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
           </div>
         </header>
         {workspace.status !== "active" ? <div className="suspension-banner"><CircleAlert /><span>This workspace is {workspace.status}. Changes and captures are disabled until a platform administrator restores it.</span></div> : null}
         {globalError ? <div className="global-error" role="alert"><CircleAlert /><span>{globalError}</span><button className="icon-button" onClick={() => onError("")}><X /></button></div> : null}
         <main className="content-area">
-          {view === "Overview" ? <OverviewView data={active} canCreate={canCreate && workspaceMutable} canCapture={canCapture} onNewGuide={() => onNavigate(newGuideHref(workspace.slug))} onOpenGuide={(guide) => openGuide(guide)} onNavigate={navigateToView} /> : null}
+          {view === "Overview" ? <OverviewView data={active} viewerName={data.viewer.name} canCreate={canCreate && workspaceMutable} canCapture={canCapture} canManageAccess={isAdmin} onNewGuide={() => onNavigate(newGuideHref(workspace.slug))} onOpenGuide={(guide) => openGuide(guide)} onNavigate={navigateToView} /> : null}
           {view === "Guides" ? <GuidesView guides={guides} canCreate={canCreate && workspaceMutable} onNew={() => onNavigate(newGuideHref(workspace.slug))} onOpen={(guide) => openGuide(guide)} onEdit={(guide) => onNavigate(guideEditorHref(workspace.slug, guide.id))} onAction={command} busy={busy || !workspaceMutable} /> : null}
           {view === "Capture" ? <CaptureView canCapture={canCapture} onOpenExtension={() => setDialog({ type: "extension" })} /> : null}
           {view === "Groups" && isAdmin ? <GroupsView groups={groups} busy={busy || !workspaceMutable} onNew={() => setDialog({ type: "group", group: null })} onEdit={(group) => setDialog({ type: "group", group })} /> : null}
           {view === "Members" && isAdmin ? <MembersView members={members} invitations={invitations} joinRequests={joinRequests} supportRequests={supportRequests} supportGrants={supportGrants} busy={busy || !workspaceMutable} onInvite={() => setDialog({ type: "invite" })} onEdit={(member) => setDialog({ type: "member", member })} onApprove={(joinRequestId, approve) => { void command("resolveJoinRequest", { joinRequestId, approve }, approve ? "Member approved as viewer" : "Join request denied").catch(() => undefined); }} onRevoke={(invitationId) => { void command("revokeInvite", { invitationId }, "Invitation revoked").catch(() => undefined); }} onResolveSupport={(request) => setDialog({ type: "support-decision", request })} onRevokeSupport={(grant) => { if (window.confirm(`Revoke ${grant.displayName || grant.email}'s temporary access now?`)) void command("revokeSupportAccess", { grantId: grant.id }, "Temporary support access revoked").catch(() => undefined); }} /> : null}
           {view === "Vault" && canUseVault ? <VaultView items={vaultItems} busy={busy || !workspaceMutable} onNew={() => setDialog({ type: "vault-editor", item: null })} onEdit={(item) => setDialog({ type: "vault-editor", item })} onReveal={(item) => setDialog({ type: "vault-reveal", item })} onDelete={(item) => { if (window.confirm(`Delete ${item.title}? This encrypted item cannot be recovered.`)) void command("deleteVaultItem", { vaultItemId: item.id }, "Vault item deleted").catch(() => undefined); }} /> : null}
           {view === "Activity" && isAdmin ? <ActivityView audits={audits} workspaceId={workspace.id} busy={busy} onBusyChange={onBusyChange} onError={onError} onRefresh={onRefresh} /> : null}
-          {view === "Settings" && isAdmin ? <SettingsView key={workspace.id} workspaceId={workspace.id} initial={workspace.settings} busy={busy || !workspaceMutable} onRefresh={onRefresh} onSave={async (settings) => { await command("updateWorkspaceSettings", { settings }, "Workspace policies saved"); }} onSaveDomains={async (allowedDomains) => { await command("updateAllowedDomains", { allowedDomains }, "Approved domains saved"); }} /> : null}
+          {view === "Settings" && isAdmin ? <SettingsView key={workspace.id} workspaceId={workspace.id} workspaceName={workspace.name} initial={workspace.settings} busy={busy || !workspaceMutable} onRefresh={onRefresh} onSave={async (settings) => { await command("updateWorkspaceSettings", { settings }, "Workspace policies saved"); }} onSaveDomains={async (allowedDomains) => { await command("updateAllowedDomains", { allowedDomains }, "Approved domains saved"); }} /> : null}
           {view === "Platform" && data.viewer.platformAdministrator && data.platform ? <PlatformView platform={data.platform} busy={busy} onStatus={(workspaceId, status) => { if (window.confirm(`${titleCase(status)} this workspace?`)) void command("setWorkspaceStatus", { targetWorkspaceId: workspaceId, status }, `Workspace ${status}`).catch(() => undefined); }} onAssign={(target) => setDialog({ type: "assign-admin", workspace: target })} onRequestSupport={(target) => setDialog({ type: "support-request", workspace: target })} onUpdateSettings={async (limit) => { await command("updatePlatformSettings", { selfServiceWorkspaceLimit: limit }, "Platform policy saved"); }} onRevokeAppointment={(appointment) => { if (window.confirm(`Revoke the administrator appointment for ${appointment.email}?`)) void command("revokeAppointment", { appointmentId: appointment.id }, "Appointment revoked").catch(() => undefined); }} /> : null}
         </main>
       </div>
@@ -1207,7 +1687,7 @@ export function KnowHowWorkspaceApp({
       {dialog?.type === "group" && isAdmin && workspaceMutable ? <GroupDialog group={dialog.group} members={members} busy={busy} onClose={() => setDialog(null)} onSave={async (payload) => { await command("saveGroup", payload, payload.id ? "Group updated" : "Group created"); setDialog(null); }} onDelete={async (groupId) => { await command("deleteGroup", { groupId }, "Group deleted"); setDialog(null); }} /> : null}
       {dialog?.type === "member" && isAdmin && workspaceMutable ? <MemberDialog member={dialog.member} busy={busy} onClose={() => setDialog(null)} onSave={async (nextRoles, capabilities) => { await command("updateMember", { memberId: dialog.member.id, roles: nextRoles, capabilities, status: dialog.member.status }, "Member access updated"); setDialog(null); }} onSuspend={async () => { await command("updateMember", { memberId: dialog.member.id, roles: dialog.member.roles, capabilities: dialog.member.capabilities ?? [], status: dialog.member.status === "suspended" ? "active" : "suspended" }, dialog.member.status === "suspended" ? "Member restored" : "Member suspended"); setDialog(null); }} /> : null}
       {dialog?.type === "invite" && isAdmin && workspaceMutable ? <InviteDialog busy={busy} origin={window.location.origin} onClose={() => setDialog(null)} onCreate={(payload) => command<{ token: string }>("createInvite", payload, "Invitation created")} /> : null}
-      {dialog?.type === "extension" && canCapture ? <ExtensionDialog busy={busy} onClose={() => setDialog(null)} onPair={() => command<{ code: string; expiresAt: string }>("createPairingCode", {}, "Pairing code created")} onRevoke={() => command("revokeCaptureDevices", {}, "Paired browser access revoked")} /> : null}
+      {dialog?.type === "extension" && canCapture ? <ExtensionDialog busy={busy} companion={extensionCompanion} onClose={() => setDialog(null)} onPair={() => command<{ code: string; expiresAt: string }>("createPairingCode", {}, "")} onRevoke={() => command("revokeCaptureDevices", {}, "Paired browser access revoked")} /> : null}
       {dialog?.type === "platform-create" && data.viewer.platformAdministrator ? <PlatformCreateDialog busy={busy} onClose={() => setDialog(null)} onCreate={async (name, administratorEmail, inviteEmails) => { const result = await command<{ workspaceId: string; appointmentToken: string | null; invitations: string[] }>("createWorkspace", { name, ...(administratorEmail ? { administratorEmail } : {}), ...(inviteEmails.length ? { inviteEmails } : {}) }, "Workspace created"); setDialog(null); return { appointmentUrl: result.appointmentToken ? `${window.location.origin}/?appointment=${encodeURIComponent(result.appointmentToken)}` : null, inviteUrls: (result.invitations ?? []).map((token) => `${window.location.origin}/?invite=${encodeURIComponent(token)}`) }; }} /> : null}
       {dialog?.type === "assign-admin" && data.viewer.platformAdministrator ? <AssignAdminDialog workspace={dialog.workspace} busy={busy} onClose={() => setDialog(null)} onAssign={async (email) => { await command("assignWorkspaceAdministrator", { targetWorkspaceId: dialog.workspace.id, email }, "Workspace administrator assigned"); setDialog(null); }} /> : null}
       {dialog?.type === "support-request" && data.viewer.platformAdministrator ? <SupportRequestDialog workspace={dialog.workspace} busy={busy} onClose={() => setDialog(null)} onRequest={async (requestedRole, reason, requestedDurationHours) => { await command("requestSupportAccess", { workspaceId: dialog.workspace.id, requestedRole, reason, requestedDurationHours }, "Support request submitted for approval"); setDialog(null); }} /> : null}
@@ -1215,8 +1695,8 @@ export function KnowHowWorkspaceApp({
       {dialog?.type === "vault-editor" && canUseVault && workspaceMutable ? <VaultEditorDialog item={dialog.item} busy={busy} onClose={() => setDialog(null)} onSave={async (payload) => { await command("saveVaultItem", payload, "Vault item encrypted and saved"); setDialog(null); }} /> : null}
       {dialog?.type === "vault-reveal" && canUseVault ? <VaultRevealDialog item={dialog.item} busy={busy} onClose={() => setDialog(null)} /> : null}
       {busy ? <div className="busy-indicator" role="status"><LoaderCircle className="spin" /> Working securely…</div> : null}
-      {toast ? <div className="toast" role="status"><CheckCircle2 /> {toast}</div> : null}
-    </div>
+      </div>
+    </SidebarProvider>
   );
 }
 
@@ -1238,8 +1718,10 @@ export function SupportRequestDialog({ workspace, busy, onClose, onRequest }: {
 }) {
   const [role, setRole] = useState<WorkspaceRole>("viewer");
   const [reason, setReason] = useState("");
-  const [hours, setHours] = useState(4);
-  return <Modal title={`Request support access · ${workspace.name}`} eyebrow="Customer approval required" onClose={onClose}><form className="modal-form" onSubmit={async (event: FormEvent) => { event.preventDefault(); await onRequest(role, reason.trim(), hours); }}><p className="modal-copy">The workspace&apos;s administrator is notified in-app, reviews your reason, and may adjust the granted role and duration. Access stays denied until they approve, expires automatically, and every action during access is recorded in the customer&apos;s audit history.</p><div className="field"><span>Requested role</span><SelectMenu className="form-select" value={role} onChange={setRole} ariaLabel="Requested role" options={WORKSPACE_ROLES.map((item) => ({ value: item, label: titleCase(item) }))} /><small>Administrator-level access only ever operates within the customer&apos;s approval and remains locked out of membership, invitations, domains, groups, and support governance.</small></div><label className="field"><span>Why is access needed?</span><textarea required minLength={10} maxLength={2000} rows={4} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Investigating a capture failure on the onboarding guide…" /></label><div className="field"><span>Requested duration (1–168 hours)</span><input type="number" min={1} max={168} value={hours} onChange={(event) => setHours(Math.max(1, Math.min(168, Number(event.target.value) || 1)))} /></div><footer className="modal-footer"><span /><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || reason.trim().length < 10}><ShieldCheck /> Request access</button></footer></form></Modal>;
+  const [hours, setHours] = useState("4");
+  const parsedHours = Number(hours);
+  const validHours = hours.trim() !== "" && Number.isInteger(parsedHours) && parsedHours >= 1 && parsedHours <= 168;
+  return <Modal title={`Request support access · ${workspace.name}`} eyebrow="Customer approval required" onClose={onClose}><form className="modal-form" onSubmit={async (event: FormEvent) => { event.preventDefault(); if (!validHours) return; await onRequest(role, reason.trim(), parsedHours); }}><p className="modal-copy">The workspace&apos;s administrator is notified in-app, reviews your reason, and may adjust the granted role and duration. Access stays denied until they approve, expires automatically, and every action during access is recorded in the customer&apos;s audit history.</p><div className="field"><span>Requested role</span><SelectMenu className="form-select" value={role} onChange={setRole} ariaLabel="Requested role" options={WORKSPACE_ROLES.map((item) => ({ value: item, label: titleCase(item) }))} /><small>Administrator-level access only ever operates within the customer&apos;s approval and remains locked out of membership, invitations, domains, groups, and support governance.</small></div><label className="field"><span>Why is access needed?</span><textarea required minLength={10} maxLength={2000} rows={4} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Investigating a capture failure on the onboarding guide…" /></label><div className="field"><span>Requested duration (1–168 hours)</span><input type="number" min={1} max={168} required value={hours} onChange={(event) => setHours(event.target.value)} /></div><footer className="modal-footer"><span /><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={busy || reason.trim().length < 10 || !validHours}><ShieldCheck /> Request access</button></footer></form></Modal>;
 }
 
 export function AssignAdminDialog({ workspace, busy, onClose, onAssign }: { workspace: PlatformWorkspace; busy: boolean; onClose: () => void; onAssign: (email: string) => Promise<void> }) {

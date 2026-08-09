@@ -91,8 +91,8 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
     .primaryKey()
     .references(() => workspaces.id, { onDelete: "cascade" }),
   logoObjectKey: text("logo_object_key"),
-  accentColor: text("accent_color").notNull().default("#2563eb"),
-  clickTargetColor: text("click_target_color").notNull().default("#ef4444"),
+  accentColor: text("accent_color").notNull().default("#b45309"),
+  clickTargetColor: text("click_target_color").notNull().default("#d97706"),
   removeBranding: integer("remove_branding", { mode: "boolean" })
     .notNull()
     .default(false),
