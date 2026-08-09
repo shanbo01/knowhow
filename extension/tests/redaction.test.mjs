@@ -72,22 +72,26 @@ test("viewport rectangles scale into screenshot pixels", () => {
 
 test("detectors return locations without exposing values in sanitized labels", () => {
   const input = "Email alice@example.com or call +974 5555 1234";
-  const ranges = detectSensitiveRanges(input);
+  const enabled = { redactEmails: true, redactPhoneNumbers: true };
+  const ranges = detectSensitiveRanges(input, enabled);
   assert.ok(ranges.some((finding) => finding.reason === "email"));
   assert.ok(ranges.some((finding) => finding.reason === "phone"));
-  const sanitized = sanitizeCapturedLabel(input);
+  const sanitized = sanitizeCapturedLabel(input, enabled);
   assert.equal(sanitized.includes("alice@example.com"), false);
   assert.match(sanitized, /\[redacted\]/);
+});
+
+test("no category is detected until the author enables it", () => {
+  const input =
+    "Email alice@example.com, call +974 5555 1234, ref AB-12345678, card 4111 1111 1111 1111";
+  assert.deepEqual(detectSensitiveRanges(input), []);
+  assert.equal(sanitizeCapturedLabel(input).includes("[redacted]"), false);
 });
 
 test("all-number masking stays opt-in", () => {
   const defaultFindings = detectSensitiveRanges("Choose step 2");
   assert.equal(defaultFindings.length, 0);
   const strictFindings = detectSensitiveRanges("Choose step 2", {
-    redactEmails: false,
-    redactPhoneNumbers: false,
-    redactFinancialNumbers: false,
-    redactIds: false,
     redactAllNumbers: true,
   });
   assert.deepEqual(strictFindings, [
@@ -97,7 +101,15 @@ test("all-number masking stays opt-in", () => {
 
 test("captured metadata redacts formatted numbers, IDs, and optional names", () => {
   const input = "Call +974 5555 1234 for Alice Example about AB-12345678";
-  const sanitized = sanitizeCapturedText(input, { redactCommonNames: true }, 500);
+  const sanitized = sanitizeCapturedText(
+    input,
+    {
+      redactPhoneNumbers: true,
+      redactIds: true,
+      redactCommonNames: true,
+    },
+    500,
+  );
   assert.equal(sanitized.includes("5555"), false);
   assert.equal(sanitized.includes("Alice Example"), false);
   assert.equal(sanitized.includes("AB-12345678"), false);

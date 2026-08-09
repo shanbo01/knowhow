@@ -497,7 +497,7 @@ test("captured steps and guide steps share one illustrated presentation", async 
   // device credential, and only for steps scrolled into view.
   assert.match(source, /type: "GET_GUIDE_MEDIA"/);
   assert.match(source, /new IntersectionObserver/);
-  assert.match(source, /root: elements\.guideFollowSteps/);
+  assert.match(source, /root: elements\.guidesPanel/);
   assert.match(source, /guideStepGeometry\(pending, result\)/);
   assert.match(source, /step\.media\?\.mediaId && currentConnection\?\.connected/);
   assert.match(backgroundSource, /case "GET_GUIDE_MEDIA":/);
@@ -506,4 +506,43 @@ test("captured steps and guide steps share one illustrated presentation", async 
   assert.match(apiClient, /export async function fetchGuideMedia\(mediaId\)/);
   assert.match(apiClient, /\/media\/" \+ encodeURIComponent\(id\)/);
   assert.match(apiClient, /isAcceptedScreenshotType\(contentType\)/);
+});
+
+test("the guide library reads as one scrolling page", async () => {
+  const [css, source] = await Promise.all([
+    readFile(new URL("../src/popup/popup.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/popup/popup.js", import.meta.url), "utf8"),
+  ]);
+
+  function rule(selector) {
+    const match = css.match(
+      new RegExp("^\\" + selector + " \\{([^}]*)\\}", "m"),
+    );
+    assert.ok(match, selector + " is missing");
+    return match[1];
+  }
+
+  // The whole panel scrolls—heading, search field and rows together—rather than
+  // trapping the list in a short inner scroller.
+  assert.match(rule(".guide-library"), /overflow: auto/);
+  for (const selector of [".guide-results", ".guide-follow-steps"]) {
+    assert.doesNotMatch(rule(selector), /overflow: auto/, selector);
+    // Without align-content a two-row grid stretches each row over the panel.
+    assert.match(rule(selector), /align-content: start/, selector);
+  }
+  assert.doesNotMatch(rule(".guide-follow"), /flex: 1|overflow/);
+  assert.match(rule(".guide-follow-actions"), /position: sticky/);
+
+  // The screenshot sits in the step's own copy column, so it cannot be pushed
+  // into a phantom second column beside the step text.
+  assert.doesNotMatch(rule(".guide-step-figure"), /grid-column/);
+  assert.match(source, /copy\.className = "guide-follow-step-copy"/);
+  assert.match(source, /number\.className = "guide-follow-step-number"/);
+  assert.match(css, /\.guide-follow-step-copy \{[^}]*display: grid/);
+
+  // Walking with Next keeps the current step in sight, and opening or leaving a
+  // guide starts at the top of the panel.
+  assert.match(source, /renderGuideFollow\(\{ reveal: true \}\)/);
+  assert.match(source, /children\[activeGuideStep\]\?\.scrollIntoView/);
+  assert.match(source, /elements\.guidesPanel\.scrollTop = 0/);
 });

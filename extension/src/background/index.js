@@ -1286,17 +1286,18 @@ async function validateActiveCaptureTab(state, policy, expectedSanitizedUrl) {
   }
   const verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
   if (!verdict.allowed) throw new Error(verdict.reason);
-  if (verdict.origin !== state.origin) {
+  // Capture follows the author across sites, so what has to hold is that the tab
+  // still shows the exact page this screenshot was queued for. Without a pinned
+  // page, the session's current origin is the guard.
+  if (expectedSanitizedUrl) {
+    if (verdict.sanitizedUrl !== expectedSanitizedUrl) {
+      throw new Error(
+        "The captured page changed before its screenshot was ready. Try the action again.",
+      );
+    }
+  } else if (verdict.origin !== state.origin) {
     throw new Error(
-      "The page changed origin. Resume explicitly to continue on the new site.",
-    );
-  }
-  if (
-    expectedSanitizedUrl &&
-    verdict.sanitizedUrl !== expectedSanitizedUrl
-  ) {
-    throw new Error(
-      "The captured page changed before its screenshot was ready. Try the action again.",
+      "The captured page moved to another site before its screenshot was ready. Try the action again.",
     );
   }
   return { tab, verdict };
@@ -1390,23 +1391,15 @@ async function captureStep(request, reserveSlot) {
     await pauseCapture(verdict.reason);
     return false;
   }
-  if (verdict.origin !== snapshot.origin) {
-    await pauseCapture(
-      "The page changed origin. Resume explicitly to continue on the new site.",
-    );
-    return false;
-  }
   const activeVerdict = evaluateCaptureUrl(activeTab.url || "", policy);
   if (!activeVerdict.allowed) {
     await pauseCapture(activeVerdict.reason);
     return false;
   }
-  if (activeVerdict.origin !== snapshot.origin) {
-    await pauseCapture(
-      "The page changed origin. Resume explicitly to continue on the new site.",
-    );
-    return false;
-  }
+  // The session may legitimately have moved to another site since this job was
+  // queued. That is the navigation's own step to record, so the stale job is
+  // dropped rather than photographed against the wrong page or paused.
+  if (verdict.origin !== activeVerdict.origin) return false;
 
   const context = await preparePageContext(snapshot, request);
   if (!context) return false;
@@ -1582,6 +1575,14 @@ async function commitPreflightStep(stash, request, snapshot) {
   return true;
 }
 
+// The side panel names the site being recorded, so following the author to
+// another host has to rename the scope with it.
+function scopeLabelForHost(state, hostname) {
+  const workspace = String(state?.scopeLabel || "").split(" · ")[0];
+  if (!hostname) return state?.scopeLabel;
+  return (workspace || "Workspace") + " · " + hostname;
+}
+
 function waitForTabComplete(tabId, timeoutMs = 8_000) {
   return new Promise((resolve) => {
     let settled = false;
@@ -1659,6 +1660,7 @@ async function followNewTabNavigation(details) {
       tabId: tab.id,
       windowId: tab.windowId,
       origin: verdict.origin,
+      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
       sanitizedUrl: verdict.sanitizedUrl,
       lastNavigationUrl: verdict.sanitizedUrl,
       lastNavigationAt: Date.now(),
@@ -1697,21 +1699,16 @@ async function followNewTabNavigation(details) {
 }
 
 /**
- * Switching to any other regular, capturable tab inside the same window that
- * the capture is scoped to keeps recording there instead of merely pausing,
- * matching real cross-tab workflows (e.g. copying a code from a mail tab
- * back into a signup tab). A "Switch to ..." step marks the hand-off, the
- * same way followNewTabNavigation() marks a tab opened from a link.
+ * Switching to any other regular, capturable tab keeps recording there instead
+ * of merely pausing, matching real cross-tab workflows (e.g. copying a code
+ * from a mail tab back into a signup tab). Tabs in another window count too,
+ * because workflows routinely spill into a second window. A "Switch to ..."
+ * step marks the hand-off, the same way followNewTabNavigation() marks a tab
+ * opened from a link.
  */
 async function followActiveTabSwitch({ tabId, windowId }) {
   const state = await getCaptureState();
-  if (
-    !isCollecting(state) ||
-    state.windowId !== windowId ||
-    state.tabId === tabId
-  ) {
-    return;
-  }
+  if (!isCollecting(state) || state.tabId === tabId) return;
   const policy = await getCapturePolicy();
   await waitForTabComplete(tabId);
   let tab;
@@ -1721,7 +1718,13 @@ async function followActiveTabSwitch({ tabId, windowId }) {
     return;
   }
   if (tab.incognito) return;
-  const [activeTab] = await chrome.tabs.query({ active: true, windowId });
+  // The tab may have been dragged into another window while it loaded, so the
+  // window it lives in now decides whether it is the tab in front.
+  const targetWindowId = Number.isInteger(tab.windowId) ? tab.windowId : windowId;
+  const [activeTab] = await chrome.tabs.query({
+    active: true,
+    windowId: targetWindowId,
+  });
   if (!activeTab || activeTab.id !== tabId) return;
   let verdict;
   try {
@@ -1743,8 +1746,9 @@ async function followActiveTabSwitch({ tabId, windowId }) {
     const next = {
       ...latest,
       tabId,
-      windowId,
+      windowId: targetWindowId,
       origin: verdict.origin,
+      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
       sanitizedUrl: verdict.sanitizedUrl,
       lastNavigationUrl: verdict.sanitizedUrl,
       lastNavigationAt: Date.now(),
@@ -1782,13 +1786,28 @@ async function followActiveTabSwitch({ tabId, windowId }) {
   }
 }
 
+/**
+ * A tab the author opens themselves — Ctrl+T, a bookmark, pasting a URL — has no
+ * opener, so no new-target event exists to follow. The tab starts life on the new
+ * tab page, which is not capturable, so the moment it finishes loading a real
+ * page while it is the tab in front, the session continues there.
+ */
+async function followOwnNewTab(tabId) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  if (tab.active !== true) return;
+  await followActiveTabSwitch({ tabId, windowId: tab.windowId });
+}
+
 async function captureNavigation(details) {
   const state = await getCaptureState();
-  if (
-    !isCollecting(state) ||
-    state.tabId !== details.tabId ||
-    details.frameId !== 0
-  ) {
+  if (!isCollecting(state) || details.frameId !== 0) return;
+  if (state.tabId !== details.tabId) {
+    await followOwnNewTab(details.tabId);
     return;
   }
 
@@ -1798,12 +1817,10 @@ async function captureNavigation(details) {
     await pauseCapture(verdict.reason);
     return;
   }
-  if (verdict.origin !== state.origin) {
-    await pauseCapture(
-      "The page changed origin. Resume explicitly to continue on the new site.",
-    );
-    return;
-  }
+  // Following a link onto another site is an ordinary part of a real workflow
+  // (an app hands off to a payment provider, an identity provider, a docs site),
+  // so capture continues there and records the hand-off. Sites the workspace
+  // excludes, and anything that is not a regular page, still stop capture above.
   const recentInteraction = recentInteractionByTab.get(details.tabId);
   if (
     recentInteraction?.sessionId === state.sessionId &&
@@ -1819,6 +1836,8 @@ async function captureNavigation(details) {
       }
       const next = {
         ...latest,
+        origin: verdict.origin,
+        scopeLabel: scopeLabelForHost(latest, verdict.hostname),
         sanitizedUrl: verdict.sanitizedUrl,
         lastNavigationUrl: verdict.sanitizedUrl,
         lastNavigationAt: Date.now(),
@@ -1845,6 +1864,8 @@ async function captureNavigation(details) {
     }
     const next = {
       ...latest,
+      origin: verdict.origin,
+      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
       sanitizedUrl: verdict.sanitizedUrl,
       lastNavigationUrl: verdict.sanitizedUrl,
       lastNavigationAt: Date.now(),
@@ -2117,6 +2138,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.tabs.onActivated.addListener((activeInfo) => {
   windowActivationEpochs.note(activeInfo.windowId);
   void followActiveTabSwitch(activeInfo);
+});
+
+// Moving to another browser window does not activate a tab, so capture follows
+// the tab already in front of the newly focused window.
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (!Number.isInteger(windowId) || windowId === chrome.windows.WINDOW_ID_NONE) {
+    return;
+  }
+  void chrome.tabs
+    .query({ active: true, windowId })
+    .then(([tab]) => {
+      if (!tab || !Number.isInteger(tab.id)) return;
+      return followActiveTabSwitch({ tabId: tab.id, windowId });
+    })
+    .catch(() => undefined);
 });
 
 chrome.webNavigation.onCompleted.addListener((details) => {

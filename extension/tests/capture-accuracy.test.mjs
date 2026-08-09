@@ -73,6 +73,112 @@ test("clicked element bounds normalize into an editable focus region", () => {
   );
 });
 
+// The content script is injected as a classic script, so it cannot export its
+// geometry. Evaluating the shipped mask-merging block lets these rules be tested
+// as behaviour instead of as a regular expression over source text.
+async function maskGeometry(viewport = { width: 1280, height: 800 }) {
+  const source = await readFile(
+    new URL("../src/content/capture.js", import.meta.url),
+    "utf8",
+  );
+  const block = source.slice(
+    source.indexOf("  const MASK_PADDING"),
+    source.indexOf("  function collectMasks"),
+  );
+  return new Function(
+    "innerWidth",
+    "innerHeight",
+    block + "\nreturn { mergedMasks };",
+  )(viewport.width, viewport.height);
+}
+
+test("live blur covers the detected text and nothing else", async () => {
+  const { mergedMasks } = await maskGeometry();
+
+  // Rectangles from one line of text join into a single calm panel.
+  const line = mergedMasks([
+    { x: 100, y: 100, width: 60, height: 16, reason: "email" },
+    { x: 164, y: 100, width: 40, height: 16, reason: "email" },
+  ]);
+  assert.equal(line.length, 1);
+  assert.equal(line[0].x, 97);
+  assert.equal(line[0].width, 110);
+
+  // Two short lines in a tall container stay separate: merging them would cover
+  // the blank space to the right of the shorter line.
+  const stacked = mergedMasks([
+    { x: 100, y: 100, width: 180, height: 15, reason: "common-name" },
+    { x: 100, y: 122, width: 40, height: 15, reason: "common-name" },
+  ]);
+  assert.equal(stacked.length, 2);
+  assert.ok(stacked.every((mask) => mask.width <= 186));
+
+  // Overlapping rectangles reported for the same control still collapse.
+  const overlapping = mergedMasks([
+    { x: 100, y: 100, width: 200, height: 30, reason: "form-field" },
+    { x: 140, y: 104, width: 60, height: 22, reason: "form-field" },
+  ]);
+  assert.equal(overlapping.length, 1);
+  assert.equal(overlapping[0].width, 206);
+
+  // Slivers and rectangles scrolled out of the viewport never paint.
+  assert.deepEqual(
+    mergedMasks([
+      { x: 10, y: 10, width: 0.5, height: 12, reason: "number" },
+      { x: 10, y: 900, width: 120, height: 12, reason: "number" },
+    ]),
+    [],
+  );
+});
+
+test("the on-page panel labels workspace advice instead of acting on it", async () => {
+  const contentSource = await readFile(
+    new URL("../src/content/capture.js", import.meta.url),
+    "utf8",
+  );
+
+  // Nothing is detected, covered, or rewritten unless the author switched that
+  // category on: every read of a detector flag is an explicit true.
+  for (const key of [
+    "redactEmails",
+    "redactPhoneNumbers",
+    "redactFinancialNumbers",
+    "redactIds",
+    "redactFormFields",
+    "redactImages",
+    "redactTableRows",
+    "redactLongText",
+  ]) {
+    assert.doesNotMatch(
+      contentSource,
+      new RegExp("policy\\." + key + " !== false"),
+      key,
+    );
+  }
+  assert.match(contentSource, /const RECOMMENDED_CATEGORY_BY_KEY = \{/);
+  assert.match(contentSource, /function recommendedPolicyKey\(key\)/);
+  assert.match(contentSource, /suggestion\.textContent = "Suggested"/);
+  assert.match(
+    contentSource,
+    /input\.checked = state\.policy\[input\.dataset\.knowhowPolicy\] === true/,
+  );
+});
+
+test("a mask never reaches past the ink it hides", async () => {
+  const contentSource = await readFile(
+    new URL("../src/content/capture.js", import.meta.url),
+    "utf8",
+  );
+
+  // Selecting a text node's collapsed newlines and indentation makes the browser
+  // report rectangles that run to the end of the line box.
+  assert.match(contentSource, /function inkRange\(node, start, end\)/);
+  assert.match(contentSource, /while \(from < to && \/\\s\/\.test\(value\[from\]\)\) from \+= 1;/);
+  assert.match(contentSource, /const range = inkRange\(node, finding\.start, finding\.end\)/);
+  assert.match(contentSource, /const range = inkRange\(node, 0, value\.length\)/);
+  assert.doesNotMatch(contentSource, /selectNodeContents/);
+});
+
 test("capture uses primary pointer geometry and keeps the marker editable", async () => {
   const [contentSource, backgroundSource, offscreenSource] = await Promise.all([
     readFile(new URL("../src/content/capture.js", import.meta.url), "utf8"),

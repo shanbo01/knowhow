@@ -30,11 +30,20 @@ test("private draft metadata is sanitized again at the upload boundary", () => {
         instructions: "Ask Alice Example about AB-12345678.",
       },
     ],
-    { redactCommonNames: true },
+    { redactEmails: true, redactIds: true, redactCommonNames: true },
   );
   assert.equal(step.title.includes("alice@example.com"), false);
   assert.equal(step.instructions.includes("Alice Example"), false);
   assert.equal(step.instructions.includes("AB-12345678"), false);
+});
+
+test("draft metadata keeps what the author chose not to cover", () => {
+  const [step] = preparePrivateDraftSteps(
+    [{ title: "Email alice@example.com", instructions: "Ask about AB-12345678." }],
+    {},
+  );
+  assert.equal(step.title, "Email alice@example.com");
+  assert.equal(step.instructions, "Ask about AB-12345678.");
 });
 
 test("private draft submission rejects a WebP before any authenticated request", async () => {

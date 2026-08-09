@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CAPTURE_POLICY_SCHEMA_VERSION,
   DEFAULT_CAPTURE_POLICY,
   applyWorkspaceContext,
   evaluateCaptureUrl,
@@ -11,15 +12,55 @@ import {
   sanitizeCaptureUrl,
 } from "../src/core/policy.js";
 
-test("Smart Blur is opt-in even when a workspace recommends detectors", () => {
+test("every detector is opt-in; workspace categories only recommend", () => {
   assert.equal(DEFAULT_CAPTURE_POLICY.smartBlurEnabled, false);
+  for (const key of [
+    "redactEmails",
+    "redactPhoneNumbers",
+    "redactFinancialNumbers",
+    "redactIds",
+    "redactFormFields",
+    "redactAllNumbers",
+    "redactImages",
+    "redactTableRows",
+    "redactLongText",
+    "redactCommonNames",
+  ]) {
+    assert.equal(DEFAULT_CAPTURE_POLICY[key], false, key);
+  }
+
   const policy = applyWorkspaceContext({}, {
     policyVersion: "privacy-v1",
     privacy: { automatic: ["email", "form-field"] },
   });
   assert.equal(policy.smartBlurEnabled, false);
-  assert.equal(policy.redactEmails, true);
-  assert.equal(policy.redactFormFields, true);
+  assert.equal(policy.redactEmails, false);
+  assert.equal(policy.redactFormFields, false);
+  // The workspace's advice survives as a label the on-page panel can show.
+  assert.deepEqual(policy.recommendedRedactions, ["email", "form-field"]);
+
+  const chosen = applyWorkspaceContext(
+    {
+      schemaVersion: CAPTURE_POLICY_SCHEMA_VERSION,
+      smartBlurEnabled: true,
+      redactEmails: true,
+    },
+    { privacy: { automatic: [] } },
+  );
+  assert.equal(chosen.smartBlurEnabled, true);
+  assert.equal(chosen.redactEmails, true);
+});
+
+test("a policy stored before recommendations stopped enabling detectors is reset", () => {
+  const migrated = mergePolicy({
+    schemaVersion: 3,
+    redactEmails: true,
+    redactFormFields: true,
+    clickTargetColor: "#123456",
+  });
+  assert.equal(migrated.redactEmails, false);
+  assert.equal(migrated.redactFormFields, false);
+  assert.equal(migrated.clickTargetColor, "#123456");
 });
 
 test("only regular HTTP and HTTPS pages are eligible", () => {
@@ -89,7 +130,7 @@ test("allowlists use a default-deny decision", () => {
   );
 });
 
-test("workspace context enforces server exclusions and automatic privacy rules", () => {
+test("workspace context enforces server exclusions and keeps author choices", () => {
   const policy = applyWorkspaceContext(
     {
       redactEmails: false,
@@ -104,8 +145,8 @@ test("workspace context enforces server exclusions and automatic privacy rules",
     },
   );
   assert.equal(policy.version, "privacy-v1");
-  assert.equal(policy.redactEmails, true);
-  assert.equal(policy.redactFormFields, true);
+  assert.equal(policy.redactEmails, false);
+  assert.equal(policy.redactFormFields, false);
   assert.equal(policy.clickTargetColor, "#ef6f47");
   assert.equal(
     evaluateCaptureUrl("https://finance.example.com/payroll", policy).allowed,

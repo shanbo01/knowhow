@@ -473,7 +473,7 @@ function observeGuideMedia(figure, media) {
           });
         }
       },
-      { root: elements.guideFollowSteps, rootMargin: "220px 0px" },
+      { root: elements.guidesPanel, rootMargin: "260px 0px" },
     );
   }
   guideMediaSources.set(figure, media);
@@ -497,7 +497,7 @@ function setActivePanel(panel) {
   if (activePanel === "guides") renderGuideLibrary();
 }
 
-function renderGuideFollow() {
+function renderGuideFollow({ reveal = false } = {}) {
   const guide = companionGuides().find((item) => item.id === activeGuideId);
   if (!guide) {
     activeGuideId = null;
@@ -533,8 +533,10 @@ function renderGuideFollow() {
       renderGuideFollow();
     });
     const number = document.createElement("span");
+    number.className = "guide-follow-step-number";
     number.textContent = index < activeGuideStep ? "✓" : String(index + 1);
     const copy = document.createElement("span");
+    copy.className = "guide-follow-step-copy";
     const kind = document.createElement("small");
     kind.textContent = step.kind || "action";
     const title = document.createElement("strong");
@@ -561,6 +563,12 @@ function renderGuideFollow() {
   for (const [figure, media] of figures) observeGuideMedia(figure, media);
   elements.guidePreviousStep.disabled = activeGuideStep <= 0;
   elements.guideNextStep.disabled = !steps.length || activeGuideStep >= steps.length - 1;
+  if (reveal) {
+    elements.guideFollowSteps.children[activeGuideStep]?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }
 }
 
 function renderGuideLibrary() {
@@ -595,6 +603,7 @@ function renderGuideLibrary() {
     button.addEventListener("click", () => {
       activeGuideId = guide.id;
       activeGuideStep = 0;
+      elements.guidesPanel.scrollTop = 0;
       renderGuideFollow();
     });
     const icon = document.createElement("span");
@@ -988,15 +997,16 @@ elements.guideSearch.addEventListener("input", renderGuideLibrary);
 elements.guideFollowBack.addEventListener("click", () => {
   activeGuideId = null;
   activeGuideStep = 0;
+  elements.guidesPanel.scrollTop = 0;
   renderGuideLibrary();
 });
 elements.guidePreviousStep.addEventListener("click", () => {
   activeGuideStep = Math.max(0, activeGuideStep - 1);
-  renderGuideFollow();
+  renderGuideFollow({ reveal: true });
 });
 elements.guideNextStep.addEventListener("click", () => {
   activeGuideStep += 1;
-  renderGuideFollow();
+  renderGuideFollow({ reveal: true });
 });
 elements.guideOpenApp.addEventListener("click", () => {
   const guide = companionGuides().find((item) => item.id === activeGuideId);

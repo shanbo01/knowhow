@@ -12,12 +12,14 @@ const DEFAULT_EXCLUDED_HOSTS = Object.freeze([
 // mergePolicy() uses this to migrate policies saved under an older schema so
 // stale stored values (like the previous "Smart Blur on by default") don't
 // silently keep overriding a new, safer default forever.
-export const CAPTURE_POLICY_SCHEMA_VERSION = 3;
+export const CAPTURE_POLICY_SCHEMA_VERSION = 4;
 
-// Keys whose *default* changed before CAPTURE_POLICY_SCHEMA_VERSION 3 (Smart Blur
-// flipped from opt-out to opt-in). A policy persisted under an older schema
-// version has these values discarded in favor of the current defaults below,
-// instead of being merged over them.
+// Keys whose *default* changed up to CAPTURE_POLICY_SCHEMA_VERSION 4: Smart Blur
+// flipped from opt-out to opt-in (3), and workspace recommendations stopped
+// switching individual detectors on (4), which had left every install with
+// emails, phones, financial numbers, long IDs and form fields already covered.
+// A policy persisted under an older schema version has these values discarded
+// in favor of the current defaults below, instead of being merged over them.
 const MIGRATED_DEFAULT_KEYS = Object.freeze([
   "smartBlurEnabled",
   "redactEmails",
@@ -54,6 +56,9 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   redactTableRows: false,
   redactLongText: false,
   redactCommonNames: false,
+  // Categories this workspace suggests covering. Shown as a hint in the on-page
+  // panel; it never enables a detector by itself.
+  recommendedRedactions: [],
   clickTargetColor: "#d97706",
   // Shown briefly on-page when a capture starts or resumes; never present
   // while a screenshot is actually taken. Toggled from the side panel.
@@ -255,13 +260,15 @@ export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
     excludedSites: [...local.excludedSites, ...workspaceExcluded],
     clickTargetColor,
     smartBlurEnabled: local.smartBlurEnabled === true,
-    redactEmails: automatic.has("email") || local.redactEmails,
-    redactPhoneNumbers:
-      automatic.has("phone-number") || local.redactPhoneNumbers,
-    redactFinancialNumbers:
-      automatic.has("financial-number") || local.redactFinancialNumbers,
-    redactIds: automatic.has("identifier") || local.redactIds,
-    redactFormFields:
-      automatic.has("form-field") || local.redactFormFields,
+    // Workspace categories are advice, not a switch: they tell the author what
+    // this workspace cares about covering, while every detector stays off until
+    // the author turns it on for the session. Nothing is ever covered, and no
+    // captured text is ever rewritten, without the author asking for it.
+    recommendedRedactions: Array.from(automatic).slice(0, 20),
+    redactEmails: local.redactEmails === true,
+    redactPhoneNumbers: local.redactPhoneNumbers === true,
+    redactFinancialNumbers: local.redactFinancialNumbers === true,
+    redactIds: local.redactIds === true,
+    redactFormFields: local.redactFormFields === true,
   });
 }

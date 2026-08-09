@@ -112,6 +112,44 @@ test("multi-tab capture waits for final URLs and deduplicates new-tab handoffs",
   assert.match(opened, /latest\.tabId !== details\.sourceTabId/);
   assert.match(opened, /latest\.tabId === tab\.id/);
   assert.ok(switched.indexOf("waitForTabComplete(tabId)") < switched.indexOf("chrome.tabs.get(tabId)"));
-  assert.match(switched, /chrome\.tabs\.query\(\{ active: true, windowId \}\)/);
+  assert.match(
+    switched,
+    /chrome\.tabs\.query\(\{\s*active: true,\s*windowId: targetWindowId,\s*\}\)/,
+  );
   assert.match(switched, /title: context\.context\.title[\s\S]*"Switch to "/);
+});
+
+test("capture follows the author into tabs and windows they open themselves", async () => {
+  const source = await backgroundSource();
+  const follow = functionSlice(source, "followOwnNewTab", "captureNavigation");
+  const navigation = functionSlice(source, "captureNavigation", "handleMessage");
+  const switched = functionSlice(source, "followActiveTabSwitch", "followOwnNewTab");
+
+  // A tab opened with Ctrl+T has no opener to follow, so a completed load in the
+  // frontmost tab hands the session over instead of being ignored.
+  assert.match(navigation, /if \(state\.tabId !== details\.tabId\) \{\s*await followOwnNewTab\(details\.tabId\);/);
+  assert.match(follow, /if \(tab\.active !== true\) return;/);
+  assert.match(follow, /followActiveTabSwitch\(\{ tabId, windowId: tab\.windowId \}\)/);
+
+  // Following works across windows, and switching sites inside one tab keeps
+  // recording with the new origin instead of pausing for a manual resume.
+  assert.doesNotMatch(switched, /state\.windowId !== windowId/);
+  assert.doesNotMatch(source, /Resume explicitly to continue on the new site/);
+  assert.match(navigation, /origin: verdict\.origin/);
+
+  // A job queued before the page moved on is dropped, not photographed against
+  // the wrong site and not turned into a pause the author has to clear.
+  const step = functionSlice(source, "captureStep", "waitForTabComplete");
+  assert.match(step, /if \(verdict\.origin !== activeVerdict\.origin\) return false;/);
+  assert.match(
+    source,
+    /if \(verdict\.sanitizedUrl !== expectedSanitizedUrl\) \{/,
+  );
+  assert.match(source, /chrome\.windows\.onFocusChanged\.addListener/);
+  assert.match(source, /windowId === chrome\.windows\.WINDOW_ID_NONE/);
+
+  // The panel names the site being recorded, so a hand-off renames the scope.
+  assert.match(source, /function scopeLabelForHost\(state, hostname\)/);
+  assert.match(switched, /scopeLabel: scopeLabelForHost\(latest, verdict\.hostname\)/);
+  assert.match(navigation, /scopeLabel: scopeLabelForHost\(latest, verdict\.hostname\)/);
 });

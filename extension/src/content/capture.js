@@ -28,19 +28,19 @@
     let output = String(value || "").replace(/\s+/g, " ").trim();
     const replacements = [
       [
-        state.policy.redactEmails !== false,
+        state.policy.redactEmails === true,
         /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi,
       ],
       [
-        state.policy.redactPhoneNumbers !== false,
+        state.policy.redactPhoneNumbers === true,
         /(?:\+?\d[\d\s().-]{7,}\d)/g,
       ],
       [
-        state.policy.redactFinancialNumbers !== false,
+        state.policy.redactFinancialNumbers === true,
         /(?:\b\d[ -]*?){13,19}\b/g,
       ],
       [
-        state.policy.redactIds !== false,
+        state.policy.redactIds === true,
         /\b(?=[A-Z0-9-]{8,}\b)(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{7,}\b/gi,
       ],
       [state.policy.redactAllNumbers === true, /\d+/g],
@@ -137,7 +137,7 @@
       "[autocomplete=cc-number]",
       "[data-knowhow-redact]",
     ];
-    if (smartBlurEnabled && state.policy.redactFormFields) {
+    if (smartBlurEnabled && state.policy.redactFormFields === true) {
       selectors.push(
         "input:not([type=button]):not([type=submit]):not([type=reset])",
         "textarea",
@@ -145,10 +145,10 @@
         "[contenteditable=true]",
       );
     }
-    if (smartBlurEnabled && state.policy.redactEmails !== false) {
+    if (smartBlurEnabled && state.policy.redactEmails === true) {
       selectors.push("input[type=email]", "[autocomplete=email]");
     }
-    if (smartBlurEnabled && state.policy.redactPhoneNumbers !== false) {
+    if (smartBlurEnabled && state.policy.redactPhoneNumbers === true) {
       selectors.push("input[type=tel]", "[autocomplete=tel]");
     }
     const selector = selectors.join(",");
@@ -173,22 +173,22 @@
     const findings = [];
     const detectors = [
       [
-        state.policy.redactEmails !== false,
+        state.policy.redactEmails === true,
         "email",
         /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi,
       ],
       [
-        state.policy.redactPhoneNumbers !== false,
+        state.policy.redactPhoneNumbers === true,
         "phone",
         /(?:\+?\d[\d\s().-]{7,}\d)/g,
       ],
       [
-        state.policy.redactFinancialNumbers !== false,
+        state.policy.redactFinancialNumbers === true,
         "financial-number",
         /(?:\b\d[ -]*?){13,19}\b/g,
       ],
       [
-        state.policy.redactIds !== false,
+        state.policy.redactIds === true,
         "identifier",
         /\b(?=[A-Z0-9-]{8,}\b)(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{7,}\b/gi,
       ],
@@ -215,6 +215,31 @@
     return findings;
   }
 
+  // A text node usually carries the source file's newlines and indentation.
+  // Selecting those collapsed spaces makes the browser hand back rectangles
+  // that run to the end of the line box, which paints a cover over blank page.
+  // Every range is trimmed to the ink it actually needs to hide.
+  function inkRange(node, start, end) {
+    const value = node.nodeValue || "";
+    let from = start;
+    let to = Math.min(end, value.length);
+    while (from < to && /\s/.test(value[from])) from += 1;
+    while (to > from && /\s/.test(value[to - 1])) to -= 1;
+    if (from >= to) return null;
+    const range = document.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, to);
+    return range;
+  }
+
+  function pushRangeMasks(masks, range, reason) {
+    for (const rect of range.getClientRects()) {
+      const mask = rectFor({ getBoundingClientRect: () => rect }, reason);
+      if (mask) masks.push(mask);
+    }
+    range.detach();
+  }
+
   function textMasks() {
     if (state.policy.smartBlurEnabled !== true) return [];
     const masks = [];
@@ -236,35 +261,14 @@
       }
       const value = node.nodeValue || "";
       if (!value.trim()) continue;
-      if (state.policy.redactLongText && value.trim().length >= 100) {
-        const range = document.createRange();
-        range.selectNodeContents(node);
-        for (const rect of range.getClientRects()) {
-          const mask = rectFor(
-            {
-              getBoundingClientRect: () => rect,
-            },
-            "long-text",
-          );
-          if (mask) masks.push(mask);
-        }
-        range.detach();
+      if (state.policy.redactLongText === true && value.trim().length >= 100) {
+        const range = inkRange(node, 0, value.length);
+        if (range) pushRangeMasks(masks, range, "long-text");
         continue;
       }
       for (const finding of rangeFindings(value)) {
-        const range = document.createRange();
-        range.setStart(node, finding.start);
-        range.setEnd(node, finding.end);
-        for (const rect of range.getClientRects()) {
-          const mask = rectFor(
-            {
-              getBoundingClientRect: () => rect,
-            },
-            finding.reason,
-          );
-          if (mask) masks.push(mask);
-        }
-        range.detach();
+        const range = inkRange(node, finding.start, finding.end);
+        if (range) pushRangeMasks(masks, range, finding.reason);
       }
     }
     return masks;
@@ -280,7 +284,7 @@
   function optionalSurfaceMasks() {
     const masks = [];
     if (state.policy.smartBlurEnabled !== true) return masks;
-    if (state.policy.redactImages) {
+    if (state.policy.redactImages === true) {
       for (const image of document.querySelectorAll("img,picture,canvas,video")) {
         if (visible(image)) {
           const mask = rectFor(image, "image");
@@ -288,7 +292,7 @@
         }
       }
     }
-    if (state.policy.redactTableRows) {
+    if (state.policy.redactTableRows === true) {
       for (const row of document.querySelectorAll("tr")) {
         if (visible(row)) {
           const mask = rectFor(row, "table-row");
@@ -305,8 +309,14 @@
   // a single field. Growing each rectangle slightly and merging the ones that
   // touch produces the few calm frosted panels the author actually expects,
   // and matches how the uploaded pending regions are merged before storage.
-  const MASK_PADDING = 4;
-  const MASK_MERGE_GAP = 6;
+  const MASK_PADDING = 3;
+  const MASK_MERGE_GAP = 5;
+  // A merge is only worth it when the combined rectangle stays close to the ink
+  // it covers. Without this, two short lines of text merge into a block whose
+  // right half covers nothing, which is exactly what made the preview look like
+  // it was blurring empty page.
+  const MASK_MERGE_WASTE = 1.3;
+  const MASK_MIN_SIDE = 3;
 
   function grownMask(mask) {
     const left = Math.max(0, mask.x - MASK_PADDING);
@@ -331,27 +341,67 @@
     );
   }
 
+  function maskUnion(left, right) {
+    const x = Math.min(left.x, right.x);
+    const y = Math.min(left.y, right.y);
+    return {
+      x,
+      y,
+      width: Math.max(left.x + left.width, right.x + right.width) - x,
+      height: Math.max(left.y + left.height, right.y + right.height) - y,
+      reason:
+        left.reason === right.reason ? left.reason : "multiple-sensitive-items",
+    };
+  }
+
+  function maskContains(outer, inner) {
+    return (
+      inner.x >= outer.x &&
+      inner.y >= outer.y &&
+      inner.x + inner.width <= outer.x + outer.width &&
+      inner.y + inner.height <= outer.y + outer.height
+    );
+  }
+
+  function shareTextLine(left, right) {
+    const overlap =
+      Math.min(left.y + left.height, right.y + right.height) -
+      Math.max(left.y, right.y);
+    return overlap >= Math.min(left.height, right.height) * 0.55;
+  }
+
+  function worthMerging(left, right) {
+    if (!masksTouch(left, right)) return false;
+    if (maskContains(left, right) || maskContains(right, left)) return true;
+    // Rectangles from different lines are kept apart: stacking them would grow
+    // the cover sideways across whitespace neither line occupies.
+    if (!shareTextLine(left, right)) return false;
+    const union = maskUnion(left, right);
+    return (
+      union.width * union.height <=
+      (left.width * left.height + right.width * right.height) *
+        MASK_MERGE_WASTE
+    );
+  }
+
   function mergedMasks(masks) {
     const merged = [];
-    for (const mask of masks.map(grownMask)) {
+    for (const detected of masks) {
+      // Hairline rectangles are measurement noise, and padding must not be what
+      // makes them big enough to paint.
+      if (
+        detected.width <= MASK_MIN_SIDE ||
+        detected.height <= MASK_MIN_SIDE
+      ) {
+        continue;
+      }
+      const mask = grownMask(detected);
       if (mask.width <= 0 || mask.height <= 0) continue;
       let current = mask;
       let index = 0;
       while (index < merged.length) {
-        if (masksTouch(current, merged[index])) {
-          const other = merged.splice(index, 1)[0];
-          const x = Math.min(current.x, other.x);
-          const y = Math.min(current.y, other.y);
-          current = {
-            x,
-            y,
-            width: Math.max(current.x + current.width, other.x + other.width) - x,
-            height: Math.max(current.y + current.height, other.y + other.height) - y,
-            reason:
-              current.reason === other.reason
-                ? current.reason
-                : "multiple-sensitive-items",
-          };
+        if (worthMerging(current, merged[index])) {
+          current = maskUnion(current, merged.splice(index, 1)[0]);
           index = 0;
           continue;
         }
@@ -394,6 +444,24 @@
     ["redactTableRows", "Table rows"],
     ["redactImages", "Images and video"],
   ];
+
+  // Workspace privacy categories map onto these switches. A recommended
+  // category is labelled in the panel but never switched on for the author.
+  const RECOMMENDED_CATEGORY_BY_KEY = {
+    redactEmails: "email",
+    redactPhoneNumbers: "phone-number",
+    redactFinancialNumbers: "financial-number",
+    redactIds: "identifier",
+    redactFormFields: "form-field",
+  };
+
+  function recommendedPolicyKey(key) {
+    const category = RECOMMENDED_CATEGORY_BY_KEY[key];
+    const recommended = state.policy.recommendedRedactions;
+    return Boolean(
+      category && Array.isArray(recommended) && recommended.includes(category),
+    );
+  }
 
   function captureSessionVisible() {
     return state.status === "recording" || state.status === "paused";
@@ -500,7 +568,18 @@
       PANEL_FONT +
       ";cursor:pointer;";
     const text = document.createElement("span");
-    text.textContent = label;
+    text.style.cssText = "display:flex;align-items:center;gap:7px;min-width:0;";
+    const labelText = document.createElement("span");
+    labelText.textContent = label;
+    const suggestion = document.createElement("em");
+    suggestion.dataset.knowhowBlurSuggested = key;
+    suggestion.textContent = "Suggested";
+    suggestion.style.cssText =
+      "display:none;flex:0 0 auto;padding:2px 6px;border-radius:999px;" +
+      "background:rgba(250,204,21,.14);color:#facc15;font:700 8px/1 " +
+      PANEL_FONT +
+      ";letter-spacing:.08em;text-transform:uppercase;font-style:normal;";
+    text.append(labelText, suggestion);
     const input = document.createElement("input");
     input.type = "checkbox";
     input.dataset.knowhowPolicy = key;
@@ -621,9 +700,13 @@
     }
     const summary = smartBlurUiRoot.querySelector("[data-knowhow-blur-summary]");
     if (summary) {
-      summary.textContent = enabled
-        ? coveredAreaCopy(lastMaskCount)
-        : "Turn on to cover sensitive details live, before each screenshot.";
+      // With no category chosen the only cover is the mandatory one, so say so
+      // rather than reporting an empty screen as if nothing were sensitive.
+      summary.textContent = !enabled
+        ? "Turn on to cover sensitive details live, before each screenshot."
+        : SMART_BLUR_OPTIONS.some(([key]) => state.policy[key] === true)
+          ? coveredAreaCopy(lastMaskCount)
+          : "Passwords and embedded frames are always covered. Choose what else to detect.";
     }
   }
 
@@ -642,6 +725,13 @@
     if (dot) {
       dot.style.background = enabled ? "#34d399" : "#52525b";
       dot.style.boxShadow = enabled ? "0 0 0 3px rgba(52,211,153,.18)" : "none";
+    }
+    for (const chip of root.querySelectorAll("[data-knowhow-blur-suggested]")) {
+      chip.style.display = recommendedPolicyKey(
+        chip.dataset.knowhowBlurSuggested,
+      )
+        ? "block"
+        : "none";
     }
     for (const input of root.querySelectorAll("[data-knowhow-policy]")) {
       input.checked = state.policy[input.dataset.knowhowPolicy] === true;

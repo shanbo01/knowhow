@@ -166,14 +166,17 @@ export function detectSensitiveRanges(text, options = {}) {
   const input = String(text || "");
   const findings = [];
   const detectors = [
-    [options.redactEmails !== false, "email", EMAIL_PATTERN],
-    [options.redactPhoneNumbers !== false, "phone", PHONE_PATTERN],
+    // Every detector is opt-in. Nothing is covered or rewritten unless the
+    // author switched that category on for the session, so what they see in the
+    // live preview is exactly what the guide will contain.
+    [options.redactEmails === true, "email", EMAIL_PATTERN],
+    [options.redactPhoneNumbers === true, "phone", PHONE_PATTERN],
     [
-      options.redactFinancialNumbers !== false,
+      options.redactFinancialNumbers === true,
       "financial-number",
       FINANCIAL_PATTERN,
     ],
-    [options.redactIds !== false, "identifier", LONG_ID_PATTERN],
+    [options.redactIds === true, "identifier", LONG_ID_PATTERN],
     [options.redactAllNumbers === true, "number", ANY_NUMBER_PATTERN],
     [options.redactCommonNames === true, "common-name", COMMON_NAME_PATTERN],
   ];

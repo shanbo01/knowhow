@@ -471,8 +471,9 @@ async function contextResponse(request: Request, db: D1DatabaseLike, repository:
       captureRawKeystrokes: false,
       captureIncognito: false,
       retainUnredactedScreenshots: false,
-      // These categories are available to Smart Blur, but the extension's
-      // explicit master switch remains off until the recorder enables it.
+      // What this workspace suggests covering. The extension labels these
+      // categories as suggested and still leaves every detector, and the Smart
+      // Blur master switch, off until the recorder turns them on.
       automatic: ["email", "phone-number", "financial-number", "identifier", "form-field"],
       assisted: ["common-name", "long-text"],
     },

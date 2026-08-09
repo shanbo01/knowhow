@@ -274,7 +274,10 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .finish-button > span { font-size: 15px; }
 .review-dock { grid-template-columns: 1fr auto; }
 
-.guide-library { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; overflow: hidden; }
+/* The library scrolls as one page—heading, search field and results together—so
+   a long guide list uses the full panel height instead of squeezing rows into a
+   short inner scroller. */
+.guide-library { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 0 12px 12px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .guide-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 2px 0; }
 .guide-library-heading > span:first-child { display: grid; }
 .guide-library-heading small { color: var(--muted); font-size: 8px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
@@ -285,8 +288,10 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .search-icon { position: absolute; z-index: 1; left: 12px; top: 50%; width: 13px; height: 13px; border: 1.7px solid var(--muted); border-radius: 50%; transform: translateY(-57%); }
 .search-icon::after { content: ""; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.7px; border-radius: 2px; background: var(--muted); transform: rotate(45deg); }
 .guide-library-empty { margin: 40px auto; color: var(--muted); text-align: center; font-size: 10px; }
-.guide-results { min-height: 0; display: grid; gap: 0; flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
-.guide-result { width: 100%; min-height: 64px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 10px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--foreground); text-align: left; }
+/* align-content keeps rows at their natural height; without it the grid
+   stretches two guides across the whole panel. */
+.guide-results { display: grid; align-content: start; gap: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.guide-result { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--foreground); text-align: left; }
 .guide-result:last-child { border-bottom: 0; }
 .guide-result:hover { background: var(--card-muted); }
 .guide-result-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: var(--card-muted); color: var(--muted); font-size: 12px; }
@@ -296,7 +301,7 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .guide-result small { color: var(--muted); font-size: 9px; }
 .guide-result > span:last-child > span { color: var(--muted-foreground); font-size: 8px; text-transform: capitalize; }
 
-.guide-follow { min-height: 0; display: flex; flex: 1; flex-direction: column; gap: 10px; overflow: hidden; }
+.guide-follow { display: flex; flex-direction: column; gap: 10px; }
 .guide-back { align-self: flex-start; min-height: 24px; padding: 0; }
 .guide-follow > header { display: grid; gap: 4px; }
 .guide-follow > header > span { width: max-content; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 8px; font-weight: 700; text-transform: capitalize; }
@@ -305,24 +310,27 @@ body[data-capture-mode="reviewing"] .recording-state-dot { border-color: var(--a
 .follow-progress { display: grid; gap: 5px; color: var(--muted); font-size: 9px; font-weight: 700; }
 .follow-progress i { height: 4px; display: block; overflow: hidden; border-radius: 999px; background: var(--card-muted); }
 .follow-progress i span { width: 0; height: 100%; display: block; border-radius: inherit; background: var(--primary); transition: width 180ms ease; }
-.guide-follow-steps { min-height: 0; flex: 1; margin: 0; padding: 0; overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--card); list-style: none; }
+.guide-follow-steps { display: grid; align-content: start; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--card); list-style: none; }
 .guide-follow-step { border-bottom: 1px solid var(--border); }
 .guide-follow-step:last-child { border-bottom: 0; }
-.guide-follow-step button { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; padding: 10px; border: 0; background: transparent; color: var(--foreground); text-align: left; }
+.guide-follow-step button { width: 100%; display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: start; gap: 10px; padding: 11px 11px 12px; border: 0; background: transparent; color: var(--foreground); text-align: left; }
 .guide-follow-step button:hover { background: var(--card-muted); }
-.guide-follow-step button > span:first-child { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 9px; font-weight: 700; }
-.guide-follow-step button > span:last-child { min-width: 0; display: grid; gap: 2px; }
-.guide-follow-step small { color: var(--muted); font-size: 7px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-.guide-follow-step strong { font-size: 10px; }
-.guide-follow-step p { margin: 2px 0 0; color: var(--muted); font-size: 9px; }
-.guide-follow-step.active button > span:first-child { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
-.guide-follow-step.complete { opacity: 0.7; }
-.guide-step-figure { position: relative; grid-column: 2; width: 100%; margin: 7px 0 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--card-muted); }
+.guide-follow-step-number { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.guide-follow-step-copy { min-width: 0; display: grid; gap: 3px; }
+.guide-follow-step small { color: var(--muted-foreground); font-size: 8px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.guide-follow-step strong { font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.guide-follow-step p { margin: 1px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.guide-follow-step.active { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.guide-follow-step.active .guide-follow-step-number { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.guide-follow-step.complete { opacity: 0.72; }
+.guide-step-figure { position: relative; width: 100%; margin: 6px 0 0; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--card-muted); }
 .guide-step-figure img { position: absolute; height: auto; max-width: none; user-select: none; pointer-events: none; }
 .guide-step-figure[data-state="loading"], .guide-step-figure[data-state="failed"] { aspect-ratio: 16 / 9; display: grid; place-items: center; }
-.guide-step-figure[data-state="loading"]::after { content: "Loading screenshot…"; color: var(--muted); font-size: 8px; }
-.guide-step-figure[data-state="failed"]::after { content: attr(data-message); padding: 0 10px; color: var(--muted); text-align: center; font-size: 8px; }
-.guide-follow-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.guide-step-figure[data-state="loading"]::after { content: "Loading screenshot…"; color: var(--muted); font-size: 9px; }
+.guide-step-figure[data-state="failed"]::after { content: attr(data-message); padding: 0 10px; color: var(--muted); text-align: center; font-size: 9px; }
+/* The step list scrolls with the panel, so the walkthrough controls stay
+   pinned to the bottom edge instead of scrolling out of reach. */
+.guide-follow-actions { position: sticky; bottom: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 0 12px; background: linear-gradient(to top, var(--background) 78%, transparent); }
 .guide-follow-actions .text-button { grid-column: 1 / -1; justify-self: center; }
 
 @media (max-width: 350px) {

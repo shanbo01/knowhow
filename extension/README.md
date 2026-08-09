@@ -45,16 +45,20 @@ upload.
 
 1. Open the page to document and select the KnowHow toolbar action.
 2. Search the Guides tab to open an authorized guide in the side panel and
-   follow it beside the current page — each step shows its screenshot, framed to
-   the author's crop with click markers and blur regions intact — or stay in
-   Capture to record a new guide.
+   follow it beside the current page. The library and the walkthrough scroll as
+   one page, each step shows its screenshot framed to the author's crop with
+   click markers and blur regions intact, and Next keeps the current step in
+   view. Or stay in Capture to record a new guide.
 3. Enter a guide title and choose Start capturing. The first capture
    asks you to allow KnowHow to access websites; this runtime permission is what
    lets Chrome capture the foreground tab from its persistent side panel.
-4. Smart Blur appears only after recording starts and is off by default. When
-   enabled, merged frosted regions appear live on the page, and the pill reports
-   how many areas are covered, so you see what will be protected before the
-   screenshot is taken.
+4. Smart Blur appears only after recording starts, and both the feature and every
+   detector category are off until you switch them on. Categories the workspace
+   suggests are labelled Suggested in the panel and stay off. When a category is
+   on, frosted regions appear live over the detected text only — rectangles from
+   one line merge into a single calm panel, and separate lines stay separate so a
+   cover never spreads across blank page — and the pill reports how many areas
+   are covered before the screenshot is taken.
 5. Keep KnowHow docked in Chrome's native side panel while the captured page
    remains usable beside it. Numbered step previews appear in the panel as you
    click, double-click, switch tabs, and navigate, each zoomed to the control you
@@ -81,11 +85,12 @@ very fast clicking a step falls back to photographing the painted result instead
 of waiting for a frame that would no longer be the right one. Step titles quote
 the control's own label, so a step reads `Click "Encrypted vault access"`.
 
-Capture follows regular, policy-allowed foreground tabs in the recording
-window. Opening a link in a new tab or switching to another capturable tab adds
-a navigation step and continues the same session. Same-origin navigation also
-continues automatically. A same-tab cross-origin navigation still pauses and
-requires an explicit Resume action on the destination origin.
+Capture follows the regular, policy-allowed page you are working in, wherever it
+goes. Opening a link in a new tab, opening a tab yourself and typing a URL into
+it, switching to another capturable tab, moving to another browser window, and
+navigating to another site in the same tab all continue the same session and add
+a navigation step marking the hand-off. Excluded sites, browser-internal pages,
+and incognito windows still stop capture rather than following it.
 
 ## Privacy properties
 
@@ -93,10 +98,14 @@ requires an explicit Resume action on the destination origin.
 - No static all-site content script is used. All-site host access is optional
   and requested only when the user starts capture; it is required by Chrome's
   visible-tab screenshot API for reliable capture from a persistent side panel.
-- KnowHow attaches only to the active, policy-allowed foreground tab in the
-  recording window. Workspace allowlists, excluded hosts,
-  browser-internal-page, and incognito checks remain enforced at runtime.
+- KnowHow attaches only to the active, policy-allowed foreground tab it is
+  recording. When capture follows you to another tab or window, that tab becomes
+  the recorded one and the checks run again: workspace allowlists, excluded
+  hosts, browser-internal-page, and incognito checks are enforced at runtime.
 - Password fields and embedded frames are always redacted.
+- Every other detector is opt-in. Workspace privacy categories are advice the
+  panel labels; they never switch a detector on, and captured step text is only
+  rewritten for categories the author enabled.
 - The extension does not request clipboard, tab-capture, desktop-capture, or
   raw keyboard access.
 - It records click events and navigation only; it never installs keyboard
@@ -157,7 +166,7 @@ the exact manifest host_permissions entry before building.
 ## Current limits
 
 - Visible viewport screenshots only
-- Foreground tabs in the recording window only
+- The foreground tab of the window capture is currently following
 - At most 100 captured steps per session
 - At most two screenshot attempts per second
 - Redacted image target of 2 MB per step
