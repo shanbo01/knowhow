@@ -18,12 +18,10 @@ const elements = {
   connectionDot: document.querySelector("#connection-dot"),
   connectionLabel: document.querySelector("#connection-label"),
   connectButton: document.querySelector("#connect-button"),
+  userName: document.querySelector("#user-name"),
   panelTabs: Array.from(document.querySelectorAll("[data-panel-tab]")),
   capturePanel: document.querySelector("#capture-panel"),
   guidesPanel: document.querySelector("#guides-panel"),
-  statusLabel: document.querySelector("#status-label"),
-  statusDetail: document.querySelector("#status-detail"),
-  stepCount: document.querySelector("#step-count"),
   stepFeed: document.querySelector("#step-feed"),
   feedCount: document.querySelector("#feed-count"),
   stepFeedScroll: document.querySelector("#step-feed-scroll"),
@@ -36,6 +34,7 @@ const elements = {
   captureActions: document.querySelector("#capture-actions"),
   reviewActions: document.querySelector("#review-actions"),
   pauseButton: document.querySelector("#pause-button"),
+  pauseButtonLabel: document.querySelector("#pause-button span"),
   blurPanelButton: document.querySelector("#blur-panel-button"),
   finishButton: document.querySelector("#finish-button"),
   discardButton: document.querySelector("#discard-button"),
@@ -89,7 +88,170 @@ const capturedSteps = createCapturedStepCache({
   listSteps: listCapturedSteps,
 });
 
+const extensionRuntimeAvailable = Boolean(globalThis.chrome?.runtime?.id);
 const captureAccess = Object.freeze({ origins: ["<all_urls>"] });
+
+function escapePreviewText(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function previewScreenshotSvg(pageTitle, focusLabel, variant = 0) {
+  const title = escapePreviewText(pageTitle);
+  const focus = escapePreviewText(focusLabel);
+  const accents = ["#c2410c", "#2563eb", "#15965f", "#7c3aed"];
+  const accent = accents[variant % accents.length];
+  const focusRows = [174, 252, 330, 408];
+  const focusY = focusRows[variant % focusRows.length];
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+    <defs>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#111827" flood-opacity=".1"/></filter>
+    </defs>
+    <rect width="960" height="540" fill="#f6f7f9"/>
+    <rect width="176" height="540" fill="#121214"/>
+    <rect x="22" y="22" width="34" height="34" rx="9" fill="#fff"/>
+    <circle cx="52" cy="52" r="5" fill="#c2410c"/>
+    <text x="68" y="45" fill="#fff" font-family="Arial,sans-serif" font-size="18" font-weight="700">KnowHow</text>
+    <text x="22" y="93" fill="#8f9098" font-family="Arial,sans-serif" font-size="10" font-weight="700" letter-spacing="1.5">OPERATIONS</text>
+    <g font-family="Arial,sans-serif" font-size="13" font-weight="600">
+      <rect x="14" y="112" width="148" height="38" rx="8" fill="#242428"/><text x="32" y="136" fill="#fff">Overview</text>
+      <text x="32" y="180" fill="#a6a7ae">Guides</text><text x="32" y="224" fill="#a6a7ae">Members</text>
+      <text x="32" y="268" fill="#a6a7ae">Reviews</text><text x="32" y="312" fill="#a6a7ae">Settings</text>
+    </g>
+    <rect x="176" width="784" height="66" fill="#fff"/><line x1="176" y1="66" x2="960" y2="66" stroke="#e5e7eb"/>
+    <text x="210" y="31" fill="#73747c" font-family="Arial,sans-serif" font-size="11">Workspace / Operations</text>
+    <circle cx="914" cy="33" r="17" fill="#f1f2f4"/><text x="914" y="38" text-anchor="middle" fill="#37383e" font-family="Arial,sans-serif" font-size="12" font-weight="700">JL</text>
+    <text x="210" y="112" fill="#111113" font-family="Arial,sans-serif" font-size="25" font-weight="700">${title}</text>
+    <text x="210" y="136" fill="#74757d" font-family="Arial,sans-serif" font-size="12">Operations workspace · Updated just now</text>
+    <rect x="210" y="158" width="710" height="318" rx="15" fill="#fff" filter="url(#shadow)"/>
+    <g font-family="Arial,sans-serif">
+      <text x="238" y="196" fill="#111113" font-size="14" font-weight="700">Workflow details</text>
+      <rect x="238" y="214" width="654" height="1" fill="#ececef"/>
+      <rect x="238" y="230" width="118" height="11" rx="5" fill="#dedfe3"/><rect x="238" y="250" width="264" height="8" rx="4" fill="#eff0f2"/>
+      <rect x="238" y="286" width="154" height="11" rx="5" fill="#dedfe3"/><rect x="238" y="306" width="338" height="8" rx="4" fill="#eff0f2"/>
+      <rect x="238" y="364" width="132" height="11" rx="5" fill="#dedfe3"/><rect x="238" y="384" width="292" height="8" rx="4" fill="#eff0f2"/>
+      <rect x="724" y="422" width="168" height="34" rx="9" fill="${accent}"/><text x="808" y="444" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">${focus}</text>
+    </g>
+    <rect x="224" y="${focusY - 28}" width="682" height="56" rx="11" fill="none" stroke="${accent}" stroke-width="4"/>
+    <circle cx="884" cy="${focusY}" r="14" fill="${accent}" fill-opacity=".18" stroke="${accent}" stroke-width="4"/>
+  </svg>`;
+}
+
+function previewScreenshotDataUrl(pageTitle, focusLabel, variant) {
+  return "data:image/svg+xml;charset=utf-8," +
+    encodeURIComponent(previewScreenshotSvg(pageTitle, focusLabel, variant));
+}
+
+function previewGuideStep(id, kind, title, description, pageTitle, variant) {
+  return {
+    id,
+    kind,
+    title,
+    description,
+    media: {
+      previewDataUrl: previewScreenshotDataUrl(pageTitle, title, variant),
+      previewWidth: 960,
+      previewHeight: 540,
+      crop: { x: 0, y: 0, width: 1, height: 1 },
+      click: {
+        x: 0.92,
+        y: [0.322, 0.467, 0.611, 0.756][variant % 4],
+        radius: 0.035,
+        color: "#c2410c",
+      },
+      redactions: [],
+    },
+  };
+}
+
+function previewCapturedSteps() {
+  const capturedAt = "2026-08-10T10:00:00.000Z";
+  const definitions = [
+    ["capture-1", "Open the Members page", "Choose Members from the workspace navigation.", "Members", "Members", 0],
+    ["capture-2", "Click Invite teammate", "Open the invitation form from the top-right action.", "Invite a teammate", "Invite teammate", 1],
+    ["capture-3", "Choose workspace access", "Select the role this teammate needs.", "Invite a teammate", "Choose access", 2],
+  ];
+  return definitions.map(([id, title, instructions, pageTitle, focusLabel, variant], index) => ({
+    sessionId: "preview-capture",
+    id,
+    order: index + 1,
+    sourceEvent: "interaction",
+    title,
+    instructions,
+    capturedAt,
+    updatedAt: capturedAt,
+    imageWidth: 960,
+    imageHeight: 540,
+    imageBlob: new Blob(
+      [previewScreenshotSvg(pageTitle, focusLabel, variant)],
+      { type: "image/svg+xml" },
+    ),
+    crop: { x: 0, y: 0, width: 1, height: 1 },
+    clickTarget: {
+      x: 0.92,
+      y: [0.322, 0.467, 0.611][variant],
+      radius: 0.035,
+      color: "#c2410c",
+    },
+    pendingRedactions: [],
+  }));
+}
+
+function previewCompanion() {
+  return {
+    workspaceId: "preview-workspace",
+    workspaceName: "Operations",
+    userName: "Jordan Lee",
+    theme: "light",
+    guides: [
+      {
+        id: "preview-invite-teammate",
+        title: "Invite a new teammate",
+        summary: "Add a teammate and choose the right workspace access.",
+        status: "published",
+        restricted: false,
+        updatedAt: "2026-08-08T09:30:00.000Z",
+        href: "/w/operations/guides/preview-invite-teammate",
+        steps: [
+          previewGuideStep("invite-1", "action", "Open Members", "Choose Members from the workspace navigation.", "Members", 0),
+          previewGuideStep("invite-2", "action", "Select Invite teammate", "Open the invitation form from the top-right action.", "Invite a teammate", 1),
+          previewGuideStep("invite-3", "action", "Set their access", "Enter their email and select the appropriate role.", "Invite a teammate", 2),
+          previewGuideStep("invite-4", "note", "Send the invitation", "Review the details, then send the private invitation.", "Invite a teammate", 3),
+        ],
+      },
+      {
+        id: "preview-approve-invoice",
+        title: "Approve a supplier invoice",
+        summary: "Review a pending invoice before releasing it for payment.",
+        status: "review",
+        restricted: true,
+        updatedAt: "2026-08-07T14:15:00.000Z",
+        href: "/w/operations/guides/preview-approve-invoice",
+        steps: [
+          previewGuideStep("invoice-1", "action", "Open pending invoices", "Filter the invoice queue to Pending review.", "Pending invoices", 0),
+          previewGuideStep("invoice-2", "warning", "Verify the supplier", "Confirm the supplier and purchase order match.", "Invoice review", 1),
+          previewGuideStep("invoice-3", "action", "Approve for payment", "Add a review note and approve the invoice.", "Invoice review", 2),
+        ],
+      },
+      {
+        id: "preview-publish-update",
+        title: "Publish a workspace update",
+        summary: "Prepare and publish a short operational announcement.",
+        status: "draft",
+        restricted: false,
+        updatedAt: "2026-08-05T11:00:00.000Z",
+        href: "/w/operations/guides/preview-publish-update",
+        steps: [
+          previewGuideStep("update-1", "action", "Create the update", "Start a new update from the workspace overview.", "Workspace updates", 0),
+          previewGuideStep("update-2", "note", "Add the key details", "Keep the summary concise and link the supporting guide.", "New workspace update", 1),
+          previewGuideStep("update-3", "action", "Publish", "Preview the update and publish it to the workspace.", "New workspace update", 3),
+        ],
+      },
+    ],
+  };
+}
 
 async function requestCaptureAccess() {
   const granted = await chrome.permissions.request(captureAccess);
@@ -161,31 +323,6 @@ async function request(message) {
     throw new Error(response?.error || "KnowHow Capture could not complete the action.");
   }
   return response;
-}
-
-function statusDescription(state) {
-  switch (state.status) {
-    case "preparing":
-      return "Preparing a private capture and attaching KnowHow to this tab.";
-    case "recording":
-      return state.captureWarning ||
-        state.scopeLabel ||
-        "Capturing clicks and navigation in this tab.";
-    case "paused":
-      return state.pausedReason || "No events or screenshots are being collected.";
-    case "reviewing":
-      return state.lastError
-        ? state.lastError
-        : "Wrapping up the capture before upload.";
-    case "uploading":
-      return "Uploading your captured screenshots to KnowHow.";
-    case "completed":
-      return "Draft created. Continue editing it in the KnowHow app.";
-    case "error":
-      return state.lastError || "Capture needs attention.";
-    default:
-      return "Start from the page you want to document.";
-  }
 }
 
 function nearFeedBottom() {
@@ -323,6 +460,12 @@ function renderStepFeed(state, rawSteps) {
     remove.append(createTrashIcon());
     remove.addEventListener("click", async () => {
       if (remove.disabled) return;
+      if (!extensionRuntimeAvailable) {
+        item.remove();
+        elements.feedCount.textContent = String(elements.stepList.children.length);
+        elements.stepFeedEmpty.hidden = elements.stepList.children.length > 0;
+        return;
+      }
       remove.disabled = true;
       showError("");
       try {
@@ -498,6 +641,7 @@ function setActivePanel(panel) {
 }
 
 function renderGuideFollow({ reveal = false } = {}) {
+  elements.guidesPanel.dataset.view = "follow";
   const guide = companionGuides().find((item) => item.id === activeGuideId);
   if (!guide) {
     activeGuideId = null;
@@ -523,39 +667,51 @@ function renderGuideFollow({ reveal = false } = {}) {
   const figures = [];
   steps.forEach((step, index) => {
     const item = document.createElement("li");
-    item.className = "guide-follow-step";
+    item.className = "guide-follow-step step-card";
     if (index === activeGuideStep) item.classList.add("active");
-    if (index < activeGuideStep) item.classList.add("complete");
     const button = document.createElement("button");
     button.type = "button";
+    button.className = "guide-step-select step-card-copy";
     button.addEventListener("click", () => {
       activeGuideStep = index;
       renderGuideFollow();
     });
     const number = document.createElement("span");
-    number.className = "guide-follow-step-number";
-    number.textContent = index < activeGuideStep ? "✓" : String(index + 1);
+    number.className = "step-number";
+    number.textContent = String(index + 1);
     const copy = document.createElement("span");
-    copy.className = "guide-follow-step-copy";
-    const kind = document.createElement("small");
-    kind.textContent = step.kind || "action";
+    copy.className = "step-card-text";
     const title = document.createElement("strong");
+    title.className = "step-card-title";
     title.textContent = step.title || `Step ${index + 1}`;
-    copy.append(kind, title);
+    copy.append(title);
     if (step.description) {
       const description = document.createElement("p");
+      description.className = "step-card-detail";
       description.textContent = step.description;
       copy.append(description);
     }
-    if (step.media?.mediaId && currentConnection?.connected) {
-      const figure = document.createElement("figure");
+    let figure = null;
+    if (step.media?.previewDataUrl) {
+      figure = document.createElement("figure");
+      figure.className = "guide-step-figure";
+      paintStepFigure(
+        figure,
+        guideStepGeometry(step.media, {
+          width: step.media.previewWidth || 960,
+          height: step.media.previewHeight || 540,
+        }),
+        step.media.previewDataUrl,
+      );
+    } else if (step.media?.mediaId && currentConnection?.connected) {
+      figure = document.createElement("figure");
       figure.className = "guide-step-figure";
       figure.dataset.state = "loading";
-      copy.append(figure);
       figures.push([figure, step.media]);
     }
     button.append(number, copy);
     item.append(button);
+    if (figure) item.append(figure);
     fragment.append(item);
   });
   resetGuideMediaObserver();
@@ -579,6 +735,7 @@ function renderGuideLibrary() {
     renderGuideFollow();
     return;
   }
+  elements.guidesPanel.dataset.view = "library";
   elements.guideFollow.hidden = true;
   elements.guideResults.hidden = false;
   const query = elements.guideSearch.value.trim().toLowerCase();
@@ -628,11 +785,6 @@ function renderState(state, policy) {
   if (!policySavePending() || !currentPolicy) {
     currentPolicy = policy || currentPolicy || {};
   }
-  const label =
-    state.status.charAt(0).toUpperCase() + state.status.slice(1);
-  elements.statusLabel.textContent = label;
-  elements.statusDetail.textContent = statusDescription(state);
-  elements.stepCount.textContent = String(state.stepCount || 0);
 
   const preparing = state.status === "preparing";
   const active = state.status === "recording" || state.status === "paused";
@@ -653,7 +805,7 @@ function renderState(state, policy) {
   elements.privacySettings.hidden = true;
   elements.captureActions.hidden = !(preparing || active);
   elements.reviewActions.hidden = !reviewing;
-  elements.pauseButton.textContent =
+  elements.pauseButtonLabel.textContent =
     state.status === "paused" ? "Resume" : "Pause";
 
   if (!policySavePending()) applyPolicyControls(currentPolicy);
@@ -672,6 +824,7 @@ function renderState(state, policy) {
 function syncCaptureActionControls() {
   const status = currentState?.status || "idle";
   elements.startButton.disabled =
+    !extensionRuntimeAvailable ||
     captureActionPending ||
     policySavePending() ||
     !captureInitialized ||
@@ -726,6 +879,9 @@ async function refreshCapture() {
 }
 
 function renderConnection() {
+  const userName = currentCompanion?.userName || "";
+  elements.userName.textContent = userName;
+  elements.userName.hidden = !userName;
   if (!currentConnection) {
     syncConnectionControls();
     syncCaptureActionControls();
@@ -821,6 +977,13 @@ elements.pauseButton.addEventListener("click", async () => {
   showError("");
   try {
     const resuming = currentState.status === "paused";
+    if (!extensionRuntimeAvailable) {
+      renderState(
+        { ...currentState, status: resuming ? "recording" : "paused" },
+        currentPolicy,
+      );
+      return;
+    }
     let captureTarget = null;
     if (resuming) {
       await requestCaptureAccess();
@@ -843,6 +1006,14 @@ elements.blurPanelButton.addEventListener("click", async () => {
   if (elements.blurPanelButton.disabled) return;
   showError("");
   try {
+    if (!extensionRuntimeAvailable) {
+      currentPolicy = {
+        ...currentPolicy,
+        smartBlurEnabled: currentPolicy?.smartBlurEnabled !== true,
+      };
+      applyPolicyControls(currentPolicy);
+      return;
+    }
     await request({ type: "TOGGLE_SMART_BLUR_PANEL" });
   } catch (error) {
     showError(
@@ -857,6 +1028,10 @@ elements.finishButton.addEventListener("click", async () => {
   if (!beginCaptureAction()) return;
   showError("");
   try {
+    if (!extensionRuntimeAvailable) {
+      renderState({ ...currentState, status: "reviewing" }, currentPolicy);
+      return;
+    }
     const response = await request({ type: "FINISH_CAPTURE" });
     renderState(response.state, currentPolicy);
     await refreshCapture();
@@ -872,6 +1047,10 @@ async function discard() {
   if (!beginCaptureAction()) return;
   showError("");
   try {
+    if (!extensionRuntimeAvailable) {
+      initializePreview();
+      return;
+    }
     const response = await request({ type: "DISCARD_CAPTURE" });
     renderState(response.state, currentPolicy);
     await refreshCapture();
@@ -986,7 +1165,11 @@ for (const input of elements.policyInputs) {
 elements.policyColor.addEventListener("change", schedulePolicySave);
 
 elements.connectButton.addEventListener("click", () => {
-  void chrome.tabs.create({ url: KNOWHOW_ORIGIN });
+  if (extensionRuntimeAvailable) {
+    void chrome.tabs.create({ url: KNOWHOW_ORIGIN });
+    return;
+  }
+  window.open(KNOWHOW_ORIGIN, "_blank", "noopener,noreferrer");
 });
 
 for (const tab of elements.panelTabs) {
@@ -1011,27 +1194,62 @@ elements.guideNextStep.addEventListener("click", () => {
 elements.guideOpenApp.addEventListener("click", () => {
   const guide = companionGuides().find((item) => item.id === activeGuideId);
   if (!guide?.href) return;
-  void chrome.tabs.create({ url: new URL(guide.href, KNOWHOW_ORIGIN).href });
+  const url = new URL(guide.href, KNOWHOW_ORIGIN).href;
+  if (extensionRuntimeAvailable) {
+    void chrome.tabs.create({ url });
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (
-    area === "session" &&
-    Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.captureState)
-  ) {
-    void refreshCapture().catch((error) =>
-      showError(
-        error instanceof Error ? error.message : "Could not refresh captured steps.",
-      ),
-    );
-  }
-  if (
-    area === "local" &&
-    Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.companion)
-  ) {
-    void refreshCompanion().catch(() => undefined);
-  }
-});
+function initializePreview() {
+  currentCompanion = previewCompanion();
+  currentContext = {
+    workspaceId: currentCompanion.workspaceId,
+    workspaceName: currentCompanion.workspaceName,
+    themePreference: currentCompanion.theme,
+  };
+  currentConnection = {
+    connected: true,
+    workspaceId: currentCompanion.workspaceId,
+  };
+  currentPolicy = {};
+  captureInitialized = true;
+  connectionInitialized = true;
+  applySharedTheme();
+  const previewState = {
+    status: "recording",
+    sessionId: "preview-capture",
+    stepCount: 3,
+    stepIds: ["capture-1", "capture-2", "capture-3"],
+  };
+  renderState(previewState, currentPolicy);
+  renderStepFeed(previewState, previewCapturedSteps());
+  renderConnection();
+  renderGuideLibrary();
+  setActivePanel("capture");
+}
+
+if (extensionRuntimeAvailable) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (
+      area === "session" &&
+      Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.captureState)
+    ) {
+      void refreshCapture().catch((error) =>
+        showError(
+          error instanceof Error ? error.message : "Could not refresh captured steps.",
+        ),
+      );
+    }
+    if (
+      area === "local" &&
+      Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.companion)
+    ) {
+      void refreshCompanion().catch(() => undefined);
+    }
+  });
+}
 
 addEventListener(
   "pagehide",
@@ -1044,5 +1262,9 @@ addEventListener(
   { once: true },
 );
 
-setActivePanel("capture");
-void refresh();
+if (extensionRuntimeAvailable) {
+  setActivePanel("capture");
+  void refresh();
+} else {
+  initializePreview();
+}

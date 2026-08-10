@@ -452,7 +452,9 @@ test("the native side panel wires the local live feed and bottom dock", async ()
 
   assert.match(html, /id="step-feed"/);
   assert.ok(html.indexOf('id="step-feed"') < html.indexOf('id="capture-actions"'));
-  assert.match(css, /body\[data-capture-mode="active"\]/);
+  assert.doesNotMatch(html, /id="status-card"/);
+  assert.match(html, /class="record-button-dot"/);
+  assert.match(css, /\.record-button-dot \{/);
   assert.match(css, /\.step-feed-scroll[\s\S]*overflow:\s*auto/);
   assert.match(source, /capturedSteps\.load\(capture\.state\)/);
   assert.match(source, /getSteps: getCapturedSteps/);
@@ -462,8 +464,7 @@ test("the native side panel wires the local live feed and bottom dock", async ()
     source,
     /step\.sourceEvent === "navigation" \? null : thumbnailUrls\.get\(step\)/,
   );
-  assert.match(source, /case "preparing":/);
-  assert.match(source, /state\.captureWarning \|\|/);
+  assert.match(source, /const preparing = state\.status === "preparing"/);
   assert.match(source, /STORAGE_KEYS\.captureState/);
   assert.match(source, /thumbnailUrls\.dispose\(\)/);
   assert.match(source, /requestAnimationFrame/);
@@ -508,7 +509,7 @@ test("captured steps and guide steps share one illustrated presentation", async 
   assert.match(apiClient, /isAcceptedScreenshotType\(contentType\)/);
 });
 
-test("the guide library reads as one scrolling page", async () => {
+test("the whole guide panel scrolls while the walkthrough action dock stays sticky", async () => {
   const [css, source] = await Promise.all([
     readFile(new URL("../src/popup/popup.css", import.meta.url), "utf8"),
     readFile(new URL("../src/popup/popup.js", import.meta.url), "utf8"),
@@ -522,23 +523,28 @@ test("the guide library reads as one scrolling page", async () => {
     return match[1];
   }
 
-  // The whole panel scrolls—heading, search field and rows together—rather than
-  // trapping the list in a short inner scroller.
   assert.match(rule(".guide-library"), /overflow: auto/);
-  for (const selector of [".guide-results", ".guide-follow-steps"]) {
-    assert.doesNotMatch(rule(selector), /overflow: auto/, selector);
-    // Without align-content a two-row grid stretches each row over the panel.
-    assert.match(rule(selector), /align-content: start/, selector);
-  }
-  assert.doesNotMatch(rule(".guide-follow"), /flex: 1|overflow/);
+  assert.match(rule(".guide-results"), /overflow: visible/);
+  assert.match(rule(".guide-follow"), /flex: 0 0 auto/);
+  assert.match(rule(".guide-follow"), /overflow: visible/);
+  assert.match(rule(".guide-follow-steps"), /overflow: visible/);
+  assert.match(rule(".guide-follow-steps"), /grid-auto-rows: max-content/);
+  assert.match(rule(".guide-follow-steps"), /gap: 11px/);
+  assert.match(rule(".guide-follow-step"), /border-radius: 14px/);
   assert.match(rule(".guide-follow-actions"), /position: sticky/);
+  assert.match(rule(".guide-follow-actions"), /bottom: -12px/);
+  assert.match(rule(".guide-follow-actions"), /flex: 0 0 auto/);
+  assert.match(rule(".guide-follow-actions"), /box-shadow/);
 
-  // The screenshot sits in the step's own copy column, so it cannot be pushed
-  // into a phantom second column beside the step text.
+  // Guide steps reuse the Capture card anatomy and keep the full-width
+  // screenshot below the copy row.
   assert.doesNotMatch(rule(".guide-step-figure"), /grid-column/);
-  assert.match(source, /copy\.className = "guide-follow-step-copy"/);
-  assert.match(source, /number\.className = "guide-follow-step-number"/);
-  assert.match(css, /\.guide-follow-step-copy \{[^}]*display: grid/);
+  assert.match(source, /item\.className = "guide-follow-step step-card"/);
+  assert.match(source, /button\.className = "guide-step-select step-card-copy"/);
+  assert.match(source, /copy\.className = "step-card-text"/);
+  assert.match(source, /number\.className = "step-number"/);
+  assert.match(source, /if \(figure\) item\.append\(figure\)/);
+  assert.match(rule(".guide-step-figure"), /width: calc\(100% - 18px\)/);
 
   // Walking with Next keeps the current step in sight, and opening or leaving a
   // guide starts at the top of the panel.

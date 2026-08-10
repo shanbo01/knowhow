@@ -374,6 +374,7 @@ function normalizeCompanionGuide(value) {
 function normalizeCompanion(value) {
   const workspaceId = boundedCompanionText(value?.workspaceId, 160);
   const workspaceName = boundedCompanionText(value?.workspaceName, 240);
+  const userName = boundedCompanionText(value?.userName, 240);
   const theme = value?.theme === "dark" ? "dark" : "light";
   const guides = Array.isArray(value?.guides)
     ? value.guides
@@ -384,6 +385,7 @@ function normalizeCompanion(value) {
   return {
     workspaceId,
     workspaceName,
+    userName,
     theme,
     guides,
     syncedAt: new Date().toISOString(),

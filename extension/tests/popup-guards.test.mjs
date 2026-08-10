@@ -80,6 +80,38 @@ test("guide follow mode, search, Smart Blur, and per-step deletion are wired", a
   assert.match(source, /type: "TOGGLE_SMART_BLUR_PANEL"/);
 });
 
+test("the feedback preview mirrors the updated header and provides navigable sample guides", async () => {
+  const [source, html, css, background, bridge] = await Promise.all([
+    readFile(popupSourceUrl, "utf8"),
+    readFile(popupHtmlUrl, "utf8"),
+    readFile(new URL("../src/popup/popup.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
+    readFile(new URL("../../lib/extension-bridge.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.doesNotMatch(html, /id="status-card"/);
+  assert.match(html, /id="connect-button" class="brand brand-button"/);
+  assert.match(html, /id="user-name"/);
+  assert.match(html, /class="record-button-dot"/);
+  assert.match(css, /\.start-button \{[^}]*font-size: 14px/);
+  assert.match(css, /\.record-button-dot \{[^}]*background: #ef4444/);
+  assert.match(css, /--background: #f7f7f9/);
+  assert.match(css, /:root\[data-theme="dark"\] \{[\s\S]*--background: #15171a;[\s\S]*--card: #1d2024/);
+  assert.match(source, /function previewCompanion\(\)/);
+  assert.match(source, /function previewScreenshotSvg\(/);
+  assert.match(source, /function previewCapturedSteps\(\)/);
+  assert.match(source, /previewDataUrl: previewScreenshotDataUrl/);
+  assert.match(source, /renderStepFeed\(previewState, previewCapturedSteps\(\)\)/);
+  assert.match(source, /function initializePreview\(\)/);
+  assert.match(source, /userName: "Jordan Lee"/);
+  assert.match(source, /setActivePanel\("capture"\)/);
+  assert.match(source, /if \(!extensionRuntimeAvailable\) \{\s*renderState\(\s*\{ \.\.\.currentState, status: resuming \? "recording" : "paused" \}/);
+  assert.match(source, /smartBlurEnabled: currentPolicy\?\.smartBlurEnabled !== true/);
+  assert.match(source, /if \(!extensionRuntimeAvailable\) \{\s*renderState\(\{ \.\.\.currentState, status: "reviewing" \}/);
+  assert.match(background, /const userName = boundedCompanionText\(value\?\.userName, 240\)/);
+  assert.match(bridge, /userName: string/);
+});
+
 test("uploading locks destructive review actions", async () => {
   const source = await readFile(popupSourceUrl, "utf8");
   const controls = source.slice(

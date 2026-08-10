@@ -9,11 +9,11 @@
   <body>
     <main class="panel-shell">
       <header class="app-header">
-        <div class="brand">
+        <button id="connect-button" class="brand brand-button" type="button" title="Open KnowHow" aria-label="Open KnowHow">
           <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-          <span class="brand-copy"><strong>KnowHow</strong><small>Capture</small></span>
-        </div>
-        <button id="connect-button" class="icon-button open-app-button" type="button" title="Open KnowHow" aria-label="Open KnowHow">↗</button>
+          <span class="brand-copy"><strong>KnowHow</strong></span>
+        </button>
+        <span id="user-name" class="header-user" hidden></span>
       </header>
 
       <div class="workspace-bar" aria-label="KnowHow connection">
@@ -28,17 +28,11 @@
       </nav>
 
       <section id="capture-panel" class="panel-view capture-view">
-        <section id="status-card" class="status-card" aria-live="polite">
-          <span class="recording-state-dot" aria-hidden="true"></span>
-          <span class="status-copy"><small>Capture</small><strong id="status-label">Idle</strong><span id="status-detail">Start from the page you want to document.</span></span>
-          <span id="step-count" class="step-count">0</span>
-        </section>
-
         <form id="start-form" class="capture-form card">
           <div class="start-heading"><span class="start-icon" aria-hidden="true">✦</span><span><strong>Record a workflow</strong><small>Turn your clicks into an editable private guide.</small></span></div>
           <label><span>Guide title</span><input id="guide-title" minlength="2" maxlength="200" placeholder="e.g. Invite a new teammate" required /></label>
           <label class="workspace-field"><span>Workspace</span><input id="workspace-id" maxlength="128" placeholder="Open KnowHow to connect" readonly /></label>
-          <button id="start-button" class="primary start-button" type="submit" disabled><span aria-hidden="true">●</span> Start capture</button>
+          <button id="start-button" class="primary start-button" type="submit" disabled><span class="record-button-dot" aria-hidden="true"></span> Start capture</button>
         </form>
 
         <section id="step-feed" class="step-feed" aria-label="Captured steps" aria-live="polite" hidden>
@@ -72,11 +66,11 @@
 
         <section id="capture-actions" class="capture-dock" hidden>
           <div class="dock-tools">
-            <button id="pause-button" class="dock-action pause-action" type="button">Pause</button>
-            <button id="blur-panel-button" class="dock-action blur-action" type="button">Smart Blur</button>
-            <button id="discard-button" class="dock-action discard-action" type="button">Discard</button>
+            <button id="pause-button" class="dock-action pause-action" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1.5"></rect><rect x="14" y="4" width="4" height="16" rx="1.5"></rect></svg><span>Pause</span></button>
+            <button id="blur-panel-button" class="dock-action blur-action" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.25 3.75L17 8l-3.75 1.25L12 13l-1.25-3.75L7 8l3.75-1.25L12 3Z"></path><path d="m18.5 13 .75 2.25L21.5 16l-2.25.75L18.5 19l-.75-2.25L15.5 16l2.25-.75L18.5 13Z"></path><path d="m6 14 .9 2.6 2.6.9-2.6.9L6 21l-.9-2.6-2.6-.9 2.6-.9L6 14Z"></path></svg><span>Smart Blur</span></button>
+            <button id="discard-button" class="dock-action discard-action" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="m18 7-1 13H7L6 7"></path><path d="M10 11v5M14 11v5"></path></svg><span>Discard</span></button>
           </div>
-          <button id="finish-button" class="primary finish-button" type="button"><span aria-hidden="true">✓</span> Finish capture</button>
+          <button id="finish-button" class="primary finish-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.5 2.5L16 9"></path></svg><span>Finish capture</span></button>
         </section>
 
         <section id="review-actions" class="capture-dock review-dock" hidden>

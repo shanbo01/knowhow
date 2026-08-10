@@ -1389,6 +1389,7 @@ export function KnowHowWorkspaceApp({
   const extensionCompanion = useMemo<ExtensionCompanion>(() => ({
     workspaceId: workspace.id,
     workspaceName: workspace.name,
+    userName: data.viewer.name || data.viewer.email,
     theme: resolvedTheme === "dark" ? "dark" : "light",
     guides: guides.flatMap((guide) => {
       const revision = guide.publishedRevision ?? guide.workingRevision;
@@ -1442,7 +1443,7 @@ export function KnowHowWorkspaceApp({
         }),
       }];
     }),
-  }), [guides, resolvedTheme, workspace.id, workspace.name, workspace.slug]);
+  }), [data.viewer.email, data.viewer.name, guides, resolvedTheme, workspace.id, workspace.name, workspace.slug]);
 
   // The extension is handed the signed-in workspace automatically: being in the
   // app is the proof of identity, so nobody copies a pairing code. Credentials
@@ -1677,7 +1678,6 @@ export function KnowHowWorkspaceApp({
           </SidebarGroup> : null}
         </SidebarContent>
         <SidebarFooter>
-          <div className="sidebar-privacy"><ShieldCheck /><div><strong>Default deny</strong><p>Every data request is checked by the trusted server.</p></div></div>
           <button className="capture-shortcut" type="button" disabled={!canCapture} onClick={() => setDialog({ type: "extension" })}><span><Sparkles /></span><span><strong>Capture workflow</strong><small>{canCapture ? "Chrome & Edge extension" : "Creator access required"}</small></span><ArrowRight /></button>
         </SidebarFooter>
       </Sidebar>
@@ -1686,7 +1686,7 @@ export function KnowHowWorkspaceApp({
         <header className="topbar">
           <div className="topbar-start">
             <SidebarTrigger className="mobile-menu" />
-            <div className="topbar-workspace"><WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="sm" /><span><small>Workspace</small><strong>{workspace.name}</strong></span><StatusBadge status={workspace.status} /></div>
+            <div className="topbar-workspace"><WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="sm" /><span><small>Workspace</small><strong>{workspace.name}</strong></span></div>
           </div>
           <div className="topbar-search-slot"><GlobalGuideSearch guides={guides} onOpen={openGuide} /></div>
           <div className="topbar-actions">

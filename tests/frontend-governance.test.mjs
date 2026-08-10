@@ -151,6 +151,13 @@ test("browser-feedback layout and input regressions stay fixed", async () => {
   assert.match(styles, /--app-page-max-width: 108rem/);
   assert.match(styles, /\.sidebar-brand \.product-brand-copy strong \{ text-transform: none/);
   assert.match(styles, /\.workspace-menu \.workspace-avatar[\s\S]*background: var\(--surface-soft\) !important/);
+  assert.doesNotMatch(shell, /className="sidebar-privacy"/);
+  assert.doesNotMatch(shell, /topbar-workspace[^\n]*StatusBadge/);
+  assert.match(styles, /--kh-surface-shadow:/);
+  assert.match(styles, /--background: #f7f7f9/);
+  assert.match(styles, /:root\[data-theme="dark"\],[\s\S]*--background: #15171a;[\s\S]*--card: #1d2024/);
+  assert.match(styles, /\.topbar \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) minmax\(14rem, 31rem\) minmax\(0, 1fr\)/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.topbar-search-slot \{ width: 100%; grid-column: 1 \/ -1; grid-row: 2; \}/);
 });
 
 test("published screenshots are cloned into a revision-scoped working draft", async () => {

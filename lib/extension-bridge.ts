@@ -41,6 +41,7 @@ export type ExtensionCompanionGuide = {
 export type ExtensionCompanion = {
   workspaceId: string;
   workspaceName: string;
+  userName: string;
   theme: "light" | "dark";
   guides: ExtensionCompanionGuide[];
 };
