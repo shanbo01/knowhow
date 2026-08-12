@@ -441,7 +441,7 @@ test("product routes share the guarded app while marketing stays public", async 
   assert.match(auditRoute, /AUDIT_CHAIN_INVALID/);
 });
 
-test("browser identity remains cookie-backed and invitation-only", async () => {
+test("browser identity remains cookie-backed while public registration grants no workspace access", async () => {
   const [authClient, authRoute, commandService] = await Promise.all([
     read("lib/auth-client.ts"),
     read("app/api/auth/[[...path]]/route.ts"),
@@ -449,10 +449,12 @@ test("browser identity remains cookie-backed and invitation-only", async () => {
   ]);
 
   assert.match(authClient, /credentials: "same-origin"/);
-  assert.match(authClient, /signUpWithCredential/);
+  assert.match(authClient, /export function signUp/);
   assert.doesNotMatch(authClient, /localStorage|sessionStorage|setJWT|createJWT/);
   assert.match(authRoute, /HttpOnly; SameSite=Strict/);
   assert.match(authRoute, /SameSite=Strict/);
+  assert.match(authRoute, /KNOWHOW_PUBLIC_SIGNUP_ENABLED === "1"/);
+  assert.match(authRoute, /credentialSignup/);
   assert.match(commandService, /action === "requestDomainJoin" \|\| action === "resolveJoinRequest"/);
   assert.match(commandService, /"INVITATION_ONLY"/);
 });

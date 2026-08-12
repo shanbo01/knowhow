@@ -44,7 +44,7 @@ import {
   sendEmailVerification,
   signInWithPassword,
   signOutSession,
-  signUpWithCredential,
+  signUp as signUpAccount,
   type SessionUser,
 } from "../../lib/auth-client";
 import type { NavigationGuard } from "../../lib/navigation-guard";
@@ -528,6 +528,8 @@ function WorkspaceOnboarding({
 }
 
 export default function Home() {
+  const publicSignUp =
+    process.env.NEXT_PUBLIC_KNOWHOW_PUBLIC_SIGNUP_ENABLED === "1";
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [backendMessage, setBackendMessage] = useState("");
   const [locationKey, setLocationKey] = useState("/");
@@ -880,16 +882,20 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      if (!signupCredential)
+      if (!signupCredential && !publicSignUp)
         throw new Error(
           "A current invitation is required to create an account.",
         );
-      await signUpWithCredential({
+      await signUpAccount({
         name,
         email,
         password,
-        credentialKind: signupCredential.kind,
-        credential: signupCredential.token,
+        ...(signupCredential
+          ? {
+              credentialKind: signupCredential.kind,
+              credential: signupCredential.token,
+            }
+          : {}),
       });
       clearApiCredential();
       const nextUser = await getAuthSession();
@@ -1352,7 +1358,8 @@ export default function Home() {
         onRetryBackend={checkBackend}
         onSignIn={signIn}
         onSignUp={signUp}
-        allowSignUp={Boolean(signupCredential)}
+        allowSignUp={publicSignUp || Boolean(signupCredential)}
+        publicSignUp={publicSignUp}
       />
     );
   }

@@ -11,7 +11,7 @@ Controlled deployments set `KNOWHOW_APPWRITE_RESIDENCY=azure-self-hosted:<arm-re
 - `knowhow_core`, `knowhow_private_media`, `knowhow_exports`, `knowhow_web`, `knowhow_ops`, and `knowhow_export` retain those stable IDs.
 - All table and bucket permissions are empty. Browsers never receive a TablesDB, Storage, or server API credential.
 - Production has no customer organization until the final synthetic rehearsal has passed and its synthetic tenant has been purged.
-- Public signup, payments, the future 14-day trial, SSO/SCIM, and regulated-data use remain disabled.
+- Public account registration may be enabled with `KNOWHOW_PUBLIC_SIGNUP_ENABLED=1` and `NEXT_PUBLIC_KNOWHOW_PUBLIC_SIGNUP_ENABLED=1`. It creates only an email-verification-pending identity; organization/workspace access remains exact-email invitation or appointment only. Automatic workspace creation, payments, the future 14-day trial, SSO/SCIM, and regulated-data use remain disabled.
 
 ## Owner checkpoints
 

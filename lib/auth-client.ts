@@ -68,12 +68,12 @@ export function signInWithPassword(email: string, password: string) {
   });
 }
 
-export function signUpWithCredential(input: {
+export function signUp(input: {
   name: string;
   email: string;
   password: string;
-  credentialKind: "invite" | "appointment";
-  credential: string;
+  credentialKind?: "invite" | "appointment";
+  credential?: string;
 }) {
   return authRequest("sign-up", { method: "POST", body: JSON.stringify(input) });
 }

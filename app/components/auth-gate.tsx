@@ -27,6 +27,7 @@ export type AuthGateProps = {
     password: string,
   ) => Promise<void> | void;
   allowSignUp?: boolean;
+  publicSignUp?: boolean;
 };
 
 export type WorkspaceSetupProps = {
@@ -72,6 +73,7 @@ export function AuthGate({
   onSignIn,
   onSignUp,
   allowSignUp = false,
+  publicSignUp = false,
 }: AuthGateProps) {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [name, setName] = useState("");
@@ -185,11 +187,17 @@ export function AuthGate({
               {isSignUp ? "Create your account" : "Welcome back"}
             </p>
             <h2 id="auth-heading">
-              {isSignUp ? "Create your invited account" : "Sign in to KnowHow"}
+              {isSignUp
+                ? publicSignUp
+                  ? "Create your KnowHow account"
+                  : "Create your invited account"
+                : "Sign in to KnowHow"}
             </h2>
             <p>
               {isSignUp
-                ? "Set up your secure account, verify your email, then redeem the access issued to you."
+                ? publicSignUp
+                  ? "Set up your secure account and verify your email. Workspace access is granted separately by an administrator."
+                  : "Set up your secure account, verify your email, then redeem the access issued to you."
                 : "Use your work account to continue to your SOP workspace."}
             </p>
           </div>
@@ -220,7 +228,7 @@ export function AuthGate({
                 onClick={() => selectMode("sign-up")}
                 disabled={busy}
               >
-                Create invited account
+                {publicSignUp ? "Create account" : "Create invited account"}
               </button>
             ) : null}
           </div>
@@ -316,7 +324,9 @@ export function AuthGate({
 
           <p className="auth-card-footnote">
             {allowSignUp
-              ? "This invitation creates an account, not automatic guide access."
+              ? publicSignUp
+                ? "Creating an account does not grant automatic workspace or guide access."
+                : "This invitation creates an account, not automatic guide access."
               : "KnowHow pilots are invitation-only. Request access from your organization owner."}
           </p>
         </div>

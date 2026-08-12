@@ -226,12 +226,21 @@ export async function POST(request: Request, context: Context) {
       const email = text(body.email, "Email", 5, 320).toLowerCase();
       await consumeFixedWindows(store, [{ scope: "auth.sign-up.email", subject: email, limit: 3, windowSeconds: 3_600 }]);
       const password = text(body.password, "Password", 12, 1_024);
-      const credential = text(body.credential, "Invitation", 20, 8_192);
       const credentialKind = body.credentialKind;
-      if (credentialKind !== "invite" && credentialKind !== "appointment") {
+      const credential = typeof body.credential === "string" ? body.credential.trim() : "";
+      const credentialSignup =
+        (credentialKind === "invite" || credentialKind === "appointment") &&
+        credential.length > 0;
+      const publicSignup = process.env.KNOWHOW_PUBLIC_SIGNUP_ENABLED === "1";
+      if (!credentialSignup && !publicSignup) {
         throw new HttpError(403, "INVITATION_REQUIRED", "A current invitation is required to create an account.");
       }
-      await assertSignupCredential({ kind: credentialKind, token: credential, email });
+      if (credentialSignup) {
+        if (credential.length < 20 || credential.length > 8_192) {
+          throw new HttpError(403, "INVITATION_REQUIRED", "A current invitation is required to create an account.");
+        }
+        await assertSignupCredential({ kind: credentialKind, token: credential, email });
+      }
       const { users, account, config } = createAdminAppwrite();
       await users.create({ userId: ID.unique(), email, password, name });
       const session = await account.createEmailPasswordSession({ email, password });
