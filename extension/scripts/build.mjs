@@ -7,15 +7,31 @@ import { deflateRawSync } from "node:zlib";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const extensionRoot = resolve(scriptDirectory, "..");
 const destination = resolve(extensionRoot, "dist");
-const publicDirectory = resolve(extensionRoot, "..", "public");
-const archivePath = resolve(publicDirectory, "knowhow-extension.zip");
+const outputDirectory = resolve(extensionRoot, "..", "outputs", "extension");
 const expectedExtensionId = "phbofjenfnnnnndghhinoldlfbpaedpo";
+const storeBuild = process.argv.includes("--store");
+const configuredOrigin = process.env.KNOWHOW_EXTENSION_ORIGIN?.trim();
+if (storeBuild && !configuredOrigin) {
+  throw new Error("KNOWHOW_EXTENSION_ORIGIN is required for a store build.");
+}
+const origin = new URL(configuredOrigin || "http://localhost:3001");
+if (
+  origin.username ||
+  origin.password ||
+  origin.pathname !== "/" ||
+  origin.search ||
+  origin.hash ||
+  (origin.protocol !== "https:" &&
+    !(origin.protocol === "http:" && origin.hostname === "localhost"))
+) {
+  throw new Error("KNOWHOW_EXTENSION_ORIGIN must be an exact HTTPS origin (or localhost for development).");
+}
+if (storeBuild && origin.protocol !== "https:") {
+  throw new Error("Store builds require an HTTPS KnowHow origin.");
+}
 
 if (dirname(destination) !== extensionRoot || destination === extensionRoot) {
   throw new Error("Refusing to build outside extension/dist.");
-}
-if (dirname(archivePath) !== publicDirectory) {
-  throw new Error("Refusing to package outside public/knowhow-extension.zip.");
 }
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
@@ -125,6 +141,16 @@ async function deterministicZip(root) {
 
 const manifestPath = resolve(extensionRoot, "manifest.json");
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const originMatch = `${origin.origin}/*`;
+manifest.host_permissions = [originMatch];
+manifest.externally_connectable = { matches: [originMatch] };
+const archivePath = resolve(
+  outputDirectory,
+  `knowhow-capture-${manifest.version}-${storeBuild ? "store" : "development"}.zip`,
+);
+if (dirname(archivePath) !== outputDirectory) {
+  throw new Error("Refusing to package outside outputs/extension.");
+}
 const contentSource = await readFile(
   resolve(extensionRoot, "src/content/capture.js"),
   "utf8",
@@ -213,6 +239,16 @@ await mkdir(destination, { recursive: true });
 await cp(resolve(extensionRoot, "src"), resolve(destination, "src"), {
   recursive: true,
 });
+const builtConfigPath = resolve(destination, "src", "core", "config.js");
+const builtConfig = await readFile(builtConfigPath, "utf8");
+const configuredSource = builtConfig.replace(
+  /export const KNOWHOW_ORIGIN\s*=\s*"[^"]+";/,
+  `export const KNOWHOW_ORIGIN = ${JSON.stringify(origin.origin)};`,
+);
+if (configuredSource === builtConfig && !builtConfig.includes(origin.origin)) {
+  throw new Error("Could not configure the extension application origin.");
+}
+await writeFile(builtConfigPath, configuredSource, "utf8");
 const popupFontDirectory = resolve(destination, "src", "popup", "fonts");
 await mkdir(popupFontDirectory, { recursive: true });
 for (const weight of ["400", "700"]) {
@@ -235,8 +271,10 @@ await writeFile(
   "utf8",
 );
 
-await mkdir(publicDirectory, { recursive: true });
+await mkdir(outputDirectory, { recursive: true });
 await writeFile(archivePath, await deterministicZip(destination));
 
 console.log("Built unpacked extension at " + destination);
 console.log("Packaged deterministic download at " + archivePath);
+console.log("Extension channel: " + (storeBuild ? "store" : "development"));
+console.log("KnowHow origin: " + origin.origin);

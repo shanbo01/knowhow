@@ -1,0 +1,119 @@
+name: controlled-release-gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Controlled Appwrite environment to verify
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      release_sha:
+        description: Exact 40-character commit SHA already deployed to the Site and Functions
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: controlled-release-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  release-gates:
+    name: ${{ inputs.target }} / ${{ inputs.release_sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.target }}
+    env:
+      KNOWHOW_ENVIRONMENT: ${{ inputs.target }}
+      APPWRITE_ENDPOINT: https://fra.cloud.appwrite.io/v1
+      APPWRITE_PROJECT_ID: ${{ inputs.target == 'staging' && secrets.APPWRITE_STAGING_PROJECT_ID || secrets.APPWRITE_PRODUCTION_PROJECT_ID }}
+      APPWRITE_API_KEY: ${{ inputs.target == 'staging' && secrets.APPWRITE_STAGING_API_KEY || secrets.APPWRITE_PRODUCTION_API_KEY }}
+      APPWRITE_DATABASE_ID: knowhow_core
+      APPWRITE_PRIVATE_MEDIA_BUCKET_ID: knowhow_private_media
+      APPWRITE_EXPORTS_BUCKET_ID: knowhow_exports
+      KNOWHOW_SMOKE_SITE_ORIGIN: ${{ inputs.target == 'staging' && secrets.KNOWHOW_STAGING_SITE_ORIGIN || secrets.KNOWHOW_PRODUCTION_SITE_ORIGIN }}
+      KNOWHOW_SMOKE_REQUIRE_EMAIL_PROVIDER: "1"
+      KNOWHOW_SMOKE_REQUIRE_READY: "1"
+      KNOWHOW_SMOKE_EXPECTED_PROJECT_ID: ${{ inputs.target == 'staging' && vars.APPWRITE_STAGING_PROJECT_ID || vars.APPWRITE_PRODUCTION_PROJECT_ID }}
+      KNOWHOW_SMOKE_FORBIDDEN_PROJECT_ID: ${{ inputs.target == 'staging' && vars.APPWRITE_PRODUCTION_PROJECT_ID || vars.APPWRITE_STAGING_PROJECT_ID }}
+      KNOWHOW_SMOKE_MUTATION_CONFIRM: ${{ format('{0}-transient-fixtures', inputs.target) }}
+      KNOWHOW_SMOKE_EXPECTED_RELEASE: ${{ inputs.release_sha }}
+      KNOWHOW_SMOKE_SYNTHETIC_ONLY: ${{ inputs.target == 'production' && '1' || '0' }}
+      KNOWHOW_SMOKE_FINAL_PRODUCTION: ${{ inputs.target == 'production' && '1' || '0' }}
+      KNOWHOW_E2E_BASE_URL: ${{ inputs.target == 'staging' && secrets.KNOWHOW_STAGING_SITE_ORIGIN || secrets.KNOWHOW_PRODUCTION_SITE_ORIGIN }}
+      KNOWHOW_REQUIRE_CONTROLLED_REHEARSAL: "1"
+      KNOWHOW_E2E_EXPECTED_ENVIRONMENT: ${{ inputs.target }}
+      KNOWHOW_E2E_EXPECTED_PROJECT_ID: ${{ inputs.target == 'staging' && vars.APPWRITE_STAGING_PROJECT_ID || vars.APPWRITE_PRODUCTION_PROJECT_ID }}
+      KNOWHOW_E2E_EXPECTED_RELEASE: ${{ inputs.release_sha }}
+      KNOWHOW_E2E_OWNER_EMAIL: ${{ secrets.KNOWHOW_E2E_OWNER_EMAIL }}
+      KNOWHOW_E2E_OWNER_PASSWORD: ${{ secrets.KNOWHOW_E2E_OWNER_PASSWORD }}
+      KNOWHOW_E2E_OWNER_TOTP_SECRET: ${{ secrets.KNOWHOW_E2E_OWNER_TOTP_SECRET }}
+      KNOWHOW_E2E_MEMBER_EMAIL: ${{ secrets.KNOWHOW_E2E_MEMBER_EMAIL }}
+      KNOWHOW_E2E_MEMBER_PASSWORD: ${{ secrets.KNOWHOW_E2E_MEMBER_PASSWORD }}
+      KNOWHOW_E2E_MEMBER_TOTP_SECRET: ${{ secrets.KNOWHOW_E2E_MEMBER_TOTP_SECRET }}
+      KNOWHOW_E2E_WORKSPACE_SLUG: ${{ secrets.KNOWHOW_E2E_WORKSPACE_SLUG }}
+      KNOWHOW_E2E_PUBLISHED_GUIDE_ID: ${{ secrets.KNOWHOW_E2E_PUBLISHED_GUIDE_ID }}
+      KNOWHOW_NETWORK_LOAD_ENVIRONMENT: ${{ inputs.target }}
+      KNOWHOW_NETWORK_LOAD_SITE_ORIGIN: ${{ inputs.target == 'staging' && secrets.KNOWHOW_STAGING_SITE_ORIGIN || secrets.KNOWHOW_PRODUCTION_SITE_ORIGIN }}
+      KNOWHOW_NETWORK_LOAD_EXPECTED_PROJECT_ID: ${{ inputs.target == 'staging' && vars.APPWRITE_STAGING_PROJECT_ID || vars.APPWRITE_PRODUCTION_PROJECT_ID }}
+      KNOWHOW_NETWORK_LOAD_FORBIDDEN_PROJECT_ID: ${{ inputs.target == 'staging' && vars.APPWRITE_PRODUCTION_PROJECT_ID || vars.APPWRITE_STAGING_PROJECT_ID }}
+      KNOWHOW_NETWORK_LOAD_EXPECTED_RELEASE: ${{ inputs.release_sha }}
+      KNOWHOW_NETWORK_LOAD_CONFIRM: ${{ format('{0}-synthetic-network-load', inputs.target) }}
+      KNOWHOW_NETWORK_LOAD_SYNTHETIC_ONLY: "1"
+      KNOWHOW_NETWORK_LOAD_DEDICATED_ACTORS: "1"
+      KNOWHOW_NETWORK_LOAD_FINAL_PRODUCTION: ${{ inputs.target == 'production' && '1' || '0' }}
+      KNOWHOW_NETWORK_LOAD_EXTENSION_ORIGIN: ${{ vars.KNOWHOW_CHROMIUM_EXTENSION_ORIGIN }}
+      KNOWHOW_NETWORK_LOAD_EXTENSION_VERSION: ${{ vars.KNOWHOW_EXTENSION_VERSION }}
+      KNOWHOW_NETWORK_LOAD_SYNTHETIC_EMAIL_DOMAIN: ${{ vars.KNOWHOW_NETWORK_LOAD_SYNTHETIC_EMAIL_DOMAIN }}
+      KNOWHOW_NETWORK_LOAD_ACTORS_JSON: ${{ secrets.KNOWHOW_NETWORK_LOAD_ACTORS_JSON }}
+      KNOWHOW_NETWORK_LOAD_EXPECTED_TENANTS: ${{ inputs.target == 'staging' && '3' || '2' }}
+      KNOWHOW_NETWORK_LOAD_MINIMUM_MEMBERS: ${{ inputs.target == 'staging' && '100' || '1' }}
+      KNOWHOW_NETWORK_LOAD_EVIDENCE_HMAC_KEY: ${{ secrets.KNOWHOW_RELEASE_EVIDENCE_HMAC_KEY }}
+      KNOWHOW_NETWORK_LOAD_EVIDENCE_HMAC_KEY_ID: ${{ vars.KNOWHOW_RELEASE_EVIDENCE_HMAC_KEY_ID }}
+      KNOWHOW_NETWORK_LOAD_EVIDENCE_PATH: .tmp/controlled-network-load-${{ github.run_id }}.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 1
+      - name: Verify immutable release checkout
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run load:pilot
+      - name: Verify exact Appwrite contracts and transient cleanup
+        run: |
+          if [[ "$KNOWHOW_ENVIRONMENT" == "production" ]]; then
+            npm run appwrite:smoke:production
+          else
+            npm run appwrite:smoke:staging
+          fi
+      - run: npx playwright install --with-deps chrome msedge
+      - name: Run credentialed two-user browser rehearsal in current Chrome and Edge
+        run: npx playwright test e2e/controlled-rehearsal.spec.ts --project=chrome --project=edge --workers=1
+      - name: Run controlled network-load and tenant-isolation gate
+        run: npm run load:controlled
+      - name: Verify sealed network-load evidence offline
+        run: npm run load:controlled:evidence:verify
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controlled-${{ inputs.target }}-${{ github.run_id }}
+          path: |
+            outputs/
+            .tmp/controlled-network-load-${{ github.run_id }}.json
+          if-no-files-found: ignore
+          retention-days: 14

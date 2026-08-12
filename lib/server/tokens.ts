@@ -65,20 +65,57 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer;
 }
 
-function signingSecret(override?: string): string {
-  const secret = override ?? process.env.KNOWHOW_TOKEN_SIGNING_KEY ?? "";
-  if (encoder.encode(secret).byteLength < 32) {
-    throw new HttpError(500, "TOKEN_KEY_MISSING", "Token signing is unavailable.", {
-      expose: false,
-    });
-  }
-  return secret;
+type TokenKeyring = {
+  activeKeyId: string;
+  keys: ReadonlyMap<string, string>;
+};
+
+function validSecret(secret: string) {
+  return encoder.encode(secret).byteLength >= 32;
 }
 
-async function hmacKey(secret?: string): Promise<CryptoKey> {
+function tokenKeyring(override?: string): TokenKeyring {
+  if (override !== undefined) {
+    if (!validSecret(override)) {
+      throw new HttpError(500, "TOKEN_KEY_MISSING", "Token signing is unavailable.", { expose: false });
+    }
+    return { activeKeyId: "test", keys: new Map([["test", override]]) };
+  }
+  const configured = process.env.KNOWHOW_TOKEN_KEYS_JSON?.trim();
+  if (configured) {
+    try {
+      const candidate = JSON.parse(configured) as unknown;
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error("invalid keyring");
+      const entries = Object.entries(candidate as Record<string, unknown>);
+      if (
+        !entries.length ||
+        entries.some(([keyId, secret]) => !/^[A-Za-z0-9_-]{1,32}$/.test(keyId) || typeof secret !== "string" || !validSecret(secret))
+      ) {
+        throw new Error("invalid keyring");
+      }
+      const keys = new Map(entries as Array<[string, string]>);
+      const activeKeyId = process.env.KNOWHOW_TOKEN_ACTIVE_KID?.trim() ?? "";
+      if (!keys.has(activeKeyId)) throw new Error("active key missing");
+      return { activeKeyId, keys };
+    } catch (error) {
+      throw new HttpError(500, "TOKEN_KEYRING_INVALID", "Token signing is unavailable.", { expose: false, cause: error });
+    }
+  }
+  const secret = process.env.KNOWHOW_TOKEN_SIGNING_KEY ?? "";
+  if (!validSecret(secret)) {
+    throw new HttpError(500, "TOKEN_KEY_MISSING", "Token signing is unavailable.", { expose: false });
+  }
+  const activeKeyId = process.env.KNOWHOW_TOKEN_ACTIVE_KID?.trim() || "v1";
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(activeKeyId)) {
+    throw new HttpError(500, "TOKEN_KEYRING_INVALID", "Token signing is unavailable.", { expose: false });
+  }
+  return { activeKeyId, keys: new Map([[activeKeyId, secret]]) };
+}
+
+async function hmacKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
-    encoder.encode(signingSecret(secret)),
+    encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign", "verify"],
@@ -101,10 +138,13 @@ async function signClaims(
   secret?: string,
 ): Promise<string> {
   assertBaseClaims(claims);
+  const keyring = tokenKeyring(secret);
+  const keyId = keyring.activeKeyId;
+  const signingSecret = keyring.keys.get(keyId)!;
   const payload = bytesToBase64Url(encoder.encode(stableJson(claims)));
-  const message = encoder.encode(`knowhow.v1.${payload}`);
-  const signature = await crypto.subtle.sign("HMAC", await hmacKey(secret), message);
-  return `${payload}.${bytesToBase64Url(new Uint8Array(signature))}`;
+  const message = encoder.encode(`knowhow.v1.${keyId}.${payload}`);
+  const signature = await crypto.subtle.sign("HMAC", await hmacKey(signingSecret), message);
+  return `${keyId}.${payload}.${bytesToBase64Url(new Uint8Array(signature))}`;
 }
 
 function assertBaseClaims(value: unknown): asserts value is KnowHowTokenClaims {
@@ -139,10 +179,17 @@ async function verifyClaims(
   if (!token || token.length > MAX_TOKEN_LENGTH) {
     throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
   }
-  const [payload, signature, extra] = token.split(".");
-  if (!payload || !signature || extra) {
+  const parts = token.split(".");
+  const keyring = tokenKeyring(secret);
+  const legacy = parts.length === 2;
+  const keyId = legacy ? keyring.activeKeyId : parts[0];
+  const payload = legacy ? parts[0] : parts[1];
+  const signature = legacy ? parts[1] : parts[2];
+  if (!keyId || !payload || !signature || (parts.length !== 2 && parts.length !== 3)) {
     throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
   }
+  const verificationSecret = keyring.keys.get(keyId);
+  if (!verificationSecret) throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
   const payloadBytes = base64UrlToBytes(payload);
   const signatureBytes = base64UrlToBytes(signature);
   if (
@@ -153,9 +200,9 @@ async function verifyClaims(
   }
   const valid = await crypto.subtle.verify(
     "HMAC",
-    await hmacKey(secret),
+    await hmacKey(verificationSecret),
     ownedBuffer(signatureBytes),
-    encoder.encode(`knowhow.v1.${payload}`),
+    encoder.encode(legacy ? `knowhow.v1.${payload}` : `knowhow.v1.${keyId}.${payload}`),
   );
   if (!valid) throw new HttpError(401, "TOKEN_INVALID", "The token is invalid.");
 

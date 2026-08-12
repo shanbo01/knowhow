@@ -1,25 +1,38 @@
-import { env } from "cloudflare:workers";
+import { AccessService } from "../../../../lib/server/access-service";
+import { appendAudit } from "../../../../lib/server/audit-service";
+import { decodePayload } from "../../../../lib/server/domain-records";
+import { HttpError, toErrorResponse } from "../../../../lib/server/http-security";
+import { TABLES } from "../../../../lib/server/appwrite-resources";
+import { requireAuthorized } from "../../../../lib/server/policy";
 import {
-  allRows,
-  authorize,
-  D1KnowHowRepository,
-  HttpError,
-  requireD1Binding,
-  requireVerifiedIdentity,
-  toErrorResponse,
-  type D1DatabaseLike,
-} from "../../../../lib/server";
+  correlationId,
+  createRequestServices,
+  withRequestId,
+} from "../../../../lib/server/request-services";
+import { requireVerifiedSession } from "../../../../lib/server/session-identity";
+import { consumeFixedWindows } from "../../../../lib/server/rate-limit-service";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function statement(db: D1DatabaseLike, sql: string, ...values: unknown[]) {
-  return db.prepare(sql).bind(...values);
-}
+type StoredAudit = {
+  sequence: number;
+  action: string;
+  actorName: string;
+  actorEmail: string;
+  targetType: string;
+  targetId: string;
+  targetLabel: string;
+  summary: string;
+  occurredAt: string;
+  metadata: Record<string, unknown>;
+  previousHash: string;
+  eventHash: string;
+};
 
-function queryValue(url: URL, key: string, max: number) {
+function queryValue(url: URL, key: string, maximum: number) {
   const value = url.searchParams.get(key)?.trim() ?? "";
-  if (value.length > max) throw new HttpError(400, "AUDIT_FILTER_INVALID", "An audit filter is invalid.");
+  if (value.length > maximum) throw new HttpError(400, "AUDIT_FILTER_INVALID", "An audit filter is invalid.");
   return value;
 }
 
@@ -30,130 +43,84 @@ function csvCell(value: unknown) {
 }
 
 export async function GET(request: Request) {
-  const eventId = crypto.randomUUID();
+  const requestId = correlationId(request);
   try {
     const url = new URL(request.url);
-    const workspaceId = queryValue(url, "workspaceId", 128);
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(workspaceId)) {
+    const workspaceId = queryValue(url, "workspaceId", 36);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/.test(workspaceId)) {
       throw new HttpError(400, "AUDIT_FILTER_INVALID", "Workspace is required.");
     }
     const action = queryValue(url, "action", 128);
     const from = queryValue(url, "from", 32);
     const to = queryValue(url, "to", 32);
-    if ((from && Number.isNaN(Date.parse(from))) || (to && Number.isNaN(Date.parse(to)))) {
+    const fromTime = from ? Date.parse(from) : Number.NEGATIVE_INFINITY;
+    const toTime = to ? Date.parse(to) : Number.POSITIVE_INFINITY;
+    if (Number.isNaN(fromTime) || Number.isNaN(toTime) || fromTime > toTime) {
       throw new HttpError(400, "AUDIT_FILTER_INVALID", "Audit dates are invalid.");
     }
-
-    const db = requireD1Binding(env.DB);
-    const repository = new D1KnowHowRepository(db);
-    await repository.ensureSecurityGuards();
-    const identity = await requireVerifiedIdentity(request);
-    const access = await repository.getWorkspaceAccess(workspaceId, identity.userId);
-    if (!access) throw new HttpError(403, "WORKSPACE_ACCESS_REQUIRED", "You do not belong to this workspace.");
-    const allowed = authorize("workspace.audit.read", {
-      isVerifiedIdentity: true,
-      membershipStatus: access.membershipStatus,
-      workspaceStatus: access.workspaceStatus,
-      roles: access.roles,
-      capabilities: access.capabilities,
+    const identity = await requireVerifiedSession(request);
+    const { store } = createRequestServices();
+    await consumeFixedWindows(store, [{ scope: "knowhow.audit-export", subject: identity.userId, limit: 10, windowSeconds: 600 }]);
+    const accessService = new AccessService(store);
+    const access = await accessService.requireWorkspace(workspaceId, identity);
+    requireAuthorized("workspace.audit.read", accessService.context(access));
+    const rows = await store.list(TABLES.auditSegments, {
+      filters: [{ field: "workspace_id", value: workspaceId }],
+      orderBy: "sequence",
+      order: "asc",
+      limit: 50_001,
     });
-    if (!allowed.allowed) throw new HttpError(403, allowed.code, allowed.reason);
-
-    const predicates = ["workspace_id = ?"];
-    const values: unknown[] = [workspaceId];
-    if (action) {
-      predicates.push("action = ?");
-      values.push(action);
-    }
-    if (from) {
-      predicates.push("unixepoch(occurred_at) >= unixepoch(?)");
-      values.push(new Date(from).toISOString());
-    }
-    if (to) {
-      predicates.push("unixepoch(occurred_at) <= unixepoch(?)");
-      values.push(new Date(to).toISOString());
-    }
-    const events = await allRows<{
-      sequence: number;
-      occurred_at: string;
-      action: string;
-      actor_name: string | null;
-      actor_email: string | null;
-      target_type: string;
-      target_id: string | null;
-      target_label: string | null;
-      summary: string;
-      metadata_json: string;
-      event_hash: string;
-    }>(
-      statement(
-        db,
-        `SELECT sequence, occurred_at, action, actor_name, actor_email,
-                target_type, target_id, target_label, summary, metadata_json, event_hash
-         FROM audit_events
-         WHERE ${predicates.join(" AND ")}
-         ORDER BY sequence ASC
-         LIMIT 50001`,
-        ...values,
-      ),
-    );
-    if (events.length > 50_000) {
+    if (rows.length > 50_000) {
       throw new HttpError(413, "AUDIT_EXPORT_TOO_LARGE", "Narrow the date or action filter before exporting.");
     }
+    const complete = rows.map((row) => decodePayload<StoredAudit>(row, null as never));
+    let previousHash = "0".repeat(64);
+    for (const [index, event] of complete.entries()) {
+      if (!event || event.sequence !== index + 1 || event.previousHash !== previousHash) {
+        throw new HttpError(500, "AUDIT_CHAIN_INVALID", "The audit chain failed verification.", { expose: false });
+      }
+      previousHash = event.eventHash;
+    }
+    const events = complete.filter((event) => {
+      const occurredAt = Date.parse(event.occurredAt);
+      return (!action || event.action === action) && occurredAt >= fromTime && occurredAt <= toTime;
+    });
     const header = [
-      "sequence",
-      "occurred_at",
-      "action",
-      "actor_name",
-      "actor_email",
-      "target_type",
-      "target_id",
-      "target_label",
-      "summary",
-      "metadata_json",
-      "event_hash",
+      "sequence", "occurred_at", "action", "actor_name", "actor_email",
+      "target_type", "target_id", "target_label", "summary", "metadata_json", "event_hash",
     ];
     const csv = [
       header.map(csvCell).join(","),
-      ...events.map((event) =>
-        [
-          event.sequence,
-          event.occurred_at,
-          event.action,
-          event.actor_name,
-          event.actor_email,
-          event.target_type,
-          event.target_id,
-          event.target_label,
-          event.summary,
-          event.metadata_json,
-          event.event_hash,
-        ]
-          .map(csvCell)
-          .join(","),
-      ),
+      ...events.map((event) => [
+        event.sequence,
+        event.occurredAt,
+        event.action,
+        event.actorName,
+        event.actorEmail,
+        event.targetType,
+        event.targetId,
+        event.targetLabel,
+        event.summary,
+        JSON.stringify(event.metadata),
+        event.eventHash,
+      ].map(csvCell).join(",")),
     ].join("\r\n");
-    await repository.executeAuditedMutation({
-      workspaceId,
-      actor: { userId: identity.userId, email: identity.email, name: identity.name },
-      event: {
-        action: "audit.exported",
-        targetType: "audit-history",
-        targetId: workspaceId,
-        summary: "Permitted audit history exported",
-        metadata: { rowCount: events.length, actionFilter: action || null, from: from || null, to: to || null },
-      },
-      statements: [],
-    });
-    return new Response(csv, {
+    await store.transaction((transaction) => appendAudit(transaction, identity, workspaceId, {
+      action: "audit.exported",
+      targetType: "audit-history",
+      targetId: workspaceId,
+      summary: "Permitted audit history exported",
+      metadata: { rowCount: events.length, actionFilter: action || null, from: from || null, to: to || null, requestId },
+    }));
+    return withRequestId(new Response(csv, {
       headers: {
         "content-type": "text/csv; charset=utf-8",
         "content-disposition": `attachment; filename="knowhow-audit-${workspaceId}.csv"`,
         "cache-control": "private, no-store",
         "x-content-type-options": "nosniff",
       },
-    });
+    }), requestId);
   } catch (error) {
-    return toErrorResponse(error, eventId);
+    return withRequestId(toErrorResponse(error, requestId), requestId);
   }
 }

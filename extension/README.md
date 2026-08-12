@@ -13,9 +13,9 @@ Node.js 22 or newer is sufficient; there are no package dependencies.
     npm run build
 
 The build validates the privacy-sensitive manifest, writes an unpacked
-extension to extension/dist, and deterministically refreshes the installable
-public/knowhow-extension.zip archive. The generated dist directory is
-intentionally ignored by Git.
+extension to `extension/dist`, and creates a deterministic development archive
+under ignored `outputs/extension`. No extension package is publicly served by
+the application.
 
 ## Load in Chrome
 
@@ -156,12 +156,25 @@ The server derives the user and workspace from the scoped device token,
 rechecks membership, ignores client-supplied permissions, accepts only locally
 redacted and rasterized image bytes, and always creates a private draft.
 
-Production distribution should use a stable Chrome Web Store or enterprise
-extension ID. The extension uses bearer device credentials, never cookies or
-the user’s Appwrite session.
+Pilot distribution uses approved unlisted Chrome Web Store and Microsoft Edge
+Add-ons listings (or managed-browser policy referencing those listings), never
+a public ZIP. The checked-in manifest key pins the Chrome identity to
+`phbofjenfnnnnndghhinoldlfbpaedpo`; the final Edge listing ID must be recorded
+after store creation. The extension uses bearer device credentials, never
+cookies or the user’s Appwrite session.
 
-When a production KnowHow origin is selected, update both src/core/config.js and
-the exact manifest host_permissions entry before building.
+Build a store artifact from the release SHA with an exact HTTPS application
+origin:
+
+    KNOWHOW_EXTENSION_ORIGIN=https://staging.example.com npm run build:store
+
+PowerShell users should set `KNOWHOW_EXTENSION_ORIGIN` for the process before
+running `npm run build:store`. The build injects that one origin into the
+packaged manifest and runtime configuration without changing development
+source, and writes `outputs/extension/knowhow-capture-<version>-store.zip`.
+Inspect and hash the artifact before uploading. See
+`../docs/operations/extension-distribution.md` for release, managed-install, and
+rollback policy.
 
 ## Current limits
 

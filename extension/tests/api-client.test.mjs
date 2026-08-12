@@ -64,7 +64,7 @@ test("private draft submission rejects a WebP before any authenticated request",
   );
 });
 
-test("screenshots upload as pending and preserve crop, click, and reversible blur metadata", async () => {
+test("screenshots upload only after irreversible local redaction and preserve presentation metadata", async () => {
   const apiSource = await readFile(
     new URL("../src/core/api-client.js", import.meta.url),
     "utf8",
@@ -73,7 +73,7 @@ test("screenshots upload as pending and preserve crop, click, and reversible blu
   const commitPath = apiSource.indexOf('"/commit"');
 
   assert.ok(screenshotPath >= 0 && screenshotPath < commitPath);
-  assert.match(apiSource, /"X-KnowHow-Redacted":\s*"false"/);
+  assert.match(apiSource, /"X-KnowHow-Redacted":\s*"true"/);
   assert.match(apiSource, /"X-KnowHow-Source-Rasterized":\s*"true"/);
   assert.match(apiSource, /\{ clickTarget: step\.clickTarget \}/);
   assert.match(apiSource, /\{ focusRegion: step\.focusRegion \}/);

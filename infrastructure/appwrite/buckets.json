@@ -1,0 +1,36 @@
+[
+    {
+        "$id": "knowhow_private_media",
+        "$permissions": [],
+        "fileSecurity": true,
+        "name": "KnowHow Private Media",
+        "enabled": true,
+        "maximumFileSize": 15728640,
+        "allowedFileExtensions": [
+            "png",
+            "jpg",
+            "jpeg"
+        ],
+        "compression": "none",
+        "encryption": true,
+        "antivirus": true
+    },
+    {
+        "$id": "knowhow_exports",
+        "$permissions": [],
+        "fileSecurity": true,
+        "name": "KnowHow Exports",
+        "enabled": true,
+        "maximumFileSize": 52428800,
+        "allowedFileExtensions": [
+            "pdf",
+            "html",
+            "md",
+            "csv",
+            "zip"
+        ],
+        "compression": "gzip",
+        "encryption": true,
+        "antivirus": true
+    }
+]

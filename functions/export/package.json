@@ -1,0 +1,9 @@
+{
+  "name": "knowhow-export-function",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "node-appwrite": "27.1.0" }
+}
+

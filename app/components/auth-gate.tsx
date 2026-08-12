@@ -26,6 +26,7 @@ export type AuthGateProps = {
     email: string,
     password: string,
   ) => Promise<void> | void;
+  allowSignUp?: boolean;
 };
 
 export type WorkspaceSetupProps = {
@@ -70,6 +71,7 @@ export function AuthGate({
   onRetryBackend,
   onSignIn,
   onSignUp,
+  allowSignUp = false,
 }: AuthGateProps) {
   const [mode, setMode] = useState<AuthMode>("sign-in");
   const [name, setName] = useState("");
@@ -78,7 +80,7 @@ export function AuthGate({
   const [localError, setLocalError] = useState<string>();
 
   const status = backendCopy[backendState];
-  const isSignUp = mode === "sign-up";
+  const isSignUp = allowSignUp && mode === "sign-up";
   const controlsDisabled = busy || backendState !== "connected";
   const visibleError = localError ?? error;
 
@@ -104,8 +106,8 @@ export function AuthGate({
       return;
     }
 
-    if (password.length < 8) {
-      setLocalError("Password must be at least 8 characters.");
+    if (password.length < 12) {
+      setLocalError("Password must be at least 12 characters.");
       return;
     }
 
@@ -183,11 +185,11 @@ export function AuthGate({
               {isSignUp ? "Create your account" : "Welcome back"}
             </p>
             <h2 id="auth-heading">
-              {isSignUp ? "Start a KnowHow workspace" : "Sign in to KnowHow"}
+              {isSignUp ? "Create your invited account" : "Sign in to KnowHow"}
             </h2>
             <p>
               {isSignUp
-                ? "Set up your secure account, verify your email, then create or join a workspace."
+                ? "Set up your secure account, verify your email, then redeem the access issued to you."
                 : "Use your work account to continue to your SOP workspace."}
             </p>
           </div>
@@ -206,19 +208,21 @@ export function AuthGate({
             >
               Sign in
             </button>
-            <button
-              className={
-                mode === "sign-up"
-                  ? "auth-mode-button auth-mode-button-active"
-                  : "auth-mode-button"
-              }
-              type="button"
-              aria-pressed={mode === "sign-up"}
-              onClick={() => selectMode("sign-up")}
-              disabled={busy}
-            >
-              Create account
-            </button>
+            {allowSignUp ? (
+              <button
+                className={
+                  mode === "sign-up"
+                    ? "auth-mode-button auth-mode-button-active"
+                    : "auth-mode-button"
+                }
+                type="button"
+                aria-pressed={mode === "sign-up"}
+                onClick={() => selectMode("sign-up")}
+                disabled={busy}
+              >
+                Create invited account
+              </button>
+            ) : null}
           </div>
 
           <form
@@ -263,13 +267,13 @@ export function AuthGate({
             <div className="auth-field">
               <div className="auth-label-row">
                 <label htmlFor="auth-password">Password</label>
-                {isSignUp ? <span>8 characters minimum</span> : null}
+                {isSignUp ? <span>12 characters minimum</span> : null}
               </div>
               <input
                 id="auth-password"
                 name="password"
                 type="password"
-                minLength={8}
+                minLength={12}
                 autoComplete={isSignUp ? "new-password" : "current-password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -311,8 +315,154 @@ export function AuthGate({
           </form>
 
           <p className="auth-card-footnote">
-            KnowHow verifies access on every request and defaults to no access.
+            {allowSignUp
+              ? "This invitation creates an account, not automatic guide access."
+              : "KnowHow pilots are invitation-only. Request access from your organization owner."}
           </p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export function MfaGate({
+  busy,
+  error,
+  factor,
+  onVerify,
+  onRestart,
+  onUseFactor,
+  restartLabel = "Return to sign in",
+  overlay = false,
+}: {
+  busy: boolean;
+  error?: string;
+  factor: "totp" | "recoveryCode";
+  onVerify: (code: string) => void | Promise<void>;
+  onRestart: () => void | Promise<void>;
+  onUseFactor?: (factor: "totp" | "recoveryCode") => void | Promise<void>;
+  restartLabel?: string;
+  overlay?: boolean;
+}) {
+  const [code, setCode] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalized = code.trim();
+    if (normalized.length < 6) return;
+    await onVerify(normalized);
+  }
+
+  return (
+    <main className={`auth-shell${overlay ? " auth-shell-overlay" : ""}`}>
+      <section className="auth-intro" aria-labelledby="mfa-brand-title">
+        <div className="auth-brand"><ProductBrand id="mfa-brand-title" /></div>
+        <div className="auth-intro-copy">
+          <p className="auth-eyebrow">Protected access</p>
+          <h1>Confirm it is really you.</h1>
+          <p>Administrative and exceptional access requires a current second factor.</p>
+        </div>
+        <div className="auth-trust-note"><ShieldCheck /><span>The code is verified by Appwrite and is never stored by KnowHow.</span></div>
+      </section>
+      <section className="auth-panel" aria-labelledby="mfa-heading">
+        <div className="auth-card">
+          <div className="auth-card-heading">
+            <p className="auth-eyebrow">Multi-factor authentication</p>
+            <h2 id="mfa-heading">{factor === "totp" ? "Enter your authenticator code" : "Enter a recovery code"}</h2>
+          </div>
+          <form className="auth-form" onSubmit={submit}>
+            <div className="auth-field">
+              <label htmlFor="mfa-code">Authentication code</label>
+              <input
+                id="mfa-code"
+                autoComplete="one-time-code"
+                inputMode={factor === "totp" ? "numeric" : "text"}
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                disabled={busy}
+                autoFocus
+              />
+            </div>
+            {error ? <p className="auth-form-message" role="alert">{error}</p> : null}
+            <button className="auth-primary-button" type="submit" disabled={busy || code.trim().length < 6}>
+              {busy ? <LoaderCircle className="auth-spin" /> : <ShieldCheck />}
+              Verify
+            </button>
+          </form>
+          <button className="auth-secondary-button" type="button" onClick={onRestart} disabled={busy}>
+            {restartLabel}
+          </button>
+          {onUseFactor ? (
+            <button className="text-button" type="button" disabled={busy} onClick={() => onUseFactor(factor === "totp" ? "recoveryCode" : "totp")}>
+              {factor === "totp" ? "Use a recovery code" : "Use authenticator instead"}
+            </button>
+          ) : null}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export function MfaEnrollmentGate({
+  busy,
+  error,
+  secret,
+  qrCodeDataUrl,
+  recoveryCodes,
+  onBegin,
+  onComplete,
+  onAcknowledge,
+  onSignOut,
+}: {
+  busy: boolean;
+  error?: string;
+  secret?: string;
+  qrCodeDataUrl?: string;
+  recoveryCodes?: string[];
+  onBegin: () => void | Promise<void>;
+  onComplete: (otp: string) => void | Promise<void>;
+  onAcknowledge: () => void | Promise<void>;
+  onSignOut: () => void | Promise<void>;
+}) {
+  const [code, setCode] = useState("");
+  const [confirmedSaved, setConfirmedSaved] = useState(false);
+  return (
+    <main className="auth-shell">
+      <section className="auth-intro" aria-labelledby="mfa-enroll-brand">
+        <div className="auth-brand"><ProductBrand id="mfa-enroll-brand" /></div>
+        <div className="auth-intro-copy"><p className="auth-eyebrow">Administrator protection</p><h1>Secure privileged access with an authenticator.</h1><p>Platform and workspace administrators must use a time-based one-time password. KnowHow never stores the secret or recovery codes.</p></div>
+        <div className="auth-trust-note"><ShieldCheck /><span>Finish setup before accepting an administrator appointment or opening administrative data.</span></div>
+      </section>
+      <section className="auth-panel" aria-labelledby="mfa-enroll-heading">
+        <div className="auth-card">
+          {!secret && !recoveryCodes ? (
+            <>
+              <div className="auth-card-heading"><p className="auth-eyebrow">Required setup</p><h2 id="mfa-enroll-heading">Add an authenticator app</h2><p>Use any standards-compatible TOTP authenticator.</p></div>
+              {error ? <p className="auth-form-message" role="alert">{error}</p> : null}
+              <button className="auth-primary-button" type="button" disabled={busy} onClick={onBegin}>{busy ? <LoaderCircle className="auth-spin" /> : <ShieldCheck />} Begin secure setup</button>
+            </>
+          ) : recoveryCodes ? (
+            <>
+              <div className="auth-card-heading"><p className="auth-eyebrow">Show once</p><h2 id="mfa-enroll-heading">Save your recovery codes</h2><p>Each code works once. Store them outside KnowHow; they cannot be shown again.</p></div>
+              <ol className="mfa-recovery-codes" aria-label="Recovery codes">{recoveryCodes.map((item) => <li key={item}><code>{item}</code></li>)}</ol>
+              <label className="choice-row emphasized"><input type="checkbox" checked={confirmedSaved} onChange={(event) => setConfirmedSaved(event.target.checked)} /><span><strong>I saved these codes securely</strong><small>They will disappear after continuing.</small></span></label>
+              <button className="auth-primary-button" type="button" disabled={busy || !confirmedSaved} onClick={onAcknowledge}>{busy ? <LoaderCircle className="auth-spin" /> : <CheckCircle2 />} Continue and verify</button>
+            </>
+          ) : (
+            <>
+              <div className="auth-card-heading"><p className="auth-eyebrow">Authenticator setup</p><h2 id="mfa-enroll-heading">Scan or enter the setup key</h2><p>Then enter the six-digit code generated by your app.</p></div>
+              {/* A local data URL must never be sent through the image optimizer. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {qrCodeDataUrl ? <img className="mfa-qr" src={qrCodeDataUrl} alt="Authenticator setup QR code" width={240} height={240} /> : null}
+              <div className="auth-field"><label htmlFor="mfa-secret">Manual setup key</label><input id="mfa-secret" readOnly value={secret} onFocus={(event) => event.currentTarget.select()} /></div>
+              <form className="auth-form" onSubmit={(event) => { event.preventDefault(); void onComplete(code.trim()); }}>
+                <div className="auth-field"><label htmlFor="mfa-enroll-code">Six-digit code</label><input id="mfa-enroll-code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} /></div>
+                {error ? <p className="auth-form-message" role="alert">{error}</p> : null}
+                <button className="auth-primary-button" type="submit" disabled={busy || code.length !== 6}>{busy ? <LoaderCircle className="auth-spin" /> : <ShieldCheck />} Verify authenticator</button>
+              </form>
+            </>
+          )}
+          <button className="text-button" type="button" disabled={busy} onClick={onSignOut}>Sign out</button>
         </div>
       </section>
     </main>
@@ -346,8 +496,8 @@ export function VerificationGate({
           <p className="auth-eyebrow">Account protection</p>
           <h1>Verify the address that controls your access.</h1>
           <p>
-            Domain approval only makes an account eligible. A workspace owner
-            or invitation still decides what that account can access.
+            Email verification confirms account ownership. A signed invitation
+            or administrator appointment still decides what that account can access.
           </p>
         </div>
         <div className="auth-trust-note">
@@ -362,8 +512,8 @@ export function VerificationGate({
             <p className="auth-eyebrow">Check your inbox</p>
             <h2 id="verify-title">Verify your work email</h2>
             <p>
-              We need to confirm <strong>{email}</strong> before KnowHow can check
-              an invitation or approved domain.
+              We need to confirm <strong>{email}</strong> before KnowHow can redeem
+              the invitation or administrator appointment issued to you.
             </p>
           </div>
           {sent ? (

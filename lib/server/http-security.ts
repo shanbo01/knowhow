@@ -1,3 +1,6 @@
+import { recordHttpFailure } from "./telemetry";
+import { RecordConflictError } from "./record-store";
+
 const DEFAULT_JSON_LIMIT = 256_000;
 
 export class HttpError extends Error {
@@ -37,6 +40,46 @@ function normalizedOrigin(value: string): string | null {
   }
 }
 
+export function requestPublicOrigin(request: Request): string {
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",", 1)[0]?.trim();
+  const forwardedProtocol = request.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+  if (
+    forwardedHost &&
+    /^(?:\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.test(forwardedHost) &&
+    (forwardedProtocol === "https" ||
+      (forwardedProtocol === "http" && /^(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(forwardedHost)))
+  ) {
+    return `${forwardedProtocol}://${forwardedHost}`;
+  }
+  return new URL(request.url).origin;
+}
+
+function requestHostOrigin(request: Request): string | null {
+  const host = request.headers.get("host")?.split(",", 1)[0]?.trim();
+  if (
+    !host ||
+    !/^(?:\[[0-9a-f:]+\]|[a-z0-9.-]+)(?::\d{1,5})?$/i.test(host)
+  ) {
+    return null;
+  }
+  const forwardedProtocol = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",", 1)[0]
+    ?.trim();
+  const requestProtocol = new URL(request.url).protocol.replace(/:$/, "");
+  const protocol = forwardedProtocol === "https" ? "https" : requestProtocol;
+  if (
+    protocol !== "https" &&
+    !(
+      protocol === "http" &&
+      /^(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(host)
+    )
+  ) {
+    return null;
+  }
+  return normalizedOrigin(`${protocol}://${host}`);
+}
+
 export function assertTrustedOrigin(
   request: Request,
   allowedOrigins: readonly string[] = [],
@@ -46,8 +89,10 @@ export function assertTrustedOrigin(
     throw new HttpError(403, "ORIGIN_REQUIRED", "The request origin is required.");
   }
 
-  const requestOrigin = new URL(request.url).origin;
+  const requestOrigin = requestPublicOrigin(request);
   const accepted = new Set<string>([requestOrigin]);
+  const hostOrigin = requestHostOrigin(request);
+  if (hostOrigin) accepted.add(hostOrigin);
   for (const candidate of allowedOrigins) {
     const normalized = normalizedOrigin(candidate);
     if (normalized) accepted.add(normalized);
@@ -62,6 +107,58 @@ export function assertTrustedOrigin(
   if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "same-site") {
     throw new HttpError(403, "CROSS_SITE_REQUEST", "Cross-site requests are not allowed.");
   }
+}
+
+function cookieValue(request: Request, name: string) {
+  const header = request.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (rawName !== name) continue;
+    try {
+      return decodeURIComponent(rawValue.join("="));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export const CSRF_COOKIE_NAME = "knowhow_csrf";
+
+export function readCookie(request: Request, name: string) {
+  return cookieValue(request, name);
+}
+
+export function assertCsrfToken(request: Request): void {
+  const cookie = cookieValue(request, CSRF_COOKIE_NAME);
+  const header = request.headers.get("x-csrf-token");
+  if (
+    !cookie ||
+    !header ||
+    cookie.length < 32 ||
+    cookie.length > 256 ||
+    header.length !== cookie.length
+  ) {
+    throw new HttpError(403, "CSRF_INVALID", "The request could not be verified.");
+  }
+  let mismatch = 0;
+  for (let index = 0; index < cookie.length; index += 1) {
+    mismatch |= cookie.charCodeAt(index) ^ header.charCodeAt(index);
+  }
+  if (mismatch !== 0) {
+    throw new HttpError(403, "CSRF_INVALID", "The request could not be verified.");
+  }
+}
+
+export function assertCookieMutationRequest(
+  request: Request,
+  allowedOrigins: readonly string[] = [],
+): void {
+  if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") {
+    throw new HttpError(405, "METHOD_NOT_ALLOWED", "A mutation method is required.");
+  }
+  assertTrustedOrigin(request, allowedOrigins);
+  assertCsrfToken(request);
 }
 
 export async function readJsonObject(
@@ -125,10 +222,22 @@ export function toErrorResponse(error: unknown, requestId?: string): Response {
   const failure =
     error instanceof HttpError
       ? error
+      : error instanceof RecordConflictError
+        ? new HttpError(
+            409,
+            "CONCURRENT_UPDATE",
+            "The record changed while this request was running. Retry the operation.",
+            { cause: error },
+          )
       : new HttpError(500, "INTERNAL_ERROR", "The request could not be completed.", {
           expose: false,
           cause: error,
         });
+  recordHttpFailure(error, {
+    requestId,
+    errorCode: failure.code,
+    status: failure.status,
+  });
   return jsonResponse(
     {
       error: failure.expose ? failure.message : "The request could not be completed.",

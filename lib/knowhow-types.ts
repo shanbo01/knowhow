@@ -9,6 +9,38 @@ export type RevisionStatus = "draft" | "review" | "published" | "archived";
 export type AudienceKind = "workspace" | "group" | "user";
 export type ThemeMode = "light" | "dark" | "system";
 
+export type OrganizationRole =
+  | "owner"
+  | "administrator"
+  | "billing"
+  | "security_auditor";
+
+export type OrganizationAdministration = {
+  id: string;
+  legalName: string;
+  displayName: string;
+  country: string;
+  status: string;
+  roles: OrganizationRole[];
+  branding: { logoMediaId: string | null; accentColor: string };
+  domains: string[];
+  members: Array<{
+    id: string;
+    userId: string;
+    email: string;
+    name: string;
+    roles: OrganizationRole[];
+    status: string;
+  }>;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+  }>;
+  appointments: AdminAppointment[];
+};
+
 export type EditorBlockKind = "action" | "heading" | "note" | "warning";
 
 export type EditorBlock = {
@@ -118,6 +150,7 @@ export type Guide = {
 
 export type WorkspaceSummary = {
   id: string;
+  organizationId: string;
   name: string;
   slug: string;
   status: WorkspaceStatus;
@@ -126,6 +159,18 @@ export type WorkspaceSummary = {
   publishedCount: number;
   draftCount: number;
   createdAt: string;
+  subscription?: {
+    access:
+      | "active"
+      | "read_only"
+      | "suspended"
+      | "deletion_pending"
+      | "deleting"
+      | "deleted";
+    expiresAt: string | null;
+    graceEndsAt: string | null;
+    deletionEligibleAt: string | null;
+  };
 };
 
 export type WorkspaceSettings = {
@@ -184,15 +229,6 @@ export type VaultItem = {
   updatedAt: string;
 };
 
-export type JoinRequest = {
-  id: string;
-  userId: string;
-  email: string;
-  name: string;
-  status: "pending" | "approved" | "denied";
-  createdAt: string;
-};
-
 export type SupportAccessRequest = {
   id: string;
   workspaceId: string;
@@ -221,6 +257,28 @@ export type SupportAccessGrant = {
   expiresAt: string;
   endedAt: string | null;
   revokedBy: string | null;
+};
+
+export type SupportMessage = {
+  id: string;
+  sequence: number;
+  authorUserId: string;
+  authorName: string;
+  authorKind: "customer" | "support";
+  body: string;
+  createdAt: string;
+};
+
+export type SupportTicket = {
+  id: string;
+  subject: string;
+  status: "open" | "waiting_customer" | "waiting_support" | "closed";
+  requesterUserId: string;
+  requesterName: string;
+  createdAt: string;
+  updatedAt: string;
+  responseTargetAt: string;
+  messages: SupportMessage[];
 };
 
 export type AdminAppointment = {
@@ -315,12 +373,39 @@ export type PlatformMetrics = {
   failedOperations: number;
 };
 
+export type PlatformProvisioningRun = {
+  id: string;
+  currentStep: number;
+  completedSteps: number[];
+  updatedAt: string;
+  steps?: Record<string, Record<string, unknown>>;
+};
+
+export type PlatformProvisioningResult = {
+  organizationId: string;
+  workspaceId: string;
+  runId: string;
+  workspaces: Array<{
+    workspaceId: string;
+    appointments: Array<{ email: string; token: string }>;
+  }>;
+  invitations: Array<{
+    email: string;
+    workspaceId: string;
+    token: string;
+    role: WorkspaceRole;
+  }>;
+};
+
 export type Viewer = {
   id: string;
   email: string;
   name: string;
   emailVerified: boolean;
   platformAdministrator: boolean;
+  platformRoles?: Array<
+    "owner" | "operations" | "support" | "billing" | "auditor"
+  >;
   themePreference?: ThemeMode;
 };
 
@@ -331,23 +416,124 @@ export type WorkspaceBundle = {
   groups: WorkspaceGroup[];
   guides: Guide[];
   invitations: Invitation[];
-  joinRequests: JoinRequest[];
   supportRequests: SupportAccessRequest[];
   supportGrants: SupportAccessGrant[];
+  supportTickets: SupportTicket[];
   audits: AuditEvent[];
   vaultItems: VaultItem[];
+  onboarding: {
+    startedAt: string;
+    completedAt: string | null;
+    steps: Array<{
+      id:
+        | "workspace_readiness"
+        | "teammate_invitation"
+        | "extension_installation"
+        | "first_capture"
+        | "first_edit"
+        | "first_publication"
+        | "teammate_completion";
+      completed: boolean;
+      completedAt: string | null;
+    }>;
+  };
 };
 
 export type BootstrapResponse = {
   viewer: Viewer;
   workspaces: WorkspaceSummary[];
-  eligibleWorkspaces?: WorkspaceSummary[];
   activeWorkspace: WorkspaceBundle | null;
+  recovery?: {
+    workspace: WorkspaceSummary;
+    message: string;
+    contactEnabled: boolean;
+    extensionActionsEnabled: boolean;
+  };
+  organizations?: OrganizationAdministration[];
   platform?: {
+    generatedAt: string;
     metrics: PlatformMetrics;
     workspaces: PlatformWorkspace[];
     settings: PlatformSettings;
     appointments: AdminAppointment[];
+    organizations: Array<{
+      id: string;
+      displayName: string;
+      legalName: string;
+      country: string;
+      status: string;
+      workspaceCount: number;
+      createdAt: string;
+    }>;
+    subscriptions: Array<{
+      id: string;
+      workspaceId: string;
+      kind: string;
+      status: string;
+      access: string;
+      startsAt: string;
+      expiresAt: string | null;
+      graceEndsAt: string | null;
+      deletionEligibleAt: string | null;
+    }>;
+    entitlements: Array<{
+      id: string;
+      workspaceId: string;
+      kind: string;
+      value: string | number | boolean;
+    }>;
+    leads: Array<{
+      id: string;
+      kind: string;
+      status: string;
+      organization: string;
+      contactName: string;
+      email: string;
+      occurredAt: string;
+    }>;
+    activation: Array<{
+      workspaceId: string;
+      firstPublishedAt: string | null;
+      firstTeammateViewAt: string | null;
+      firstTeammateCompletionAt: string | null;
+    }>;
+    support: Array<{
+      id: string;
+      workspaceId: string;
+      status: string;
+      requesterName: string;
+      responseTargetAt: string;
+      updatedAt: string;
+    }>;
+    notificationFailures: Array<{
+      id: string;
+      workspaceId: string;
+      kind: string;
+      attempts: number;
+      lastFailedAt: string;
+    }>;
+    deletionCases: Array<{
+      id: string;
+      organizationId: string;
+      workspaceId: string;
+      status: string;
+      eligibleAt: string;
+      confirmationText?: string;
+    }>;
+    provisioningRuns: PlatformProvisioningRun[];
+    systemHealth: {
+      failedNotifications: number;
+      overdueSupport: number;
+      expiringWithinSevenDays: number;
+      deletionApprovals: number;
+      failedOperations: number;
+    };
+    platformAudits: Array<{
+      id: string;
+      workspaceId: string;
+      action: string;
+      occurredAt: string;
+    }>;
   };
 };
 

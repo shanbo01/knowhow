@@ -1,110 +1,127 @@
 # KnowHow
 
-KnowHow is a privacy-first SOP platform for capturing, reviewing, publishing, and sharing step-by-step guides inside governed workspaces.
+KnowHow is an invitation-only, privacy-first SOP platform for controlled external pilots. It captures browser workflows as governed, versioned guides while keeping authorization, customer records, redacted screenshots, exports, and audit history behind a server-only boundary.
 
-## MVP capabilities
+The current delivery target is up to three Qatar design partners, initially one department and 100 users per organization, under a signed 30-day pilot using ordinary business-process data only. Public self-service, payments, SSO/SCIM, regulated data, MSP tenancy, and a customer-ready on-premises package are deliberately out of scope.
 
-- Multi-tenant entities and workspaces with server-enforced isolation
-- Platform administration for aggregate metrics, workspace status, and administrator assignment
-- Workspace roles for administrators, creators, reviewers, publishers, and viewers
-- Groups and workspace, group, or named-user guide audiences
-- Immutable Draft → Review → Published → Archived revision history
-- Signed invitations, verified-email onboarding, and exact allowed-domain join requests
-- Manual and Chromium-extension capture in the same guide editor
-- Local Smart Blur, mandatory privacy review, and private redacted screenshot storage
-- Light, dark, and system themes
-- Workspace branding and PDF, HTML, and Markdown exports
-- Append-only, hash-chained audit history with CSV export
+## Runtime architecture
 
-Asset inventory is intentionally not part of the product.
+- One standard Next.js application per environment, with marketing at `/`, product entry at `/app`, workspace routes under `/w`, and platform control under `/platform`.
+- Separate Appwrite Cloud Frankfurt projects for Staging and Production.
+- Appwrite Auth sessions exchanged and retained only through secure, HTTP-only, same-site server cookies.
+- Appwrite TablesDB database `knowhow_core`, private Storage buckets `knowhow_private_media` and `knowhow_exports`, Site `knowhow_web`, and Functions `knowhow_ops` and `knowhow_export`.
+- Product tables and files have no browser permissions. Every request passes through KnowHow's default-deny policy layer.
+- Organization administration controls metadata and policy but never grants guide or screenshot access by itself. Workspace membership and guide audiences remain separate.
+- The Chromium Manifest V3 extension uses short-lived, workspace-scoped device tokens and never receives an Appwrite key or session.
 
-## Architecture
+The deployable resource source is [appwrite.config.json](./appwrite.config.json), with generated table and bucket manifests in `infrastructure/appwrite`. Environment IDs and secrets are never committed.
 
-- `app/`: Vinext/Next application and authenticated API routes
-- `db/schema.ts` and `drizzle/`: Cloudflare D1 schema and baseline migration
-- `lib/server/`: Appwrite identity verification, authorization policy, repositories, media controls, and signed credentials
-- `lib/guide-contracts.ts`: canonical guide and revision contracts
-- `lib/exports/`: policy-aware PDF, HTML, and Markdown renderers
-- `extension/`: Manifest V3 Chrome/Edge capture extension
-- `public/knowhow-extension.zip`: installable extension package produced from the validated build
+## Pilot data boundary
 
-Appwrite provides browser authentication and verified identities. The application exchanges the browser session for a short-lived Appwrite JWT and validates it on the server. D1 is the canonical store for tenants, memberships, roles, guides, invitations, and audit records. Private R2 contains only locally redacted and rasterized screenshots. The signed-in website hands the extension a revocable, workspace-scoped device token through an internal one-time exchange; users never copy or enter a pairing code, and the extension never receives Appwrite credentials.
+Permitted data is ordinary internal business-process information that the pilot organization has approved for the trial. Do not submit credentials, secrets, payment information, health information, national IDs, or other sensitive or special-category data.
 
-The earlier Appwrite `knowhow/records` collection is not used by the MVP runtime. Keep it read-only until any desired historical migration is complete.
+Screenshots must be rasterized and redacted locally, then explicitly privacy-reviewed before publication. The application does not persist raw screenshots, captured form values, clipboard data, raw keystrokes, or full captured URLs. Analytics contain IDs, event kinds, timestamps, and counts—not guide text or images.
 
 ## Prerequisites
 
 - Node.js 22.13 or newer
-- An Appwrite project with email/password authentication enabled and `localhost` added as a Web platform
-- No Cloudflare account is required for localhost; Wrangler emulates D1 and private R2 on disk
+- npm
+- Chromium for Playwright and extension testing
+- For a real environment: an empty Appwrite project in Frankfurt, an appropriately scoped server API key, verified email delivery, and exact Site/extension origins
+- For the portability smoke test: Docker Compose v2 and a fresh local Appwrite project
 
-## Configuration
+## Local development
 
-Copy `.dev.vars.example` to `.dev.vars`, then set:
+Copy `.env.example` to `.env.local`, replace every placeholder, and keep the file untracked. Development may point at a dedicated local or disposable Appwrite project; never use Production credentials locally.
 
-- `KNOWHOW_TOKEN_SIGNING_KEY` — secret random value of at least 32 bytes; signs invite and extension device credentials
-- `KNOWHOW_PLATFORM_OWNER_EMAILS` — comma-separated, lowercase verified emails allowed to bootstrap platform administration
-- `APPWRITE_ENDPOINT` — optional server override; defaults to `https://sgp.cloud.appwrite.io/v1`
-- `APPWRITE_PROJECT_ID` — optional server override; defaults to the project currently configured in `lib/appwrite.ts`
-
-The public Appwrite endpoint and project ID used by the browser live in `lib/appwrite.ts`. If you change Appwrite projects, update that public configuration and the matching optional server values together. Add `localhost` to the Appwrite project’s Web platform allowlist and configure the email-verification callback as `http://localhost:3001/verify`; use `http://localhost:3001` locally rather than `127.0.0.1`, because Appwrite treats them as different web origins. KnowHow does not grant workspace access until Appwrite reports a verified email.
-
-The development extension is pinned to `http://localhost:3001` in `extension/src/core/config.js` and to the exact `http://localhost/*` manifest host permission. Change both values and rebuild the package when a production origin is selected.
-
-## Development and verification
-
-```bash
-npm install
+```text
+npm ci
 npm run dev
 ```
 
-`npm run dev` applies any pending local D1 migrations and starts KnowHow at [http://localhost:3001](http://localhost:3001). D1 and R2 state persist under the ignored `.wrangler/` directory. `npm start` intentionally launches the same workerd-backed localhost server; the Node-only Vinext production runner cannot provide Cloudflare bindings.
+The app listens at `http://localhost:3001`. Appwrite treats `localhost` and `127.0.0.1` as different origins, so configure the exact value. The email-verification callback is `http://localhost:3001/verify`.
 
-Run the complete verification suite before handing off a change:
+Key server variables include:
 
-```bash
-npm run lint
-npx tsc --noEmit
+- `APPWRITE_ENDPOINT`, `APPWRITE_PROJECT_ID`, `APPWRITE_API_KEY`
+- `APPWRITE_DATABASE_ID`, `APPWRITE_PRIVATE_MEDIA_BUCKET_ID`, `APPWRITE_EXPORTS_BUCKET_ID`
+- `KNOWHOW_ALLOWED_ORIGINS`, `KNOWHOW_EXTENSION_ORIGINS`, `KNOWHOW_SITE_ORIGIN`
+- `KNOWHOW_TOKEN_KEYS_JSON`, `KNOWHOW_TOKEN_ACTIVE_KID`, `KNOWHOW_RATE_LIMIT_PEPPER`
+- `KNOWHOW_EXPORT_WORKER_SECRET`, `KNOWHOW_DELETION_RECEIPT_PEPPER`
+- Sentry, Resend, support, lead, release, and unlisted extension-listing settings shown in `.env.example`
+
+`KNOWHOW_PLATFORM_OWNER_EMAILS` is notification metadata only. It does not grant authority. Platform roles must be explicitly bootstrapped in `platform_roles`, with every later change audited.
+
+## Verification commands
+
+```text
 npm test
+npm run test:e2e
+npm run load:pilot
 ```
 
-`npm test` runs the production build, guide-contract/export/security tests, D1 tenant and audit-trigger tests, extension state/privacy tests, and the extension privacy-guarded build.
+`npm test` runs type checking, linting, a standard Next.js production build, application tests, Function syntax checks, all extension tests plus its privacy-guarded build, Appwrite manifest/query-index drift checks, secret scanning, and a high-severity dependency audit.
 
-Useful commands:
+Useful focused commands:
 
-- `npm run db:local` — apply pending migrations to the persisted local D1 database
-- `npm run dev` — migrate and start the local Vinext/workerd server on port 3001
-- `npm run build` — production application build
-- `npm run test:unit` — application unit and policy tests
-- `npm run extension:build` — validated unpacked extension build
-- `npm run db:generate` — regenerate Drizzle migrations after an intentional schema change
+- `npm run appwrite:generate` — regenerate checked-in Appwrite resources from the canonical schema.
+- `npm run appwrite:check` — fail on resource drift or a query without a supporting index.
+- `npm run appwrite:smoke:self-host` — destructive-to-transient-fixtures contract smoke against local Appwrite only; it cleans up its exact rows, file, user, session, and transaction metadata.
+- `npm run appwrite:smoke:staging` — exact schema/resource/deployment and transient-fixture smoke, bound to reviewed, distinct Frankfurt Staging/Production project IDs and the live Site release identity.
+- `npm run appwrite:smoke:production` — the same controlled contract against the explicitly bound Production project; requires synthetic-only/final-Production attestations and exact cleanup.
+- `npm run appwrite:backup:capture` — bind a fresh database-bound Production archive to HMAC-sealed, content-free schema/table/audit evidence while synthetic source mutations are paused.
+- `npm run appwrite:restore:verify` — verify every restored table and audit chain in a new, unreferenced Frankfurt database; this refuses the active source database and leaves application RTO as a separate gate.
+- `npm run appwrite:restore:application` — verify an access-controlled disposable Site against that exact restored database: Site-ID/origin readiness, MFA identity, own/cross-tenant and organization-metadata boundaries, a real idempotent transaction, audit sequence, queued export, anonymous denial, direct Appwrite server-session revocation, and 24-hour application RTO; writes HMAC-sealed content-free evidence chained to the database report.
+- `npm run appwrite:restore:application:evidence:verify` — independently verify the saved application report, its HMAC seal, exact disposable-Site/project/release/database/restoration binding, and chain to the sealed database restore report without requiring actor credentials or the Site access secret.
+- `npm run appwrite:restore:cleanup:verify` — after independent deletion, use a read-only Frankfurt key to prove `knowhow_core`/`knowhow_web` remain present while the exact restored database/disposable Site are absent; writes a third HMAC report chained to both prior reports.
+- `npm run appwrite:restore:cleanup:evidence:verify` — verify that cleanup report and its full evidence chain offline before revoking the final read-only key.
+- `npm run appwrite:production:cleanup:verify` — exact-project/release-bound, read-only final Production gate for hard-deleted tenant roots, scrubbed receipts, absent two-user rehearsal accounts, uncached zero customer-scoped rows, and empty stable private/export buckets; writes immutable HMAC-sealed evidence.
+- `npm run appwrite:production:cleanup:evidence:verify` — verify a saved cleanup evidence file's HMAC/key ID, reviewed project/release binding, and strict content-free contract without an Appwrite credential.
+- `npm run load:controlled` — exact-environment Frankfurt Site load gate using dedicated synthetic actors, mandatory fresh TOTP challenges, cross-tenant denial probes, concurrent authorized searches, redacted capture uploads, direct extension/server-session revocation proof, and immutable HMAC-sealed content-free evidence.
+- `npm run load:controlled:evidence:verify` — independently verify that saved live-load evidence belongs to the expected environment, Appwrite project, and release and satisfies its strict request/error/latency/cleanup contract without unexpected fields.
+- `npm run extension:build` — build a localhost development extension into ignored `outputs/extension`.
+- `KNOWHOW_EXTENSION_ORIGIN=https://... npm run extension:build:store` — build the pinned-ID, exact-origin store artifact.
+- `npm run security:secrets` and `npm run security:audit` — local security gates.
 
-## Guide governance
+Playwright covers public and invitation-only authentication, Appwrite MFA/recovery UX, activation, capture, exact-email invitations, editing, publication, completion/export, support, platform lifecycle controls, and suspended-workspace recovery at desktop and 360px-class mobile widths. Public/auth and representative product states include WCAG 2.1 A/AA checks. Credentialed controlled-environment rehearsals are gated by explicit environment variables and never silently substitute mocks for production evidence.
 
-- Drafts are visible only to workspace administrators, their authorized creator, and assigned workflow actors.
-- Submitting a draft creates reviewer assignments and moves the revision to review.
-- Publishing requires an approved review. Captured revisions also require an explicit privacy review.
-- Editing a new draft never replaces the current live revision. Publication atomically archives the previous live revision and promotes the approved revision.
-- Audiences control who can read a published revision. Roles control who can create, review, publish, or administer; these concepts are deliberately separate.
-- Restoring history always creates a new draft instead of mutating an old revision.
+For a deployed Staging or Production synthetic tenant, set the release-gate variables documented in `.env.example`, including the expected environment/project/release identity, both synthetic accounts, their TOTP seeds, workspace slug, and published guide ID. Then run:
 
-## Extension
-
-Build and test the extension with:
-
-```bash
-npm --prefix extension test
-npm --prefix extension run build
+```text
+KNOWHOW_REQUIRE_CONTROLLED_REHEARSAL=1 KNOWHOW_E2E_BASE_URL=https://<controlled-host> npx playwright test e2e/controlled-rehearsal.spec.ts --project=chrome --project=edge --workers=1
 ```
 
-Then load `extension/dist` as an unpacked extension in `chrome://extensions` or `edge://extensions`, or install the packaged `public/knowhow-extension.zip` through an appropriate enterprise/developer workflow.
+The gate runs sequentially in the installed current stable Google Chrome and Microsoft Edge channels. It requires fresh TOTP for both real server-side sessions, verifies owner-only control-plane routes, a second member's published-guide completion, and in-app support, then directly proves each Appwrite session revoked. It complements—but does not replace—the operator-recorded invitation, email, extension/store, lifecycle, restore, load, and purge rehearsal in the deployment runbook.
 
-From a signed-in KnowHow workspace, choose Connect extension; the website performs the secure workspace handoff directly with no code to copy or type. On the first Start, Chrome asks for optional website access so its visible-tab screenshot API can work reliably from the persistent panel. The side panel shares the website theme, searches the viewer's authorized guides, and can keep one open as a split-screen checklist. During recording, Smart Blur is off by default and exposes a live on-page preview when enabled. Numbered contextual previews include immediate step deletion, native dropdown interactions remain untouched, rapid clicks are queued, double-clicks are distinct actions, and capture follows policy-allowed foreground tab switches in the same window. Smart Blur regions are stored as private, reversible metadata and rendered immediately in previews and guide views; crop, blur, drawing, and click-target layers remain editable until the first review submission flattens them into the private raster. A human privacy review is mandatory before a captured draft can be published.
+## Extension development and distribution
 
-See `extension/README.md` for capture behavior, privacy guarantees, and MVP limits.
+Run `npm --prefix extension test` and `npm --prefix extension run build`, then load `extension/dist` from `chrome://extensions` or `edge://extensions` for local development.
 
-## Production hosting boundary
+Pilot distribution is through unlisted Chrome and Edge store listings. Controlled deployments fail readiness when either listing URL is missing. The build preserves extension ID `phbofjenfnnnnndghhinoldlfbpaedpo`, injects one exact HTTPS application origin into `host_permissions` and `externally_connectable`, and keeps broad website access optional and requested only when capture starts. Direct public ZIP distribution is intentionally absent.
 
-No production deployment is attached to this checkout. The current server adapter targets Cloudflare Worker APIs for D1 and private R2, which Wrangler emulates on localhost. A future Cloudflare deployment can use those bindings directly. Hosting on AWS or Azure will require replacing the D1/R2 adapter with equivalent transactional database and private-object-storage services while preserving the authorization, audit, redaction, and signed-token boundaries.
+See [extension/README.md](./extension/README.md) and [extension distribution](./docs/operations/extension-distribution.md).
 
-Before any production launch, run the full verification suite; configure production secrets and the platform-owner allowlist; migrate the production database; update the Appwrite allowlist, verification callback, and extension origin; then verify anonymous API denial, signup and verification, workspace creation, invite/domain onboarding, restricted publication, export policy, and extension pairing against the selected origin.
+## Operations and governance
+
+- [Deployment and rollback runbook](./docs/operations/deployment.md)
+- [Monitoring and alert thresholds](./docs/operations/monitoring.md)
+- [Backup and restore rehearsal](./docs/operations/backup-restore.md)
+- [Incident response](./docs/operations/incident-response.md)
+- [Self-host portability smoke](./docs/operations/self-host-smoke.md)
+- [Threat model and security overview](./docs/security/threat-model.md)
+- [Privacy notice draft](./docs/governance/privacy-notice.md)
+- [Pilot terms draft](./docs/governance/pilot-terms.md)
+- [Acceptable use and data classification](./docs/governance/acceptable-use.md)
+- [DPA template](./docs/governance/dpa-template.md)
+- [Subprocessor list](./docs/governance/subprocessors.md)
+- [Retention schedule](./docs/governance/retention-schedule.md)
+- [Support policy](./docs/governance/support-policy.md)
+- [Readiness report](./docs/readiness-report.md)
+
+The governance documents are controlled drafts, not executed agreements or legal advice. Qatar-focused counsel must approve them and the company must be incorporated before any real customer data is accepted.
+
+## Release boundary
+
+Local passing tests do not authorize a pilot. External access remains blocked until the owner completes every checkpoint in the readiness report: clean Frankfurt projects, Production Pro, daily backups and isolated restore evidence, verified DNS/email, Sentry alerts, unlisted browser-store listings, executed legal terms, full Staging and Production synthetic journeys, Production synthetic-tenant purge, and no unresolved P0/P1 findings.
+
+Production readiness here means controlled external-pilot readiness, not enterprise GA. Independent media disaster recovery, a contractual SLA, third-party penetration testing, enterprise identity, open self-service, live payments, and customer-ready on-premises delivery remain deferred.

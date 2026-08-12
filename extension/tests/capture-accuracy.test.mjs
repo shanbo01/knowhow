@@ -375,9 +375,8 @@ test("interaction geometry stays normalized to its original viewport", () => {
 });
 
 test("manifest key derives the exact development extension allowlist", async () => {
-  const [manifestText, viteSource, nextSource] = await Promise.all([
+  const [manifestText, nextSource] = await Promise.all([
     readFile(new URL("../manifest.json", import.meta.url), "utf8"),
-    readFile(new URL("../../vite.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../../next.config.ts", import.meta.url), "utf8"),
   ]);
   const manifest = JSON.parse(manifestText);
@@ -393,13 +392,8 @@ test("manifest key derives the exact development extension allowlist", async () 
   assert.deepEqual(manifest.externally_connectable, {
     matches: ["http://localhost/*"],
   });
-  assert.ok(
-    viteSource.includes(
-      "^chrome-extension:\\/\\/" + extensionId + "$",
-    ),
-  );
   assert.ok(nextSource.includes('allowedDevOrigins: ["' + extensionId + '"]'));
-  assert.doesNotMatch(viteSource + nextSource, /mdljijkdccpjhbfalkcgpnooffhcnjbb/);
+  assert.doesNotMatch(nextSource, /mdljijkdccpjhbfalkcgpnooffhcnjbb/);
 });
 
 test("extension action is configured to open the side panel", async () => {

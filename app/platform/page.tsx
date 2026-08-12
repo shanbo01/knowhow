@@ -1,6 +1,6 @@
 "use client";
 
-import KnowHowApp from "../page";
+import KnowHowApp from "../components/knowhow-app";
 
 export default function PlatformRoutePage() {
   return <KnowHowApp />;

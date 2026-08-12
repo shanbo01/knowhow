@@ -1,49 +1,107 @@
 "use client";
 
-import { account } from "./appwrite";
 import type { GuideSearchResult } from "./knowhow-types";
 
-let cachedJwt: { value: string; expiresAt: number } | null = null;
+export class KnowHowApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly requestId?: string;
 
-export function clearApiCredential() {
-  cachedJwt = null;
+  constructor(
+    status: number,
+    message: string,
+    details: { code?: string; requestId?: string } = {},
+  ) {
+    super(message);
+    this.name = "KnowHowApiError";
+    this.status = status;
+    this.code = details.code;
+    this.requestId = details.requestId;
+  }
 }
 
-async function getJwt() {
-  const now = Date.now();
-  if (cachedJwt && cachedJwt.expiresAt > now + 30_000) return cachedJwt.value;
+let reauthenticationHandler: (() => Promise<void>) | null = null;
+let reauthenticationInFlight: Promise<void> | null = null;
 
-  const result = await account.createJWT();
-  cachedJwt = { value: result.jwt, expiresAt: now + 11 * 60_000 };
-  return result.jwt;
+export function registerReauthenticationHandler(
+  handler: (() => Promise<void>) | null,
+) {
+  reauthenticationHandler = handler;
+  return () => {
+    if (reauthenticationHandler === handler) reauthenticationHandler = null;
+  };
+}
+
+async function reauthenticateOnce() {
+  if (!reauthenticationHandler) return false;
+  if (!reauthenticationInFlight) {
+    reauthenticationInFlight = reauthenticationHandler().finally(() => {
+      reauthenticationInFlight = null;
+    });
+  }
+  await reauthenticationInFlight;
+  return true;
+}
+
+export function clearApiCredential() {
+  // Retained for callers during the session-cookie migration. Credentials are
+  // HTTP-only now, so there is no browser token cache to clear.
+}
+
+function csrfToken() {
+  if (typeof document === "undefined") return "";
+  const prefix = "knowhow_csrf=";
+  const cookie = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : "";
 }
 
 export async function knowhowApi<T>(
   path: string,
   init: RequestInit = {},
+  allowReauthentication = true,
 ): Promise<T> {
-  const jwt = await getJwt();
   const response = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
       accept: "application/json",
-      authorization: `Bearer ${jwt}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.method && !["GET", "HEAD"].includes(init.method.toUpperCase())
+        ? { "x-csrf-token": csrfToken() }
+        : {}),
       ...init.headers,
     },
   });
 
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
+    let code: string | undefined;
+    let requestId: string | undefined;
     try {
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as {
+        error?: string;
+        code?: string;
+        requestId?: string;
+      };
       if (payload.error) message = payload.error;
+      code = payload.code;
+      requestId = payload.requestId;
     } catch {
       // Keep the status-based fallback for non-JSON infrastructure errors.
     }
 
     if (response.status === 401) clearApiCredential();
-    throw new Error(message);
+    if (
+      allowReauthentication &&
+      code === "TOTP_REAUTH_REQUIRED" &&
+      (await reauthenticateOnce())
+    ) {
+      return knowhowApi<T>(path, init, false);
+    }
+    throw new KnowHowApiError(response.status, message, { code, requestId });
   }
 
   return (await response.json()) as T;
@@ -52,6 +110,7 @@ export async function knowhowApi<T>(
 export function knowhowCommand<T>(action: string, payload: unknown = {}) {
   return knowhowApi<T>("/api/knowhow", {
     method: "POST",
+    headers: { "x-idempotency-key": crypto.randomUUID() },
     body: JSON.stringify({ action, payload }),
   });
 }
@@ -69,10 +128,43 @@ export async function downloadAuthorizedExport(
   guideId: string,
   format: "pdf" | "html" | "markdown",
 ) {
-  const jwt = await getJwt();
-  const params = new URLSearchParams({ workspaceId, guideId, format });
+  const queued = await knowhowApi<{
+    jobId: string;
+    status: string;
+    pollAfterMs: number;
+  }>("/api/knowhow/export", {
+    method: "POST",
+    headers: { "x-idempotency-key": crypto.randomUUID() },
+    body: JSON.stringify({ workspaceId, guideId, format }),
+  });
+  const deadline = Date.now() + 150_000;
+  let status = queued.status;
+  let failure = "";
+  while (status !== "ready" && Date.now() < deadline) {
+    if (status === "failed" || status === "expired") break;
+    await new Promise((resolve) =>
+      window.setTimeout(resolve, Math.max(500, queued.pollAfterMs || 750)),
+    );
+    const state = await knowhowApi<{ status: string; error?: string }>(
+      `/api/knowhow/export?${new URLSearchParams({ jobId: queued.jobId })}`,
+    );
+    status = state.status;
+    failure = state.error ?? "";
+  }
+  if (status !== "ready") {
+    throw new Error(
+      failure ||
+        (status === "expired"
+          ? "The export expired before it was downloaded."
+          : status === "failed"
+            ? "The export could not be created."
+            : "The export is still processing. Try again in a moment."),
+    );
+  }
+  const params = new URLSearchParams({ jobId: queued.jobId, download: "1" });
   const response = await fetch(`/api/knowhow/export?${params}`, {
-    headers: { authorization: `Bearer ${jwt}` },
+    credentials: "same-origin",
+    headers: { accept: "application/octet-stream" },
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
@@ -97,14 +189,14 @@ export async function downloadAuditCsv(
   workspaceId: string,
   filters: { action?: string; from?: string; to?: string } = {},
 ) {
-  const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId });
   if (filters.action) params.set("action", filters.action);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
 
   const response = await fetch(`/api/knowhow/audit?${params}`, {
-    headers: { authorization: `Bearer ${jwt}` },
+    credentials: "same-origin",
+    headers: { accept: "text/csv" },
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
@@ -127,11 +219,13 @@ export async function downloadAuditCsv(
 }
 
 async function authorizedBlob(path: string, init: RequestInit = {}) {
-  const jwt = await getJwt();
   const response = await fetch(path, {
     ...init,
+    credentials: "same-origin",
     headers: {
-      authorization: `Bearer ${jwt}`,
+      ...(init.method && !["GET", "HEAD"].includes(init.method.toUpperCase())
+        ? { "x-csrf-token": csrfToken() }
+        : {}),
       ...init.headers,
     },
   });
@@ -162,14 +256,14 @@ export async function loadAuthorizedWorkspaceLogoUrl(workspaceId: string) {
 }
 
 export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
-  const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, kind: "logo" });
   const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "POST",
+    credentials: "same-origin",
     headers: {
-      authorization: `Bearer ${jwt}`,
       "content-type": file.type,
       "x-knowhow-file-name": encodeURIComponent(file.name),
+      "x-csrf-token": csrfToken(),
     },
     body: file,
   });
@@ -183,12 +277,29 @@ export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
   return (await response.json()) as { configured: true };
 }
 
+export async function uploadProvisioningLogo(runId: string, file: File) {
+  const params = new URLSearchParams({ kind: "provisioning-logo", runId });
+  const response = await fetch(`/api/knowhow/media?${params}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": file.type,
+      "x-knowhow-file-name": encodeURIComponent(file.name),
+      "x-csrf-token": csrfToken(),
+    },
+    body: file,
+  });
+  const body = (await response.json().catch(() => ({}))) as { mediaId?: string; error?: string };
+  if (!response.ok || !body.mediaId) throw new Error(body.error ?? "Logo upload failed.");
+  return body.mediaId;
+}
+
 export async function removeWorkspaceLogo(workspaceId: string) {
-  const jwt = await getJwt();
   const params = new URLSearchParams({ workspaceId, kind: "logo" });
   const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "DELETE",
-    headers: { authorization: `Bearer ${jwt}` },
+    credentials: "same-origin",
+    headers: { "x-csrf-token": csrfToken() },
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
@@ -214,7 +325,6 @@ export async function replaceDraftScreenshot(input: {
    */
   redactionState?: "pending" | "redacted";
 }) {
-  const jwt = await getJwt();
   const params = new URLSearchParams({
     kind: "screenshot",
     workspaceId: input.workspaceId,
@@ -224,9 +334,10 @@ export async function replaceDraftScreenshot(input: {
   });
   const response = await fetch(`/api/knowhow/media?${params}`, {
     method: "POST",
+    credentials: "same-origin",
     headers: {
-      authorization: `Bearer ${jwt}`,
       "content-type": input.bytes.type,
+      "x-csrf-token": csrfToken(),
       "x-knowhow-redacted": input.redactionState === "pending" ? "false" : "true",
       "x-knowhow-source-rasterized": "true",
       "x-knowhow-image-width": String(input.width),

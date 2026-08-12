@@ -185,7 +185,11 @@ export async function beginKnowHowPairing(code) {
   const tokenResponse = await fetch(apiUrl("/pair"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: pairingCode, deviceId }),
+    body: JSON.stringify({
+      code: pairingCode,
+      deviceId,
+      extensionVersion: chrome.runtime.getManifest().version,
+    }),
   });
   const auth = await parseResponse(tokenResponse);
   await storeAuth(auth);
@@ -292,11 +296,7 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
       method: "PUT",
       headers: {
         "Content-Type": imageType,
-        // Screenshots leave the extension unredacted (pending): the author
-        // reviews and adds reversible blur in the app editor. They only
-        // become permanent once the guide's first review submission
-        // flattens them.
-        "X-KnowHow-Redacted": "false",
+        "X-KnowHow-Redacted": "true",
         "X-KnowHow-Source-Rasterized": "true",
         "X-KnowHow-Image-Width": String(step.imageWidth || 1),
         "X-KnowHow-Image-Height": String(step.imageHeight || 1),

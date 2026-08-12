@@ -1,0 +1,81 @@
+{
+    "projectId": "6a7b532a0033dd811cb4",
+    "endpoint": "https://fra.cloud.appwrite.io/v1",
+    "includes": {
+        "buckets": "./infrastructure/appwrite/buckets.json",
+        "tablesDB": "./infrastructure/appwrite/databases.json",
+        "tables": "./infrastructure/appwrite/tables.json"
+    },
+    "functions": [
+        {
+            "$id": "knowhow_ops",
+            "name": "KnowHow Operations",
+            "runtime": "node-22",
+            "path": "functions/operations",
+            "entrypoint": "src/main.js",
+            "commands": "npm ci --omit=dev",
+            "execute": [],
+            "events": [],
+            "schedule": "*/5 * * * *",
+            "timeout": 120,
+            "enabled": true,
+            "logging": true,
+            "ignore": [
+                "node_modules",
+                ".git"
+            ],
+            "scopes": [
+                "rows.read",
+                "rows.write",
+                "files.read",
+                "files.write",
+                "messages.write",
+                "users.read",
+                "users.write"
+            ],
+            "vars": []
+        },
+        {
+            "$id": "knowhow_export",
+            "name": "KnowHow Export Worker",
+            "runtime": "node-22",
+            "path": "functions/export",
+            "entrypoint": "src/main.js",
+            "commands": "npm ci --omit=dev",
+            "execute": [],
+            "events": [
+                "tablesdb.knowhow_core.tables.export_jobs.rows.*.create"
+            ],
+            "schedule": "*/2 * * * *",
+            "timeout": 120,
+            "enabled": true,
+            "logging": true,
+            "ignore": [
+                "node_modules",
+                ".git"
+            ],
+            "scopes": [
+                "rows.read"
+            ],
+            "vars": []
+        }
+    ],
+    "sites": [
+        {
+            "$id": "knowhow_web",
+            "name": "KnowHow Web",
+            "enabled": true,
+            "logging": true,
+            "framework": "nextjs",
+            "timeout": 30,
+            "installCommand": "npm ci",
+            "buildCommand": "node --max-old-space-size=640 node_modules/next/dist/bin/next build",
+            "outputDirectory": "./.next",
+            "specification": "s-1vcpu-1gb",
+            "buildRuntime": "node-22",
+            "adapter": "ssr",
+            "fallbackFile": "",
+            "path": "."
+        }
+    ]
+}

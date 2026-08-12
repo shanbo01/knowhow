@@ -3,7 +3,7 @@
 import { CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { account } from "../../lib/appwrite";
+import { completeEmailVerification } from "../../lib/auth-client";
 import { ProductBrand } from "../components/product-brand";
 
 type State = "checking" | "verified" | "failed";
@@ -22,8 +22,7 @@ export default function VerifyEmailPage() {
         setMessage("This verification link is incomplete. Request a new one from KnowHow.");
         return;
       }
-      account
-        .updateVerification({ userId, secret })
+      completeEmailVerification(userId, secret)
         .then(() => {
           setState("verified");
           setMessage("Your email is verified. KnowHow can now evaluate invitations and exact-domain eligibility.");
@@ -48,7 +47,7 @@ export default function VerifyEmailPage() {
       {state === "failed" ? <CircleAlert className="verify-result failed" /> : null}
       <h1>{state === "verified" ? "Email verified" : state === "failed" ? "Verification failed" : "Verifying email"}</h1>
       <p>{message}</p>
-      {state !== "checking" ? <Link className="button primary" href="/">Continue to KnowHow</Link> : null}
+      {state !== "checking" ? <Link className="button primary" href="/app">Continue to KnowHow</Link> : null}
     </main>
   );
 }

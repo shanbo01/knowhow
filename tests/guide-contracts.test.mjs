@@ -1,44 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import test, { after, before } from "node:test";
+import test from "node:test";
 import { PDFDocument } from "pdf-lib";
-import { build } from "vite";
-
-const root = path.resolve(import.meta.dirname, "..");
-let outputDirectory;
-let guide;
-
-before(async () => {
-  outputDirectory = await mkdtemp(path.join(tmpdir(), "knowhow-guide-contracts-"));
-  await build({
-    root,
-    configFile: false,
-    logLevel: "silent",
-    build: {
-      emptyOutDir: false,
-      outDir: outputDirectory,
-      target: "es2022",
-      minify: false,
-      lib: {
-        entry: path.join(root, "lib", "exports", "index.ts"),
-        formats: ["es"],
-        fileName: () => "guide-exports.mjs",
-      },
-    },
-  });
-  guide = await import(
-    `${pathToFileURL(path.join(outputDirectory, "guide-exports.mjs")).href}?test=${Date.now()}`
-  );
-});
-
-after(async () => {
-  if (outputDirectory) {
-    await rm(outputDirectory, { recursive: true, force: true });
-  }
-});
+import * as guide from "../lib/exports/index.ts";
 
 function actor(userId, displayName) {
   return { userId, displayName };

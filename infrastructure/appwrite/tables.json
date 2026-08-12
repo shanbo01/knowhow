@@ -1,0 +1,8813 @@
+[
+  {
+    "$id": "organizations",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Organizations",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_status",
+        "type": "key",
+        "columns": [
+          "status"
+        ]
+      },
+      {
+        "key": "by_slug",
+        "type": "unique",
+        "columns": [
+          "slug"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "organization_branding",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Organization Branding",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_organization",
+        "type": "unique",
+        "columns": [
+          "organization_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "organization_domains",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Organization Domains",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_domain",
+        "type": "key",
+        "columns": [
+          "subject_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_domain",
+        "type": "unique",
+        "columns": [
+          "organization_id",
+          "subject_id"
+        ]
+      },
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "organization_memberships",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Organization Memberships",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_org_user",
+        "type": "unique",
+        "columns": [
+          "organization_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_user_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_email_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "email",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "workspaces",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Workspaces",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_organization",
+        "type": "key",
+        "columns": [
+          "organization_id"
+        ]
+      },
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_slug",
+        "type": "unique",
+        "columns": [
+          "slug"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "workspace_settings",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Workspace Settings",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace",
+        "type": "unique",
+        "columns": [
+          "workspace_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "workspace_members",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Workspace Members",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_user",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_email",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "email"
+        ]
+      },
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_user_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "workspace_groups",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Workspace Groups",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_kind",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind"
+        ]
+      },
+      {
+        "key": "by_workspace_slug",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "slug"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "group_memberships",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Group Memberships",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_group_user",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_workspace_user",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "guides",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Guides",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_slug",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "slug"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "guide_revisions",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Guide Revisions",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_guide_version",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "version"
+        ]
+      },
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "guide_steps",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Guide Steps",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_revision_sequence",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "sequence"
+        ]
+      },
+      {
+        "key": "by_workspace",
+        "type": "key",
+        "columns": [
+          "workspace_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "guide_audiences",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Guide Audiences",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_revision_subject",
+        "type": "key",
+        "columns": [
+          "subject_id",
+          "kind",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_workspace_kind",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind"
+        ]
+      },
+      {
+        "key": "by_workspace_kind_user",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind",
+          "user_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "review_assignments",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Review Assignments",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_revision_user",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace",
+        "type": "key",
+        "columns": [
+          "workspace_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "captures",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Captures",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_user_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_idempotency",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "idempotency_key"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "completions",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Completions",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_revision_user",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_workspace_time",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "occurred_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "private_media",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Private Media",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_revision",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "subject_id"
+        ]
+      },
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_revision_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "subject_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "invitations",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Invitations",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_token_hash",
+        "type": "unique",
+        "columns": [
+          "subject_id"
+        ]
+      },
+      {
+        "key": "by_workspace_status_expiry",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status",
+          "expires_at"
+        ]
+      },
+      {
+        "key": "by_email_status",
+        "type": "key",
+        "columns": [
+          "email",
+          "status"
+        ]
+      },
+      {
+        "key": "by_status_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "initial_admin_appointments",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Initial Admin Appointments",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_token_hash",
+        "type": "unique",
+        "columns": [
+          "subject_id"
+        ]
+      },
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_email_status",
+        "type": "key",
+        "columns": [
+          "email",
+          "status"
+        ]
+      },
+      {
+        "key": "by_status_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
+      },
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_email_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "email",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "extension_devices",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Extension Devices",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_user",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id"
+        ]
+      },
+      {
+        "key": "by_workspace_user_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_subject",
+        "type": "unique",
+        "columns": [
+          "subject_id"
+        ]
+      },
+      {
+        "key": "by_subject_status",
+        "type": "key",
+        "columns": [
+          "subject_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_status_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "platform_roles",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Platform Roles",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_user_kind",
+        "type": "unique",
+        "columns": [
+          "user_id",
+          "kind"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_kind_status",
+        "type": "key",
+        "columns": [
+          "kind",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "support_cases",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Support Cases",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_requester_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_user_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "support_grants",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Support Grants",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_user_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "audit_segments",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Audit Segments",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_sequence",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "sequence"
+        ]
+      },
+      {
+        "key": "by_workspace_kind_time",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind",
+          "occurred_at"
+        ]
+      },
+      {
+        "key": "by_org_time",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "occurred_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "catalog_items",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Catalog Items",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_kind_status",
+        "type": "key",
+        "columns": [
+          "kind",
+          "status"
+        ]
+      },
+      {
+        "key": "by_slug",
+        "type": "unique",
+        "columns": [
+          "slug"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "subscriptions",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Subscriptions",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "entitlements",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Entitlements",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_kind",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "kind"
+        ]
+      },
+      {
+        "key": "by_workspace_kind_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind",
+          "status"
+        ]
+      },
+      {
+        "key": "by_org_kind",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "kind"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "usage_events",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Usage Events",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_time",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "occurred_at"
+        ]
+      },
+      {
+        "key": "by_workspace_kind",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind"
+        ]
+      },
+      {
+        "key": "by_time",
+        "type": "key",
+        "columns": [
+          "occurred_at"
+        ]
+      },
+      {
+        "key": "by_request",
+        "type": "unique",
+        "columns": [
+          "request_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "usage_rollups",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Usage Rollups",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_kind_time",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "kind",
+          "occurred_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "manual_invoices",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Manual Invoices",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "leads",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Leads",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_email_status",
+        "type": "key",
+        "columns": [
+          "email",
+          "status"
+        ]
+      },
+      {
+        "key": "by_kind_time",
+        "type": "key",
+        "columns": [
+          "kind",
+          "occurred_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "support_tickets",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Support Tickets",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "support_messages",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Support Messages",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_ticket_sequence",
+        "type": "unique",
+        "columns": [
+          "subject_id",
+          "sequence"
+        ]
+      },
+      {
+        "key": "by_workspace_sequence",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "sequence"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "notification_deliveries",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Notification Deliveries",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_status_schedule",
+        "type": "key",
+        "columns": [
+          "status",
+          "scheduled_at"
+        ]
+      },
+      {
+        "key": "by_workspace",
+        "type": "key",
+        "columns": [
+          "workspace_id"
+        ]
+      },
+      {
+        "key": "by_idempotency",
+        "type": "unique",
+        "columns": [
+          "idempotency_key"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "lifecycle_cases",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Lifecycle Cases",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_kind_schedule",
+        "type": "key",
+        "columns": [
+          "kind",
+          "scheduled_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "export_jobs",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Export Jobs",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_status",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_idempotency",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "idempotency_key"
+        ]
+      },
+      {
+        "key": "by_status_schedule",
+        "type": "key",
+        "columns": [
+          "status",
+          "scheduled_at"
+        ]
+      },
+      {
+        "key": "by_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "idempotency_keys",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Idempotency Keys",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_key",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "idempotency_key"
+        ]
+      },
+      {
+        "key": "by_expiry",
+        "type": "key",
+        "columns": [
+          "expires_at"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "provisioning_runs",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Provisioning Runs",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_org_status",
+        "type": "key",
+        "columns": [
+          "organization_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_user_status",
+        "type": "key",
+        "columns": [
+          "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_workspace",
+        "type": "key",
+        "columns": [
+          "workspace_id"
+        ]
+      },
+      {
+        "key": "by_request",
+        "type": "unique",
+        "columns": [
+          "request_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "onboarding_progress",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "Onboarding Progress",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_workspace_user",
+        "type": "unique",
+        "columns": [
+          "workspace_id",
+          "user_id"
+        ]
+      }
+    ]
+  },
+  {
+    "$id": "user_preferences",
+    "$permissions": [],
+    "databaseId": "knowhow_core",
+    "name": "User Preferences",
+    "enabled": true,
+    "rowSecurity": false,
+    "columns": [
+      {
+        "key": "organization_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "workspace_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "user_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "subject_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "slug",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "email",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 254,
+        "default": null
+      },
+      {
+        "key": "status",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "kind",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 40,
+        "default": null
+      },
+      {
+        "key": "idempotency_key",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 128,
+        "default": null
+      },
+      {
+        "key": "request_id",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 64,
+        "default": null
+      },
+      {
+        "key": "sequence",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 0,
+        "max": 2147483647,
+        "default": null
+      },
+      {
+        "key": "version",
+        "type": "integer",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "min": 1,
+        "max": 2147483647,
+        "default": 1
+      },
+      {
+        "key": "occurred_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "expires_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "scheduled_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "deleted_at",
+        "type": "datetime",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "default": null
+      },
+      {
+        "key": "created_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "updated_by",
+        "type": "varchar",
+        "status": "available",
+        "error": "",
+        "required": false,
+        "array": false,
+        "size": 36,
+        "default": null
+      },
+      {
+        "key": "payload_json",
+        "type": "text",
+        "status": "available",
+        "error": "",
+        "required": true,
+        "array": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      {
+        "key": "by_user",
+        "type": "unique",
+        "columns": [
+          "user_id"
+        ]
+      }
+    ]
+  }
+]

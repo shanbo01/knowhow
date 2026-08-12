@@ -1,0 +1,355 @@
+import {
+  AppwriteException,
+  AuthenticationFactor,
+  AuthenticatorType,
+  ID,
+  Query,
+} from "node-appwrite";
+import QRCode from "qrcode";
+import { appwriteSessionCookieName } from "@/lib/server/appwrite-config";
+import { createAdminAppwrite, createSessionAppwrite } from "@/lib/server/appwrite-clients";
+import {
+  CSRF_COOKIE_NAME,
+  HttpError,
+  assertCookieMutationRequest,
+  assertTrustedOrigin,
+  jsonResponse,
+  readJsonObject,
+  requestPublicOrigin,
+  toErrorResponse,
+} from "@/lib/server/http-security";
+import { sessionSecret } from "@/lib/server/session-identity";
+import { assertSignupCredential } from "@/lib/server/signup-credentials";
+import {
+  correlationId,
+  createRequestServices,
+  requestFingerprint,
+  withRequestId,
+} from "@/lib/server/request-services";
+import { decodePayload, type WorkspaceMemberRecord } from "@/lib/server/domain-records";
+import { TABLES } from "@/lib/server/appwrite-resources";
+import { requireRecentTotp } from "@/lib/server/session-identity";
+import { consumeFixedWindows } from "@/lib/server/rate-limit-service";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type Context = { params: Promise<{ path?: string[] }> };
+
+function routePath(context: Context) {
+  return context.params.then(({ path }) => (path ?? []).join("/"));
+}
+
+function allowedOrigins() {
+  return (process.env.KNOWHOW_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function text(value: unknown, label: string, minimum: number, maximum: number) {
+  if (typeof value !== "string") throw new HttpError(400, "INPUT_INVALID", `${label} is required.`);
+  const normalized = value.trim();
+  if (normalized.length < minimum || normalized.length > maximum) {
+    throw new HttpError(400, "INPUT_INVALID", `${label} is invalid.`);
+  }
+  return normalized;
+}
+
+function serializeUser(user: {
+  $id: string;
+  email: string;
+  name: string;
+  emailVerification: boolean;
+  mfa: boolean;
+}) {
+  return {
+    id: user.$id,
+    email: user.email,
+    name: user.name,
+    emailVerification: user.emailVerification,
+    mfa: user.mfa,
+  };
+}
+
+async function roleRequiresMfa(userId: string, email: string) {
+  const { store } = createRequestServices();
+  const [platformRoles, memberships, organizationMemberships, appointments] = await Promise.all([
+    store.list(TABLES.platformRoles, {
+      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
+      limit: 1,
+    }),
+    store.list(TABLES.workspaceMembers, {
+      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
+    }),
+    store.list(TABLES.organizationMemberships, {
+      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
+      limit: 1,
+    }),
+    store.list(TABLES.initialAdminAppointments, {
+      filters: [{ field: "email", value: email.toLowerCase() }, { field: "status", value: "active" }],
+      limit: 1,
+    }),
+  ]);
+  return platformRoles.length > 0 || organizationMemberships.length > 0 || appointments.length > 0 || memberships.some((row) =>
+    decodePayload<WorkspaceMemberRecord>(row, { name: "", roles: [], capabilities: [], groupIds: [] }).roles.includes("administrator"),
+  );
+}
+
+function secureRequest(request: Request) {
+  return requestPublicOrigin(request).startsWith("https://") || process.env.KNOWHOW_ENVIRONMENT === "production" || process.env.KNOWHOW_ENVIRONMENT === "staging";
+}
+
+function appendSessionCookies(response: Response, request: Request, projectId: string, secret: string, expire: string) {
+  const secure = secureRequest(request) ? "; Secure" : "";
+  response.headers.append(
+    "set-cookie",
+    `${appwriteSessionCookieName(projectId)}=${encodeURIComponent(secret)}; Path=/; HttpOnly; SameSite=Strict; Expires=${new Date(expire).toUTCString()}${secure}`,
+  );
+  const csrf = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+  response.headers.append(
+    "set-cookie",
+    `${CSRF_COOKIE_NAME}=${csrf}; Path=/; SameSite=Strict; Expires=${new Date(expire).toUTCString()}${secure}`,
+  );
+}
+
+function clearSessionCookies(response: Response, request: Request, projectId: string) {
+  const secure = secureRequest(request) ? "; Secure" : "";
+  response.headers.append("set-cookie", `${appwriteSessionCookieName(projectId)}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
+  response.headers.append("set-cookie", `${CSRF_COOKIE_NAME}=; Path=/; SameSite=Strict; Max-Age=0${secure}`);
+}
+
+function authJson(body: unknown, requestId: string, init?: ResponseInit) {
+  return withRequestId(jsonResponse(body, init), requestId);
+}
+
+function translate(error: unknown) {
+  if (error instanceof HttpError) return error;
+  if (error instanceof AppwriteException) {
+    if (error.type === "user_more_factors_required") {
+      return new HttpError(401, "MFA_REQUIRED", "Complete multi-factor authentication to continue.", { cause: error });
+    }
+    if (error.code === 401) return new HttpError(401, "AUTH_INVALID", "The email or password is incorrect.", { cause: error });
+    if (error.code === 409) return new HttpError(409, "ACCOUNT_EXISTS", "An account already exists for this email.", { cause: error });
+    if (error.code === 429) return new HttpError(429, "RATE_LIMITED", "Too many attempts. Try again later.", { cause: error });
+    if (error.code >= 500) return new HttpError(503, "IDENTITY_UNAVAILABLE", "Identity service is temporarily unavailable.", { cause: error });
+    return new HttpError(400, "IDENTITY_REQUEST_FAILED", error.message, { cause: error });
+  }
+  return error;
+}
+
+export async function GET(request: Request, context: Context) {
+  const requestId = correlationId(request);
+  try {
+    const path = await routePath(context);
+    if (path === "health") {
+      const { users, store } = createRequestServices();
+      await consumeFixedWindows(store, [{ scope: "auth.health", subject: requestFingerprint(request), limit: 60, windowSeconds: 60 }]);
+      await users.list({ queries: [Query.limit(1)], total: false });
+      return authJson({ ok: true, requestId }, requestId);
+    }
+    if (path === "session") {
+      const { account } = createSessionAppwrite(sessionSecret(request));
+      const user = await account.get();
+      return authJson({ user: serializeUser(user), requestId }, requestId);
+    }
+    if (path === "mfa/requirement") {
+      const { account } = createSessionAppwrite(sessionSecret(request));
+      const user = await account.get();
+      const [required, factors] = await Promise.all([
+        roleRequiresMfa(user.$id, user.email),
+        account.listMFAFactors(),
+      ]);
+      return authJson({ required, enabled: user.mfa, factors, requestId }, requestId);
+    }
+    throw new HttpError(404, "AUTH_ROUTE_NOT_FOUND", "Authentication route not found.");
+  } catch (error) {
+    return withRequestId(toErrorResponse(translate(error), requestId), requestId);
+  }
+}
+
+export async function POST(request: Request, context: Context) {
+  const requestId = correlationId(request);
+  try {
+    const path = await routePath(context);
+    assertTrustedOrigin(request, allowedOrigins());
+    const body = await readJsonObject(request, 32_768);
+    const { store } = createRequestServices();
+    const fingerprint = requestFingerprint(request);
+    const policy = path === "sign-in"
+      ? { limit: 12, windowSeconds: 900 }
+      : path === "sign-up"
+        ? { limit: 6, windowSeconds: 3_600 }
+        : path === "mfa/complete"
+          ? { limit: 20, windowSeconds: 600 }
+          : { limit: 60, windowSeconds: 600 };
+    await consumeFixedWindows(store, [{ scope: `auth.${path.replaceAll("/", ".").slice(0, 60)}`, subject: fingerprint, ...policy }]);
+
+    if (path === "sign-in") {
+      const email = text(body.email, "Email", 5, 320).toLowerCase();
+      await consumeFixedWindows(store, [{ scope: "auth.sign-in.email", subject: email, limit: 8, windowSeconds: 900 }]);
+      const password = text(body.password, "Password", 8, 1_024);
+      const { account, config } = createAdminAppwrite();
+      const session = await account.createEmailPasswordSession({ email, password });
+      const response = authJson({ requestId }, requestId);
+      appendSessionCookies(response, request, config.projectId, session.secret, session.expire);
+      const scoped = createSessionAppwrite(session.secret);
+      try {
+        const user = await scoped.account.get();
+        return authJson(
+          { user: serializeUser(user), requestId },
+          requestId,
+          { headers: response.headers },
+        );
+      } catch (error) {
+        if (error instanceof AppwriteException && error.type === "user_more_factors_required") {
+          const factors = await scoped.account.listMFAFactors();
+          return authJson(
+            {
+              mfaRequired: true,
+              factors: [
+                ...(factors.totp ? ["totp"] : []),
+                ...(factors.recoveryCode ? ["recoveryCode"] : []),
+              ],
+              requestId,
+            },
+            requestId,
+            { headers: response.headers },
+          );
+        }
+        throw error;
+      }
+    }
+
+    if (path === "sign-up") {
+      const name = text(body.name, "Name", 2, 128);
+      const email = text(body.email, "Email", 5, 320).toLowerCase();
+      await consumeFixedWindows(store, [{ scope: "auth.sign-up.email", subject: email, limit: 3, windowSeconds: 3_600 }]);
+      const password = text(body.password, "Password", 12, 1_024);
+      const credential = text(body.credential, "Invitation", 20, 8_192);
+      const credentialKind = body.credentialKind;
+      if (credentialKind !== "invite" && credentialKind !== "appointment") {
+        throw new HttpError(403, "INVITATION_REQUIRED", "A current invitation is required to create an account.");
+      }
+      await assertSignupCredential({ kind: credentialKind, token: credential, email });
+      const { users, account, config } = createAdminAppwrite();
+      await users.create({ userId: ID.unique(), email, password, name });
+      const session = await account.createEmailPasswordSession({ email, password });
+      const response = authJson({ created: true, requestId }, requestId);
+      appendSessionCookies(response, request, config.projectId, session.secret, session.expire);
+      return response;
+    }
+
+    assertCookieMutationRequest(request, allowedOrigins());
+    const secret = sessionSecret(request);
+    const scoped = createSessionAppwrite(secret);
+
+    if (path === "sign-out") {
+      const { config } = scoped;
+      let revocationFailed = false;
+      try {
+        await scoped.account.deleteSession({ sessionId: "current" });
+      } catch (error) {
+        if (!(error instanceof AppwriteException && error.code === 401)) {
+          revocationFailed = true;
+        }
+      }
+      const response = revocationFailed
+        ? withRequestId(
+            toErrorResponse(
+              new HttpError(
+                503,
+                "SIGN_OUT_INCOMPLETE",
+                "The local session was cleared, but server-session revocation could not be confirmed.",
+              ),
+              requestId,
+            ),
+            requestId,
+          )
+        : authJson({ signedOut: true, requestId }, requestId);
+      clearSessionCookies(response, request, config.projectId);
+      return response;
+    }
+    if (path === "verification") {
+      const url = text(body.url, "Verification URL", 10, 2_048);
+      const parsed = new URL(url);
+      if (parsed.origin !== requestPublicOrigin(request) || parsed.pathname !== "/verify") {
+        throw new HttpError(400, "VERIFICATION_URL_INVALID", "The verification URL is invalid.");
+      }
+      await scoped.account.createVerification({ url });
+      return authJson({ sent: true, requestId }, requestId);
+    }
+    if (path === "verification/complete") {
+      const userId = text(body.userId, "User", 1, 128);
+      const verificationSecret = text(body.secret, "Verification", 1, 8_192);
+      await scoped.account.updateVerification({ userId, secret: verificationSecret });
+      return authJson({ verified: true, requestId }, requestId);
+    }
+    if (path === "mfa/enroll/start") {
+      const user = await scoped.account.get();
+      if (!user.emailVerification) {
+        throw new HttpError(403, "EMAIL_NOT_VERIFIED", "Verify your email before setting up an authenticator.");
+      }
+      const factors = await scoped.account.listMFAFactors();
+      if (factors.totp) {
+        let recoveryCodes: string[] | undefined;
+        if (!factors.recoveryCode) {
+          const recovery = await scoped.account.createMFARecoveryCodes();
+          recoveryCodes = recovery.recoveryCodes;
+        }
+        if (!user.mfa) await scoped.account.updateMFA({ mfa: true });
+        return authJson(
+          {
+            enabled: true,
+            resumed: true,
+            ...(recoveryCodes ? { recoveryCodes } : {}),
+            requestId,
+          },
+          requestId,
+        );
+      }
+      const authenticator = await scoped.account.createMFAAuthenticator({ type: AuthenticatorType.Totp });
+      const qrCodeDataUrl = await QRCode.toDataURL(authenticator.uri, {
+        errorCorrectionLevel: "M",
+        margin: 1,
+        width: 240,
+      });
+      return authJson(
+        { secret: authenticator.secret, uri: authenticator.uri, qrCodeDataUrl, requestId },
+        requestId,
+      );
+    }
+    if (path === "mfa/enroll/complete") {
+      const otp = text(body.otp, "Authentication code", 6, 12);
+      await scoped.account.updateMFAAuthenticator({ type: AuthenticatorType.Totp, otp });
+      const recovery = await scoped.account.createMFARecoveryCodes();
+      await scoped.account.updateMFA({ mfa: true });
+      return authJson(
+        { enabled: true, recoveryCodes: recovery.recoveryCodes, requestId },
+        requestId,
+      );
+    }
+    if (path === "mfa/recovery/regenerate") {
+      await requireRecentTotp(request);
+      const recovery = await scoped.account.updateMFARecoveryCodes();
+      return authJson({ recoveryCodes: recovery.recoveryCodes, requestId }, requestId);
+    }
+    if (path === "mfa/challenge") {
+      const factor = body.factor === "recoveryCode"
+        ? AuthenticationFactor.Recoverycode
+        : AuthenticationFactor.Totp;
+      const challenge = await scoped.account.createMFAChallenge({ factor });
+      return authJson({ challengeId: challenge.$id, requestId }, requestId);
+    }
+    if (path === "mfa/complete") {
+      const challengeId = text(body.challengeId, "Challenge", 1, 128);
+      const otp = text(body.otp, "Authentication code", 6, 128);
+      await scoped.account.updateMFAChallenge({ challengeId, otp });
+      const user = await scoped.account.get();
+      return authJson({ user: serializeUser(user), requestId }, requestId);
+    }
+    throw new HttpError(404, "AUTH_ROUTE_NOT_FOUND", "Authentication route not found.");
+  } catch (error) {
+    return withRequestId(toErrorResponse(translate(error), requestId), requestId);
+  }
+}

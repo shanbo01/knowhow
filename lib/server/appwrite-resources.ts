@@ -1,0 +1,56 @@
+export const APPWRITE_RESOURCES = {
+  database: "knowhow_core",
+  privateMediaBucket: "knowhow_private_media",
+  exportsBucket: "knowhow_exports",
+  site: "knowhow_web",
+  operationsFunction: "knowhow_ops",
+  exportFunction: "knowhow_export",
+} as const;
+
+export const TABLES = {
+  organizations: "organizations",
+  organizationBranding: "organization_branding",
+  organizationDomains: "organization_domains",
+  organizationMemberships: "organization_memberships",
+  workspaces: "workspaces",
+  workspaceSettings: "workspace_settings",
+  workspaceMembers: "workspace_members",
+  workspaceGroups: "workspace_groups",
+  groupMemberships: "group_memberships",
+  guides: "guides",
+  guideRevisions: "guide_revisions",
+  guideSteps: "guide_steps",
+  guideAudiences: "guide_audiences",
+  reviewAssignments: "review_assignments",
+  captures: "captures",
+  completions: "completions",
+  privateMedia: "private_media",
+  invitations: "invitations",
+  initialAdminAppointments: "initial_admin_appointments",
+  extensionDevices: "extension_devices",
+  platformRoles: "platform_roles",
+  supportCases: "support_cases",
+  supportGrants: "support_grants",
+  auditSegments: "audit_segments",
+  catalogItems: "catalog_items",
+  subscriptions: "subscriptions",
+  entitlements: "entitlements",
+  usageEvents: "usage_events",
+  usageRollups: "usage_rollups",
+  manualInvoices: "manual_invoices",
+  leads: "leads",
+  supportTickets: "support_tickets",
+  supportMessages: "support_messages",
+  notificationDeliveries: "notification_deliveries",
+  lifecycleCases: "lifecycle_cases",
+  exportJobs: "export_jobs",
+  idempotencyKeys: "idempotency_keys",
+  provisioningRuns: "provisioning_runs",
+  onboardingProgress: "onboarding_progress",
+  userPreferences: "user_preferences",
+} as const;
+
+export type TableName = (typeof TABLES)[keyof typeof TABLES];
+
+export const ALL_TABLES = Object.freeze(Object.values(TABLES));
+

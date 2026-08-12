@@ -4,8 +4,9 @@ export type WorkspaceSection =
   | "capture"
   | "groups"
   | "members"
+  | "support"
+  | "organization"
   | "vault"
-  | "activity"
   | "settings";
 
 export type GuideRevisionMode = "published" | "working";
@@ -27,8 +28,9 @@ const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
   "capture",
   "groups",
   "members",
+  "support",
+  "organization",
   "vault",
-  "activity",
   "settings",
 ];
 
@@ -87,7 +89,7 @@ export function routeWorkspaceSlug(route: AppRoute) {
 
 export function parseAppRoute(pathname: string, search = ""): AppRoute {
   const normalizedPath = cleanPathname(pathname);
-  if (normalizedPath === "/") return { kind: "root" };
+  if (normalizedPath === "/" || normalizedPath === "/app") return { kind: "root" };
   if (normalizedPath === "/platform") return { kind: "platform" };
 
   const rawSegments = normalizedPath.split("/").filter(Boolean);

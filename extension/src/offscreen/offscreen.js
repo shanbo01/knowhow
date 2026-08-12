@@ -114,15 +114,27 @@ async function processScreenshot(message) {
     const context = canvas.getContext("2d", { alpha: false });
     context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-    // Redactions are no longer baked into pixels here. The masked regions
-    // are captured as normalized, reversible metadata; the author reviews
-    // and (un)blurs them in the app editor. They only become permanent once
-    // the guide's first review submission flattens the pixels server-side.
     const redactions = buildPendingRedactionRegions({
       rects: message.masks || [],
       viewport: message.viewport,
       padding: 5,
     });
+
+    // The upload boundary never receives the unredacted raster. Masked
+    // regions are replaced with opaque pixels before compression; the
+    // normalized regions remain as applied metadata so the editor can show
+    // what was removed without retaining recoverable source pixels.
+    context.save();
+    context.fillStyle = "#20242a";
+    for (const region of redactions) {
+      context.fillRect(
+        Math.floor(region.x * canvas.width),
+        Math.floor(region.y * canvas.height),
+        Math.ceil(region.width * canvas.width),
+        Math.ceil(region.height * canvas.height),
+      );
+    }
+    context.restore();
 
     const compressed = await compressCanvas(
       canvas,
@@ -156,9 +168,7 @@ async function processScreenshot(message) {
       imageBlob: compressed.blob,
       imageWidth: compressedCanvas.width,
       imageHeight: compressedCanvas.height,
-      pendingRedactions: redactions,
-      // Counted, not baked: the privacy note the author reviews in the app
-      // should say how many regions Smart Blur found, not zero.
+      pendingRedactions: redactions.map((region) => ({ ...region, applied: true })),
       automaticMaskCount: redactions.length,
       manualMaskCount: 0,
       updatedAt: new Date().toISOString(),

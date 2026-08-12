@@ -1067,8 +1067,9 @@ async function openOrFocusEditorTab(editUrl) {
 /**
  * The extension no longer opens a separate review tab: editing (crop,
  * blur, annotate) now happens directly in the app's guide editor. Finishing
- * a capture uploads every step as-is (raw screenshot + pending redaction
- * metadata), commits the draft, then opens the app editor for that guide.
+ * a capture uploads the locally rasterized and irreversibly masked screenshot
+ * plus applied redaction metadata, commits the draft, then opens the app
+ * editor for that guide. Unredacted pixels never cross the upload boundary.
  */
 async function performDraftUpload(reviewing) {
   const steps = Array.isArray(reviewing.stepIds)

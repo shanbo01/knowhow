@@ -1,4 +1,5 @@
 import type { RevisionStatus, WorkspaceRole, WorkspaceStatus } from "../knowhow-types";
+import type { LifecycleAccess } from "./domain-records";
 import { HttpError } from "./http-security";
 
 export type PolicyAction =
@@ -49,6 +50,7 @@ export interface AuthorizationContext {
   isVerifiedIdentity: boolean;
   membershipStatus?: "active" | "suspended";
   workspaceStatus?: WorkspaceStatus;
+  lifecycleAccess?: LifecycleAccess;
   roles: readonly WorkspaceRole[];
   capabilities?: readonly ("vault")[];
   guide?: GuideAuthorizationFacts;
@@ -109,6 +111,19 @@ export function authorize(
 
   if (context.membershipStatus !== "active") {
     return deny("MEMBERSHIP_REQUIRED", "An active workspace membership is required.");
+  }
+
+  if (context.lifecycleAccess === "deleted" || context.lifecycleAccess === "deleting") {
+    return deny("WORKSPACE_DELETED", "The workspace is no longer available.");
+  }
+  if (context.lifecycleAccess === "deletion_pending" || context.lifecycleAccess === "suspended") {
+    return deny("SUBSCRIPTION_SUSPENDED", "The subscription is suspended.");
+  }
+  if (
+    context.lifecycleAccess === "read_only" &&
+    !["workspace.read", "guide.list", "guide.read", "guide.export", "workspace.audit.read"].includes(action)
+  ) {
+    return deny("SUBSCRIPTION_READ_ONLY", "The subscription is in read-only grace.");
   }
 
   const roles = new Set(context.roles);
