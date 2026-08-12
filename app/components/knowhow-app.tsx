@@ -378,9 +378,10 @@ function WorkspaceOnboarding({
         <p className="eyebrow">Verified account</p>
         <h1>Welcome, {viewerName || "there"}</h1>
         <p className="lede">
-          KnowHow pilots are invitation-only. Redeem a signed invitation or
-          administrator appointment issued to your exact verified email
-          address. Every credential is single-use, expires, and is audited.
+          Your account is verified. Workspace access remains invitation-only:
+          redeem a signed invitation or administrator appointment issued to
+          your exact email address. Every credential is single-use, expires,
+          and is audited.
         </p>
 
         {error ? (

@@ -3954,11 +3954,12 @@ export function PlatformView({
             <LockKeyhole />
           </span>
           <div>
-            <h2>Invitation-only pilot</h2>
+            <h2>Registered accounts, invitation-only workspaces</h2>
             <p>
-              Public signup and self-service workspace creation are locked off.
-              Organizations are created only through controlled provisioning,
-              and every person needs an exact-email, single-use credential.
+              Public account registration is enabled. Registration grants no
+              tenant access: organizations are created only through controlled
+              provisioning, and every workspace member still needs an
+              exact-email, single-use credential.
             </p>
           </div>
         </div>
@@ -3968,7 +3969,7 @@ export function PlatformView({
             <strong>
               Self-service limit: {settings.selfServiceWorkspaceLimit}
             </strong>
-            <small>Server-enforced at zero for the external pilot.</small>
+            <small>Automatic workspace creation remains server-enforced at zero.</small>
           </span>
         </div>
       </section>
