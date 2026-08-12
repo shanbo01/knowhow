@@ -49,7 +49,7 @@ export function resolveSmokeTarget(
   }
   const endpoint = exactControlledAppwriteEndpoint(raw, residency);
   requireCondition(endpoint, "The contract smoke accepts only an exact local or approved controlled Appwrite endpoint.");
-  const location = url.hostname === "fra.cloud.appwrite.io" ? "frankfurt" : "qatar";
+  const location = url.hostname === "fra.cloud.appwrite.io" ? "frankfurt" : "azure";
   if (environment === "staging" && allowStaging)
     return { endpoint, target: `${location}-staging` };
   if (environment === "production" && allowProduction)

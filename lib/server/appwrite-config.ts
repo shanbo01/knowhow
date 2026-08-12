@@ -4,6 +4,7 @@ import { APPWRITE_RESOURCES } from "./appwrite-resources";
 
 export type AppwriteServerConfig = {
   endpoint: string;
+  internalEndpoint: string;
   projectId: string;
   apiKey: string;
   databaseId: string;
@@ -28,7 +29,14 @@ const APPWRITE_DATABASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const RESTORE_DATABASE_ID = /^knowhow_restore_[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
 const RESTORE_SITE_ID = /^knowhow_restore_web_[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/;
 const RELEASE_SHA = /^[a-f0-9]{40}$/;
-const AZURE_QATAR_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.qatarcentral\.cloudapp\.azure\.com$/;
+const AZURE_REGION = /^[a-z0-9]{2,32}$/;
+
+function approvedAzureRegion(residency: string) {
+  const prefix = "azure-self-hosted:";
+  if (!residency.startsWith(prefix)) return null;
+  const region = residency.slice(prefix.length);
+  return AZURE_REGION.test(region) ? region : null;
+}
 
 function controlledEndpointIsApproved(endpoint: URL, raw: string) {
   const exactShape =
@@ -46,9 +54,13 @@ function controlledEndpointIsApproved(endpoint: URL, raw: string) {
     const residency = process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim();
     return !residency || residency === "appwrite-cloud-frankfurt";
   }
+  const azureRegion = approvedAzureRegion(
+    process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim() ?? "",
+  );
   return (
-    process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim() === "azure-qatar-central" &&
-    AZURE_QATAR_HOST.test(endpoint.hostname)
+    azureRegion !== null &&
+    endpoint.hostname.endsWith(`.${azureRegion}.cloudapp.azure.com`) &&
+    endpoint.hostname !== `${azureRegion}.cloudapp.azure.com`
   );
 }
 
@@ -66,10 +78,52 @@ function parsedEndpoint(value: string, environment: AppwriteServerConfig["enviro
   }
   if (controlled && !controlledEndpointIsApproved(endpoint, value)) {
     throw new Error(
-      "Staging and production require an exact approved Frankfurt Cloud or Azure Qatar Central Appwrite endpoint.",
+      "Staging and production require an exact approved Frankfurt Cloud or region-attested Azure Appwrite endpoint.",
     );
   }
   return endpoint.toString().replace(/\/$/, "");
+}
+
+function parsedInternalEndpoint(
+  value: string | undefined,
+  publicEndpoint: string,
+  environment: AppwriteServerConfig["environment"],
+) {
+  const raw = value?.trim();
+  if (!raw) return publicEndpoint;
+  let endpoint: URL;
+  try {
+    endpoint = new URL(raw);
+  } catch {
+    throw new Error("APPWRITE_INTERNAL_ENDPOINT must be a valid URL.");
+  }
+  const exactPrivateRuntimeAlias =
+    raw === "http://appwrite-internal/v1" &&
+    endpoint.hostname === "appwrite-internal" &&
+    endpoint.pathname === "/v1" &&
+    !endpoint.username &&
+    !endpoint.password &&
+    !endpoint.port &&
+    !endpoint.search &&
+    !endpoint.hash;
+  if (
+    (environment === "staging" || environment === "production") &&
+    (!approvedAzureRegion(process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim() ?? "") ||
+      !exactPrivateRuntimeAlias)
+  ) {
+    throw new Error(
+      "Controlled Azure deployments require the exact private Appwrite runtime alias.",
+    );
+  }
+  if (
+    environment !== "staging" &&
+    environment !== "production" &&
+    endpoint.protocol !== "http:" &&
+    endpoint.protocol !== "https:"
+  ) {
+    throw new Error("APPWRITE_INTERNAL_ENDPOINT must use HTTP or HTTPS.");
+  }
+  return raw.replace(/\/$/, "");
 }
 
 function required(name: string) {
@@ -114,8 +168,14 @@ function deploymentEnvironment(): AppwriteServerConfig["environment"] {
 
 export function getAppwriteServerConfig(): AppwriteServerConfig {
   const environment = deploymentEnvironment();
+  const endpoint = parsedEndpoint(required("APPWRITE_ENDPOINT"), environment);
   const config = {
-    endpoint: parsedEndpoint(required("APPWRITE_ENDPOINT"), environment),
+    endpoint,
+    internalEndpoint: parsedInternalEndpoint(
+      process.env.APPWRITE_INTERNAL_ENDPOINT,
+      endpoint,
+      environment,
+    ),
     projectId: required("APPWRITE_PROJECT_ID"),
     apiKey: required("APPWRITE_API_KEY"),
     databaseId: process.env.APPWRITE_DATABASE_ID?.trim() || APPWRITE_RESOURCES.database,

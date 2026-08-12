@@ -16,8 +16,12 @@ APPWRITE_DIR=/opt/appwrite
 KNOWHOW_DIR=/etc/knowhow
 COMPOSE_URL="https://raw.githubusercontent.com/appwrite/appwrite/${APPWRITE_VERSION}/docker-compose.yml"
 ENV_URL="https://raw.githubusercontent.com/appwrite/appwrite/${APPWRITE_VERSION}/.env"
+MONGO_ENTRYPOINT_URL="https://raw.githubusercontent.com/appwrite/appwrite/${APPWRITE_VERSION}/mongo-entrypoint.sh"
+MONGO_INIT_URL="https://raw.githubusercontent.com/appwrite/appwrite/${APPWRITE_VERSION}/mongo-init.js"
 COMPOSE_SHA256=6466d116dffadb4341b3366b704f1dd0c62f5d602dc4952781f7d389b5c38ff6
 ENV_SHA256=a39058714c42ec15c216ef6d2035a5ec2784889131394ffcb247fd43ed0ec24b
+MONGO_ENTRYPOINT_SHA256=e4e7087d4e58934eab3208a3db957235154b31c5b400c98aedda4e944f79756c
+MONGO_INIT_SHA256=525e61b5aa5d33284c830c9f6f126afc52f39f4b8120f5e5583dd9c084fec81b
 
 retry() {
   local attempts="$1"
@@ -66,6 +70,44 @@ download_verified() {
 
 download_verified "$COMPOSE_URL" "$COMPOSE_SHA256" "$APPWRITE_DIR/docker-compose.yml"
 download_verified "$ENV_URL" "$ENV_SHA256" "$APPWRITE_DIR/.env"
+rm -rf "$APPWRITE_DIR/mongo-entrypoint.sh" "$APPWRITE_DIR/mongo-init.js"
+download_verified "$MONGO_ENTRYPOINT_URL" "$MONGO_ENTRYPOINT_SHA256" "$APPWRITE_DIR/mongo-entrypoint.sh"
+download_verified "$MONGO_INIT_URL" "$MONGO_INIT_SHA256" "$APPWRITE_DIR/mongo-init.js"
+chmod 700 "$APPWRITE_DIR/mongo-entrypoint.sh"
+
+# Keep private-beta email testing self-contained and zero-cost. Mailpit is not
+# exposed through the VM/NSG; it only accepts SMTP from the Appwrite network.
+install -m 600 /dev/stdin "$APPWRITE_DIR/docker-compose.override.yml" <<'YAML'
+services:
+  traefik:
+    networks:
+      gateway:
+      appwrite:
+      runtimes:
+        aliases:
+          - appwrite-internal
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    container_name: appwrite-mailpit
+    restart: unless-stopped
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_DISABLE_VERSION_CHECK: "true"
+      MP_MAX_MESSAGES: "500"
+    volumes:
+      - appwrite-mailpit:/data
+    networks:
+      - appwrite
+    mem_limit: 128m
+    cpus: 0.25
+
+volumes:
+  appwrite-mailpit:
+networks:
+  runtimes:
+    external: true
+    name: runtimes
+YAML
 
 metadata_token() {
   local resource="$1"
@@ -120,7 +162,6 @@ openssl_key="$(ensure_hex_secret appwrite-openssl-key 64)"
 executor_secret="$(ensure_hex_secret appwrite-executor-secret 32)"
 db_password="$(ensure_hex_secret appwrite-database-password 32)"
 db_root_password="$(ensure_hex_secret appwrite-database-root-password 32)"
-redis_password="$(ensure_hex_secret appwrite-redis-password 32)"
 
 if backup_age_key="$(read_vault_secret appwrite-backup-age-key 2>/dev/null)"; then
   :
@@ -149,7 +190,9 @@ set_env() {
 
 set_env _APP_ENV production
 set_env _APP_LOCALE en
-set_env _APP_WORKER_PER_CORE 1
+# Site SSR calls back into the Appwrite API. Four workers per core avoids a
+# synchronous proxy/API worker deadlock on the minimum two-vCPU beta VM.
+set_env _APP_WORKER_PER_CORE 4
 set_env _APP_OPTIONS_ABUSE enabled
 set_env _APP_OPTIONS_ROUTER_FORCE_HTTPS enabled
 set_env _APP_OPENSSL_KEY_V1 "$openssl_key"
@@ -157,8 +200,16 @@ set_env _APP_EXECUTOR_SECRET "$executor_secret"
 set_env _APP_DOMAIN "$APPWRITE_DOMAIN"
 set_env _APP_DOMAIN_TARGET_CNAME "$APPWRITE_DOMAIN"
 set_env _APP_DOMAIN_TARGET_A "$PUBLIC_IP"
-set_env _APP_DOMAIN_FUNCTIONS ''
-set_env _APP_DOMAIN_SITES ''
+# Appwrite's upstream .env currently carries a development-network resolver
+# address. Use Azure's platform DNS resolver so custom hostname verification
+# works on an Azure VNet without coupling the deployment to a Docker subnet.
+set_env _APP_DNS '168.63.129.16'
+# Function deployments still require a configured preview-domain suffix even
+# when they are invoked through the Appwrite API rather than a public hostname.
+set_env _APP_DOMAIN_FUNCTIONS "$APPWRITE_DOMAIN"
+# Sites are ultimately exposed through explicit sslip.io/custom rules, but the
+# Appwrite API still requires a non-empty preview-domain suffix at creation.
+set_env _APP_DOMAIN_SITES "$APPWRITE_DOMAIN"
 set_env _APP_CONSOLE_HOSTNAMES "$APPWRITE_DOMAIN"
 set_env _APP_CONSOLE_WHITELIST_ROOT enabled
 set_env _APP_CONSOLE_WHITELIST_EMAILS "$OPERATOR_EMAIL"
@@ -170,13 +221,14 @@ set_env _APP_DB_HOST mongodb
 set_env _APP_DB_PORT 27017
 set_env _APP_DB_PASS "$db_password"
 set_env _APP_DB_ROOT_PASS "$db_root_password"
-set_env _APP_REDIS_PASS "$redis_password"
+set_env _APP_REDIS_PASS ''
 set_env _APP_USAGE_STATS disabled
 set_env _APP_STORAGE_ANTIVIRUS disabled
+set_env _APP_STORAGE_LIMIT 52428800
 set_env _APP_SITES_RUNTIMES node-22
 set_env _APP_FUNCTIONS_RUNTIMES node-22
-set_env _APP_SMTP_HOST ''
-set_env _APP_SMTP_PORT ''
+set_env _APP_SMTP_HOST mailpit
+set_env _APP_SMTP_PORT 1025
 set_env _APP_SMTP_SECURE ''
 set_env _APP_SMTP_USERNAME ''
 set_env _APP_SMTP_PASSWORD ''
@@ -200,10 +252,22 @@ work="$(mktemp -d /var/backups/knowhow/run.XXXXXX)"
 archive="knowhow-appwrite-$(date -u +%Y%m%dT%H%M%SZ).tar.gz.age"
 stack_stopped=0
 
+start_stack() {
+  cd "$APPWRITE_DIR"
+  docker compose start
+  docker compose stop \
+    appwrite-assistant \
+    appwrite-embedding \
+    mariadb \
+    appwrite-task-stats-resources \
+    appwrite-worker-stats-resources \
+    appwrite-worker-stats-usage
+}
+
 cleanup() {
   local code=$?
   if [[ "$stack_stopped" == 1 ]]; then
-    (cd "$APPWRITE_DIR" && docker compose start) || true
+    start_stack || true
   fi
   rm -rf "$work"
   exit "$code"
@@ -212,9 +276,32 @@ trap cleanup EXIT
 
 mkdir -p "$work/payload/volumes"
 cd "$APPWRITE_DIR"
-docker compose exec -T mongodb sh -c 'exec mongodump --username=root --password="$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase=admin --archive' > "$work/payload/mongodb.archive"
+# Site/Function runtime containers are disposable deployment instances. Remove
+# them before restarting the executor so Docker does not retain stale runtime
+# network endpoints across the maintenance window.
+mapfile -t runtime_containers < <(docker ps -aq --filter 'name=^exc1-knowhow-')
+if [[ "${#runtime_containers[@]}" -gt 0 ]]; then
+  docker rm -f "${runtime_containers[@]}" >/dev/null
+fi
 docker compose stop
 stack_stopped=1
+
+# Keep the 4 GB beta VM inside its memory envelope: quiesce the application,
+# bring back only MongoDB for the logical dump, then stop it before archiving
+# the Docker volumes. The cleanup trap always restarts the complete stack.
+docker compose start mongodb
+for attempt in $(seq 1 60); do
+  if docker compose exec -T mongodb sh -c 'mongosh --quiet --username=root --password="$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase=admin --eval "db.adminCommand({ping: 1}).ok"' | grep -qx 1; then
+    break
+  fi
+  if [[ "$attempt" == 60 ]]; then
+    echo 'MongoDB did not become ready for backup' >&2
+    exit 1
+  fi
+  sleep 2
+done
+docker compose exec -T mongodb sh -c 'exec mongodump --username=root --password="$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase=admin --archive' > "$work/payload/mongodb.archive"
+docker compose stop mongodb
 
 while IFS= read -r volume; do
   [[ -n "$volume" ]] || continue
@@ -224,11 +311,12 @@ done < <(docker volume ls --format '{{.Name}}' | grep '^appwrite-' | sort)
 
 cp "$APPWRITE_DIR/.env" "$work/payload/appwrite.env"
 cp "$APPWRITE_DIR/docker-compose.yml" "$work/payload/docker-compose.yml"
+cp "$APPWRITE_DIR/docker-compose.override.yml" "$work/payload/docker-compose.override.yml"
 docker compose config --images | sort > "$work/payload/container-images.txt"
 date -u +%FT%TZ > "$work/payload/created-at.txt"
 (cd "$work/payload" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
 
-docker compose start
+start_stack
 stack_stopped=0
 
 tar czf - -C "$work/payload" . \
@@ -262,7 +350,7 @@ install -m 700 /dev/stdin /usr/local/sbin/knowhow-healthcheck <<'SCRIPT'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 source /etc/knowhow/azure.env
-if ! curl --fail --silent --show-error --max-time 20 "https://${APPWRITE_DOMAIN}/v1/health" >/dev/null; then
+if ! curl --fail --silent --show-error --max-time 20 "https://${APPWRITE_DOMAIN}/v1/health/version" >/dev/null; then
   logger --priority daemon.err --tag knowhow-healthcheck 'Appwrite health endpoint failed'
   exit 1
 fi
@@ -325,15 +413,26 @@ systemctl enable --now knowhow-backup.timer knowhow-healthcheck.timer
 cd "$APPWRITE_DIR"
 docker compose pull
 docker compose up -d --remove-orphans
+# The private beta does not use Appwrite Assistant/embeddings, MariaDB, or
+# usage aggregation. Keeping these stopped saves roughly 400 MiB on the
+# minimum 4-GiB VM without removing Auth, TablesDB, Storage, Functions, Sites,
+# Messaging, MongoDB, PostgreSQL, Redis, or the operational workers.
+docker compose stop \
+  appwrite-assistant \
+  appwrite-embedding \
+  mariadb \
+  appwrite-task-stats-resources \
+  appwrite-worker-stats-resources \
+  appwrite-worker-stats-usage
 
 for _ in {1..60}; do
-  if curl --fail --silent --show-error http://127.0.0.1/v1/health >/dev/null 2>&1; then
+  if curl --fail --silent --show-error http://127.0.0.1/v1/health/version >/dev/null 2>&1; then
     break
   fi
   sleep 10
 done
-curl --fail --silent --show-error http://127.0.0.1/v1/health >/dev/null
-curl --insecure --silent --show-error "https://${APPWRITE_DOMAIN}/v1/health" >/dev/null || true
+curl --fail --silent --show-error http://127.0.0.1/v1/health/version >/dev/null
+curl --insecure --fail --silent --show-error "https://${APPWRITE_DOMAIN}/v1/health/version" >/dev/null
 docker compose exec -T appwrite ssl || true
 
 echo "Appwrite ${APPWRITE_VERSION} is running at https://${APPWRITE_DOMAIN}"

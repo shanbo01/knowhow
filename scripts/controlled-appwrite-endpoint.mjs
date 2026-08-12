@@ -1,4 +1,11 @@
-const AZURE_QATAR_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.qatarcentral\.cloudapp\.azure\.com$/;
+const AZURE_REGION = /^[a-z0-9]{2,32}$/;
+
+function approvedAzureRegion(residency) {
+  const prefix = "azure-self-hosted:";
+  if (!residency.startsWith(prefix)) return null;
+  const region = residency.slice(prefix.length);
+  return AZURE_REGION.test(region) ? region : null;
+}
 
 export function exactControlledAppwriteEndpoint(raw, residency = "") {
   if (typeof raw !== "string" || raw !== raw.trim()) return null;
@@ -25,10 +32,12 @@ export function exactControlledAppwriteEndpoint(raw, residency = "") {
   const cloud =
     url.hostname === "fra.cloud.appwrite.io" &&
     (!normalizedResidency || normalizedResidency === "appwrite-cloud-frankfurt");
-  const qatar =
-    normalizedResidency === "azure-qatar-central" &&
-    AZURE_QATAR_HOST.test(url.hostname);
-  return cloud || qatar ? url.toString().replace(/\/$/, "") : null;
+  const azureRegion = approvedAzureRegion(normalizedResidency);
+  const azure =
+    azureRegion !== null &&
+    url.hostname.endsWith(`.${azureRegion}.cloudapp.azure.com`) &&
+    url.hostname !== `${azureRegion}.cloudapp.azure.com`;
+  return cloud || azure ? url.toString().replace(/\/$/, "") : null;
 }
 
 export function controlledEndpointOrigin(raw, residency = "") {

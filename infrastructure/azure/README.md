@@ -1,12 +1,16 @@
-# KnowHow Azure Qatar Central platform
+# KnowHow Azure self-hosted Appwrite platform
 
-This deployment creates the smallest Appwrite-supported private-beta platform in Qatar Central: one Trusted Launch `Standard_B2s` Ubuntu VM, one static public IP, a deny-by-default NSG, managed identity, Key Vault, Qatar-resident zone-redundant encrypted Blob backups, a locally redundant Recovery Services vault with daily VM protection, Azure Monitor Agent, Log Analytics, and an operator alert group. It deliberately does not use AKS.
+This deployment creates a cost-conscious Appwrite private-beta platform in a parameterized Azure region: one Trusted Launch Ubuntu VM, one static public IP, a deny-by-default NSG, managed identity, Key Vault, region-local encrypted Blob backups, a locally redundant Recovery Services vault with daily VM protection, Azure Monitor Agent, Log Analytics, and an operator alert group. It deliberately does not use AKS or multiple VMs.
+
+The current test defaults are South India and `Standard_B2ls_v2` (2 vCPU, 4 GiB). They were selected from live subscription availability on 2026-08-12. Qatar Central remains a deployment parameter for later use; no application code or stable Appwrite resource ID changes with the region.
+
+At current USD retail rates, the estimated baseline is USD 70-80/month: about USD 42.85 for the VM, USD 9.60 for its 128-GiB Standard SSD, USD 3.65 for the static IPv4 address, USD 10 for the protected VM, and USD 4-14 for actual backup storage, logs, Key Vault operations, and Blob storage. Taxes and unusual outbound data transfer are excluded.
 
 Production and Staging are separate Appwrite projects on this control plane. They must have separate project IDs, API keys, database rows, Storage objects, Sites, Function deployments, users, and synthetic test data. Shared VM failure remains an explicitly accepted private-beta availability limitation; no customer SLA is promised.
 
 Appwrite is pinned to `1.9.6`. Bootstrap downloads the official release `docker-compose.yml` and `.env` and rejects either artifact unless its SHA-256 digest matches the checked-in digest. Secrets are generated on the VM, written to the RBAC-enabled Key Vault, and retained locally only where the Appwrite Compose stack requires them. SSH is blocked at the NSG; normal maintenance uses Azure Run Command.
 
-The Appwrite API receives the free Azure public-IP FQDN and a normal Let's Encrypt certificate. Until KnowHow owns a domain, the two exact Site domains are `knowhow-prod.<static-ip>.sslip.io` and `knowhow-staging.<static-ip>.sslip.io`. These contain no customer data and can later be replaced without moving Qatar-hosted storage. They are not a contractual production domain.
+The Appwrite API receives the Azure public-IP FQDN and a normal Let's Encrypt certificate. Until KnowHow owns a domain, the two exact Site domains are `knowhow-prod.<static-ip>.sslip.io` and `knowhow-staging.<static-ip>.sslip.io`. These contain no customer data and can later be replaced without changing the application. They are not a contractual production domain.
 
 ## Validate without spending
 
@@ -29,14 +33,14 @@ After bootstrap, create the single Appwrite root console account with the operat
 The VM has two independent recovery layers:
 
 - Azure Backup takes daily VM recovery points and retains 14 days.
-- `knowhow-backup.timer` stops the stack briefly, captures every `appwrite-*` Docker volume plus a logical MongoDB dump and exact Compose configuration, encrypts the payload with age, and uploads it with managed identity to a private versioned geo-redundant container.
+- `knowhow-backup.timer` stops the stack briefly, captures every `appwrite-*` Docker volume plus a logical MongoDB dump and exact Compose configuration, encrypts the payload with age, and uploads it with managed identity to a private versioned locally redundant container.
 
 The age identity is also in Key Vault as `appwrite-backup-age-key`. A restore must target a fresh isolated VM. Copy `restore-appwrite.sh` to that VM and provide `BACKUP_BLOB` plus the exact confirmation `RESTORE_CONFIRM=fresh-instance-only:<blob>`. Never rehearse over the active VM.
 
 Useful read-only checks:
 
 ```powershell
-az backup item list --resource-group knowhowbeta-qc-rg --vault-name knowhowbeta-recovery --output table
+az backup item list --resource-group knowhowbeta-southindia-rg --vault-name knowhowbeta-recovery --output table
 az storage blob list --account-name <output-storage-name> --container-name appwrite-backups --auth-mode login --output table
-az monitor log-analytics workspace show --resource-group knowhowbeta-qc-rg --workspace-name knowhowbeta-logs
+az monitor log-analytics workspace show --resource-group knowhowbeta-southindia-rg --workspace-name knowhowbeta-logs
 ```

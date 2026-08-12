@@ -1,8 +1,8 @@
 # Deployment and rollback runbook
 
-Status: Qatar target with temporary Frankfurt fallback. Provision the self-hosted control plane through `infrastructure/azure/Deploy-KnowHowAzure.ps1`, then execute the project/resource steps once for Qatar Staging and again for clean Qatar Production. The Frankfurt-specific commands below remain usable only for synthetic testing until Qatar allocation, parity, backup, restore, and journey evidence pass. Record operator, UTC timestamps, release SHA, endpoint/residency attestation, Appwrite project ID, Site deployment ID, Function deployment IDs, and links to evidence in `docs/readiness-report.md`.
+Status: Azure self-hosted target with temporary Frankfurt fallback. The private-beta test deployment uses South India because it is the nearest low-cost region currently available to this subscription; Qatar Central remains the later production target. Provision through `infrastructure/azure/Deploy-KnowHowAzure.ps1`, then execute the project/resource steps once for Staging and again for clean Production. Record operator, UTC timestamps, release SHA, endpoint/residency attestation, Appwrite project ID, Site deployment ID, Function deployment IDs, and links to evidence in `docs/readiness-report.md`.
 
-Controlled deployments set `KNOWHOW_APPWRITE_RESIDENCY=azure-qatar-central` with an exact `https://<label>.qatarcentral.cloudapp.azure.com/v1` endpoint. The temporary Cloud fallback uses `appwrite-cloud-frankfurt`. Never point a controlled release at another Azure region or an unattested hostname.
+Controlled deployments set `KNOWHOW_APPWRITE_RESIDENCY=azure-self-hosted:<arm-region>` with an exact `https://<label>.<arm-region>.cloudapp.azure.com/v1` endpoint. The temporary Cloud fallback uses `appwrite-cloud-frankfurt`. The region value and endpoint suffix must match exactly, so moving to Qatar Central later changes deployment/environment parameters without an application change.
 
 ## Release invariants
 

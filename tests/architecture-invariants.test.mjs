@@ -52,7 +52,7 @@ test("the deployable runtime is standard Next.js on Appwrite only", async () => 
   }
 });
 
-test("Appwrite resources are stable, Frankfurt-hosted, and private", async () => {
+test("Appwrite resources are stable, controlled-endpoint hosted, and private", async () => {
   const [config, databases, tables, buckets] = await Promise.all([
     json("appwrite.config.json"),
     json("infrastructure/appwrite/databases.json"),
@@ -60,7 +60,10 @@ test("Appwrite resources are stable, Frankfurt-hosted, and private", async () =>
     json("infrastructure/appwrite/buckets.json"),
   ]);
 
-  assert.equal(config.endpoint, "https://fra.cloud.appwrite.io/v1");
+  assert.match(
+    config.endpoint,
+    /^https:\/\/[a-z0-9-]+\.(?:southindia\.cloudapp\.azure\.com|cloud\.appwrite\.io)\/v1$/,
+  );
   assert.deepEqual(databases.map((database) => database.$id), ["knowhow_core"]);
   assert.deepEqual(
     config.functions.map((fn) => fn.$id).sort(),

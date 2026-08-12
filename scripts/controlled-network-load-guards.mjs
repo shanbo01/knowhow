@@ -82,7 +82,7 @@ function exactApprovedEndpoint(raw, residency) {
   requireCondition(
     endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Controlled network load accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
+    "Controlled network load accepts only an exact approved Frankfurt Cloud or region-attested Azure endpoint.",
   );
   return endpoint;
 }

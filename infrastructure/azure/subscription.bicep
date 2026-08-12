@@ -1,10 +1,7 @@
 targetScope = 'subscription'
 
-@description('Azure region. KnowHow customer data stays in Qatar Central.')
-@allowed([
-  'qatarcentral'
-])
-param location string = 'qatarcentral'
+@description('Azure region selected at deployment time. Changing this value must not require application code changes.')
+param location string
 
 @minLength(3)
 @maxLength(24)
@@ -23,13 +20,13 @@ param sshPublicKey string
 @description('Emergency local VM account. Inbound SSH remains blocked by the NSG.')
 param adminUsername string = 'knowhowops'
 
-@description('Smallest Appwrite-supported private-beta size: 2 vCPU and 4 GiB RAM.')
-param vmSize string = 'Standard_B2s'
+@description('Available VM SKU with at least 2 vCPU and 4 GiB RAM.')
+param vmSize string
 
 @description('Pinned Appwrite server release.')
 param appwriteVersion string = '1.9.6'
 
-var resourceGroupName = '${namePrefix}-qc-rg'
+var resourceGroupName = '${namePrefix}-${location}-rg'
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
@@ -37,7 +34,7 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   tags: {
     application: 'KnowHow'
     environment: 'private-beta'
-    dataResidency: 'Qatar Central'
+    dataResidency: location
     managedBy: 'Bicep'
   }
 }

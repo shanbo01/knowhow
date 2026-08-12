@@ -26,7 +26,7 @@ var storageBlobContributorRoleId = subscriptionResourceId('Microsoft.Authorizati
 var commonTags = {
   application: 'KnowHow'
   environment: 'private-beta'
-  dataResidency: 'Qatar Central'
+  dataResidency: location
   managedBy: 'Bicep'
   appwriteVersion: appwriteVersion
 }
@@ -207,10 +207,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
         caching: 'ReadWrite'
         diskSizeGB: 128
         managedDisk: {
-          storageAccountType: 'Premium_LRS'
-          securityProfile: {
-            securityEncryptionType: 'VMGuestStateOnly'
-          }
+          storageAccountType: 'StandardSSD_LRS'
         }
         deleteOption: 'Detach'
       }
@@ -436,7 +433,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   location: location
   tags: commonTags
   sku: {
-    name: 'Standard_ZRS'
+    name: 'Standard_LRS'
   }
   kind: 'StorageV2'
   properties: {
@@ -524,16 +521,20 @@ resource recoveryVault 'Microsoft.RecoveryServices/vaults@2024-10-01' = {
 
 resource backupPolicy 'Microsoft.RecoveryServices/vaults/backupPolicies@2024-10-01' = {
   parent: recoveryVault
-  name: 'KnowHowDailyVm'
+  name: 'KnowHowDailyVmV2'
   properties: {
     backupManagementType: 'AzureIaasVM'
+    policyType: 'V2'
     instantRpRetentionRangeInDays: 2
+    instantRPDetails: {}
     schedulePolicy: {
-      schedulePolicyType: 'SimpleSchedulePolicy'
+      schedulePolicyType: 'SimpleSchedulePolicyV2'
       scheduleRunFrequency: 'Daily'
-      scheduleRunTimes: [
-        '2026-01-01T02:00:00Z'
-      ]
+      dailySchedule: {
+        scheduleRunTimes: [
+          '2026-01-01T02:00:00Z'
+        ]
+      }
     }
     retentionPolicy: {
       retentionPolicyType: 'LongTermRetentionPolicy'
@@ -551,15 +552,8 @@ resource backupPolicy 'Microsoft.RecoveryServices/vaults/backupPolicies@2024-10-
   }
 }
 
-resource protectionContainer 'Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers@2024-10-01' = {
+resource protectionContainer 'Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers@2024-10-01' existing = {
   name: '${recoveryVault.name}/Azure/IaasVMContainer;iaasvmcontainerv2;${resourceGroup().name};${vm.name}'
-  properties: {
-    backupManagementType: 'AzureIaasVM'
-    containerType: 'Microsoft.Compute/virtualMachines'
-    friendlyName: vm.name
-    virtualMachineId: vm.id
-    virtualMachineVersion: 'Compute'
-  }
 }
 
 resource protectedVm 'Microsoft.RecoveryServices/vaults/backupFabrics/protectionContainers/protectedItems@2024-10-01' = {

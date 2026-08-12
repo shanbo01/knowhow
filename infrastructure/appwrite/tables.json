@@ -199,16 +199,12 @@
       {
         "key": "by_status",
         "type": "key",
-        "columns": [
-          "status"
-        ]
+        "columns": ["status"]
       },
       {
         "key": "by_slug",
         "type": "unique",
-        "columns": [
-          "slug"
-        ]
+        "columns": ["slug"]
       }
     ]
   },
@@ -412,9 +408,7 @@
       {
         "key": "by_organization",
         "type": "unique",
-        "columns": [
-          "organization_id"
-        ]
+        "columns": ["organization_id"]
       }
     ]
   },
@@ -618,26 +612,17 @@
       {
         "key": "by_domain",
         "type": "key",
-        "columns": [
-          "subject_id",
-          "status"
-        ]
+        "columns": ["subject_id", "status"]
       },
       {
         "key": "by_org_domain",
         "type": "unique",
-        "columns": [
-          "organization_id",
-          "subject_id"
-        ]
+        "columns": ["organization_id", "subject_id"]
       },
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       }
     ]
   },
@@ -841,44 +826,27 @@
       {
         "key": "by_org_user",
         "type": "unique",
-        "columns": [
-          "organization_id",
-          "user_id"
-        ]
+        "columns": ["organization_id", "user_id"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       },
       {
         "key": "by_org_user_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["organization_id", "user_id", "status"]
       },
       {
         "key": "by_org_email_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "email",
-          "status"
-        ]
+        "columns": ["organization_id", "email", "status"]
       }
     ]
   },
@@ -1082,24 +1050,17 @@
       {
         "key": "by_organization",
         "type": "key",
-        "columns": [
-          "organization_id"
-        ]
+        "columns": ["organization_id"]
       },
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       },
       {
         "key": "by_slug",
         "type": "unique",
-        "columns": [
-          "slug"
-        ]
+        "columns": ["slug"]
       }
     ]
   },
@@ -1303,9 +1264,7 @@
       {
         "key": "by_workspace",
         "type": "unique",
-        "columns": [
-          "workspace_id"
-        ]
+        "columns": ["workspace_id"]
       }
     ]
   },
@@ -1509,43 +1468,27 @@
       {
         "key": "by_workspace_user",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "user_id"
-        ]
+        "columns": ["workspace_id", "user_id"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_workspace_email",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "email"
-        ]
+        "columns": ["workspace_id", "email"]
       },
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_workspace_user_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "user_id", "status"]
       }
     ]
   },
@@ -1749,18 +1692,12 @@
       {
         "key": "by_workspace_kind",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind"
-        ]
+        "columns": ["workspace_id", "kind"]
       },
       {
         "key": "by_workspace_slug",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "slug"
-        ]
+        "columns": ["workspace_id", "slug"]
       }
     ]
   },
@@ -1964,18 +1901,12 @@
       {
         "key": "by_group_user",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "user_id"
-        ]
+        "columns": ["subject_id", "user_id"]
       },
       {
         "key": "by_workspace_user",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id"
-        ]
+        "columns": ["workspace_id", "user_id"]
       }
     ]
   },
@@ -2179,18 +2110,12 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_workspace_slug",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "slug"
-        ]
+        "columns": ["workspace_id", "slug"]
       }
     ]
   },
@@ -2394,18 +2319,12 @@
       {
         "key": "by_guide_version",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "version"
-        ]
+        "columns": ["subject_id", "version"]
       },
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       }
     ]
   },
@@ -2609,17 +2528,12 @@
       {
         "key": "by_revision_sequence",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "sequence"
-        ]
+        "columns": ["subject_id", "sequence"]
       },
       {
         "key": "by_workspace",
         "type": "key",
-        "columns": [
-          "workspace_id"
-        ]
+        "columns": ["workspace_id"]
       }
     ]
   },
@@ -2823,28 +2737,17 @@
       {
         "key": "by_revision_subject",
         "type": "key",
-        "columns": [
-          "subject_id",
-          "kind",
-          "user_id"
-        ]
+        "columns": ["subject_id", "kind", "user_id"]
       },
       {
         "key": "by_workspace_kind",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind"
-        ]
+        "columns": ["workspace_id", "kind"]
       },
       {
         "key": "by_workspace_kind_user",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind",
-          "user_id"
-        ]
+        "columns": ["workspace_id", "kind", "user_id"]
       }
     ]
   },
@@ -3048,25 +2951,17 @@
       {
         "key": "by_revision_user",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "user_id"
-        ]
+        "columns": ["subject_id", "user_id"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_workspace",
         "type": "key",
-        "columns": [
-          "workspace_id"
-        ]
+        "columns": ["workspace_id"]
       }
     ]
   },
@@ -3270,19 +3165,12 @@
       {
         "key": "by_workspace_user_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "user_id", "status"]
       },
       {
         "key": "by_idempotency",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "idempotency_key"
-        ]
+        "columns": ["workspace_id", "idempotency_key"]
       }
     ]
   },
@@ -3486,18 +3374,12 @@
       {
         "key": "by_revision_user",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "user_id"
-        ]
+        "columns": ["subject_id", "user_id"]
       },
       {
         "key": "by_workspace_time",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "occurred_at"
-        ]
+        "columns": ["workspace_id", "occurred_at"]
       }
     ]
   },
@@ -3701,27 +3583,17 @@
       {
         "key": "by_workspace_revision",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "subject_id"
-        ]
+        "columns": ["workspace_id", "subject_id"]
       },
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_workspace_revision_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "subject_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "subject_id", "status"]
       }
     ]
   },
@@ -3925,34 +3797,22 @@
       {
         "key": "by_token_hash",
         "type": "unique",
-        "columns": [
-          "subject_id"
-        ]
+        "columns": ["subject_id"]
       },
       {
         "key": "by_workspace_status_expiry",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status",
-          "expires_at"
-        ]
+        "columns": ["workspace_id", "status", "expires_at"]
       },
       {
         "key": "by_email_status",
         "type": "key",
-        "columns": [
-          "email",
-          "status"
-        ]
+        "columns": ["email", "status"]
       },
       {
         "key": "by_status_expiry",
         "type": "key",
-        "columns": [
-          "status",
-          "expires_at"
-        ]
+        "columns": ["status", "expires_at"]
       }
     ]
   },
@@ -4156,50 +4016,32 @@
       {
         "key": "by_token_hash",
         "type": "unique",
-        "columns": [
-          "subject_id"
-        ]
+        "columns": ["subject_id"]
       },
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_email_status",
         "type": "key",
-        "columns": [
-          "email",
-          "status"
-        ]
+        "columns": ["email", "status"]
       },
       {
         "key": "by_status_expiry",
         "type": "key",
-        "columns": [
-          "status",
-          "expires_at"
-        ]
+        "columns": ["status", "expires_at"]
       },
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       },
       {
         "key": "by_org_email_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "email",
-          "status"
-        ]
+        "columns": ["organization_id", "email", "status"]
       }
     ]
   },
@@ -4403,42 +4245,27 @@
       {
         "key": "by_workspace_user",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id"
-        ]
+        "columns": ["workspace_id", "user_id"]
       },
       {
         "key": "by_workspace_user_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "user_id", "status"]
       },
       {
         "key": "by_subject",
         "type": "unique",
-        "columns": [
-          "subject_id"
-        ]
+        "columns": ["subject_id"]
       },
       {
         "key": "by_subject_status",
         "type": "key",
-        "columns": [
-          "subject_id",
-          "status"
-        ]
+        "columns": ["subject_id", "status"]
       },
       {
         "key": "by_status_expiry",
         "type": "key",
-        "columns": [
-          "status",
-          "expires_at"
-        ]
+        "columns": ["status", "expires_at"]
       }
     ]
   },
@@ -4642,26 +4469,17 @@
       {
         "key": "by_user_kind",
         "type": "unique",
-        "columns": [
-          "user_id",
-          "kind"
-        ]
+        "columns": ["user_id", "kind"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_kind_status",
         "type": "key",
-        "columns": [
-          "kind",
-          "status"
-        ]
+        "columns": ["kind", "status"]
       }
     ]
   },
@@ -4865,27 +4683,17 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_requester_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_workspace_user_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "user_id", "status"]
       }
     ]
   },
@@ -5089,27 +4897,17 @@
       {
         "key": "by_workspace_user_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "user_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "user_id", "status"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_expiry",
         "type": "key",
-        "columns": [
-          "status",
-          "expires_at"
-        ]
+        "columns": ["status", "expires_at"]
       }
     ]
   },
@@ -5313,27 +5111,17 @@
       {
         "key": "by_workspace_sequence",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "sequence"
-        ]
+        "columns": ["workspace_id", "sequence"]
       },
       {
         "key": "by_workspace_kind_time",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind",
-          "occurred_at"
-        ]
+        "columns": ["workspace_id", "kind", "occurred_at"]
       },
       {
         "key": "by_org_time",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "occurred_at"
-        ]
+        "columns": ["organization_id", "occurred_at"]
       }
     ]
   },
@@ -5537,17 +5325,12 @@
       {
         "key": "by_kind_status",
         "type": "key",
-        "columns": [
-          "kind",
-          "status"
-        ]
+        "columns": ["kind", "status"]
       },
       {
         "key": "by_slug",
         "type": "unique",
-        "columns": [
-          "slug"
-        ]
+        "columns": ["slug"]
       }
     ]
   },
@@ -5751,18 +5534,12 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       }
     ]
   },
@@ -5966,27 +5743,17 @@
       {
         "key": "by_workspace_kind",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "kind"
-        ]
+        "columns": ["workspace_id", "kind"]
       },
       {
         "key": "by_workspace_kind_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind",
-          "status"
-        ]
+        "columns": ["workspace_id", "kind", "status"]
       },
       {
         "key": "by_org_kind",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "kind"
-        ]
+        "columns": ["organization_id", "kind"]
       }
     ]
   },
@@ -6190,32 +5957,22 @@
       {
         "key": "by_workspace_time",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "occurred_at"
-        ]
+        "columns": ["workspace_id", "occurred_at"]
       },
       {
         "key": "by_workspace_kind",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "kind"
-        ]
+        "columns": ["workspace_id", "kind"]
       },
       {
         "key": "by_time",
         "type": "key",
-        "columns": [
-          "occurred_at"
-        ]
+        "columns": ["occurred_at"]
       },
       {
         "key": "by_request",
         "type": "unique",
-        "columns": [
-          "request_id"
-        ]
+        "columns": ["request_id"]
       }
     ]
   },
@@ -6419,11 +6176,7 @@
       {
         "key": "by_workspace_kind_time",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "kind",
-          "occurred_at"
-        ]
+        "columns": ["workspace_id", "kind", "occurred_at"]
       }
     ]
   },
@@ -6627,18 +6380,12 @@
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       },
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       }
     ]
   },
@@ -6842,18 +6589,12 @@
       {
         "key": "by_email_status",
         "type": "key",
-        "columns": [
-          "email",
-          "status"
-        ]
+        "columns": ["email", "status"]
       },
       {
         "key": "by_kind_time",
         "type": "key",
-        "columns": [
-          "kind",
-          "occurred_at"
-        ]
+        "columns": ["kind", "occurred_at"]
       }
     ]
   },
@@ -7057,18 +6798,12 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       }
     ]
   },
@@ -7272,18 +7007,12 @@
       {
         "key": "by_ticket_sequence",
         "type": "unique",
-        "columns": [
-          "subject_id",
-          "sequence"
-        ]
+        "columns": ["subject_id", "sequence"]
       },
       {
         "key": "by_workspace_sequence",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "sequence"
-        ]
+        "columns": ["workspace_id", "sequence"]
       }
     ]
   },
@@ -7487,24 +7216,17 @@
       {
         "key": "by_status_schedule",
         "type": "key",
-        "columns": [
-          "status",
-          "scheduled_at"
-        ]
+        "columns": ["status", "scheduled_at"]
       },
       {
         "key": "by_workspace",
         "type": "key",
-        "columns": [
-          "workspace_id"
-        ]
+        "columns": ["workspace_id"]
       },
       {
         "key": "by_idempotency",
         "type": "unique",
-        "columns": [
-          "idempotency_key"
-        ]
+        "columns": ["idempotency_key"]
       }
     ]
   },
@@ -7708,18 +7430,12 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_kind_schedule",
         "type": "key",
-        "columns": [
-          "kind",
-          "scheduled_at"
-        ]
+        "columns": ["kind", "scheduled_at"]
       }
     ]
   },
@@ -7923,34 +7639,22 @@
       {
         "key": "by_workspace_status",
         "type": "key",
-        "columns": [
-          "workspace_id",
-          "status"
-        ]
+        "columns": ["workspace_id", "status"]
       },
       {
         "key": "by_idempotency",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "idempotency_key"
-        ]
+        "columns": ["workspace_id", "idempotency_key"]
       },
       {
         "key": "by_status_schedule",
         "type": "key",
-        "columns": [
-          "status",
-          "scheduled_at"
-        ]
+        "columns": ["status", "scheduled_at"]
       },
       {
         "key": "by_expiry",
         "type": "key",
-        "columns": [
-          "status",
-          "expires_at"
-        ]
+        "columns": ["status", "expires_at"]
       }
     ]
   },
@@ -8154,17 +7858,12 @@
       {
         "key": "by_workspace_key",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "idempotency_key"
-        ]
+        "columns": ["workspace_id", "idempotency_key"]
       },
       {
         "key": "by_expiry",
         "type": "key",
-        "columns": [
-          "expires_at"
-        ]
+        "columns": ["expires_at"]
       }
     ]
   },
@@ -8368,32 +8067,22 @@
       {
         "key": "by_org_status",
         "type": "key",
-        "columns": [
-          "organization_id",
-          "status"
-        ]
+        "columns": ["organization_id", "status"]
       },
       {
         "key": "by_user_status",
         "type": "key",
-        "columns": [
-          "user_id",
-          "status"
-        ]
+        "columns": ["user_id", "status"]
       },
       {
         "key": "by_workspace",
         "type": "key",
-        "columns": [
-          "workspace_id"
-        ]
+        "columns": ["workspace_id"]
       },
       {
         "key": "by_request",
         "type": "unique",
-        "columns": [
-          "request_id"
-        ]
+        "columns": ["request_id"]
       }
     ]
   },
@@ -8597,10 +8286,7 @@
       {
         "key": "by_workspace_user",
         "type": "unique",
-        "columns": [
-          "workspace_id",
-          "user_id"
-        ]
+        "columns": ["workspace_id", "user_id"]
       }
     ]
   },
@@ -8804,9 +8490,7 @@
       {
         "key": "by_user",
         "type": "unique",
-        "columns": [
-          "user_id"
-        ]
+        "columns": ["user_id"]
       }
     ]
   }

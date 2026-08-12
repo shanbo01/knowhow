@@ -1,6 +1,6 @@
 {
-    "projectId": "6a7b532a0033dd811cb4",
-    "endpoint": "https://fra.cloud.appwrite.io/v1",
+    "projectId": "knowhow-production",
+    "endpoint": "https://knowhowbeta-2exzhpwnisvnw.southindia.cloudapp.azure.com/v1",
     "includes": {
         "buckets": "./infrastructure/appwrite/buckets.json",
         "tablesDB": "./infrastructure/appwrite/databases.json",
@@ -43,9 +43,7 @@
             "entrypoint": "src/main.js",
             "commands": "npm ci --omit=dev",
             "execute": [],
-            "events": [
-                "tablesdb.knowhow_core.tables.export_jobs.rows.*.create"
-            ],
+            "events": [],
             "schedule": "*/2 * * * *",
             "timeout": 120,
             "enabled": true,

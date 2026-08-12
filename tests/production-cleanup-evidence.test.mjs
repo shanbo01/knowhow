@@ -371,7 +371,7 @@ test("cleanup verification accepts only an exact approved controlled API endpoin
   ]) {
     assert.throws(
       () => controlledProductionEndpoint(endpoint),
-      /approved Frankfurt Cloud or Azure Qatar Central endpoint/,
+      /approved Frankfurt Cloud or region-attested Azure endpoint/,
     );
   }
 });

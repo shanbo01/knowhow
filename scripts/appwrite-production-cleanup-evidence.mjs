@@ -138,7 +138,7 @@ export function controlledProductionEndpoint(raw) {
   requireCondition(
     endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Production cleanup evidence accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
+    "Production cleanup evidence accepts only an exact approved Frankfurt Cloud or region-attested Azure endpoint.",
   );
   return endpoint;
 }

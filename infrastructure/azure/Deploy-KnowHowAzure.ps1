@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$SubscriptionName = 'Azure subscription 1',
-    [string]$Location = 'qatarcentral',
+    [string]$Location = 'southindia',
     [string]$NamePrefix = 'knowhowbeta',
     [string]$OperatorEmail = 'yousefmshanableh@gmail.com',
-    [string]$VmSize = 'Standard_B2s',
+    [string]$VmSize = 'Standard_B2ls_v2',
     [string]$AppwriteVersion = '1.9.6',
     [switch]$ValidateOnly
 )
@@ -29,6 +29,27 @@ function Invoke-AzJson {
 $account = Invoke-AzJson @('account', 'show', '--output', 'json')
 if ($account.name -ne $SubscriptionName -or $account.state -ne 'Enabled') {
     throw "Expected enabled subscription '$SubscriptionName'; active subscription is '$($account.name)' ($($account.state))."
+}
+
+$sku = Invoke-AzJson @(
+    'vm', 'list-skus',
+    '--location', $Location,
+    '--resource-type', 'virtualMachines',
+    '--size', $VmSize,
+    '--all',
+    '--output', 'json'
+)
+$availableSku = @($sku) | Where-Object {
+    $_.name -eq $VmSize -and
+    @($_.restrictions | Where-Object { $_.type -ne 'Zone' }).Count -eq 0
+} | Select-Object -First 1
+if (-not $availableSku) {
+    throw "VM SKU '$VmSize' is unavailable to this subscription in '$Location'."
+}
+$vCpus = [int](@($availableSku.capabilities | Where-Object name -eq 'vCPUs').value | Select-Object -First 1)
+$memoryGb = [double](@($availableSku.capabilities | Where-Object name -eq 'MemoryGB').value | Select-Object -First 1)
+if ($vCpus -lt 2 -or $memoryGb -lt 4) {
+    throw "VM SKU '$VmSize' has $vCpus vCPU and $memoryGb GiB RAM; KnowHow requires at least 2 vCPU and 4 GiB."
 }
 
 $requiredProviders = @(
@@ -109,16 +130,27 @@ export MANAGED_IDENTITY_CLIENT_ID='$managedIdentityClientId'
 export APPWRITE_VERSION='$AppwriteVersion'
 "@
 $script = "$preamble`n$bootstrap"
-
-& az vm run-command invoke `
-    --resource-group $resourceGroup `
-    --name $vmName `
-    --command-id RunShellScript `
-    --scripts $script `
-    --only-show-errors `
-    --output json | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw 'The VM exists, but Appwrite bootstrap failed. Inspect Azure Run Command output before retrying.'
+$scriptBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($script)
+$compressedStream = [System.IO.MemoryStream]::new()
+$gzipStream = [System.IO.Compression.GZipStream]::new($compressedStream, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+$gzipStream.Write($scriptBytes, 0, $scriptBytes.Length)
+$gzipStream.Dispose()
+$bootstrapPayload = [Convert]::ToBase64String($compressedStream.ToArray())
+$compressedStream.Dispose()
+$payloadPath = '/tmp/knowhow-bootstrap.b64'
+& az vm run-command invoke --resource-group $resourceGroup --name $vmName --command-id RunShellScript --scripts "rm -f $payloadPath /var/lib/knowhow/bootstrap-complete" --only-show-errors --output none
+if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the Appwrite bootstrap upload.' }
+for ($offset = 0; $offset -lt $bootstrapPayload.Length; $offset += 6000) {
+    $length = [Math]::Min(6000, $bootstrapPayload.Length - $offset)
+    $chunk = $bootstrapPayload.Substring($offset, $length)
+    & az vm run-command invoke --resource-group $resourceGroup --name $vmName --command-id RunShellScript --scripts "printf '%s' '$chunk' >> $payloadPath" --only-show-errors --output none
+    if ($LASTEXITCODE -ne 0) { throw 'The Appwrite bootstrap upload was interrupted.' }
+}
+$bootstrapCommand = "base64 -d $payloadPath | gzip -d > /tmp/knowhow-bootstrap.sh && chmod 700 /tmp/knowhow-bootstrap.sh && bash /tmp/knowhow-bootstrap.sh && mkdir -p /var/lib/knowhow && touch /var/lib/knowhow/bootstrap-complete"
+$bootstrapResult = Invoke-AzJson @('vm', 'run-command', 'invoke', '--resource-group', $resourceGroup, '--name', $vmName, '--command-id', 'RunShellScript', '--scripts', $bootstrapCommand, '--only-show-errors', '--output', 'json')
+$verification = Invoke-AzJson @('vm', 'run-command', 'invoke', '--resource-group', $resourceGroup, '--name', $vmName, '--command-id', 'RunShellScript', '--scripts', 'test -f /var/lib/knowhow/bootstrap-complete && docker ps --format "{{.Names}}" | grep -qx appwrite && echo KNOWHOW_BOOTSTRAP_OK', '--only-show-errors', '--output', 'json')
+if ($verification.value[0].message -notmatch 'KNOWHOW_BOOTSTRAP_OK') {
+    throw "The VM exists, but Appwrite bootstrap verification failed: $($bootstrapResult.value[0].message)"
 }
 
 [PSCustomObject]@{

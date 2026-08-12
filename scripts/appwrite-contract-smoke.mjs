@@ -471,7 +471,7 @@ try {
           readiness.deployment,
           {
             environment:
-              target === "frankfurt-staging" ? "staging" : "production",
+              target.endsWith("-staging") ? "staging" : "production",
             release: expectedRelease,
             projectFingerprint: createHash("sha256")
               .update(`project\0${projectId}`)

@@ -13,7 +13,9 @@ import { getAppwriteServerConfig } from "./appwrite-config";
 
 function baseClient() {
   const config = getAppwriteServerConfig();
-  return new Client().setEndpoint(config.endpoint).setProject(config.projectId);
+  return new Client()
+    .setEndpoint(config.internalEndpoint)
+    .setProject(config.projectId);
 }
 
 export function createAdminAppwrite() {
@@ -41,4 +43,3 @@ export function createSessionAppwrite(sessionSecret: string) {
     account: new Account(client),
   };
 }
-

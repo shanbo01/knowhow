@@ -5,7 +5,24 @@ Report date: 2026-08-12
 Delivery branch: `codex/azure-qatar-private-beta`
 
 Baseline checkpoint: `9726071` (`feat: checkpoint Appwrite pilot baseline`)
-Overall status: **SYNTHETIC STAGING TESTING AVAILABLE; REAL CUSTOMER DATA BLOCKED BY AZURE QATAR ALLOCATION AND EXTERNAL/LEGAL GATES**
+Overall status: **AZURE STAGING AND PRODUCTION AVAILABLE FOR INVITATION-ONLY PRIVATE-BETA TESTING WITH SYNTHETIC/NON-SENSITIVE DATA**
+
+## Azure private-beta deployment update
+
+On 2026-08-12, after the subscription could not allocate an affordable Qatar Central VM, the owner authorized an availability-first test deployment. Azure subscription/SKU checks selected South India and `Standard_B2ls_v2` (2 vCPU, 4 GiB) as the cheapest sensible available configuration. `location` and `vmSize` remain deployment parameters, so the identical Appwrite/application topology can be redeployed to Qatar Central later without application changes. No HA or second application VM was created.
+
+- Appwrite 1.9.6 control plane: `https://knowhowbeta-2exzhpwnisvnw.southindia.cloudapp.azure.com`
+- Staging Site: `https://knowhow-staging.20.235.61.152.sslip.io`
+- Production Site: `https://knowhow-prod.20.235.61.152.sslip.io`
+- Exact isolated projects: `knowhow-staging` and `knowhow-production`; each has one `knowhow_core` database with 40 private tables, 107 indexes, two private buckets, two ready Functions, one latest-ready Site, and a private Docker-only Mailpit Messaging provider.
+- Both environments passed the live controlled contract: endpoint/version, exact table/index and bucket drift, Function/Site readiness, anonymous denial, TablesDB CRUD and transaction commit/rollback/conflict semantics, private PNG byte integrity, server-session Auth, Messaging provider visibility, Next health/readiness identity, anonymous product/media/export/audit/extension denial, and synthetic-fixture cleanup.
+- A verified explicit `owner` account for `yousefmshanableh@gmail.com` exists in both projects. Its generated password is stored only in Key Vault as `knowhow-private-beta-owner-password`; administrative MFA remains required by the application.
+- Daily encrypted backups are enabled. The first successful age-encrypted archive was uploaded to the private versioned Blob container. Its SHA-256 and every inner payload checksum passed. A same-VM isolated, no-public-port MongoDB rehearsal restored 4,939 documents, both Appwrite projects, and 187 Appwrite collections, then destroyed the disposable container/network/volume and restarted the live stack. Index creation remains reproducible from the checked-in Appwrite manifest on this memory-constrained test SKU.
+- Azure VM Backup is enabled with the enhanced policy; the initial user-triggered recovery-point job `5f6a1063-2e7a-4237-8d4e-42210ad6b588` completed its snapshot and is transferring the recovery point to the vault.
+- Key Vault, managed identity, Log Analytics/Azure Monitor, TLS, deny-by-default NSG rules, blocked public SSH, encrypted backup/restore tooling, resource locks, and application security controls remain enabled.
+- Estimated steady-state Azure cost was disclosed before deployment as approximately USD 70–80/month excluding tax and egress. No additional restore VM was created.
+
+The deployment is approved for controlled invitation-only testing, not for regulated data, public signup, paid production SLA, or unsupervised real-customer data. The temporary Mailpit provider captures notification mail inside the private Docker network and does not deliver external email; invite links must therefore be shared manually until a real sender/domain is configured.
 
 This report separates locally verified implementation evidence from credentialed Staging/Production evidence. A local pass never substitutes for a pending environment, legal, provider, restore, store, or synthetic-customer gate.
 

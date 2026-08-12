@@ -573,7 +573,7 @@ export function controlledEndpoint(raw) {
   requireCondition(
     endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Backup evidence accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
+    "Backup evidence accepts only an exact approved Frankfurt Cloud or region-attested Azure endpoint.",
   );
   return endpoint;
 }
