@@ -28,17 +28,32 @@ const APPWRITE_DATABASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const RESTORE_DATABASE_ID = /^knowhow_restore_[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
 const RESTORE_SITE_ID = /^knowhow_restore_web_[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/;
 const RELEASE_SHA = /^[a-f0-9]{40}$/;
+const AZURE_QATAR_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.qatarcentral\.cloudapp\.azure\.com$/;
+
+function controlledEndpointIsApproved(endpoint: URL, raw: string) {
+  const exactShape =
+    endpoint.protocol === "https:" &&
+    endpoint.pathname.replace(/\/$/, "") === "/v1" &&
+    !endpoint.username &&
+    !endpoint.password &&
+    !endpoint.port &&
+    !endpoint.search &&
+    !endpoint.hash &&
+    (raw === `https://${endpoint.hostname}/v1` ||
+      raw === `https://${endpoint.hostname}/v1/`);
+  if (!exactShape) return false;
+  if (endpoint.hostname === "fra.cloud.appwrite.io") {
+    const residency = process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim();
+    return !residency || residency === "appwrite-cloud-frankfurt";
+  }
+  return (
+    process.env.KNOWHOW_APPWRITE_RESIDENCY?.trim() === "azure-qatar-central" &&
+    AZURE_QATAR_HOST.test(endpoint.hostname)
+  );
+}
 
 function parsedEndpoint(value: string, environment: AppwriteServerConfig["environment"]) {
   const controlled = environment === "staging" || environment === "production";
-  if (
-    controlled &&
-    !/^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/.test(value)
-  ) {
-    throw new Error(
-      "Staging and production require the exact Appwrite Cloud Frankfurt endpoint.",
-    );
-  }
   let endpoint: URL;
   try {
     endpoint = new URL(value);
@@ -49,20 +64,9 @@ function parsedEndpoint(value: string, environment: AppwriteServerConfig["enviro
   if (endpoint.protocol !== "https:" && !(environment === "development" && local)) {
     throw new Error("APPWRITE_ENDPOINT must use HTTPS.");
   }
-  if (
-    controlled &&
-    (endpoint.hostname !== "fra.cloud.appwrite.io" ||
-      endpoint.pathname.replace(/\/$/, "") !== "/v1" ||
-      Boolean(
-        endpoint.username ||
-          endpoint.password ||
-          endpoint.port ||
-          endpoint.search ||
-          endpoint.hash,
-      ))
-  ) {
+  if (controlled && !controlledEndpointIsApproved(endpoint, value)) {
     throw new Error(
-      "Staging and production require the exact Appwrite Cloud Frankfurt endpoint.",
+      "Staging and production require an exact approved Frankfurt Cloud or Azure Qatar Central Appwrite endpoint.",
     );
   }
   return endpoint.toString().replace(/\/$/, "");

@@ -252,7 +252,8 @@ test("controlled network load is tenant-bound, revocable, and HMAC sealed", asyn
   assert.match(load, /\.setSession\(session\)/);
   assert.match(load, /signIn\.payload\.mfaRequired/);
   assert.match(guards, /target === "staging" \? 3 : 2/);
-  assert.match(guards, /fra\.cloud\.appwrite\.io/);
+  assert.match(guards, /exactControlledAppwriteEndpoint/);
+  assert.match(guards, /KNOWHOW_APPWRITE_RESIDENCY/);
   assert.match(guards, /readersPerTenant \+ actors\.length <= 120/);
   assert.match(guards, /timingSafeEqual\(actual, expected\)/);
   assert.match(guards, /exactKeys\(payload/);
@@ -302,7 +303,8 @@ test("backup evidence is sealed, database-bound, and isolated from Production ru
     packageJson.scripts["appwrite:restore:verify"],
     "node scripts/appwrite-restore-evidence.mjs verify",
   );
-  assert.match(verifier, /hostname === "fra\.cloud\.appwrite\.io"/);
+  assert.match(verifier, /exactControlledAppwriteEndpoint/);
+  assert.match(verifier, /KNOWHOW_APPWRITE_RESIDENCY/);
   assert.match(verifier, /record\.resourceId === databaseId/);
   assert.match(verifier, /KNOWHOW_BACKUP_SOURCE_FROZEN/);
   assert.match(verifier, /KNOWHOW_RESTORE_NOT_REFERENCED/);

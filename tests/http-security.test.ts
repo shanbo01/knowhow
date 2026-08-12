@@ -207,7 +207,7 @@ test("session secrets are accepted only from the HTTP-only Appwrite cookie bound
   }
 });
 
-test("controlled environments are pinned to Frankfurt and fail closed on missing controls", () => {
+test("controlled environments accept only attested Frankfurt fallback or Azure Qatar endpoints", () => {
   const restore = withEnvironment({
     KNOWHOW_ENVIRONMENT: "production",
     NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "production",
@@ -241,8 +241,27 @@ test("controlled environments are pinned to Frankfurt and fail closed on missing
       "https://fra.cloud.appwrite.io/v1#production",
     ]) {
       process.env.APPWRITE_ENDPOINT = endpoint;
-      assert.throws(() => getAppwriteServerConfig(), /exact Appwrite Cloud Frankfurt/);
+      assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or Azure Qatar Central/);
     }
+    process.env.APPWRITE_ENDPOINT =
+      "https://knowhowbeta-abc123.qatarcentral.cloudapp.azure.com/v1";
+    assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or Azure Qatar Central/);
+    process.env.KNOWHOW_APPWRITE_RESIDENCY = "azure-qatar-central";
+    assert.equal(
+      getAppwriteServerConfig().endpoint,
+      "https://knowhowbeta-abc123.qatarcentral.cloudapp.azure.com/v1",
+    );
+    for (const endpoint of [
+      "http://knowhowbeta-abc123.qatarcentral.cloudapp.azure.com/v1",
+      "https://knowhowbeta-abc123.qatarcentral.cloudapp.azure.com:443/v1",
+      "https://knowhowbeta-abc123.qatarcentral.cloudapp.azure.com/v1?target=production",
+      "https://qatarcentral.cloudapp.azure.com/v1",
+      "https://knowhowbeta-abc123.uaenorth.cloudapp.azure.com/v1",
+    ]) {
+      process.env.APPWRITE_ENDPOINT = endpoint;
+      assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or Azure Qatar Central|must use HTTPS/);
+    }
+    delete process.env.KNOWHOW_APPWRITE_RESIDENCY;
     process.env.APPWRITE_ENDPOINT = "https://fra.cloud.appwrite.io/v1";
     process.env.KNOWHOW_ALLOWED_ORIGINS = "https://knowhow.example/path";
     assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));

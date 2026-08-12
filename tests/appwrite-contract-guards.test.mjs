@@ -56,7 +56,7 @@ test("controlled smoke endpoints and Site origins are exact", () => {
           allowStaging: true,
           environment: "staging",
         }),
-      /exact local endpoint or Appwrite Cloud Frankfurt endpoint/,
+      /exact local or approved controlled Appwrite endpoint/,
     );
   }
   assert.throws(

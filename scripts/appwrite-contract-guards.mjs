@@ -1,8 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { exactControlledAppwriteEndpoint } from "./controlled-appwrite-endpoint.mjs";
 
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const CONTROLLED_ENDPOINT_PATTERN =
-  /^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/;
 
 function requireCondition(condition, message) {
   if (!condition) throw new Error(message);
@@ -18,7 +17,12 @@ function normalizedEndpoint(url) {
 
 export function resolveSmokeTarget(
   raw,
-  { allowStaging = false, allowProduction = false, environment = "" } = {},
+  {
+    allowStaging = false,
+    allowProduction = false,
+    environment = "",
+    residency = process.env.KNOWHOW_APPWRITE_RESIDENCY ?? "",
+  } = {},
 ) {
   requireCondition(typeof raw === "string" && raw === raw.trim(), "APPWRITE_ENDPOINT is invalid.");
   let url;
@@ -43,19 +47,13 @@ export function resolveSmokeTarget(
     );
     return { endpoint: normalizedEndpoint(url), target: "self-host" };
   }
-  requireCondition(
-    CONTROLLED_ENDPOINT_PATTERN.test(raw) &&
-      !url.username &&
-      !url.password &&
-      !url.port &&
-      !url.search &&
-      !url.hash,
-    "The contract smoke accepts only an exact local endpoint or Appwrite Cloud Frankfurt endpoint.",
-  );
+  const endpoint = exactControlledAppwriteEndpoint(raw, residency);
+  requireCondition(endpoint, "The contract smoke accepts only an exact local or approved controlled Appwrite endpoint.");
+  const location = url.hostname === "fra.cloud.appwrite.io" ? "frankfurt" : "qatar";
   if (environment === "staging" && allowStaging)
-    return { endpoint: normalizedEndpoint(url), target: "frankfurt-staging" };
+    return { endpoint, target: `${location}-staging` };
   if (environment === "production" && allowProduction)
-    return { endpoint: normalizedEndpoint(url), target: "frankfurt-production" };
+    return { endpoint, target: `${location}-production` };
   throw new Error("The requested controlled smoke target was not explicitly enabled.");
 }
 
@@ -81,7 +79,7 @@ export function assertControlledMutationBinding({
       projectId !== forbiddenProjectId,
     "The Appwrite project does not match the reviewed environment binding.",
   );
-  const environment = target === "frankfurt-staging" ? "staging" : "production";
+  const environment = target.endsWith("-staging") ? "staging" : "production";
   requireCondition(
     confirmation === `${environment}-transient-fixtures`,
     `The ${environment} transient-fixture confirmation is missing.`,

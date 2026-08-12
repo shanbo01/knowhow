@@ -9,6 +9,7 @@ import {
   sealEvidence,
   verifyEvidenceSeal,
 } from "./appwrite-restore-evidence.mjs";
+import { exactControlledAppwriteEndpoint } from "./controlled-appwrite-endpoint.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const RELEASE_SHA = /^[a-f0-9]{40}$/;
@@ -122,27 +123,17 @@ export function exactSiteOrigin(raw) {
   return url.origin;
 }
 
-export function exactFrankfurtEndpoint(raw) {
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    fail("APPWRITE_ENDPOINT_INVALID", "APPWRITE_ENDPOINT is invalid.");
-  }
+export function exactFrankfurtEndpoint(
+  raw,
+  residency = process.env.KNOWHOW_APPWRITE_RESIDENCY ?? "",
+) {
+  const endpoint = exactControlledAppwriteEndpoint(raw, residency);
   requireCondition(
-    /^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/.test(raw) &&
-      url.protocol === "https:" &&
-      url.hostname === "fra.cloud.appwrite.io" &&
-      url.pathname.replace(/\/$/, "") === "/v1" &&
-      !url.username &&
-      !url.password &&
-      !url.port &&
-      !url.search &&
-      !url.hash,
+    endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Restore verification accepts only the exact Appwrite Cloud Frankfurt endpoint.",
+    "Restore verification accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
   );
-  return url.toString().replace(/\/$/, "");
+  return endpoint;
 }
 
 export function privateEvidencePath(candidate, workspace = process.cwd()) {
@@ -286,6 +277,7 @@ export function restoreApplicationConfiguration(
 
   const endpoint = exactFrankfurtEndpoint(
     required(environment, "APPWRITE_ENDPOINT"),
+    environment.KNOWHOW_APPWRITE_RESIDENCY ?? "",
   );
 
   const siteOrigin = exactSiteOrigin(
@@ -397,6 +389,7 @@ export function restoreApplicationConfiguration(
   return {
     environment: "production",
     endpoint,
+    residency: environment.KNOWHOW_APPWRITE_RESIDENCY ?? "",
     siteOrigin,
     sourceSiteOrigin,
     expectedProjectId,
@@ -486,6 +479,7 @@ export function restoreApplicationVerificationConfiguration(
   );
   return {
     environment: "production",
+    residency: environment.KNOWHOW_APPWRITE_RESIDENCY ?? "",
     siteOrigin,
     sourceSiteOrigin,
     expectedProjectId,
@@ -542,6 +536,7 @@ export function restoreCleanupConfiguration(
   }
   const endpoint = exactFrankfurtEndpoint(
     required(environment, "APPWRITE_ENDPOINT"),
+    environment.KNOWHOW_APPWRITE_RESIDENCY ?? "",
   );
   const projectId = required(environment, "APPWRITE_PROJECT_ID");
   requireCondition(
@@ -700,7 +695,10 @@ export function validateRestoreReport(payload, configuration) {
     "The restore report does not belong to the expected Production source.",
   );
   requireCondition(
-    payload.target?.endpointOrigin === "https://fra.cloud.appwrite.io" &&
+    exactControlledAppwriteEndpoint(
+      `${payload.target?.endpointOrigin}/v1`,
+      configuration.residency,
+    ) !== null &&
       payload.target?.projectFingerprint ===
       restoreEvidenceProjectFingerprint(configuration.expectedProjectId) &&
       payload.target?.databaseId === configuration.databaseId &&

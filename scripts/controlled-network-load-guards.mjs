@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
+import { exactControlledAppwriteEndpoint } from "./controlled-appwrite-endpoint.mjs";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const LABEL_PATTERN = /^[a-z0-9][a-z0-9_-]{1,31}$/;
@@ -76,30 +77,14 @@ export function exactControlledSiteOrigin(raw) {
   return parsed.origin;
 }
 
-function exactFrankfurtEndpoint(raw) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    fail(
-      "APPWRITE_ENDPOINT_INVALID",
-      "The controlled-load Appwrite endpoint is invalid.",
-    );
-  }
+function exactApprovedEndpoint(raw, residency) {
+  const endpoint = exactControlledAppwriteEndpoint(raw, residency);
   requireCondition(
-    /^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/.test(raw) &&
-      parsed.protocol === "https:" &&
-      parsed.hostname === "fra.cloud.appwrite.io" &&
-      parsed.pathname.replace(/\/$/, "") === "/v1" &&
-      !parsed.username &&
-      !parsed.password &&
-      !parsed.port &&
-      !parsed.search &&
-      !parsed.hash,
+    endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Controlled network load accepts only the exact Appwrite Cloud Frankfurt endpoint.",
+    "Controlled network load accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
   );
-  return parsed.toString().replace(/\/$/, "");
+  return endpoint;
 }
 
 function parseActors(raw, emailDomain) {
@@ -170,7 +155,10 @@ export function controlledNetworkLoadConfiguration(environment = process.env) {
     "Controlled network load runs only against Staging or Production.",
   );
   const siteOrigin = exactControlledSiteOrigin(value(environment, "KNOWHOW_NETWORK_LOAD_SITE_ORIGIN"));
-  const endpoint = exactFrankfurtEndpoint(value(environment, "APPWRITE_ENDPOINT"));
+  const endpoint = exactApprovedEndpoint(
+    value(environment, "APPWRITE_ENDPOINT"),
+    environment.KNOWHOW_APPWRITE_RESIDENCY ?? "",
+  );
   const expectedProjectId = value(environment, "KNOWHOW_NETWORK_LOAD_EXPECTED_PROJECT_ID");
   const forbiddenProjectId = value(environment, "KNOWHOW_NETWORK_LOAD_FORBIDDEN_PROJECT_ID");
   requireCondition(

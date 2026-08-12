@@ -10,6 +10,7 @@ import {
   TablesDB,
   Users,
 } from "node-appwrite";
+import { exactControlledAppwriteEndpoint } from "./controlled-appwrite-endpoint.mjs";
 
 const EVIDENCE_VERSION = 1;
 const PAGE_SIZE = 100;
@@ -130,30 +131,16 @@ function keyedHash(value, key) {
 }
 
 export function controlledProductionEndpoint(raw) {
-  requireCondition(
-    /^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/.test(raw),
-    "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Production cleanup evidence accepts only the Appwrite Cloud Frankfurt API endpoint.",
+  const endpoint = exactControlledAppwriteEndpoint(
+    raw,
+    process.env.KNOWHOW_APPWRITE_RESIDENCY ?? "",
   );
-  let endpoint;
-  try {
-    endpoint = new URL(raw);
-  } catch {
-    fail("APPWRITE_ENDPOINT_INVALID", "APPWRITE_ENDPOINT must be a valid URL.");
-  }
   requireCondition(
-    endpoint.protocol === "https:" &&
-      endpoint.hostname === "fra.cloud.appwrite.io" &&
-      endpoint.pathname.replace(/\/$/, "") === "/v1" &&
-      !endpoint.username &&
-      !endpoint.password &&
-      !endpoint.port &&
-      !endpoint.search &&
-      !endpoint.hash,
+    endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Production cleanup evidence accepts only the Appwrite Cloud Frankfurt API endpoint.",
+    "Production cleanup evidence accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
   );
-  return endpoint.toString().replace(/\/$/, "");
+  return endpoint;
 }
 
 function parseJsonEnvironment(name) {
@@ -666,7 +653,10 @@ export function verifyCleanupEvidenceSeal(evidence, key, expectedKeyId) {
         "projectFingerprint",
         "databaseId",
       ]) &&
-      payload.source.endpointOrigin === "https://fra.cloud.appwrite.io" &&
+      exactControlledAppwriteEndpoint(
+        `${payload.source.endpointOrigin}/v1`,
+        process.env.KNOWHOW_APPWRITE_RESIDENCY ?? "",
+      ) !== null &&
       SHA256_PATTERN.test(String(payload.source.projectFingerprint ?? "")) &&
       payload.source.databaseId === "knowhow_core" &&
       exactKeys(payload.cleanup ?? {}, [

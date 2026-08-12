@@ -7,14 +7,14 @@ The current delivery target is up to three Qatar design partners, initially one 
 ## Runtime architecture
 
 - One standard Next.js application per environment, with marketing at `/`, product entry at `/app`, workspace routes under `/w`, and platform control under `/platform`.
-- Separate Appwrite Cloud Frankfurt projects for Staging and Production.
+- Separate Staging and Production projects on self-hosted Appwrite 1.9.6 in Azure Qatar Central. Appwrite Cloud Frankfurt remains a temporary synthetic-testing fallback until Qatar parity and restore evidence pass.
 - Appwrite Auth sessions exchanged and retained only through secure, HTTP-only, same-site server cookies.
 - Appwrite TablesDB database `knowhow_core`, private Storage buckets `knowhow_private_media` and `knowhow_exports`, Site `knowhow_web`, and Functions `knowhow_ops` and `knowhow_export`.
 - Product tables and files have no browser permissions. Every request passes through KnowHow's default-deny policy layer.
 - Organization administration controls metadata and policy but never grants guide or screenshot access by itself. Workspace membership and guide audiences remain separate.
 - The Chromium Manifest V3 extension uses short-lived, workspace-scoped device tokens and never receives an Appwrite key or session.
 
-The deployable resource source is [appwrite.config.json](./appwrite.config.json), with generated table and bucket manifests in `infrastructure/appwrite`. Environment IDs and secrets are never committed.
+The deployable resource source is [appwrite.config.json](./appwrite.config.json), with generated table and bucket manifests in `infrastructure/appwrite` and reproducible Azure Bicep in `infrastructure/azure`. Environment IDs and secrets are never committed.
 
 ## Pilot data boundary
 
@@ -27,7 +27,7 @@ Screenshots must be rasterized and redacted locally, then explicitly privacy-rev
 - Node.js 22.13 or newer
 - npm
 - Chromium for Playwright and extension testing
-- For a real environment: an empty Appwrite project in Frankfurt, an appropriately scoped server API key, verified email delivery, and exact Site/extension origins
+- For the intended environment: the active `Azure subscription 1`, Qatar Central VM allocation, the Bicep/bootstrap in `infrastructure/azure`, two empty self-hosted Appwrite projects, scoped server keys, and exact Site/extension origins
 - For the portability smoke test: Docker Compose v2 and a fresh local Appwrite project
 
 ## Local development
@@ -104,6 +104,7 @@ See [extension/README.md](./extension/README.md) and [extension distribution](./
 ## Operations and governance
 
 - [Deployment and rollback runbook](./docs/operations/deployment.md)
+- [Azure Qatar Central platform](./infrastructure/azure/README.md)
 - [Monitoring and alert thresholds](./docs/operations/monitoring.md)
 - [Backup and restore rehearsal](./docs/operations/backup-restore.md)
 - [Incident response](./docs/operations/incident-response.md)
@@ -122,6 +123,6 @@ The governance documents are controlled drafts, not executed agreements or legal
 
 ## Release boundary
 
-Local passing tests do not authorize a pilot. External access remains blocked until the owner completes every checkpoint in the readiness report: clean Frankfurt projects, Production Pro, daily backups and isolated restore evidence, verified DNS/email, Sentry alerts, unlisted browser-store listings, executed legal terms, full Staging and Production synthetic journeys, Production synthetic-tenant purge, and no unresolved P0/P1 findings.
+Local passing tests do not authorize real customer data. Synthetic/non-sensitive testers may use the temporary invitation-only Staging environment. Real design-partner access remains blocked until Azure Qatar allocation, self-hosted Production/Staging deployment, backup and isolated restore evidence, verified email, monitoring, executed legal terms, full synthetic journeys, Production purge, and no unresolved P0/P1 findings.
 
 Production readiness here means controlled external-pilot readiness, not enterprise GA. Independent media disaster recovery, a contractual SLA, third-party penetration testing, enterprise identity, open self-service, live payments, and customer-ready on-premises delivery remain deferred.

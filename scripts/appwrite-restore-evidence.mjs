@@ -9,6 +9,7 @@ import {
   Query,
   TablesDB,
 } from "node-appwrite";
+import { exactControlledAppwriteEndpoint } from "./controlled-appwrite-endpoint.mjs";
 
 const EVIDENCE_VERSION = 1;
 const PAGE_SIZE = 100;
@@ -565,30 +566,16 @@ export function verifyEvidenceSeal(evidence, key, expectedKeyId) {
 }
 
 export function controlledEndpoint(raw) {
-  requireCondition(
-    /^https:\/\/fra\.cloud\.appwrite\.io\/v1\/?$/.test(raw),
-    "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Backup evidence accepts only the Appwrite Cloud Frankfurt API endpoint.",
+  const endpoint = exactControlledAppwriteEndpoint(
+    raw,
+    process.env.KNOWHOW_APPWRITE_RESIDENCY ?? "",
   );
-  let endpoint;
-  try {
-    endpoint = new URL(raw);
-  } catch {
-    fail("APPWRITE_ENDPOINT_INVALID", "APPWRITE_ENDPOINT must be a valid URL.");
-  }
   requireCondition(
-    endpoint.protocol === "https:" &&
-      endpoint.hostname === "fra.cloud.appwrite.io" &&
-      endpoint.pathname.replace(/\/$/, "") === "/v1" &&
-      !endpoint.username &&
-      !endpoint.password &&
-      !endpoint.port &&
-      !endpoint.search &&
-      !endpoint.hash,
+    endpoint,
     "APPWRITE_ENDPOINT_NOT_FRANKFURT",
-    "Backup evidence accepts only the Appwrite Cloud Frankfurt API endpoint.",
+    "Backup evidence accepts only an exact approved Frankfurt Cloud or Azure Qatar Central endpoint.",
   );
-  return endpoint.toString().replace(/\/$/, "");
+  return endpoint;
 }
 
 export function assertIsolatedTarget(source, targetProjectId, targetDatabaseId) {

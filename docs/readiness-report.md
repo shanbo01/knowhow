@@ -1,21 +1,25 @@
 # KnowHow external-pilot readiness report
 
-Report date: 2026-08-11  
-Delivery branch: `codex/appwrite-pilot-readiness`  
-Baseline checkpoint: `74f3729` on `codex/extension-feedback`  
-Overall status: **NOT READY FOR EXTERNAL CUSTOMER DATA — controlled-environment and owner/legal gates remain open**
+Report date: 2026-08-12
+
+Delivery branch: `codex/azure-qatar-private-beta`
+
+Baseline checkpoint: `9726071` (`feat: checkpoint Appwrite pilot baseline`)
+Overall status: **SYNTHETIC STAGING TESTING AVAILABLE; REAL CUSTOMER DATA BLOCKED BY AZURE QATAR ALLOCATION AND EXTERNAL/LEGAL GATES**
 
 This report separates locally verified implementation evidence from credentialed Staging/Production evidence. A local pass never substitutes for a pending environment, legal, provider, restore, store, or synthetic-customer gate.
 
 ## Current execution context
 
-Checks and the owner-authorized environment reset on 2026-08-11 established the current evidence boundary:
+Checks on 2026-08-11 and the Azure migration work on 2026-08-12 established the current evidence boundary:
 
-- The delivery branch still points at baseline commit `74f372972e60ab7f660c8c0dcc00dfecc3d252dc`; the Appwrite migration is an uncommitted working tree and the repository has no configured Git remote. There is therefore no immutable reviewed candidate SHA to deploy or dispatch through the protected release workflow.
+- The complete Appwrite pilot migration is checkpointed at `9726071` on `codex/azure-qatar-private-beta`. The repository still has no configured Git remote, so protected remote workflow evidence is unavailable.
 - Staging was provisioned with a short-lived bootstrap credential. That credential was converted in place to a Site-only runtime key with only `users`, `sessions`, database/table rows, private files, Function-read, and message-write scopes; the local Appwrite CLI configuration was reset to an empty `{}` after deployment.
 - A configuration-only snapshot of the old Free Singapore project, `SOP Inventory` (`6a6a53ac002ca43c7ea4`), was recorded without opening Auth users, keys, row contents, or files. The owner then explicitly authorized its permanent deletion, including its users and resources; the project was deleted without exporting or migrating anything.
 - The `Personal projects` organization contains exactly two Free-plan projects in Frankfurt: `KnowHow Staging` (`6a7b532a0033dd811cb4`) and `KnowHow Production` (`6a7b534f00071e3d3014`). Staging now has `knowhow_core` with all 40 tables and indexes, the two Functions, and the live `knowhow_web` Site. Production remains an empty project boundary.
 - Appwrite's Pro checkout displayed `$25/month` for Pro plus `$15/month` for the second project, for `$40` due immediately and every 30 days. The owner explicitly deferred all paid-plan work on 2026-08-11, so no purchase was submitted.
+- The active Azure account is the enabled default `Azure subscription 1`. Required Compute, Network, Storage, Key Vault, Managed Identity, Log Analytics, Insights, and Recovery Services providers are registered. Reproducible Qatar Central Bicep, pinned Appwrite bootstrap, Key Vault secret generation, Azure Monitor, deny-by-default networking, age-encrypted zone-redundant Qatar backups, daily locally redundant VM backup, and fresh-instance-only restore tooling are implemented and locally validated.
+- Azure ARM preflight rejected `Standard_B2s` both zonally and regionally with `SkuNotAvailable`. The live Qatar catalog marks every practical 2–4 vCPU SKU `NotAvailableForSubscription`; only 20–128 vCPU families are unrestricted, which exceed the subscription's 4-vCPU regional quota and are not an acceptable cost workaround. No billable Azure resources were created.
 
 Consequently, Staging is available for invitation-only testing with synthetic/non-sensitive data at `https://6a7b5a4e1431645d3de7.appwrite.network/app`. A verified explicit platform-owner account passed real password login and was stopped by the required TOTP-enrollment gate. The UI produces exact-email, single-use fallback invitation links, so testing does not depend on a paid email provider. This is not Production approval: Production, Pro backup/restore, legal, sender, monitoring, store, and full controlled-rehearsal gates remain open, and real customer data remains prohibited.
 
@@ -59,8 +63,9 @@ npm run load:pilot
 | Gate | Owner | Status / required proof |
 | --- | --- | --- |
 | Company/legal authority | Company + Qatar counsel | **Blocked:** incorporation and approved/executed pilot agreement, DPA, privacy notice, acceptable use, subprocessors, retention, incident/support terms |
+| Azure Qatar Central allocation | Azure subscription owner / Microsoft | **Blocked externally:** ARM reports `SkuNotAvailable` for `Standard_B2s`; every practical Qatar VM SKU is `NotAvailableForSubscription`. Enable one 2-vCPU/4-GB-or-more Qatar SKU, then run `infrastructure/azure/Deploy-KnowHowAzure.ps1` without changing country or selecting an oversized machine. |
 | Frankfurt Staging | Product/operations owner | **Available for synthetic Free-plan testing:** `KnowHow Staging` (`6a7b532a0033dd811cb4`) has the full 40-table schema/index set, two ready Functions, one private Free-plan bucket shared by media and exports, and the active Site at `https://6a7b5a4e1431645d3de7.appwrite.network`. Health, Auth, identity, tables, storage, Functions, real owner password login, forced owner TOTP enrollment, session sign-out, and scoped transaction rollback passed. Readiness intentionally remains `503 configuration: attention` for the one-bucket Free-plan deviation and missing Sentry/store-listing settings. Full two-user and controlled load rehearsals remain pending. |
-| Frankfurt Production Pro | Product/operations owner | **Deferred by owner / not deployed:** clean Frankfurt project `KnowHow Production` (`6a7b534f00071e3d3014`) exists, but the organization remains Free and the owner declined paid-plan work for now. Pending Pro activation, scoped deployment credential, deployed resources, exact runtime origins, controlled browser/load evidence, backup/restore, synthetic cleanup, and final clean-state proof. |
+| Qatar self-hosted Production/Staging | Product/operations owner | **Deployment-ready but allocation-blocked:** create two isolated projects on the Qatar control plane, deploy the same manifest with separate credentials/origins, and pass smoke/journey/load/backup/restore/purge. The empty Frankfurt Production project is not the intended paid target. |
 | Backup/restore | Product/operations owner | **Blocked:** run the implemented HMAC-sealed source capture and database verifier against a daily `knowhow_core` policy and successful isolated Pro restore; create the access-controlled disposable Site; pass `appwrite:restore:application` and independent evidence verification; then have a second operator remove the disposable resources and pass the read-only live/offline restore-cleanup evidence gates before revoking the final key |
 | Email/DNS | Domain owner | **Blocked for automated delivery:** canonical TLS/DNS plus Resend/Appwrite Messaging sender, SPF, DKIM, DMARC, and template evidence are absent. For synthetic testing only, the product displays exact-email, expiring, one-use invitation links for manual sharing. |
 | Sentry | Security/operations owner | **Blocked:** projects/alerts, scrubbed synthetic canary inspection, notification route, source-map release evidence |

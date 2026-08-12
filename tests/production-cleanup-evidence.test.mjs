@@ -358,7 +358,7 @@ test("the full verifier returns content-free evidence for an empty Production cu
   }
 });
 
-test("cleanup verification accepts only the exact Frankfurt API endpoint", () => {
+test("cleanup verification accepts only an exact approved controlled API endpoint", () => {
   assert.equal(
     controlledProductionEndpoint("https://fra.cloud.appwrite.io/v1"),
     "https://fra.cloud.appwrite.io/v1",
@@ -371,7 +371,7 @@ test("cleanup verification accepts only the exact Frankfurt API endpoint", () =>
   ]) {
     assert.throws(
       () => controlledProductionEndpoint(endpoint),
-      /Frankfurt API endpoint/,
+      /approved Frankfurt Cloud or Azure Qatar Central endpoint/,
     );
   }
 });

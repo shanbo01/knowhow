@@ -30,7 +30,8 @@ jobs:
     environment: ${{ inputs.target }}
     env:
       KNOWHOW_ENVIRONMENT: ${{ inputs.target }}
-      APPWRITE_ENDPOINT: https://fra.cloud.appwrite.io/v1
+      APPWRITE_ENDPOINT: ${{ vars.APPWRITE_ENDPOINT }}
+      KNOWHOW_APPWRITE_RESIDENCY: ${{ vars.KNOWHOW_APPWRITE_RESIDENCY }}
       APPWRITE_PROJECT_ID: ${{ inputs.target == 'staging' && secrets.APPWRITE_STAGING_PROJECT_ID || secrets.APPWRITE_PRODUCTION_PROJECT_ID }}
       APPWRITE_API_KEY: ${{ inputs.target == 'staging' && secrets.APPWRITE_STAGING_API_KEY || secrets.APPWRITE_PRODUCTION_API_KEY }}
       APPWRITE_DATABASE_ID: knowhow_core
