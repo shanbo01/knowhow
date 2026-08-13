@@ -121,7 +121,10 @@ test("workspace invitations are exact-email, single-use, domain-bound, and idemp
       error instanceof HttpError && error.code === "INPUT_INVALID",
   );
 
-  const options = commandOptions("single-invite");
+  const options = {
+    ...commandOptions("single-invite"),
+    idempotencyKey: "i".repeat(128),
+  };
   const [first, replay] = (await Promise.all([
     service.execute(
       admin,
@@ -150,6 +153,7 @@ test("workspace invitations are exact-email, single-use, domain-bound, and idemp
   assert.equal((await store.list(TABLES.invitations)).length, 1);
   const deliveries = await store.list(TABLES.notificationDeliveries);
   assert.equal(deliveries.length, 1);
+  assert.ok(String(deliveries[0].idempotency_key).length <= 128);
   const delivery = decodePayload<Record<string, unknown>>(deliveries[0], {});
   assert.equal(delivery.credential, undefined);
   assert.equal(typeof delivery.credentialEnvelope, "object");

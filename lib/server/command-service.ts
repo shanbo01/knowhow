@@ -386,6 +386,10 @@ async function queueNotification(
   },
 ) {
   const id = await deterministicId("notice", input.idempotencyKey);
+  const storedIdempotencyKey =
+    input.idempotencyKey.length <= 128
+      ? input.idempotencyKey
+      : await deterministicId("notice-key", input.idempotencyKey);
   const notificationPayload = { ...(input.payload ?? {}) };
   if (typeof notificationPayload.credential === "string") {
     notificationPayload.credentialEnvelope =
@@ -409,7 +413,7 @@ async function queueNotification(
         subject_id: input.subjectId,
         status: "queued",
         scheduled_at: nowIso(),
-        idempotency_key: input.idempotencyKey,
+        idempotency_key: storedIdempotencyKey,
       },
       notificationPayload,
     ),
