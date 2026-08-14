@@ -3,8 +3,19 @@ import { LeadForm } from "../components/lead-form";
 import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
-export const metadata: Metadata = { title: "Contact and pilot pricing | KnowHow" };
+export const metadata: Metadata = { title: "Contact | KnowHow" };
 
 export default function ContactPage() {
-  return <MarketingPage><InfoHero eyebrow="Contact and pricing" title="Tell us what your team needs to standardize." intro="Pilot pricing is agreed directly. Public prices, self-service checkout, and live payments are intentionally unavailable during the design-partner phase." /><section className={styles.formSection}><LeadForm kind="pricing" /></section></MarketingPage>;
+  return (
+    <MarketingPage>
+      <InfoHero
+        eyebrow="Contact"
+        title="Tell us what your team needs to standardize."
+        intro="Most teams start a free trial themselves. Use this form for a walkthrough, custom or on-prem setup, or a provisioned workspace."
+      />
+      <section className={styles.formSection}>
+        <LeadForm kind="demo" />
+      </section>
+    </MarketingPage>
+  );
 }

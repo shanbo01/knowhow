@@ -10,10 +10,7 @@ export type AudienceKind = "workspace" | "group" | "user";
 export type ThemeMode = "light" | "dark" | "system";
 
 export type OrganizationRole =
-  | "owner"
-  | "administrator"
-  | "billing"
-  | "security_auditor";
+  "owner" | "administrator" | "billing" | "security_auditor";
 
 export type OrganizationAdministration = {
   id: string;
@@ -23,7 +20,6 @@ export type OrganizationAdministration = {
   status: string;
   roles: OrganizationRole[];
   branding: { logoMediaId: string | null; accentColor: string };
-  domains: string[];
   members: Array<{
     id: string;
     userId: string;
@@ -178,8 +174,6 @@ export type WorkspaceSettings = {
   accentColor: string;
   clickTargetColor: string;
   removeBranding: boolean;
-  allowedDomains: string[];
-  excludedCaptureHosts: string[];
   allowRestrictedExports: boolean;
   watermarkExports: boolean;
 };
@@ -294,6 +288,60 @@ export type PlatformSettings = {
   selfServiceWorkspaceLimit: number;
 };
 
+export type BetaAccessGrant = {
+  id: string;
+  label: string;
+  exactEmail: string | null;
+  status: "active" | "exhausted" | "expired" | "revoked";
+  maxUses: number;
+  usedCount: number;
+  reservedCount: number;
+  createdAt: string;
+  createdBy: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  revokedBy: string | null;
+};
+
+export type BetaAccessEvent = {
+  id: string;
+  grantId: string;
+  kind: "created" | "reservation" | "consumed" | "released" | "revoked";
+  status: "recorded" | "reserved" | "consumed" | "released";
+  email: string | null;
+  userId: string | null;
+  occurredAt: string;
+  expiresAt: string | null;
+  reason: string | null;
+};
+
+export type BetaAdmissionSummary = {
+  grantId: string;
+  email: string;
+  consumedAt: string;
+  maxUses: number;
+  usedCount: number;
+};
+
+export type SelfServiceSetup = {
+  runId: string;
+  status: "draft" | "completed";
+  draft: {
+    organizationName?: string;
+    legalName?: string;
+    country?: string;
+    workspaceName?: string;
+    accentColor?: string;
+    inviteEmail?: string;
+  };
+  result?: {
+    organizationId: string;
+    workspaceId: string;
+    workspaceSlug: string;
+  };
+};
+
 export type GuideSearchResult = {
   guideId: string;
   revisionId: string;
@@ -340,6 +388,12 @@ export type PlatformWorkspace = WorkspaceSummary & {
   exports: number;
   storageBytes: number;
   failedOperations: number;
+  simulation?: {
+    synthetic: true;
+    disposable: true;
+    lastState: string;
+    lastSimulatedAt: string | null;
+  };
   /** The platform administrator's most recent support request, if any. */
   supportRequest?: {
     id: string;
@@ -356,6 +410,86 @@ export type PlatformWorkspace = WorkspaceSummary & {
     grantedAt: string;
     expiresAt: string;
   } | null;
+};
+
+export type PlatformPricingCatalog = {
+  id: string;
+  slug: string;
+  schemaVersion: 1;
+  catalogVersion: string;
+  name: string;
+  description: string;
+  status: "draft" | "scheduled" | "active" | "retired";
+  currency: string;
+  effectiveFrom: string;
+  effectiveUntil: string | null;
+  selfServiceTrial: boolean;
+  trial: { days: number; graceDays: number; retentionDays: number };
+  baseWorkspace: {
+    amountMinor: number | null;
+    unit: "workspace_month";
+    includedActiveCreators: number;
+    includedActiveUsers: number;
+    includedStorageBytes: number;
+  };
+  additionalUsage: {
+    creator: {
+      amountMinor: number | null;
+      unit: "active_creator_month";
+    };
+    user: { amountMinor: number | null; unit: "active_user_month" };
+    storage: { amountMinor: number | null; unit: "storage_gb_month" };
+  };
+  features: Array<{
+    key: string;
+    label: string;
+    included: boolean;
+    note: string;
+  }>;
+  services: Array<{
+    key: string;
+    label: string;
+    included: boolean;
+    note: string;
+  }>;
+  futureOptions: {
+    ssoScim: {
+      amountMinor: number | null;
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+    supportSla: {
+      amountMinor: number | null;
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+      level: string;
+      responseTargetHours: number | null;
+    };
+    sovereignDeployment: {
+      amountMinor: number | null;
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+    dedicatedDeployment: {
+      amountMinor: number | null;
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+  };
+  securityFundamentalsIncluded: true;
+  paymentsEnabled: false;
+  manualContractAllowed: true;
+  revision: number;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  retiredAt?: string;
+  retiredBy?: string;
 };
 
 export type PlatformMetrics = {
@@ -402,11 +536,14 @@ export type Viewer = {
   email: string;
   name: string;
   emailVerified: boolean;
+  mfaEnabled: boolean;
   platformAdministrator: boolean;
   platformRoles?: Array<
     "owner" | "operations" | "support" | "billing" | "auditor"
   >;
   themePreference?: ThemeMode;
+  betaAdmission?: BetaAdmissionSummary;
+  selfServiceSetup?: SelfServiceSetup;
 };
 
 export type WorkspaceBundle = {
@@ -424,6 +561,7 @@ export type WorkspaceBundle = {
   onboarding: {
     startedAt: string;
     completedAt: string | null;
+    dismissedAt: string | null;
     steps: Array<{
       id:
         | "workspace_readiness"
@@ -521,6 +659,26 @@ export type BootstrapResponse = {
       confirmationText?: string;
     }>;
     provisioningRuns: PlatformProvisioningRun[];
+    betaAccess: {
+      grants: BetaAccessGrant[];
+      events: BetaAccessEvent[];
+    };
+    pricingCatalogs?: PlatformPricingCatalog[];
+    lifecycleSimulation?: {
+      enabled: boolean;
+      environment: string;
+      productionForbidden: true;
+      createConfirmation: string;
+      states: ReadonlyArray<
+        | "trial_active"
+        | "near_expiry"
+        | "read_only"
+        | "suspended"
+        | "retention"
+        | "deletion_eligible"
+        | "pending_deletion"
+      >;
+    };
     systemHealth: {
       failedNotifications: number;
       overdueSupport: number;

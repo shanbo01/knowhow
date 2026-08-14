@@ -122,7 +122,7 @@ test.describe("critical pilot product surfaces", () => {
 
     await page.goto("/app");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
-    await expect(page.getByText("Pilot activation")).toBeVisible();
+    await expect(page.getByText("Getting started")).toBeVisible();
     await expect(page.getByText("0 of 7")).toBeVisible();
     await expectNoWcagViolations(page);
 
@@ -130,7 +130,7 @@ test.describe("critical pilot product surfaces", () => {
     await expect(
       page.getByRole("heading", { name: "Capture a workflow" }),
     ).toBeVisible();
-    await expect(page.getByText("Redaction happens before upload")).toBeVisible();
+    await expect(page.getByText("Redaction happens before anything is uploaded")).toBeVisible();
     await expect(page.getByText("Send a private draft")).toBeVisible();
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/members`);
@@ -143,9 +143,9 @@ test.describe("critical pilot product surfaces", () => {
     await page.getByRole("button", { name: "Invite teammate" }).click();
     await expect(page.getByRole("heading", { name: "Invite a teammate" })).toBeVisible();
     await expect(
-      page.getByText("The credential is bound to this exact verified email address."),
+      page.getByText("Paste one address per line, or separate them with commas."),
     ).toBeVisible();
-    await page.getByLabel("Invitee email").fill("new.teammate@alpha.example");
+    await page.getByLabel("Invitee emails").fill("new.teammate@alpha.example");
     await page.getByRole("button", { name: "Create invitation" }).click();
     await expect(page.getByText("Invitation ready")).toBeVisible();
     expect(commands.some((command) => command.action === "createInvite")).toBe(true);
@@ -223,14 +223,14 @@ test.describe("critical pilot product surfaces", () => {
       page.getByRole("heading", { name: "Platform administration" }),
     ).toBeVisible();
     await expect(page.getByText("Self-service limit: 0")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Deletion approvals" })).toBeVisible();
 
     await page.getByRole("button", { name: "Provision organization" }).first().click();
     await expect(
-      page.getByRole("heading", { name: "Provision a pilot organization" }),
+      page.getByRole("heading", { name: "Provision an organization" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
+    await page.goto("/platform/accounts");
     const activeWorkspaceRow = page
       .locator(".platform-row")
       .filter({ hasText: "Alpha Operations" });
@@ -241,6 +241,8 @@ test.describe("critical pilot product surfaces", () => {
       .poll(() => commands.some((command) => command.action === "setWorkspaceStatus"))
       .toBe(true);
 
+    await page.goto("/platform/ops");
+    await expect(page.getByRole("heading", { name: "Deletion approvals" })).toBeVisible();
     await page.getByRole("button", { name: "Review deletion" }).click();
     await expect(
       page.getByRole("heading", { name: /Approve deletion.*Beta Archive/ }),

@@ -36,89 +36,12 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium chrome msedge
+      - run: npx playwright install --with-deps chrome msedge
       - run: npm run test:e2e
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-evidence
-          path: outputs/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  appwrite-staging:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: staging
-    env:
-      KNOWHOW_ENVIRONMENT: staging
-      APPWRITE_ENDPOINT: https://fra.cloud.appwrite.io/v1
-      APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_STAGING_PROJECT_ID }}
-      APPWRITE_API_KEY: ${{ secrets.APPWRITE_STAGING_API_KEY }}
-      APPWRITE_DATABASE_ID: knowhow_core
-      APPWRITE_PRIVATE_MEDIA_BUCKET_ID: knowhow_private_media
-      APPWRITE_EXPORTS_BUCKET_ID: knowhow_exports
-      KNOWHOW_SMOKE_SITE_ORIGIN: ${{ secrets.KNOWHOW_STAGING_SITE_ORIGIN }}
-      KNOWHOW_SMOKE_REQUIRE_EMAIL_PROVIDER: "1"
-      KNOWHOW_SMOKE_REQUIRE_READY: "1"
-      KNOWHOW_SMOKE_EXPECTED_PROJECT_ID: ${{ vars.APPWRITE_STAGING_PROJECT_ID }}
-      KNOWHOW_SMOKE_FORBIDDEN_PROJECT_ID: ${{ vars.APPWRITE_PRODUCTION_PROJECT_ID }}
-      KNOWHOW_SMOKE_MUTATION_CONFIRM: staging-transient-fixtures
-      KNOWHOW_SMOKE_EXPECTED_RELEASE: ${{ github.sha }}
-    steps:
-      - if: env.APPWRITE_PROJECT_ID == ''
-        run: echo "Staging integration is pending repository secrets."
-      - if: env.APPWRITE_PROJECT_ID != ''
-        uses: actions/checkout@v4
-      - if: env.APPWRITE_PROJECT_ID != ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.13.0
-          cache: npm
-      - if: env.APPWRITE_PROJECT_ID != ''
-        run: npm ci
-      - if: env.APPWRITE_PROJECT_ID != ''
-        run: npm run appwrite:smoke:staging
-
-  controlled-browser-staging:
-    needs: appwrite-staging
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: staging
-    env:
-      KNOWHOW_E2E_BASE_URL: ${{ secrets.KNOWHOW_STAGING_SITE_ORIGIN }}
-      KNOWHOW_REQUIRE_CONTROLLED_REHEARSAL: "1"
-      KNOWHOW_E2E_EXPECTED_ENVIRONMENT: staging
-      KNOWHOW_E2E_EXPECTED_PROJECT_ID: ${{ vars.APPWRITE_STAGING_PROJECT_ID }}
-      KNOWHOW_E2E_EXPECTED_RELEASE: ${{ github.sha }}
-      KNOWHOW_E2E_OWNER_EMAIL: ${{ secrets.KNOWHOW_E2E_OWNER_EMAIL }}
-      KNOWHOW_E2E_OWNER_PASSWORD: ${{ secrets.KNOWHOW_E2E_OWNER_PASSWORD }}
-      KNOWHOW_E2E_OWNER_TOTP_SECRET: ${{ secrets.KNOWHOW_E2E_OWNER_TOTP_SECRET }}
-      KNOWHOW_E2E_MEMBER_EMAIL: ${{ secrets.KNOWHOW_E2E_MEMBER_EMAIL }}
-      KNOWHOW_E2E_MEMBER_PASSWORD: ${{ secrets.KNOWHOW_E2E_MEMBER_PASSWORD }}
-      KNOWHOW_E2E_MEMBER_TOTP_SECRET: ${{ secrets.KNOWHOW_E2E_MEMBER_TOTP_SECRET }}
-      KNOWHOW_E2E_WORKSPACE_SLUG: ${{ secrets.KNOWHOW_E2E_WORKSPACE_SLUG }}
-      KNOWHOW_E2E_PUBLISHED_GUIDE_ID: ${{ secrets.KNOWHOW_E2E_PUBLISHED_GUIDE_ID }}
-    steps:
-      - if: env.KNOWHOW_E2E_BASE_URL == ''
-        run: echo "Credentialed Staging browser rehearsal is pending repository secrets."
-      - if: env.KNOWHOW_E2E_BASE_URL != ''
-        uses: actions/checkout@v4
-      - if: env.KNOWHOW_E2E_BASE_URL != ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.13.0
-          cache: npm
-      - if: env.KNOWHOW_E2E_BASE_URL != ''
-        run: npm ci
-      - if: env.KNOWHOW_E2E_BASE_URL != ''
-        run: npx playwright install --with-deps chrome msedge
-      - if: env.KNOWHOW_E2E_BASE_URL != ''
-        run: npx playwright test e2e/controlled-rehearsal.spec.ts --project=chrome --project=edge --workers=1
-      - if: always() && env.KNOWHOW_E2E_BASE_URL != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: controlled-staging-playwright-evidence
           path: outputs/
           if-no-files-found: ignore
           retention-days: 14

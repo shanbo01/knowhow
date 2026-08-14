@@ -100,7 +100,7 @@ and incognito windows still stop capture rather than following it.
   visible-tab screenshot API for reliable capture from a persistent side panel.
 - KnowHow attaches only to the active, policy-allowed foreground tab it is
   recording. When capture follows you to another tab or window, that tab becomes
-  the recorded one and the checks run again: workspace allowlists, excluded
+  the recorded one and the checks run again: excluded
   hosts, browser-internal-page, and incognito checks are enforced at runtime.
 - Password fields and embedded frames are always redacted.
 - Every other detector is opt-in. Workspace privacy categories are advice the

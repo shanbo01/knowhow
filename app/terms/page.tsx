@@ -2,8 +2,50 @@ import type { Metadata } from "next";
 import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
-export const metadata: Metadata = { title: "Pilot terms summary | KnowHow" };
+export const metadata: Metadata = {
+  title: "Terms summary | KnowHow",
+};
 
 export default function TermsPage() {
-  return <MarketingPage><InfoHero eyebrow="Pilot terms summary" title="KnowHow workspace access is available only through a signed, invitation-only pilot." intro="This page is an operational summary, not the pilot agreement. Accepted organizations must execute the legally reviewed agreement, privacy terms, and acceptable-use policy before real customer data is accepted." /><section className={styles.legal}><h2>Controlled access</h2><p>People may create and verify a KnowHow account, but registration grants no organization, workspace, guide, or customer-data access. Workspace access still requires an exact-email invitation or administrator appointment. Payments, SSO/SCIM, regulated-data use, and customer-ready on-prem service are not offered in this pilot.</p><h2>Permitted use</h2><p>The pilot is limited to agreed internal business-process workflows, initially one department and no more than 100 users per organization, using ordinary business-process data only.</p><h2>Service targets</h2><p>Internal targets are database RPO up to 24 hours and best-effort RTO within one business day. These are not contractual SLAs or recovery guarantees.</p><h2>Support and changes</h2><p>In-app support carries a one-business-day response target. The extension and service may be updated or rolled back under the pilot change policy.</p><h2>Controlling documents</h2><p>The signed pilot agreement, DPA, acceptable-use policy, privacy notice, and retention schedule govern an accepted organization and supersede this summary.</p></section></MarketingPage>;
+  return (
+    <MarketingPage>
+      <InfoHero
+        eyebrow="Terms summary"
+        title="Use KnowHow for internal business-process guidance."
+        intro="This page is an operational summary, not the signed agreement. Organizations that need a contract, DPA, or on-prem terms should contact us before putting production data in the product."
+      />
+      <section className={styles.legal}>
+        <h2>Accounts and workspaces</h2>
+        <p>
+          Anyone can create an account, verify their email, and set up an
+          organization on a 14-day trial. Invitations to an existing workspace
+          remain exact-email, scoped, and single-use. Some companies are
+          provisioned by KnowHow after a conversation.
+        </p>
+        <h2>Permitted use</h2>
+        <p>
+          KnowHow is for internal business-process workflows and ordinary
+          business-process data. Credentials, regulated data, and other
+          prohibited categories must not be captured.
+        </p>
+        <h2>Service targets</h2>
+        <p>
+          Internal targets are database RPO up to 24 hours and best-effort RTO
+          within one business day. These are not contractual SLAs or recovery
+          guarantees unless a signed agreement says otherwise.
+        </p>
+        <h2>Support and changes</h2>
+        <p>
+          In-app support carries a one-business-day response target. The
+          extension and service may be updated as the product evolves.
+        </p>
+        <h2>Controlling documents</h2>
+        <p>
+          A signed agreement, DPA, acceptable-use policy, privacy notice, and
+          retention schedule govern contracted organizations and supersede this
+          summary.
+        </p>
+      </section>
+    </MarketingPage>
+  );
 }

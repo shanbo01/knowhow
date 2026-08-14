@@ -10,9 +10,8 @@ const varchar = (key, size = 128, options = {}) => ({
   ...options,
 });
 
-// Keep persisted email values on the portable varchar path. Appwrite CLI 26
-// cannot currently push TablesDB `email` columns even though the Cloud API can
-// create them directly. Application input remains email-normalized and the
+// Keep persisted email values on the portable varchar path used by the local
+// CLI workflow. Application input remains email-normalized and the
 // 254-character bound keeps compound email indexes within the varchar budget.
 const email = (key) => varchar(key, 254);
 
@@ -82,14 +81,6 @@ const definitions = [
   [
     "organization_branding",
     [index("by_organization", ["organization_id"], "unique")],
-  ],
-  [
-    "organization_domains",
-    [
-      index("by_domain", ["subject_id", "status"]),
-      index("by_org_domain", ["organization_id", "subject_id"], "unique"),
-      index("by_org_status", ["organization_id", "status"]),
-    ],
   ],
   [
     "organization_memberships",
@@ -219,6 +210,25 @@ const definitions = [
       index("by_status_expiry", ["status", "expires_at"]),
       index("by_org_status", ["organization_id", "status"]),
       index("by_org_email_status", ["organization_id", "email", "status"]),
+    ],
+  ],
+  [
+    "beta_access_grants",
+    [
+      index("by_token_hash", ["subject_id"], "unique"),
+      index("by_status_expiry", ["status", "expires_at"]),
+      index("by_email_status", ["email", "status"]),
+      index("by_creator_time", ["created_by", "occurred_at"]),
+    ],
+  ],
+  [
+    "beta_access_events",
+    [
+      index("by_grant_status", ["subject_id", "status"]),
+      index("by_grant_time", ["subject_id", "occurred_at"]),
+      index("by_user_status", ["user_id", "status"]),
+      index("by_email_kind", ["email", "kind"]),
+      index("by_status_expiry", ["status", "expires_at"]),
     ],
   ],
   [

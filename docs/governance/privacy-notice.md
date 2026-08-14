@@ -34,17 +34,17 @@ We use the subprocessors listed in `subprocessors.md`. We do not sell customer d
 
 ## 6. Location and transfers
 
-The SaaS application database and private storage are configured in Appwrite Cloud Frankfurt. Email and error-monitoring providers may process minimized operational data in the locations described in the approved subprocessor list and contracts. The final notice/DPA must describe the legally approved transfer mechanism and Qatar-specific requirements.
+The application database and private storage run on operator-controlled local infrastructure. Optional email and error-monitoring providers may process minimized operational data only when enabled and approved as described in the service list and contracts. The final notice/DPA must describe the machine location, any backup locations, enabled integrations, and legally required transfer safeguards.
 
 ## 7. Retention and deletion
 
 The approved retention schedule controls. At pilot/trial expiry, KnowHow provides a configurable grace period, suspension, reminders, and a 90-day deletion-eligibility point measured from original expiry. Nothing is purged without explicit authorized approval, TOTP reauthentication, and typed confirmation. The asynchronous purge creates a content-free receipt. Legal holds, security evidence, and statutory/contractual requirements may alter a specific period and must be documented.
 
-Database backups target up to a 24-hour RPO. Independent media disaster recovery is deferred, so KnowHow does not promise full screenshot recovery or a contractual RTO/SLA during the pilot.
+Backup frequency, observed recovery time, and media coverage must be stated from the operator's tested local procedure. KnowHow does not promise a contractual RPO, RTO, or SLA during the pilot.
 
 ## 8. Security
 
-Controls include verified email, administrator TOTP, secure HTTP-only sessions, exact origin/CSRF checks, rate and size limits, server-only product data, default-deny authorization, private encrypted Storage, short-lived rotating extension credentials, local screenshot redaction and privacy review, transaction-backed invariants, hash-chained audits, scrubbed Sentry telemetry, versioned key rotation, daily Production database backups, and incident response.
+Controls include verified email, administrator TOTP, secure HTTP-only sessions, exact origin/CSRF checks, rate and size limits, server-only product data, default-deny authorization, private Storage, short-lived rotating extension credentials, local screenshot redaction and privacy review, transaction-backed invariants, hash-chained audits, optional scrubbed telemetry, versioned key rotation, operator-owned encrypted backups, and incident response.
 
 No system is risk-free. Pilot users must follow the acceptable-use/data-classification policy and report suspected incidents promptly.
 

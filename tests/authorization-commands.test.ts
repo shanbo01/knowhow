@@ -3,7 +3,7 @@ import test from "node:test";
 import { AccessService } from "../lib/server/access-service";
 import { TABLES } from "../lib/server/appwrite-resources";
 import { CommandService } from "../lib/server/command-service";
-import { decodePayload, rowData } from "../lib/server/domain-records";
+import { decodePayload } from "../lib/server/domain-records";
 import { HttpError } from "../lib/server/http-security";
 import {
   InMemoryRecordStore,
@@ -69,7 +69,7 @@ test("organization governance never grants workspace guide access", async () => 
   ]);
 });
 
-test("workspace invitations are exact-email, single-use, domain-bound, and idempotent", async () => {
+test("workspace invitations are exact-email, single-use, and idempotent", async () => {
   const store = new InMemoryRecordStore();
   const { organizationId, workspaceId } = await seedWorkspace(store);
   const admin = identity("admin", "admin@acme.example", "Admin");
@@ -80,31 +80,8 @@ test("workspace invitations are exact-email, single-use, domain-bound, and idemp
     email: admin.email,
     roles: ["administrator"],
   });
-  await store.create(
-    TABLES.organizationDomains,
-    "domain_acme",
-    rowData(
-      {
-        organization_id: organizationId,
-        workspace_id: workspaceId,
-        subject_id: "acme.example",
-        status: "active",
-      },
-      { domain: "acme.example" },
-    ),
-  );
   const service = new CommandService(store);
 
-  await assert.rejects(
-    service.execute(
-      admin,
-      "createInvite",
-      { workspaceId, role: "viewer", email: "person@outside.example" },
-      commandOptions("outside"),
-    ),
-    (error: unknown) =>
-      error instanceof HttpError && error.code === "INVITATION_DOMAIN_DENIED",
-  );
   await assert.rejects(
     service.execute(
       admin,

@@ -1,9 +1,7 @@
-import { APPWRITE_RESOURCES } from "@/lib/server/appwrite-resources";
-import {
-  deploymentConfigurationIssues,
-  restoreApplicationConfiguration,
-} from "@/lib/server/appwrite-config";
+import { TABLES } from "@/lib/server/appwrite-resources";
+import { deploymentConfigurationIssues } from "@/lib/server/appwrite-config";
 import { jsonResponse, toErrorResponse } from "@/lib/server/http-security";
+import { localWorkerReadiness } from "@/lib/server/local-worker-readiness";
 import {
   correlationId,
   createRequestServices,
@@ -25,18 +23,47 @@ export async function GET(request: Request) {
     );
   }
   try {
-    const { config, users, tables, storage, functions } = createRequestServices();
+    const { config, users, tables, storage } = createRequestServices();
     const issues = deploymentConfigurationIssues(config);
-    const restoreApplication = restoreApplicationConfiguration(config);
-    await Promise.all([
+    const workers = await localWorkerReadiness(config);
+    const infrastructureChecks: Promise<unknown>[] = [
       users.list({ queries: [Query.limit(1)], total: false }),
       tables.get({ databaseId: config.databaseId }),
       storage.getBucket({ bucketId: config.privateMediaBucketId }),
       storage.getBucket({ bucketId: config.exportsBucketId }),
-      functions.get({ functionId: APPWRITE_RESOURCES.operationsFunction }),
-      functions.get({ functionId: APPWRITE_RESOURCES.exportFunction }),
-    ]);
-    const status = issues.length ? "not_ready" : "ready";
+    ];
+    await Promise.all(infrastructureChecks);
+    let notificationQueue = { due: 0, terminalFailed: 0 };
+    if (workers.enabled) {
+      const now = new Date().toISOString();
+      const [due, failed] = await Promise.all([
+        tables.listRows({
+          databaseId: config.databaseId,
+          tableId: TABLES.notificationDeliveries,
+          queries: [
+            Query.equal("status", ["queued"]),
+            Query.lessThanEqual("scheduled_at", now),
+            Query.limit(1),
+          ],
+          total: false,
+        }),
+        tables.listRows({
+          databaseId: config.databaseId,
+          tableId: TABLES.notificationDeliveries,
+          queries: [Query.equal("status", ["failed"]), Query.limit(1)],
+          total: false,
+        }),
+      ]);
+      notificationQueue = {
+        due: due.rows.length,
+        terminalFailed: failed.rows.length,
+      };
+    }
+    const runtimeReady =
+      workers.ready &&
+      notificationQueue.due === 0 &&
+      notificationQueue.terminalFailed === 0;
+    const status = issues.length || !runtimeReady ? "not_ready" : "ready";
     return withRequestId(
       jsonResponse(
         {
@@ -44,49 +71,26 @@ export async function GET(request: Request) {
           deployment: {
             environment: config.environment,
             release: process.env.KNOWHOW_RELEASE?.trim() || "unversioned",
+            runtime: workers.enabled ? "local-workers" : "local-appwrite",
             projectFingerprint: createHash("sha256")
               .update(`project\0${config.projectId}`)
               .digest("hex"),
-            ...(restoreApplication.enabled
-              ? {
-                  mode: "isolated-restore-application",
-                  databaseFingerprint: createHash("sha256")
-                    .update(`database\0${config.databaseId}`)
-                    .digest("hex"),
-                  restorationFingerprint: createHash("sha256")
-                    .update(`restoration\0${restoreApplication.restorationId}`)
-                    .digest("hex"),
-                  disposableSiteFingerprint: createHash("sha256")
-                    .update(`site\0${restoreApplication.siteId}`)
-                    .digest("hex"),
-                  siteOriginFingerprint: createHash("sha256")
-                    .update(`site-origin\0${restoreApplication.siteOrigin}`)
-                    .digest("hex"),
-                  sourceSiteOriginFingerprint: createHash("sha256")
-                    .update(
-                      `site-origin\0${restoreApplication.sourceSiteOrigin}`,
-                    )
-                    .digest("hex"),
-                }
-              : {}),
           },
           checks: {
             identity: "ok",
             tables: "ok",
             storage: "ok",
-            functions: "ok",
+            workers: runtimeReady ? "ok" : "attention",
+            workerState: workers.state,
+            notificationQueue:
+              notificationQueue.due || notificationQueue.terminalFailed
+                ? "attention"
+                : "ok",
             configuration: issues.length ? "attention" : "ok",
-            ...(restoreApplication.enabled
-              ? {
-                  restoreIsolation: restoreApplication.valid
-                    ? "ok"
-                    : "attention",
-                }
-              : {}),
           },
           requestId,
         },
-        { status: issues.length ? 503 : 200 },
+        { status: status === "ready" ? 200 : 503 },
       ),
       requestId,
     );

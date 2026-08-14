@@ -7,12 +7,15 @@ import "@fontsource/kumbh-sans/latin-700.css";
 import "@fontsource/kumbh-sans/latin-800.css";
 import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
+import "./auth-experience.css";
+import "./workspace-experience.css";
+import "./ui-system.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 
-const title = "KnowHow — SOPs captured, governed, and shared";
+const title = "KnowHow — process knowledge that stays useful";
 const description =
-  "A privacy-first SOP capture and publishing workspace for MSPs and multi-entity teams.";
+  "Capture real browser work, turn it into a trusted guide, and see whether the team finished it.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -60,7 +63,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
+      <body suppressHydrationWarning>
         <ThemeProvider>
           <TooltipProvider delay={200}>{children}</TooltipProvider>
           <Toaster position="bottom-right" closeButton richColors />

@@ -119,8 +119,24 @@ export async function connectKnowHowExtension(
   });
 }
 
+function httpsPublicUrl(value: string | undefined) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.startsWith("https://") ? trimmed : null;
+}
+
+export function extensionStoreUrls() {
+  return {
+    chrome: httpsPublicUrl(process.env.NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL),
+    edge: httpsPublicUrl(process.env.NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL),
+  };
+}
+
+export function chromiumExtensionHost() {
+  return Boolean(chromeRuntime()?.sendMessage);
+}
+
 export type ExtensionLinkState =
-  | { installed: false }
+  | { installed: false; reason: "missing" | "unavailable" }
   | { installed: true; connected: boolean; workspaceId: string | null; paired: boolean };
 
 /**
@@ -134,11 +150,14 @@ export async function ensureKnowHowExtension(
   mintPairingCode: () => Promise<{ code: string }>,
   { force = false }: { force?: boolean } = {},
 ): Promise<ExtensionLinkState> {
+  if (!chromiumExtensionHost()) {
+    return { installed: false, reason: "unavailable" };
+  }
   let status: Awaited<ReturnType<typeof inspectKnowHowExtension>>;
   try {
     status = await inspectKnowHowExtension();
   } catch {
-    return { installed: false };
+    return { installed: false, reason: "missing" };
   }
   if (!force && status.connected && status.workspaceId === companion.workspaceId) {
     await syncKnowHowExtension(companion);

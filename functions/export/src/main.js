@@ -13,7 +13,20 @@ function required(name) {
 
 function siteOrigin() {
   const origin = new URL(required("KNOWHOW_SITE_ORIGIN"));
-  if (origin.protocol !== "https:" || origin.pathname !== "/") {
+  const localEmulation =
+    process.env.KNOWHOW_LOCAL_WORKER_MODE === "emulated" &&
+    process.env.KNOWHOW_ENVIRONMENT === "development" &&
+    process.env.APPWRITE_FUNCTION_PROJECT_ID === "knowhow-local" &&
+    origin.protocol === "http:" &&
+    (origin.hostname === "localhost" || origin.hostname === "127.0.0.1");
+  if (
+    (!localEmulation && origin.protocol !== "https:") ||
+    origin.pathname !== "/" ||
+    origin.username ||
+    origin.password ||
+    origin.search ||
+    origin.hash
+  ) {
     throw new Error("KNOWHOW_SITE_ORIGIN must be an HTTPS origin without a path.");
   }
   return origin.origin;

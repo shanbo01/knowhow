@@ -26,10 +26,13 @@ import {
   requestFingerprint,
   withRequestId,
 } from "@/lib/server/request-services";
-import { decodePayload, type WorkspaceMemberRecord } from "@/lib/server/domain-records";
-import { TABLES } from "@/lib/server/appwrite-resources";
 import { requireRecentTotp } from "@/lib/server/session-identity";
 import { consumeFixedWindows } from "@/lib/server/rate-limit-service";
+import { BetaAccessService } from "@/lib/server/beta-access-service";
+import {
+  registrationMode,
+  signupAdmission,
+} from "@/lib/server/registration-mode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,30 +75,6 @@ function serializeUser(user: {
   };
 }
 
-async function roleRequiresMfa(userId: string, email: string) {
-  const { store } = createRequestServices();
-  const [platformRoles, memberships, organizationMemberships, appointments] = await Promise.all([
-    store.list(TABLES.platformRoles, {
-      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
-      limit: 1,
-    }),
-    store.list(TABLES.workspaceMembers, {
-      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
-    }),
-    store.list(TABLES.organizationMemberships, {
-      filters: [{ field: "user_id", value: userId }, { field: "status", value: "active" }],
-      limit: 1,
-    }),
-    store.list(TABLES.initialAdminAppointments, {
-      filters: [{ field: "email", value: email.toLowerCase() }, { field: "status", value: "active" }],
-      limit: 1,
-    }),
-  ]);
-  return platformRoles.length > 0 || organizationMemberships.length > 0 || appointments.length > 0 || memberships.some((row) =>
-    decodePayload<WorkspaceMemberRecord>(row, { name: "", roles: [], capabilities: [], groupIds: [] }).roles.includes("administrator"),
-  );
-}
-
 function secureRequest(request: Request) {
   return requestPublicOrigin(request).startsWith("https://") || process.env.KNOWHOW_ENVIRONMENT === "production" || process.env.KNOWHOW_ENVIRONMENT === "staging";
 }
@@ -129,6 +108,9 @@ function translate(error: unknown) {
     if (error.type === "user_more_factors_required") {
       return new HttpError(401, "MFA_REQUIRED", "Complete multi-factor authentication to continue.", { cause: error });
     }
+    if (error.type === "user_invalid_token") {
+      return new HttpError(401, "AUTH_CODE_INVALID", "The authentication code is invalid or expired.", { cause: error });
+    }
     if (error.code === 401) return new HttpError(401, "AUTH_INVALID", "The email or password is incorrect.", { cause: error });
     if (error.code === 409) return new HttpError(409, "ACCOUNT_EXISTS", "An account already exists for this email.", { cause: error });
     if (error.code === 429) return new HttpError(429, "RATE_LIMITED", "Too many attempts. Try again later.", { cause: error });
@@ -156,11 +138,13 @@ export async function GET(request: Request, context: Context) {
     if (path === "mfa/requirement") {
       const { account } = createSessionAppwrite(sessionSecret(request));
       const user = await account.get();
-      const [required, factors] = await Promise.all([
-        roleRequiresMfa(user.$id, user.email),
-        account.listMFAFactors(),
-      ]);
-      return authJson({ required, enabled: user.mfa, factors, requestId }, requestId);
+      const factors = await account.listMFAFactors();
+      return authJson({
+        required: false,
+        enabled: user.mfa,
+        factors,
+        requestId,
+      }, requestId);
     }
     throw new HttpError(404, "AUTH_ROUTE_NOT_FOUND", "Authentication route not found.");
   } catch (error) {
@@ -180,6 +164,8 @@ export async function POST(request: Request, context: Context) {
       ? { limit: 12, windowSeconds: 900 }
       : path === "sign-up"
         ? { limit: 6, windowSeconds: 3_600 }
+        : path === "recovery" || path === "recovery/complete"
+          ? { limit: 8, windowSeconds: 3_600 }
         : path === "mfa/complete"
           ? { limit: 20, windowSeconds: 600 }
           : { limit: 60, windowSeconds: 600 };
@@ -225,28 +211,107 @@ export async function POST(request: Request, context: Context) {
       const name = text(body.name, "Name", 2, 128);
       const email = text(body.email, "Email", 5, 320).toLowerCase();
       await consumeFixedWindows(store, [{ scope: "auth.sign-up.email", subject: email, limit: 3, windowSeconds: 3_600 }]);
-      const password = text(body.password, "Password", 12, 1_024);
+      const password = text(body.password, "Password", 8, 1_024);
       const credentialKind = body.credentialKind;
       const credential = typeof body.credential === "string" ? body.credential.trim() : "";
-      const credentialSignup =
-        (credentialKind === "invite" || credentialKind === "appointment") &&
-        credential.length > 0;
-      const publicSignup = process.env.KNOWHOW_PUBLIC_SIGNUP_ENABLED === "1";
-      if (!credentialSignup && !publicSignup) {
-        throw new HttpError(403, "INVITATION_REQUIRED", "A current invitation is required to create an account.");
-      }
-      if (credentialSignup) {
+      const admission = signupAdmission({
+        mode: registrationMode(),
+        credentialKind,
+        hasCredential: credential.length > 0,
+      });
+      const betaAccess = new BetaAccessService(store);
+      let betaReservation: Awaited<ReturnType<BetaAccessService["reserve"]>> | null = null;
+      if (admission === "signed_credential") {
         if (credential.length < 20 || credential.length > 8_192) {
           throw new HttpError(403, "INVITATION_REQUIRED", "A current invitation is required to create an account.");
         }
+        if (credentialKind !== "invite" && credentialKind !== "appointment") {
+          throw new HttpError(400, "SIGNUP_CREDENTIAL_INVALID", "The signup credential is invalid.");
+        }
         await assertSignupCredential({ kind: credentialKind, token: credential, email });
+      } else if (admission === "beta") {
+        if (credential.length < 20 || credential.length > 128) {
+          throw new HttpError(
+            403,
+            "BETA_ACCESS_REQUIRED",
+            "A current private-beta access code is required to create an account.",
+          );
+        }
+        betaReservation = await betaAccess.reserve({
+          code: credential,
+          email,
+          requestId,
+        });
       }
       const { users, account, config } = createAdminAppwrite();
-      await users.create({ userId: ID.unique(), email, password, name });
+      const userId = ID.unique();
+      let userCreated = false;
+      try {
+        await users.create({ userId, email, password, name });
+        userCreated = true;
+        if (betaReservation) {
+          await betaAccess.consume({
+            reservationId: betaReservation.reservationId,
+            email,
+            userId,
+            requestId,
+          });
+        }
+      } catch (error) {
+        if (userCreated) {
+          await users.delete({ userId }).catch(() => undefined);
+        }
+        if (betaReservation) {
+          await betaAccess
+            .release({
+              reservationId: betaReservation.reservationId,
+              email,
+              reason: "signup_failed",
+              requestId,
+            })
+            .catch(() => undefined);
+        }
+        throw error;
+      }
       const session = await account.createEmailPasswordSession({ email, password });
       const response = authJson({ created: true, requestId }, requestId);
       appendSessionCookies(response, request, config.projectId, session.secret, session.expire);
       return response;
+    }
+
+    if (path === "recovery") {
+      const email = text(body.email, "Email", 5, 320).toLowerCase();
+      await consumeFixedWindows(store, [
+        { scope: "auth.recovery.email", subject: email, limit: 3, windowSeconds: 3_600 },
+      ]);
+      const url = text(body.url, "Recovery URL", 10, 2_048);
+      const parsed = new URL(url);
+      if (parsed.origin !== requestPublicOrigin(request) || parsed.pathname !== "/reset-password") {
+        throw new HttpError(400, "RECOVERY_URL_INVALID", "The recovery URL is invalid.");
+      }
+      const { account } = createAdminAppwrite();
+      try {
+        await account.createRecovery({ email, url });
+      } catch (error) {
+        if (
+          !(
+            error instanceof AppwriteException &&
+            (error.code === 404 || error.code === 400 || error.type === "user_not_found")
+          )
+        ) {
+          throw error;
+        }
+      }
+      return authJson({ sent: true, requestId }, requestId);
+    }
+
+    if (path === "recovery/complete") {
+      const userId = text(body.userId, "User", 1, 128);
+      const recoverySecret = text(body.secret, "Recovery", 1, 8_192);
+      const password = text(body.password, "Password", 8, 1_024);
+      const { account } = createAdminAppwrite();
+      await account.updateRecovery({ userId, secret: recoverySecret, password });
+      return authJson({ updated: true, requestId }, requestId);
     }
 
     assertCookieMutationRequest(request, allowedOrigins());
@@ -338,6 +403,19 @@ export async function POST(request: Request, context: Context) {
         requestId,
       );
     }
+    if (path === "mfa/disable") {
+      const user = await scoped.account.get();
+      try {
+        await scoped.account.deleteMFAAuthenticator({ type: AuthenticatorType.Totp });
+      } catch (error) {
+        if (!(error instanceof AppwriteException && (error.code === 404 || error.code === 400))) {
+          throw error;
+        }
+      }
+      if (user.mfa) await scoped.account.updateMFA({ mfa: false });
+      const nextUser = await scoped.account.get();
+      return authJson({ enabled: false, user: serializeUser(nextUser), requestId }, requestId);
+    }
     if (path === "mfa/recovery/regenerate") {
       await requireRecentTotp(request);
       const recovery = await scoped.account.updateMFARecoveryCodes();
@@ -356,6 +434,27 @@ export async function POST(request: Request, context: Context) {
       await scoped.account.updateMFAChallenge({ challengeId, otp });
       const user = await scoped.account.get();
       return authJson({ user: serializeUser(user), requestId }, requestId);
+    }
+    if (path === "password") {
+      const currentPassword = text(body.currentPassword, "Current password", 8, 1_024);
+      const password = text(body.password, "Password", 8, 1_024);
+      await scoped.account.updatePassword({ password, oldPassword: currentPassword });
+      return authJson({ updated: true, requestId }, requestId);
+    }
+    if (path === "profile") {
+      const name = text(body.name, "Name", 2, 128);
+      await scoped.account.updateName({ name });
+      const user = await scoped.account.get();
+      return authJson({ user: serializeUser(user), requestId }, requestId);
+    }
+    if (path === "sessions/revoke-others") {
+      const sessions = await scoped.account.listSessions();
+      await Promise.all(
+        sessions.sessions
+          .filter((session) => !session.current)
+          .map((session) => scoped.account.deleteSession({ sessionId: session.$id })),
+      );
+      return authJson({ revoked: true, requestId }, requestId);
     }
     throw new HttpError(404, "AUTH_ROUTE_NOT_FOUND", "Authentication route not found.");
   } catch (error) {

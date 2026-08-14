@@ -32,6 +32,7 @@ import {
 } from "react";
 import { loadAuthorizedMediaUrl } from "../../lib/knowhow-client";
 import type { EditorBlock } from "../../lib/knowhow-types";
+import { paintRasterRedaction } from "../../lib/redaction-raster";
 
 type Annotation = NonNullable<EditorBlock["annotations"]>[number];
 type Redaction = NonNullable<EditorBlock["redactions"]>[number];
@@ -85,6 +86,110 @@ function toStageBox(
   const height = region.height / crop.height;
   if (left + width <= 0 || top + height <= 0 || left >= 1 || top >= 1) return null;
   return { left: left * 100, top: top * 100, width: width * 100, height: height * 100 };
+}
+
+function drawRedactionPreview(
+  canvas: HTMLCanvasElement,
+  source: HTMLImageElement,
+  scratch: HTMLCanvasElement,
+  region: Pick<Redaction, "x" | "y" | "width" | "height">,
+) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.round(rect.width * pixelRatio));
+    const height = Math.max(1, Math.round(rect.height * pixelRatio));
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.clearRect(0, 0, width, height);
+
+    const sourceX = clamp(region.x, 0, 1) * source.naturalWidth;
+    const sourceY = clamp(region.y, 0, 1) * source.naturalHeight;
+    const sourceWidth = Math.max(
+      1,
+      Math.min(region.width, 1 - clamp(region.x, 0, 1)) * source.naturalWidth,
+    );
+    const sourceHeight = Math.max(
+      1,
+      Math.min(region.height, 1 - clamp(region.y, 0, 1)) * source.naturalHeight,
+    );
+    paintRasterRedaction(
+      context,
+      source,
+      { x: sourceX, y: sourceY, width: sourceWidth, height: sourceHeight },
+      { x: 0, y: 0, width, height },
+      16 * pixelRatio,
+      scratch,
+    );
+}
+
+function RedactionRasterPreview({
+  url,
+  region,
+}: {
+  url: string;
+  region: Pick<Redaction, "x" | "y" | "width" | "height">;
+}) {
+  const regionX = region.x;
+  const regionY = region.y;
+  const regionWidth = region.width;
+  const regionHeight = region.height;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scratchRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceRef = useRef<HTMLImageElement | null>(null);
+  const regionRef = useRef({
+    x: regionX,
+    y: regionY,
+    width: regionWidth,
+    height: regionHeight,
+  });
+
+  useEffect(() => {
+    const nextRegion = {
+      x: regionX,
+      y: regionY,
+      width: regionWidth,
+      height: regionHeight,
+    };
+    regionRef.current = nextRegion;
+    const canvas = canvasRef.current;
+    const source = sourceRef.current;
+    if (!canvas || !source) return;
+    scratchRef.current ??= document.createElement("canvas");
+    drawRedactionPreview(canvas, source, scratchRef.current, nextRegion);
+  }, [regionX, regionY, regionWidth, regionHeight]);
+
+  useEffect(() => {
+    let active = true;
+    const source = new Image();
+    const canvas = canvasRef.current;
+    const redraw = () => {
+      if (!canvas || !source.naturalWidth || !source.naturalHeight) return;
+      scratchRef.current ??= document.createElement("canvas");
+      drawRedactionPreview(canvas, source, scratchRef.current, regionRef.current);
+    };
+    const observer = canvas
+      ? new ResizeObserver(redraw)
+      : null;
+    if (canvas) observer?.observe(canvas);
+    source.decoding = "async";
+    source.onload = () => {
+      if (!active) return;
+      sourceRef.current = source;
+      redraw();
+    };
+    source.src = url;
+    return () => {
+      active = false;
+      observer?.disconnect();
+      if (sourceRef.current === source) sourceRef.current = null;
+    };
+  }, [url]);
+
+  return <canvas ref={canvasRef} className="shot-redaction-preview" aria-hidden="true" />;
 }
 
 /** The stored bounding box for an annotation. Arrows carry an explicit tail
@@ -1033,6 +1138,8 @@ export function ScreenshotEditor({
                   data-marker-id={redaction.id}
                   data-marker-kind="redaction"
                 >
+                  <RedactionRasterPreview url={url} region={redaction} />
+                  <span className="shot-redaction-tint" aria-hidden="true" />
                   {isSelected && !locked ? (
                     <>
                       {(["nw", "ne", "sw", "se"] as const).map((handle) => (
@@ -1186,7 +1293,16 @@ export function ScreenshotEditor({
             {draftRect ? (() => {
               const box = toStageBox(crop, draftRect);
               if (!box) return null;
-              return <span className={`shot-region shot-draft ${mode === "redact" ? "shot-redaction" : "shot-box"}`} style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }} />;
+              return (
+                <span className={`shot-region shot-draft ${mode === "redact" ? "shot-redaction" : "shot-box"}`} style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }}>
+                  {mode === "redact" ? (
+                    <>
+                      <RedactionRasterPreview url={url} region={draftRect} />
+                      <span className="shot-redaction-tint" aria-hidden="true" />
+                    </>
+                  ) : null}
+                </span>
+              );
             })() : null}
 
             {frameSize.width && frameSize.height && (arrowOverlayLines.length || draftArrowLine) ? (

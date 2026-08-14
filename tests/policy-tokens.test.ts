@@ -164,7 +164,6 @@ test("temporary support access cannot become governance or platform authority", 
     "workspace.members.manage",
     "workspace.groups.manage",
     "workspace.invitations.manage",
-    "workspace.domains.manage",
     "workspace.support.decide",
   ] as const) {
     assert.equal(authorize(action, support).code, "SUPPORT_GRANT_RESTRICTED");

@@ -1,38 +1,12 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
 
-const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-const extensionRoot = resolve(scriptDirectory, "..");
-const destination = resolve(extensionRoot, "dist");
-const outputDirectory = resolve(extensionRoot, "..", "outputs", "extension");
 const expectedExtensionId = "phbofjenfnnnnndghhinoldlfbpaedpo";
-const storeBuild = process.argv.includes("--store");
-const configuredOrigin = process.env.KNOWHOW_EXTENSION_ORIGIN?.trim();
-if (storeBuild && !configuredOrigin) {
-  throw new Error("KNOWHOW_EXTENSION_ORIGIN is required for a store build.");
-}
-const origin = new URL(configuredOrigin || "http://localhost:3001");
-if (
-  origin.username ||
-  origin.password ||
-  origin.pathname !== "/" ||
-  origin.search ||
-  origin.hash ||
-  (origin.protocol !== "https:" &&
-    !(origin.protocol === "http:" && origin.hostname === "localhost"))
-) {
-  throw new Error("KNOWHOW_EXTENSION_ORIGIN must be an exact HTTPS origin (or localhost for development).");
-}
-if (storeBuild && origin.protocol !== "https:") {
-  throw new Error("Store builds require an HTTPS KnowHow origin.");
-}
-
-if (dirname(destination) !== extensionRoot || destination === extensionRoot) {
-  throw new Error("Refusing to build outside extension/dist.");
-}
 
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;
@@ -58,6 +32,38 @@ function chromeExtensionId(publicKey) {
   return Array.from(digest, (character) =>
     String.fromCharCode("a".charCodeAt(0) + Number.parseInt(character, 16)),
   ).join("");
+}
+
+function resolveExtensionRoot() {
+  const fromScript = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  if (existsSync(resolve(fromScript, "manifest.json"))) return fromScript;
+  const fromCwd = resolve(process.cwd(), "extension");
+  if (existsSync(resolve(fromCwd, "manifest.json"))) return fromCwd;
+  throw new Error("Could not locate the KnowHow Capture extension.");
+}
+
+function parseKnowHowOrigin(value, storeBuild) {
+  const origin = new URL(value);
+  if (
+    origin.username ||
+    origin.password ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash ||
+    (origin.protocol !== "https:" &&
+      !(
+        origin.protocol === "http:" &&
+        (origin.hostname === "localhost" || origin.hostname === "127.0.0.1")
+      ))
+  ) {
+    throw new Error(
+      "KNOWHOW_EXTENSION_ORIGIN must be an exact HTTPS origin (or localhost for development).",
+    );
+  }
+  if (storeBuild && origin.protocol !== "https:") {
+    throw new Error("Store builds require an HTTPS KnowHow origin.");
+  }
+  return origin;
 }
 
 async function listFiles(root, directory = root) {
@@ -139,142 +145,205 @@ async function deterministicZip(root) {
   return Buffer.concat([...localParts, ...centralParts, end]);
 }
 
-const manifestPath = resolve(extensionRoot, "manifest.json");
-const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const originMatch = `${origin.origin}/*`;
-manifest.host_permissions = [originMatch];
-manifest.externally_connectable = { matches: [originMatch] };
-const archivePath = resolve(
-  outputDirectory,
-  `knowhow-capture-${manifest.version}-${storeBuild ? "store" : "development"}.zip`,
-);
-if (dirname(archivePath) !== outputDirectory) {
-  throw new Error("Refusing to package outside outputs/extension.");
-}
-const contentSource = await readFile(
-  resolve(extensionRoot, "src/content/capture.js"),
-  "utf8",
-);
-const backgroundSource = await readFile(
-  resolve(extensionRoot, "src/background/index.js"),
-  "utf8",
-);
-const captureStoreSource = await readFile(
-  resolve(extensionRoot, "src/core/capture-store.js"),
-  "utf8",
-);
-
-if (manifest.manifest_version !== 3) {
-  throw new Error("KnowHow Capture must remain a Manifest V3 extension.");
-}
-if (
-  typeof manifest.key !== "string" ||
-  chromeExtensionId(manifest.key) !== expectedExtensionId
-) {
-  throw new Error(
-    "KnowHow Capture must retain the manifest key for extension ID " +
-      expectedExtensionId +
-      ".",
-  );
-}
-if (manifest.incognito !== "not_allowed") {
-  throw new Error("Incognito capture must remain disabled.");
-}
-if (manifest.content_scripts?.length) {
-  throw new Error("Static content scripts are prohibited.");
-}
-if (manifest.host_permissions?.includes("<all_urls>")) {
-  throw new Error("Required <all_urls> access is prohibited.");
-}
-if (
-  JSON.stringify(manifest.optional_host_permissions || []) !==
-  JSON.stringify(["<all_urls>"])
-) {
-  throw new Error(
-    "Website capture access must remain an explicit optional <all_urls> request.",
-  );
-}
-if (
-  (manifest.content_scripts || []).some((entry) =>
-    (entry.matches || []).includes("<all_urls>"),
-  )
-) {
-  throw new Error("Static <all_urls> content injection is prohibited.");
-}
-for (const forbiddenPermission of [
-  "clipboardRead",
-  "desktopCapture",
-  "tabCapture",
-]) {
-  if (manifest.permissions?.includes(forbiddenPermission)) {
-    throw new Error("Forbidden permission: " + forbiddenPermission);
+/**
+ * @param {{
+ *   store?: boolean;
+ *   origin?: string;
+ *   persist?: boolean;
+ *   extensionRoot?: string;
+ * }} [options]
+ */
+export async function buildKnowHowCapturePackage({
+  store = false,
+  origin: originValue,
+  persist = true,
+  extensionRoot: extensionRootValue,
+} = {}) {
+  const storeBuild = store === true;
+  const configuredOrigin =
+    originValue?.trim() || process.env.KNOWHOW_EXTENSION_ORIGIN?.trim();
+  if (storeBuild && !configuredOrigin) {
+    throw new Error("KNOWHOW_EXTENSION_ORIGIN is required for a store build.");
   }
-}
-for (const forbiddenContentPattern of [
-  ["clipboard", /clipboard/i],
-  ["raw keyboard listener", /addEventListener\(\s*["']key(?:down|up|press)/],
-  ["form value read", /\.value\b/],
-]) {
-  if (forbiddenContentPattern[1].test(contentSource)) {
-    throw new Error(
-      "Content capture contains a forbidden " +
-        forbiddenContentPattern[0] +
-        " operation.",
+  const origin = parseKnowHowOrigin(
+    configuredOrigin || "http://localhost:3001",
+    storeBuild,
+  );
+  const extensionRoot = extensionRootValue
+    ? resolve(extensionRootValue)
+    : resolveExtensionRoot();
+  if (!existsSync(resolve(extensionRoot, "manifest.json"))) {
+    throw new Error("Could not locate the KnowHow Capture extension.");
+  }
+  const outputDirectory = resolve(extensionRoot, "..", "outputs", "extension");
+  const persistedDestination = resolve(extensionRoot, "dist");
+  if (
+    persist &&
+    (dirname(persistedDestination) !== extensionRoot ||
+      persistedDestination === extensionRoot)
+  ) {
+    throw new Error("Refusing to build outside extension/dist.");
+  }
+
+  const workDirectory = persist
+    ? persistedDestination
+    : await mkdtemp(resolve(tmpdir(), "knowhow-capture-"));
+
+  try {
+    const manifestPath = resolve(extensionRoot, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const originMatch = `${origin.origin}/*`;
+    manifest.host_permissions = [originMatch];
+    manifest.externally_connectable = { matches: [originMatch] };
+    const filename = `knowhow-capture-${manifest.version}-${storeBuild ? "store" : "development"}.zip`;
+    const archivePath = resolve(outputDirectory, filename);
+    if (persist && dirname(archivePath) !== outputDirectory) {
+      throw new Error("Refusing to package outside outputs/extension.");
+    }
+    const contentSource = await readFile(
+      resolve(extensionRoot, "src/content/capture.js"),
+      "utf8",
     );
+    const backgroundSource = await readFile(
+      resolve(extensionRoot, "src/background/index.js"),
+      "utf8",
+    );
+    const captureStoreSource = await readFile(
+      resolve(extensionRoot, "src/core/capture-store.js"),
+      "utf8",
+    );
+
+    if (manifest.manifest_version !== 3) {
+      throw new Error("KnowHow Capture must remain a Manifest V3 extension.");
+    }
+    if (
+      typeof manifest.key !== "string" ||
+      chromeExtensionId(manifest.key) !== expectedExtensionId
+    ) {
+      throw new Error(
+        "KnowHow Capture must retain the manifest key for extension ID " +
+          expectedExtensionId +
+          ".",
+      );
+    }
+    if (manifest.incognito !== "not_allowed") {
+      throw new Error("Incognito capture must remain disabled.");
+    }
+    if (manifest.content_scripts?.length) {
+      throw new Error("Static content scripts are prohibited.");
+    }
+    if (manifest.host_permissions?.includes("<all_urls>")) {
+      throw new Error("Required <all_urls> access is prohibited.");
+    }
+    if (
+      JSON.stringify(manifest.optional_host_permissions || []) !==
+      JSON.stringify(["<all_urls>"])
+    ) {
+      throw new Error(
+        "Website capture access must remain an explicit optional <all_urls> request.",
+      );
+    }
+    if (
+      (manifest.content_scripts || []).some((entry) =>
+        (entry.matches || []).includes("<all_urls>"),
+      )
+    ) {
+      throw new Error("Static <all_urls> content injection is prohibited.");
+    }
+    for (const forbiddenPermission of [
+      "clipboardRead",
+      "desktopCapture",
+      "tabCapture",
+    ]) {
+      if (manifest.permissions?.includes(forbiddenPermission)) {
+        throw new Error("Forbidden permission: " + forbiddenPermission);
+      }
+    }
+    for (const forbiddenContentPattern of [
+      ["clipboard", /clipboard/i],
+      ["raw keyboard listener", /addEventListener\(\s*["']key(?:down|up|press)/],
+      ["form value read", /\.value\b/],
+    ]) {
+      if (forbiddenContentPattern[1].test(contentSource)) {
+        throw new Error(
+          "Content capture contains a forbidden " +
+            forbiddenContentPattern[0] +
+            " operation.",
+        );
+      }
+    }
+    if ((backgroundSource.match(/captureVisibleTab/g) || []).length !== 1) {
+      throw new Error(
+        "captureVisibleTab must remain isolated to one guarded code path.",
+      );
+    }
+    if (/dataUrl/.test(captureStoreSource)) {
+      throw new Error("Raw screenshot data must never enter capture storage.");
+    }
+
+    if (persist) {
+      await rm(workDirectory, { recursive: true, force: true });
+    }
+    await mkdir(workDirectory, { recursive: true });
+    await cp(resolve(extensionRoot, "src"), resolve(workDirectory, "src"), {
+      recursive: true,
+    });
+    const builtConfigPath = resolve(workDirectory, "src", "core", "config.js");
+    const builtConfig = await readFile(builtConfigPath, "utf8");
+    const configuredSource = builtConfig.replace(
+      /export const KNOWHOW_ORIGIN\s*=\s*"[^"]+";/,
+      `export const KNOWHOW_ORIGIN = ${JSON.stringify(origin.origin)};`,
+    );
+    if (configuredSource === builtConfig && !builtConfig.includes(origin.origin)) {
+      throw new Error("Could not configure the extension application origin.");
+    }
+    await writeFile(builtConfigPath, configuredSource, "utf8");
+    const popupFontDirectory = resolve(workDirectory, "src", "popup", "fonts");
+    await mkdir(popupFontDirectory, { recursive: true });
+    for (const weight of ["400", "700"]) {
+      await cp(
+        resolve(
+          extensionRoot,
+          "..",
+          "node_modules",
+          "@fontsource",
+          "kumbh-sans",
+          "files",
+          `kumbh-sans-latin-${weight}-normal.woff2`,
+        ),
+        resolve(popupFontDirectory, `kumbh-sans-latin-${weight}-normal.woff2`),
+      );
+    }
+    await writeFile(
+      resolve(workDirectory, "manifest.json"),
+      JSON.stringify(manifest, null, 2) + "\n",
+      "utf8",
+    );
+
+    const zip = await deterministicZip(workDirectory);
+    if (persist) {
+      await mkdir(outputDirectory, { recursive: true });
+      await writeFile(archivePath, zip);
+      console.log("Built unpacked extension at " + workDirectory);
+      console.log("Packaged deterministic download at " + archivePath);
+      console.log("Extension channel: " + (storeBuild ? "store" : "development"));
+      console.log("KnowHow origin: " + origin.origin);
+    }
+    return {
+      zip,
+      filename,
+      origin: origin.origin,
+      version: manifest.version,
+    };
+  } finally {
+    if (!persist) {
+      await rm(workDirectory, { recursive: true, force: true });
+    }
   }
 }
-if (
-  (backgroundSource.match(/captureVisibleTab/g) || []).length !== 1
-) {
-  throw new Error(
-    "captureVisibleTab must remain isolated to one guarded code path.",
-  );
-}
-if (/dataUrl/.test(captureStoreSource)) {
-  throw new Error("Raw screenshot data must never enter capture storage.");
-}
 
-await rm(destination, { recursive: true, force: true });
-await mkdir(destination, { recursive: true });
-await cp(resolve(extensionRoot, "src"), resolve(destination, "src"), {
-  recursive: true,
-});
-const builtConfigPath = resolve(destination, "src", "core", "config.js");
-const builtConfig = await readFile(builtConfigPath, "utf8");
-const configuredSource = builtConfig.replace(
-  /export const KNOWHOW_ORIGIN\s*=\s*"[^"]+";/,
-  `export const KNOWHOW_ORIGIN = ${JSON.stringify(origin.origin)};`,
-);
-if (configuredSource === builtConfig && !builtConfig.includes(origin.origin)) {
-  throw new Error("Could not configure the extension application origin.");
+if (process.argv[1]?.includes("build.mjs")) {
+  await buildKnowHowCapturePackage({
+    store: process.argv.includes("--store"),
+  });
 }
-await writeFile(builtConfigPath, configuredSource, "utf8");
-const popupFontDirectory = resolve(destination, "src", "popup", "fonts");
-await mkdir(popupFontDirectory, { recursive: true });
-for (const weight of ["400", "700"]) {
-  await cp(
-    resolve(
-      extensionRoot,
-      "..",
-      "node_modules",
-      "@fontsource",
-      "kumbh-sans",
-      "files",
-      `kumbh-sans-latin-${weight}-normal.woff2`,
-    ),
-    resolve(popupFontDirectory, `kumbh-sans-latin-${weight}-normal.woff2`),
-  );
-}
-await writeFile(
-  resolve(destination, "manifest.json"),
-  JSON.stringify(manifest, null, 2) + "\n",
-  "utf8",
-);
-
-await mkdir(outputDirectory, { recursive: true });
-await writeFile(archivePath, await deterministicZip(destination));
-
-console.log("Built unpacked extension at " + destination);
-console.log("Packaged deterministic download at " + archivePath);
-console.log("Extension channel: " + (storeBuild ? "store" : "development"));
-console.log("KnowHow origin: " + origin.origin);

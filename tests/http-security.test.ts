@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
-import { NextRequest } from "next/server";
 import {
   appwriteSessionCookieName,
   deploymentConfigurationIssues,
   getAppwriteServerConfig,
-  restoreApplicationConfiguration,
 } from "../lib/server/appwrite-config";
-import { proxy } from "../proxy";
 import {
   assertCookieMutationRequest,
   HttpError,
@@ -67,7 +64,6 @@ test("record conflicts return a safe retryable 409 envelope", async () => {
     requestId: "request_conflict_0000000000000000",
   });
 });
-
 test("cookie mutations require same-origin proof and a matching CSRF token", () => {
   const token = "a".repeat(64);
   assert.doesNotThrow(() =>
@@ -111,9 +107,9 @@ test("trusted origin accepts the browser-facing Host behind a stale forwarded ho
   const request = new Request("http://site-runtime.internal/api/knowhow", {
     method: "POST",
     headers: {
-      host: "current-deployment.appwrite.network",
-      origin: "https://current-deployment.appwrite.network",
-      "x-forwarded-host": "previous-deployment.appwrite.network",
+      host: "current.reverse-proxy.test",
+      origin: "https://current.reverse-proxy.test",
+      "x-forwarded-host": "previous.reverse-proxy.test",
       "x-forwarded-proto": "https",
       "sec-fetch-site": "same-origin",
       cookie: `knowhow_csrf=${token}`,
@@ -125,7 +121,7 @@ test("trusted origin accepts the browser-facing Host behind a stale forwarded ho
   const crossOrigin = new Request(request, {
     headers: {
       ...Object.fromEntries(request.headers),
-      origin: "https://another-deployment.appwrite.network",
+      origin: "https://another.reverse-proxy.test",
     },
   });
   assert.throws(
@@ -186,7 +182,7 @@ test("JSON parsing enforces content type, object shape, and byte limits", async 
 test("session secrets are accepted only from the HTTP-only Appwrite cookie boundary", () => {
   const restore = withEnvironment({
     KNOWHOW_ENVIRONMENT: "development",
-    APPWRITE_ENDPOINT: "https://fra.cloud.appwrite.io/v1",
+    APPWRITE_ENDPOINT: "http://localhost/v1",
     APPWRITE_PROJECT_ID: "project_test",
     APPWRITE_API_KEY: "test-api-key-with-at-least-twenty-characters",
   });
@@ -207,190 +203,58 @@ test("session secrets are accepted only from the HTTP-only Appwrite cookie bound
   }
 });
 
-test("controlled environments accept only attested Frankfurt fallback or region-bound Azure endpoints", () => {
+test("runtime configuration accepts only local Appwrite endpoints and origins", () => {
   const restore = withEnvironment({
-    KNOWHOW_ENVIRONMENT: "production",
-    NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "production",
-    APPWRITE_ENDPOINT: "https://fra.cloud.appwrite.io/v1",
-    APPWRITE_PROJECT_ID: "project_production",
-    APPWRITE_API_KEY: "production-api-key-with-at-least-twenty-characters",
-    KNOWHOW_ALLOWED_ORIGINS: "https://knowhow.example",
+    KNOWHOW_ENVIRONMENT: "development",
+    NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "development",
+    KNOWHOW_RELEASE: "local",
+    NEXT_PUBLIC_KNOWHOW_RELEASE: "local",
+    APPWRITE_ENDPOINT: "http://localhost/v1",
+    APPWRITE_INTERNAL_ENDPOINT: "http://appwrite-internal/v1",
+    APPWRITE_PROJECT_ID: "knowhow-local",
+    APPWRITE_API_KEY: "local-api-key-with-at-least-twenty-characters",
+    KNOWHOW_ALLOWED_ORIGINS: "http://localhost:3001",
+    KNOWHOW_SITE_ORIGIN: "http://localhost:3001",
     KNOWHOW_EXTENSION_ORIGINS:
       "chrome-extension://phbofjenfnnnnndghhinoldlfbpaedpo",
-    NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL:
-      "https://chromewebstore.google.com/detail/knowhow/example",
-    NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL:
-      "https://microsoftedge.microsoft.com/addons/detail/knowhow/example",
     KNOWHOW_RATE_LIMIT_PEPPER: "r".repeat(32),
     KNOWHOW_TOKEN_KEYS_JSON: JSON.stringify({ v1: "t".repeat(32) }),
     KNOWHOW_TOKEN_ACTIVE_KID: "v1",
-    NEXT_PUBLIC_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
-    KNOWHOW_RELEASE: "release-1",
-    NEXT_PUBLIC_KNOWHOW_RELEASE: "release-1",
     KNOWHOW_EXPORT_WORKER_SECRET: "e".repeat(32),
-    KNOWHOW_SITE_ORIGIN: "https://knowhow.example",
-  });
-  try {
-    assert.equal(getAppwriteServerConfig().endpoint, "https://fra.cloud.appwrite.io/v1");
-    assert.deepEqual(deploymentConfigurationIssues(), []);
-    for (const endpoint of [
-      "https://nyc.cloud.appwrite.io/v1",
-      "https://fra.cloud.appwrite.io:443/v1",
-      "https://user@fra.cloud.appwrite.io/v1",
-      "https://fra.cloud.appwrite.io/v1?target=production",
-      "https://fra.cloud.appwrite.io/v1#production",
-    ]) {
-      process.env.APPWRITE_ENDPOINT = endpoint;
-      assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or region-attested Azure/);
-    }
-    process.env.APPWRITE_ENDPOINT =
-      "https://knowhowbeta-abc123.southindia.cloudapp.azure.com/v1";
-    assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or region-attested Azure/);
-    process.env.KNOWHOW_APPWRITE_RESIDENCY = "azure-self-hosted:southindia";
-    assert.equal(
-      getAppwriteServerConfig().endpoint,
-      "https://knowhowbeta-abc123.southindia.cloudapp.azure.com/v1",
-    );
-    for (const endpoint of [
-      "http://knowhowbeta-abc123.southindia.cloudapp.azure.com/v1",
-      "https://knowhowbeta-abc123.southindia.cloudapp.azure.com:443/v1",
-      "https://knowhowbeta-abc123.southindia.cloudapp.azure.com/v1?target=production",
-      "https://southindia.cloudapp.azure.com/v1",
-      "https://knowhowbeta-abc123.uaenorth.cloudapp.azure.com/v1",
-    ]) {
-      process.env.APPWRITE_ENDPOINT = endpoint;
-      assert.throws(() => getAppwriteServerConfig(), /approved Frankfurt Cloud or region-attested Azure|must use HTTPS/);
-    }
-    delete process.env.KNOWHOW_APPWRITE_RESIDENCY;
-    process.env.APPWRITE_ENDPOINT = "https://fra.cloud.appwrite.io/v1";
-    process.env.KNOWHOW_ALLOWED_ORIGINS = "https://knowhow.example/path";
-    assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));
-    process.env.KNOWHOW_ALLOWED_ORIGINS = "https://knowhow.example";
-    process.env.NEXT_PUBLIC_KNOWHOW_RELEASE = "another-release";
-    assert.ok(
-      deploymentConfigurationIssues().includes("public_deployment_identity"),
-    );
-    process.env.NEXT_PUBLIC_KNOWHOW_RELEASE = "release-1";
-    process.env.APPWRITE_DATABASE_ID = "other_database";
-    assert.ok(deploymentConfigurationIssues().includes("resource_ids"));
-    delete process.env.APPWRITE_DATABASE_ID;
-    delete process.env.KNOWHOW_EXPORT_WORKER_SECRET;
-    assert.ok(deploymentConfigurationIssues().includes("export_worker_secret"));
-  } finally {
-    restore();
-  }
-});
-
-test("isolated restore mode permits only an access-controlled alternate Production database", () => {
-  const restore = withEnvironment({
-    KNOWHOW_ENVIRONMENT: "production",
-    NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "production",
-    APPWRITE_ENDPOINT: "https://fra.cloud.appwrite.io/v1",
-    APPWRITE_PROJECT_ID: "project_production",
-    APPWRITE_API_KEY: "production-api-key-with-at-least-twenty-characters",
-    APPWRITE_DATABASE_ID: "knowhow_restore_releasea",
-    KNOWHOW_ALLOWED_ORIGINS: "https://restore.knowhow.example",
-    KNOWHOW_EXTENSION_ORIGINS:
-      "chrome-extension://phbofjenfnnnnndghhinoldlfbpaedpo",
-    NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL:
-      "https://chromewebstore.google.com/detail/knowhow/example",
-    NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL:
-      "https://microsoftedge.microsoft.com/addons/detail/knowhow/example",
-    KNOWHOW_RATE_LIMIT_PEPPER: "r".repeat(32),
-    KNOWHOW_TOKEN_KEYS_JSON: JSON.stringify({ v1: "t".repeat(32) }),
-    KNOWHOW_TOKEN_ACTIVE_KID: "v1",
-    NEXT_PUBLIC_SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
-    KNOWHOW_RELEASE: "a".repeat(40),
-    NEXT_PUBLIC_KNOWHOW_RELEASE: "a".repeat(40),
-    KNOWHOW_EXPORT_WORKER_SECRET: "e".repeat(32),
-    KNOWHOW_SITE_ORIGIN: "https://restore.knowhow.example",
-    KNOWHOW_RESTORE_APPLICATION_MODE: "1",
-    KNOWHOW_RESTORE_APPLICATION_CONFIRM:
-      "production-isolated-restore-application",
-    KNOWHOW_RESTORE_APPLICATION_DATABASE_ID: "knowhow_restore_releasea",
-    KNOWHOW_RESTORE_APPLICATION_SITE_ID: "knowhow_restore_web_releasea",
-    KNOWHOW_RESTORE_RESTORATION_ID: "restoration_releasea",
-    KNOWHOW_RESTORE_APPLICATION_SITE_ORIGIN:
-      "https://restore.knowhow.example",
-    KNOWHOW_RESTORE_APPLICATION_EXPECTED_PROJECT_ID: "project_production",
-    KNOWHOW_RESTORE_APPLICATION_EXPECTED_RELEASE: "a".repeat(40),
-    KNOWHOW_RESTORE_APPLICATION_SOURCE_PROJECT_ID: "project_production",
-    KNOWHOW_RESTORE_APPLICATION_SOURCE_SITE_ORIGIN:
-      "https://knowhow.example",
-    KNOWHOW_RESTORE_APPLICATION_ACCESS_TOKEN: "x".repeat(48),
-    KNOWHOW_RESTORE_APPLICATION_ISOLATED: "1",
-    KNOWHOW_RESTORE_APPLICATION_NON_PUBLIC: "1",
-    KNOWHOW_RESTORE_APPLICATION_SYNTHETIC_ONLY: "1",
-    KNOWHOW_RESTORE_APPLICATION_EMAIL_DISABLED: "1",
-    KNOWHOW_RESTORE_APPLICATION_EXCLUSIVE: "1",
   });
   try {
     const config = getAppwriteServerConfig();
-    assert.equal(config.databaseId, "knowhow_restore_releasea");
-    assert.deepEqual(restoreApplicationConfiguration(config), {
-      enabled: true,
-      valid: true,
-      databaseId: "knowhow_restore_releasea",
-      restorationId: "restoration_releasea",
-      siteId: "knowhow_restore_web_releasea",
-      siteOrigin: "https://restore.knowhow.example",
-      sourceSiteOrigin: "https://knowhow.example",
-      issues: [],
-    });
+    assert.equal(config.endpoint, "http://localhost/v1");
+    assert.equal(config.internalEndpoint, "http://appwrite-internal/v1");
     assert.deepEqual(deploymentConfigurationIssues(config), []);
 
-    const denied = proxy(
-      new NextRequest("https://restore.knowhow.example/api/health?ready=1"),
-    );
-    assert.equal(denied.status, 404);
-    assert.match(denied.headers.get("x-robots-tag") ?? "", /noindex/);
-    const allowed = proxy(
-      new NextRequest("https://restore.knowhow.example/api/health?ready=1", {
-        headers: { "x-knowhow-restore-access": "x".repeat(48) },
-      }),
-    );
-    assert.equal(allowed.status, 200);
-    assert.equal(allowed.headers.get("x-middleware-next"), "1");
-    assert.equal(
-      allowed.headers.has("x-middleware-request-x-knowhow-restore-access"),
-      false,
+    for (const endpoint of [
+      "https://example.invalid/v1",
+      "http://user@localhost/v1",
+      "http://localhost/v1?target=test",
+      "http://localhost/v1#test",
+      "http://localhost/console",
+    ]) {
+      process.env.APPWRITE_ENDPOINT = endpoint;
+      assert.throws(
+        () => getAppwriteServerConfig(),
+        /exact local Appwrite \/v1 endpoint/,
+      );
+    }
+
+    process.env.APPWRITE_ENDPOINT = "http://localhost/v1";
+    process.env.APPWRITE_INTERNAL_ENDPOINT = "https://example.invalid/v1";
+    assert.throws(
+      () => getAppwriteServerConfig(),
+      /APPWRITE_INTERNAL_ENDPOINT must be an exact local Appwrite \/v1 endpoint/,
     );
 
-    process.env.APPWRITE_DATABASE_ID = "knowhow_core";
-    assert.equal(
-      proxy(
-        new NextRequest("https://restore.knowhow.example/api/health?ready=1", {
-          headers: { "x-knowhow-restore-access": "x".repeat(48) },
-        }),
-      ).status,
-      404,
-    );
-    process.env.APPWRITE_DATABASE_ID = "knowhow_restore_releasea";
-
-    process.env.KNOWHOW_RESTORE_APPLICATION_SITE_ID = "knowhow_web";
-    assert.equal(
-      proxy(
-        new NextRequest("https://restore.knowhow.example/api/health?ready=1", {
-          headers: { "x-knowhow-restore-access": "x".repeat(48) },
-        }),
-      ).status,
-      404,
-    );
-    process.env.KNOWHOW_RESTORE_APPLICATION_SITE_ID =
-      "knowhow_restore_web_releasea";
-
-    process.env.KNOWHOW_RESTORE_APPLICATION_ACCESS_TOKEN = "weak";
-    assert.ok(
-      deploymentConfigurationIssues(config).includes("restore_application"),
-    );
-    assert.equal(
-      proxy(
-        new NextRequest("https://restore.knowhow.example/api/health?ready=1", {
-          headers: { "x-knowhow-restore-access": "weak" },
-        }),
-      ).status,
-      404,
-    );
+    process.env.APPWRITE_INTERNAL_ENDPOINT = "http://appwrite-internal/v1";
+    process.env.KNOWHOW_ALLOWED_ORIGINS = "https://example.invalid";
+    assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));
+    process.env.KNOWHOW_ALLOWED_ORIGINS = "http://localhost:3001";
+    process.env.APPWRITE_DATABASE_ID = "other_database";
+    assert.ok(deploymentConfigurationIssues().includes("resource_ids"));
   } finally {
     restore();
   }

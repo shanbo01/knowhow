@@ -79,7 +79,7 @@ function region(input: unknown, label: string) {
   return result;
 }
 
-function safeOrigin(input: unknown, excludedHosts: readonly string[]) {
+function safeOrigin(input: unknown) {
   if (input === undefined || input === null || input === "") return undefined;
   const text = inputText(input, "Capture URL", { max: 2_048 });
   let url: URL;
@@ -90,10 +90,6 @@ function safeOrigin(input: unknown, excludedHosts: readonly string[]) {
   }
   if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
     throw new HttpError(400, "CAPTURE_URL_INVALID", "The capture origin is invalid.");
-  }
-  const host = url.hostname.toLowerCase();
-  if (excludedHosts.some((excluded) => host === excluded || host.endsWith(`.${excluded}`))) {
-    throw new HttpError(403, "CAPTURE_ORIGIN_EXCLUDED", "Workspace policy excludes this capture origin.");
   }
   // Paths, query strings and fragments can contain identifiers or form data.
   return url.origin;
@@ -180,7 +176,7 @@ export class ExtensionCaptureService {
       workspaceName: workspace?.name ?? "KnowHow workspace",
       themePreference: preference.theme ?? "system",
       policyVersion: CAPTURE_POLICY_VERSION,
-      excludedOrigins: settings.excludedCaptureHosts.map((host) => `https://${host}`),
+      excludedOrigins: [],
       clickTargetColor: settings.clickTargetColor,
       minimumVersion: credential.details.minimumVersion,
       privacy: {
@@ -244,8 +240,7 @@ export class ExtensionCaptureService {
     }
     const title = inputText(payload.title ?? "Captured workflow", "Guide title", { min: 2, max: 500 });
     const expectedSteps = inputInteger(payload.stepCount ?? 0, "Step count", 0, 100);
-    const settings = await this.settings(workspaceId);
-    const sanitizedOrigin = safeOrigin(payload.sanitizedUrl ?? payload.origin, settings.excludedCaptureHosts);
+    const sanitizedOrigin = safeOrigin(payload.sanitizedUrl ?? payload.origin);
     const captureId = await stableId("capture", `${workspaceId}:${credential.identity.userId}:${sessionId}`);
     const existingRow = await this.store.get(TABLES.captures, captureId);
     if (existingRow) {

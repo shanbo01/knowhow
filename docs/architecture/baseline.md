@@ -26,8 +26,6 @@ Verification at the checkpoint:
 - Audit history remains append-only and excludes secrets, guide content, screenshots, and captured values.
 - Tenant identifiers are checked at every read and mutation boundary; missing access is indistinguishable from a missing resource.
 
-## Legacy boundary being removed
+## Legacy boundary removed
 
-At this checkpoint, the server still depends on Vinext, a Cloudflare Worker entry point, D1 SQL/Drizzle migrations, R2 bindings, Wrangler, browser-generated Appwrite JWT forwarding, environment-based platform-owner promotion, and legacy `rivet` resource identifiers. None of those components are an approved production dependency for the external pilot.
-
-The old Appwrite Cloud project's configuration-only inventory is preserved in `docs/architecture/legacy-appwrite-snapshot.md`. It records no customer/demo content and is explicitly forbidden as a source for target rows, users, files, credentials, permissions, or environment bindings. After that read-only snapshot, the owner authorized permanent deletion of the demo project; it was removed without exporting or migrating anything.
+The server no longer depends on Vinext, a Cloudflare Worker entry point, D1 SQL/Drizzle migrations, R2 bindings, Wrangler, browser-generated Appwrite JWT forwarding, environment-based platform-owner promotion, or legacy `rivet` resource identifiers. Historical hosted-project inventories and deployment bindings are not part of the repository or the supported runtime.

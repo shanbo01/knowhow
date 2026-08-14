@@ -1,6 +1,6 @@
 # Threat model and security overview
 
-Scope: invitation-only KnowHow external pilots on Appwrite Cloud Frankfurt, including the Next.js Site, Auth, TablesDB, private Storage, operations/export Functions, Sentry, Resend/Appwrite Messaging, and the Chromium extension. Review this model before each pilot and after material identity, authorization, capture, export, lifecycle, or provider changes.
+Scope: the local KnowHow installation, including the Next.js server, local Appwrite Auth/TablesDB/private Storage, local worker processes, optional Sentry and Resend integrations, Mailpit, and the Chromium extension. Review this model after material identity, authorization, capture, export, lifecycle, machine, network, backup, or provider changes.
 
 ## Assets and security objectives
 
@@ -26,7 +26,7 @@ Objectives are default-deny confidentiality, tenant and audience isolation, auth
 
 | Threat | Primary controls | Residual risk / verification |
 | --- | --- | --- |
-| Public signup or forged invitation | Signup UI only appears for a signed invitation/appointment; server verifies kind, signature, email, expiry, one-use transaction; domain join is rejected | Credential delivery mailbox compromise; test one-use concurrency and notification secrecy |
+| Unauthorized signup, reused beta code, or forged invitation | Server registration mode fails closed; private-beta codes are high-entropy and hash-only, optionally exact-email bound, expiring, revocable, and atomically reserved/consumed; signed invitation/appointment validation remains independent; domain join is rejected | Credential delivery mailbox compromise; test one-use concurrency, compensation, and notification secrecy |
 | Session theft/fixation | Server-created Appwrite session, secure HTTP-only same-site cookies, exact origins, CSRF token, session revocation, HSTS | Compromised endpoint/browser; exercise session limits and revocation in controlled environments |
 | Administrator account takeover | Verified email, TOTP required for platform/workspace admins, current TOTP for exceptional actions, one-time recovery codes | Recovery-code theft and social engineering; require secure storage and audit regeneration |
 | Cross-tenant IDOR/query leakage | Scalar tenant IDs, indexed filters, server revalidation, default-deny policy, not-found equivalence, no client table/file permissions | Service regression; unit, integration, load, and two-tenant tests are release gates |
@@ -44,7 +44,7 @@ Objectives are default-deny confidentiality, tenant and audience isolation, auth
 | Audit tampering/races | Append-only hash chain, per-workspace sequence, transaction-backed ordering, no content/secrets in audit metadata | Server-key compromise; alert on chain mismatch and preserve provider audit logs |
 | Last-admin or entitlement race | Appwrite transactions for invitation redemption, final-admin guards, capture idempotency, audit sequencing, subscription/deletion transitions | Platform transaction semantics/config drift; concurrency tests and Appwrite integration smoke |
 | Premature/partial deletion | 90-day eligibility from original expiry, overdue escalation, explicit approval with TOTP/typed confirmation, case/org/workspace-bound HMAC-sealed target plan, cross-tenant/scope-drift refusal, delete-not-tombstone roots, guarded unreferenced-user cleanup, idempotent 404 handling, quarantine, scalar-scrubbed HMAC-bound receipt, read-only clean-state verifier | Provider partial failure or a new post-approval row/workspace; P1 alert and worker/manual review; never broaden a frozen plan or manually falsify completion |
-| Backup loss or false DR claims | Production Pro database-bound daily backups; HMAC-sealed all-table/audit restore verifier; isolated application/tenancy rehearsal; RPO/RTO targets labeled noncontractual | Independent media DR is deferred; verifier execution and application RTO still require Production evidence; pilot terms prohibit stronger claims |
+| Backup loss or false recovery claims | Operator-owned encrypted backups; recorded archive hashes; isolated local restore rehearsal covering database, Auth, private media, tenant boundaries, and audit continuity; observed recovery measurements labeled noncontractual | A backup is not accepted until an isolated restore passes; pilot terms prohibit stronger claims |
 | Supply-chain/secret compromise | Lockfiles, `npm ci`, dependency audit, Gitleaks plus local secret scan, GitHub read-only token, no runtime remote extension code | Unknown upstream flaws; patch cadence, Sentry monitoring, incident response |
 
 ## Authorization model

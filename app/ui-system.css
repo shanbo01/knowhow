@@ -1,0 +1,181 @@
+/*
+ * Canonical interface primitives.
+ *
+ * Product, focused-editor, and account screens historically accumulated
+ * one-off control and surface rules. This final stylesheet gives both the
+ * typed UI components and the older semantic classes the same dimensions,
+ * radii, elevation, interaction timing, and focus treatment.
+ */
+:root {
+  --kh-control-height: 2.375rem;
+  --kh-control-height-sm: 2rem;
+  --kh-control-height-lg: 2.75rem;
+  --kh-control-radius: 0.625rem;
+  --kh-surface-radius: 0.75rem;
+  --kh-dialog-radius: 0.875rem;
+  --kh-control-gap: 0.45rem;
+  --kh-control-pad-x: 0.8rem;
+  --kh-control-font-size: 0.8125rem;
+  --kh-control-font-weight: 650;
+  --kh-ui-speed: 140ms;
+  --kh-focus-ring: 0 0 0 3px color-mix(in srgb, var(--ring) 24%, transparent);
+  --kh-surface-shadow:
+    0 1px 2px rgb(15 23 42 / 0.025),
+    0 8px 24px rgb(15 23 42 / 0.055);
+  --kh-control-shadow:
+    0 1px 2px rgb(15 23 42 / 0.035),
+    0 3px 10px rgb(15 23 42 / 0.04);
+  --kh-floating-shadow: 0 16px 42px rgb(15 23 42 / 0.12);
+}
+
+:root[data-theme="dark"],
+.dark {
+  --kh-surface-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.025),
+    0 10px 28px rgb(0 0 0 / 0.18);
+  --kh-control-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.035),
+    0 4px 12px rgb(0 0 0 / 0.16);
+  --kh-floating-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.035),
+    0 18px 46px rgb(0 0 0 / 0.3);
+}
+
+[data-slot="button"],
+.button,
+.auth-primary-button,
+.auth-secondary-button,
+.top-create {
+  min-height: var(--kh-control-height);
+  gap: var(--kh-control-gap);
+  border-radius: var(--kh-control-radius) !important;
+  font-family: inherit;
+  font-size: var(--kh-control-font-size);
+  font-weight: var(--kh-control-font-weight);
+  line-height: 1;
+  transition:
+    color var(--kh-ui-speed) ease,
+    background-color var(--kh-ui-speed) ease,
+    box-shadow var(--kh-ui-speed) ease,
+    transform var(--kh-ui-speed) ease,
+    opacity var(--kh-ui-speed) ease;
+}
+
+[data-slot="button"][data-size="xs"],
+[data-slot="button"][data-size="sm"],
+[data-slot="button"][data-size="icon-xs"],
+[data-slot="button"][data-size="icon-sm"],
+.button.small {
+  min-height: var(--kh-control-height-sm);
+}
+
+[data-slot="button"][data-size="lg"],
+[data-slot="button"][data-size="icon-lg"] {
+  min-height: var(--kh-control-height-lg);
+}
+
+[data-slot="button"][data-size^="icon"] {
+  padding: 0;
+}
+
+:where(.experience-shell, .focused-guide-route, .auth-shell)
+  :where(
+    .field input,
+    .field textarea,
+    .auth-field input,
+    .auth-field textarea,
+    .step-title-input,
+    .step-description-input,
+    .kh-select-trigger,
+    .select-menu-trigger,
+    .date-range-filter,
+    .search-field,
+    .member-search
+  ),
+[data-slot="input"],
+[data-slot="select-trigger"] {
+  min-height: var(--kh-control-height);
+  border-radius: var(--kh-control-radius) !important;
+  font-family: inherit;
+  font-size: var(--kh-control-font-size);
+  transition:
+    border-color var(--kh-ui-speed) ease,
+    background-color var(--kh-ui-speed) ease,
+    box-shadow var(--kh-ui-speed) ease;
+}
+
+[data-slot="select-trigger"][data-size="sm"] {
+  min-height: var(--kh-control-height-sm);
+}
+
+[data-slot="textarea"] {
+  border-radius: var(--kh-control-radius) !important;
+  font-family: inherit;
+  font-size: var(--kh-control-font-size);
+  line-height: 1.5;
+}
+
+:where(.experience-shell, .focused-guide-route, .auth-shell)
+  :where(
+    .field input,
+    .field textarea,
+    .auth-field input,
+    .auth-field textarea,
+    .step-title-input,
+    .step-description-input,
+    .kh-select-trigger,
+    .select-menu-trigger,
+    .search-field,
+    .member-search
+  ):focus,
+:where([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):focus-visible,
+:where([data-slot="button"], .button, .auth-primary-button, .auth-secondary-button):focus-visible {
+  outline: 0;
+  box-shadow: var(--kh-focus-ring), var(--kh-control-shadow) !important;
+}
+
+:where(.experience-shell, .focused-guide-route, .auth-shell)
+  :where(.card, .metric-card, .group-card, .editor-metadata, .step-editor, .shot-editor),
+[data-slot="card"] {
+  border-radius: var(--kh-surface-radius) !important;
+  box-shadow: var(--kh-surface-shadow) !important;
+}
+
+:where(
+  [data-slot="dialog-content"],
+  .kh-dialog-content,
+  .modal-card,
+  .danger-confirm-card,
+  .editor-leave-card
+) {
+  border-radius: var(--kh-dialog-radius) !important;
+  box-shadow: var(--kh-floating-shadow) !important;
+}
+
+:where([data-slot="select-content"], .kh-select-options, .profile-menu, .row-menu-pop) {
+  border-radius: var(--kh-control-radius) !important;
+  box-shadow: var(--kh-floating-shadow) !important;
+}
+
+:where(.experience-shell, .focused-guide-route, .auth-shell)
+  :where(.field > span:first-child, .field-label, .auth-field > label, label) {
+  font-weight: 650;
+}
+
+[data-sidebar="menu-button"] > span:last-child,
+[data-sidebar="menu-sub-button"] > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="button"],
+  .button,
+  [data-slot="input"],
+  [data-slot="textarea"],
+  [data-slot="select-trigger"] {
+    transition-duration: 0.01ms !important;
+  }
+}

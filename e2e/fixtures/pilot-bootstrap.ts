@@ -159,6 +159,7 @@ export function pilotBootstrap(): BootstrapResponse {
       email: "owner@alpha.example",
       name: "Pilot Owner",
       emailVerified: true,
+      mfaEnabled: false,
       platformAdministrator: true,
       platformRoles: ["owner"],
       themePreference: "light",
@@ -172,8 +173,6 @@ export function pilotBootstrap(): BootstrapResponse {
           accentColor: "#2563eb",
           clickTargetColor: "#f97316",
           removeBranding: false,
-          allowedDomains: [],
-          excludedCaptureHosts: ["accounts.example.test"],
           allowRestrictedExports: false,
           watermarkExports: true,
         },
@@ -307,6 +306,7 @@ export function pilotBootstrap(): BootstrapResponse {
       onboarding: {
         startedAt: "2026-08-01T08:00:00.000Z",
         completedAt: null,
+        dismissedAt: null,
         steps: (
           [
             "workspace_readiness",
@@ -329,7 +329,6 @@ export function pilotBootstrap(): BootstrapResponse {
         status: "active",
         roles: ["owner", "administrator"],
         branding: { logoMediaId: null, accentColor: "#2563eb" },
-        domains: ["alpha.example"],
         members: [
           {
             id: "organization_member_owner",
@@ -498,6 +497,7 @@ export function pilotBootstrap(): BootstrapResponse {
           steps: {},
         },
       ],
+      betaAccess: { grants: [], events: [] },
       systemHealth: {
         failedNotifications: 0,
         overdueSupport: 0,

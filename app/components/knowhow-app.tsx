@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  ArrowRight,
   Building2,
   CalendarClock,
   CheckCircle2,
+  Link2,
   LoaderCircle,
   LogOut,
   Mail,
@@ -11,6 +13,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   AuthGate,
   MfaEnrollmentGate,
@@ -28,6 +31,10 @@ import {
 } from "./knowhow-workspace-app";
 import { ProductBrand } from "./product-brand";
 import {
+  SelfServiceSetup,
+  type SelfServiceSetupDraft,
+} from "./self-service-setup";
+import {
   clearApiCredential,
   knowhowApi,
   knowhowCommand,
@@ -40,7 +47,6 @@ import {
   completeMfaChallenge,
   completeMfaEnrollment,
   getAuthSession,
-  getMfaRequirement,
   sendEmailVerification,
   signInWithPassword,
   signOutSession,
@@ -71,6 +77,8 @@ function errorMessage(error: unknown) {
 }
 
 const PENDING_INVITE_KEY = "knowhow-pending-invite";
+const PENDING_APPOINTMENT_KEY = "knowhow-pending-appointment";
+const PENDING_BETA_ACCESS_KEY = "knowhow-pending-beta-access";
 
 function locationKeyFromWindow() {
   if (typeof window === "undefined") return "/";
@@ -84,30 +92,78 @@ function rememberInviteFromLocation() {
   return token ?? window.sessionStorage.getItem(PENDING_INVITE_KEY);
 }
 
+function rememberAppointmentFromLocation() {
+  if (typeof window === "undefined") return null;
+  const token = new URLSearchParams(window.location.search).get("appointment");
+  if (token) window.sessionStorage.setItem(PENDING_APPOINTMENT_KEY, token);
+  return token ?? window.sessionStorage.getItem(PENDING_APPOINTMENT_KEY);
+}
+
+function rememberBetaAccessFromLocation() {
+  if (typeof window === "undefined") return null;
+  const token = new URLSearchParams(window.location.search).get("beta");
+  if (token) window.sessionStorage.setItem(PENDING_BETA_ACCESS_KEY, token);
+  return token ?? window.sessionStorage.getItem(PENDING_BETA_ACCESS_KEY);
+}
+
+function credentialEmail(token?: string | null) {
+  if (!token || typeof window === "undefined") return undefined;
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return undefined;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(
+      window.atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")),
+    ) as { email?: unknown };
+    return typeof decoded.email === "string"
+      ? decoded.email.trim().toLowerCase()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function OpeningKnowHow() {
   return (
     <main className="opening-screen" aria-live="polite">
       <ProductBrand markOnly className="opening-product-brand" />
       <LoaderCircle className="spin" aria-hidden="true" />
       <h1>Opening KnowHow</h1>
-      <p>Verifying Appwrite and restoring your secure session.</p>
+      <p>Preparing your workspace.</p>
     </main>
   );
 }
 
+type CachedProductSession = {
+  user: SessionUser;
+  bootstrap: BootstrapResponse | null;
+  activeWorkspaceId: string;
+};
+
+let cachedProductSession: CachedProductSession | null = null;
+
 function AppointmentPrompt({
-  email,
+  signedInEmail,
+  appointedEmail,
   busy,
   error,
   onAccept,
   onDismiss,
+  onSwitchAccount,
 }: {
-  email: string;
+  signedInEmail: string;
+  appointedEmail?: string;
   busy: boolean;
   error: string;
   onAccept: () => Promise<void>;
   onDismiss: () => void;
+  onSwitchAccount: () => Promise<void>;
 }) {
+  const accountMismatch = Boolean(
+    appointedEmail &&
+    appointedEmail.toLowerCase() !== signedInEmail.toLowerCase(),
+  );
+
   return (
     <main className="onboarding-shell">
       <header className="onboarding-header">
@@ -119,17 +175,43 @@ function AppointmentPrompt({
         <p className="eyebrow">Administrator appointment</p>
         <h1>Become a workspace administrator</h1>
         <p className="lede">
-          A KnowHow platform administrator appointed <strong>{email}</strong> as
-          the administrator of a client workspace. Accepting adds you as that
+          A KnowHow platform administrator appointed{" "}
+          <strong>{appointedEmail ?? signedInEmail}</strong> as the
+          administrator of a client workspace. Accepting adds you as that
           workspace&apos;s administrator and is recorded in its audit history.
           This appointment is single-use and expires within 14 days.
         </p>
+        <div
+          className={
+            accountMismatch
+              ? "access-account access-account-mismatch"
+              : "access-account"
+          }
+        >
+          <span>Signed in as</span>
+          <strong>{signedInEmail}</strong>
+          <small>
+            {accountMismatch
+              ? "This appointment belongs to a different account."
+              : "The email matches this appointment."}
+          </small>
+        </div>
         {error ? (
           <p className="form-error" role="alert">
             {error}
           </p>
         ) : null}
         <div className="modal-actions">
+          {accountMismatch ? (
+            <button
+              className="button secondary"
+              type="button"
+              disabled={busy}
+              onClick={() => void onSwitchAccount()}
+            >
+              Switch account
+            </button>
+          ) : null}
           <button
             className="button secondary"
             type="button"
@@ -141,7 +223,7 @@ function AppointmentPrompt({
           <button
             className="button primary"
             type="button"
-            disabled={busy}
+            disabled={busy || accountMismatch}
             onClick={() => void onAccept()}
           >
             {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />}
@@ -280,11 +362,12 @@ function WorkspaceOnboarding({
   organizations,
   busy,
   error,
+  route,
+  onNavigate,
   onSaveProvisioning,
   onCompleteProvisioning,
   onAppointOrganizationMember,
   onUpdateOrganizationMember,
-  onSaveOrganizationDomains,
   onSetWorkspaceStatus,
   onAssignAdministrator,
   onRequestSupport,
@@ -292,6 +375,9 @@ function WorkspaceOnboarding({
   onConvertSubscription,
   onApproveDeletion,
   onRevokeAppointment,
+  onCreateBetaAccess,
+  onRevokeBetaAccess,
+  onPlatformControl,
   onSignOut,
 }: {
   viewerName: string;
@@ -300,6 +386,8 @@ function WorkspaceOnboarding({
   organizations: OrganizationAdministration[];
   busy: boolean;
   error: string;
+  route: AppRoute;
+  onNavigate: (href: string) => void;
   onSaveProvisioning: (
     runId: string | null,
     step: number,
@@ -311,26 +399,25 @@ function WorkspaceOnboarding({
   }>;
   onCompleteProvisioning: (
     runId: string,
+    finalStepData: Record<string, unknown>,
   ) => Promise<PlatformProvisioningResult>;
   onAppointOrganizationMember: (
     organizationId: string,
-    email: string,
+    emails: string[],
     roles: OrganizationRole[],
     anchorWorkspaceId: string,
-  ) => Promise<{
-    appointmentId: string;
-    appointmentToken: string;
-    expiresAt: string;
-  }>;
+  ) => Promise<
+    Array<{
+      email: string;
+      appointmentToken: string;
+      expiresAt: string;
+    }>
+  >;
   onUpdateOrganizationMember: (
     organizationId: string,
     memberId: string,
     roles: OrganizationRole[],
     status: "active" | "revoked",
-  ) => Promise<unknown>;
-  onSaveOrganizationDomains: (
-    organizationId: string,
-    domains: string[],
   ) => Promise<unknown>;
   onSetWorkspaceStatus: (
     workspaceId: string,
@@ -356,13 +443,56 @@ function WorkspaceOnboarding({
   ) => Promise<unknown>;
   onApproveDeletion: (caseId: string, confirmation: string) => Promise<unknown>;
   onRevokeAppointment: (appointmentId: string) => Promise<void>;
+  onCreateBetaAccess: (input: {
+    label?: string;
+    email?: string;
+    expiresAt: string;
+    maxUses: number;
+  }) => Promise<{
+    grant: NonNullable<
+      BootstrapResponse["platform"]
+    >["betaAccess"]["grants"][number];
+    code: string;
+  }>;
+  onRevokeBetaAccess: (grantId: string) => Promise<unknown>;
+  onPlatformControl: (
+    action:
+      | "createPricingCatalog"
+      | "updatePricingCatalog"
+      | "retirePricingCatalog"
+      | "createLifecycleSimulationTenant"
+      | "simulateLifecycleState",
+    payload: Record<string, unknown>,
+    successMessage: string,
+  ) => Promise<unknown>;
   onSignOut: () => Promise<void>;
 }) {
   const [provisioningOpen, setProvisioningOpen] = useState(false);
+  const [accessLink, setAccessLink] = useState("");
+  const [accessLinkError, setAccessLinkError] = useState("");
   const [assigningWorkspace, setAssigningWorkspace] =
     useState<PlatformWorkspace | null>(null);
   const [requestingWorkspace, setRequestingWorkspace] =
     useState<PlatformWorkspace | null>(null);
+
+  function redeemAccessLink() {
+    setAccessLinkError("");
+    try {
+      const parsed = new URL(accessLink.trim(), window.location.origin);
+      const invite = parsed.searchParams.get("invite");
+      const appointment = parsed.searchParams.get("appointment");
+      if (!invite && !appointment) {
+        setAccessLinkError("Paste a KnowHow invitation or appointment link.");
+        return;
+      }
+      const params = new URLSearchParams();
+      if (invite) params.set("invite", invite);
+      if (appointment) params.set("appointment", appointment);
+      window.location.assign(`/app?${params.toString()}`);
+    } catch {
+      setAccessLinkError("Paste the complete access link you received.");
+    }
+  }
 
   return (
     <main className="onboarding-shell">
@@ -378,10 +508,9 @@ function WorkspaceOnboarding({
         <p className="eyebrow">Verified account</p>
         <h1>Welcome, {viewerName || "there"}</h1>
         <p className="lede">
-          Your account is verified. Workspace access remains invitation-only:
-          redeem a signed invitation or administrator appointment issued to
-          your exact email address. Every credential is single-use, expires,
-          and is audited.
+          Your account is verified. Paste an invitation or appointment link
+          issued to this email to join a workspace, or ask a teammate to invite
+          you.
         </p>
 
         {error ? (
@@ -412,12 +541,53 @@ function WorkspaceOnboarding({
             </button>
           </div>
         ) : null}
-        <div className="access-guidance">
-          <h2>Need access to another workspace?</h2>
+        <div className="access-guidance access-center">
+          <p className="eyebrow">Access center</p>
+          <h2>Have an invitation or appointment link?</h2>
           <p>
-            Ask a workspace administrator to issue a signed invitation to your
-            exact email address. Domain matching never grants access.
+            Paste it here to continue without signing out. The link must be
+            issued to this account&apos;s exact email address.
           </p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              redeemAccessLink();
+            }}
+          >
+            <label className="auth-field" htmlFor="access-link">
+              <span>Access link</span>
+              <div className="auth-input-wrap">
+                <Link2 aria-hidden="true" />
+                <input
+                  id="access-link"
+                  type="url"
+                  inputMode="url"
+                  value={accessLink}
+                  onChange={(event) => {
+                    setAccessLink(event.target.value);
+                    setAccessLinkError("");
+                  }}
+                  placeholder="https://…/app?invite=…"
+                />
+              </div>
+            </label>
+            {accessLinkError ? (
+              <p className="form-error" role="alert">
+                {accessLinkError}
+              </p>
+            ) : null}
+            <button
+              className="button primary"
+              type="submit"
+              disabled={!accessLink.trim()}
+            >
+              Redeem access <ArrowRight />
+            </button>
+          </form>
+          <small>
+            No link yet? Ask a workspace administrator to invite this exact
+            email address.
+          </small>
         </div>
       </section>
       {organizations.map((organization) => (
@@ -429,12 +599,12 @@ function WorkspaceOnboarding({
           <OrganizationView
             organization={organization}
             busy={busy}
-            onAppoint={(email, roles, anchorWorkspaceId) =>
+            onAppoint={(payload) =>
               onAppointOrganizationMember(
                 organization.id,
-                email,
-                roles,
-                anchorWorkspaceId,
+                payload.emails,
+                payload.roles,
+                payload.anchorWorkspaceId,
               )
             }
             onUpdate={(memberId, roles, status) =>
@@ -444,9 +614,6 @@ function WorkspaceOnboarding({
                 roles,
                 status,
               )
-            }
-            onSaveDomains={(domains) =>
-              onSaveOrganizationDomains(organization.id, domains)
             }
             onRevokeAppointment={onRevokeAppointment}
           />
@@ -460,6 +627,9 @@ function WorkspaceOnboarding({
           <PlatformView
             platform={platform}
             busy={busy}
+            section={route.kind === "platform" ? route.section : "overview"}
+            workspaceId={route.kind === "platform" ? route.workspaceId : undefined}
+            onNavigate={onNavigate}
             onProvision={() => setProvisioningOpen(true)}
             onStatus={(workspaceId, status) => {
               if (
@@ -477,6 +647,11 @@ function WorkspaceOnboarding({
             onExtendSubscription={onExtendSubscription}
             onConvertSubscription={onConvertSubscription}
             onApproveDeletion={onApproveDeletion}
+            canManageBetaAccess={canCreateWorkspace}
+            onCreateBetaAccess={onCreateBetaAccess}
+            onRevokeBetaAccess={onRevokeBetaAccess}
+            canManagePlatformControls={canCreateWorkspace}
+            onPlatformControl={onPlatformControl}
             onRevokeAppointment={(appointment) => {
               if (
                 window.confirm(
@@ -530,17 +705,21 @@ function WorkspaceOnboarding({
 
 export default function Home() {
   const publicSignUp =
-    process.env.NEXT_PUBLIC_KNOWHOW_PUBLIC_SIGNUP_ENABLED === "1";
+    process.env.NEXT_PUBLIC_KNOWHOW_REGISTRATION_MODE === "open";
+  const privateBetaSignUp =
+    process.env.NEXT_PUBLIC_KNOWHOW_REGISTRATION_MODE === "private_beta";
   const [backendState, setBackendState] = useState<BackendState>("checking");
   const [backendMessage, setBackendMessage] = useState("");
   const [locationKey, setLocationKey] = useState("/");
-  const [booting, setBooting] = useState(true);
+  const [booting, setBooting] = useState(!cachedProductSession?.user);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [verificationSent, setVerificationSent] = useState(false);
-  const [user, setUser] = useState<SessionUser | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(
+    cachedProductSession?.user ?? null,
+  );
   const [signupCredential, setSignupCredential] = useState<{
-    kind: "invite" | "appointment";
+    kind: "invite" | "appointment" | "beta";
     token: string;
   } | null>(null);
   const [mfaPrompt, setMfaPrompt] = useState<{
@@ -557,8 +736,12 @@ export default function Home() {
     qrCodeDataUrl?: string;
     recoveryCodes?: string[];
   } | null>(null);
-  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(
+    cachedProductSession?.bootstrap ?? null,
+  );
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(
+    cachedProductSession?.activeWorkspaceId ?? "",
+  );
   const [appointmentToken, setAppointmentToken] = useState<string | null>(null);
   const inviteAttempted = useRef<string | null>(null);
   const locationKeyRef = useRef(locationKey);
@@ -652,18 +835,18 @@ export default function Home() {
     return () => window.removeEventListener("popstate", updateLocation);
   }, [commitLocation]);
 
-  const appointmentFromLocation = useCallback(() => {
-    if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("appointment");
-  }, []);
+  const appointmentFromLocation = useCallback(
+    () => rememberAppointmentFromLocation(),
+    [],
+  );
 
   const checkBackend = useCallback(async () => {
     setBackendState("checking");
-    setBackendMessage("Verifying the identity service.");
+    setBackendMessage("Checking the connection.");
     try {
       await authHealth();
       setBackendState("connected");
-      setBackendMessage("Secure identity service connected.");
+      setBackendMessage("Ready to sign in.");
       return true;
     } catch (nextError) {
       setBackendState("failed");
@@ -681,6 +864,13 @@ export default function Home() {
     const selected =
       next.activeWorkspace?.workspace.id ?? next.workspaces[0]?.id ?? "";
     setActiveWorkspaceId(selected);
+    if (cachedProductSession?.user) {
+      cachedProductSession = {
+        user: cachedProductSession.user,
+        bootstrap: next,
+        activeWorkspaceId: selected,
+      };
+    }
     return next;
   }, []);
 
@@ -694,43 +884,39 @@ export default function Home() {
     [loadBootstrap, navigate],
   );
 
-  const requireMfaEnrollment = useCallback(async (identity: SessionUser) => {
-    if (!identity.emailVerification) return false;
-    const requirement = await getMfaRequirement();
-    if (requirement.required && !requirement.enabled) {
-      setMfaEnrollment({});
-      return true;
-    }
-    return false;
-  }, []);
-
   const restore = useCallback(async () => {
-    setBooting(true);
+    if (!cachedProductSession?.user) setBooting(true);
     setError("");
     await checkBackend();
     const invite = rememberInviteFromLocation();
     const appointment = appointmentFromLocation();
+    const betaAccess = rememberBetaAccessFromLocation();
     setAppointmentToken(appointment);
     setSignupCredential(
       invite
         ? { kind: "invite", token: invite }
         : appointment
           ? { kind: "appointment", token: appointment }
-          : null,
+          : betaAccess
+            ? { kind: "beta", token: betaAccess }
+            : null,
     );
     const nextUser = await getAuthSession().catch(() => null);
     if (!nextUser) {
+      cachedProductSession = null;
       setUser(null);
       setBootstrap(null);
       setBooting(false);
       return;
     }
     setUser(nextUser);
+    cachedProductSession = {
+      user: nextUser,
+      bootstrap: cachedProductSession?.bootstrap ?? null,
+      activeWorkspaceId: cachedProductSession?.activeWorkspaceId ?? "",
+    };
     try {
-      if (
-        nextUser.emailVerification &&
-        !(await requireMfaEnrollment(nextUser))
-      ) {
+      if (nextUser.emailVerification) {
         await loadBootstrap();
       }
     } catch (nextError) {
@@ -739,12 +925,7 @@ export default function Home() {
     } finally {
       setBooting(false);
     }
-  }, [
-    appointmentFromLocation,
-    checkBackend,
-    loadBootstrap,
-    requireMfaEnrollment,
-  ]);
+  }, [appointmentFromLocation, checkBackend, loadBootstrap]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => void restore());
@@ -860,10 +1041,7 @@ export default function Home() {
       if (!nextUser)
         throw new Error("The secure session could not be restored.");
       setUser(nextUser);
-      if (
-        nextUser.emailVerification &&
-        !(await requireMfaEnrollment(nextUser))
-      ) {
+      if (nextUser.emailVerification) {
         try {
           await loadBootstrap();
         } catch (nextError) {
@@ -879,22 +1057,41 @@ export default function Home() {
     }
   };
 
-  const signUp = async (name: string, email: string, password: string) => {
+  const signUp = async (
+    name: string,
+    email: string,
+    password: string,
+    betaCode?: string,
+  ) => {
     setBusy(true);
     setError("");
     try {
-      if (!signupCredential && !publicSignUp)
+      const suppliedBetaCode = betaCode?.trim();
+      const effectiveCredential = suppliedBetaCode
+        ? ({ kind: "beta", token: suppliedBetaCode } as const)
+        : signupCredential;
+      if (!effectiveCredential && !publicSignUp && !privateBetaSignUp)
         throw new Error(
-          "A current invitation is required to create an account.",
+          "Registration is not currently available without an invitation.",
         );
+      if (
+        effectiveCredential?.kind === "beta" &&
+        typeof window !== "undefined"
+      ) {
+        window.sessionStorage.setItem(
+          PENDING_BETA_ACCESS_KEY,
+          effectiveCredential.token,
+        );
+        setSignupCredential(effectiveCredential);
+      }
       await signUpAccount({
         name,
         email,
         password,
-        ...(signupCredential
+        ...(effectiveCredential
           ? {
-              credentialKind: signupCredential.kind,
-              credential: signupCredential.token,
+              credentialKind: effectiveCredential.kind,
+              credential: effectiveCredential.token,
             }
           : {}),
       });
@@ -906,8 +1103,11 @@ export default function Home() {
       try {
         await sendEmailVerification(`${window.location.origin}/verify`);
         setVerificationSent(true);
-      } catch {
+      } catch (verificationError) {
         setVerificationSent(false);
+        setError(
+          `Your account was created, but the verification email could not be sent. ${errorMessage(verificationError)}`,
+        );
       }
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -918,6 +1118,19 @@ export default function Home() {
   };
 
   const signOut = async () => {
+    const pendingInvite =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem(PENDING_INVITE_KEY)
+        : null;
+    const pendingAppointment =
+      appointmentToken ??
+      (typeof window !== "undefined"
+        ? window.sessionStorage.getItem(PENDING_APPOINTMENT_KEY)
+        : null);
+    const pendingBetaAccess =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem(PENDING_BETA_ACCESS_KEY)
+        : null;
     setBusy(true);
     try {
       await signOutSession();
@@ -927,11 +1140,21 @@ export default function Home() {
       );
       reauthenticationResolver.current = null;
       clearApiCredential();
+      cachedProductSession = null;
       setUser(null);
       setBootstrap(null);
       setMfaEnrollment(null);
       setMfaPrompt(null);
-      navigate("/", { replace: true });
+      navigate(
+        pendingAppointment
+          ? `/app?appointment=${encodeURIComponent(pendingAppointment)}&mode=sign-in`
+          : pendingInvite
+            ? `/app?invite=${encodeURIComponent(pendingInvite)}&mode=sign-in`
+            : pendingBetaAccess
+              ? `/app?beta=${encodeURIComponent(pendingBetaAccess)}&mode=sign-in`
+              : "/",
+        { replace: true },
+      );
       setBusy(false);
     }
   };
@@ -944,10 +1167,7 @@ export default function Home() {
       if (!nextUser)
         throw new Error("Your session has expired. Sign in again.");
       setUser(nextUser);
-      if (
-        nextUser.emailVerification &&
-        !(await requireMfaEnrollment(nextUser))
-      ) {
+      if (nextUser.emailVerification) {
         await loadBootstrap();
       } else
         setError(
@@ -1143,7 +1363,9 @@ export default function Home() {
       }>("acceptAppointment", {
         token: appointmentToken,
       });
+      window.sessionStorage.removeItem(PENDING_APPOINTMENT_KEY);
       setAppointmentToken(null);
+      setSignupCredential(null);
       if (result.workspaceAccessGranted === false) {
         await loadBootstrap();
         navigate("/", { replace: true });
@@ -1246,6 +1468,10 @@ export default function Home() {
           } finally {
             setBusy(false);
           }
+        }}
+        onCancel={() => {
+          setMfaEnrollment(null);
+          setError("");
         }}
         onSignOut={signOut}
       />
@@ -1359,8 +1585,29 @@ export default function Home() {
         onRetryBackend={checkBackend}
         onSignIn={signIn}
         onSignUp={signUp}
-        allowSignUp={publicSignUp || Boolean(signupCredential)}
+        allowSignUp={
+          publicSignUp || privateBetaSignUp || Boolean(signupCredential)
+        }
         publicSignUp={publicSignUp}
+        privateBetaSignUp={privateBetaSignUp}
+        initialMode={
+          new URL(locationKey, "https://knowhow.local").searchParams.get(
+            "mode",
+          ) === "sign-up"
+            ? "sign-up"
+            : "sign-in"
+        }
+        credentialContext={
+          signupCredential
+            ? {
+                kind: signupCredential.kind,
+                email:
+                  signupCredential.kind === "beta"
+                    ? undefined
+                    : credentialEmail(signupCredential.token),
+              }
+            : undefined
+        }
       />
     );
   }
@@ -1405,11 +1652,13 @@ export default function Home() {
     return (
       <>
         <AppointmentPrompt
-          email={user.email}
+          signedInEmail={user.email}
+          appointedEmail={credentialEmail(appointmentToken)}
           busy={busy}
           error={error}
           onAccept={acceptAppointment}
           onDismiss={dismissAppointment}
+          onSwitchAccount={signOut}
         />
         {reauthenticationGate}
       </>
@@ -1451,15 +1700,73 @@ export default function Home() {
   }
 
   if (!bootstrap.activeWorkspace) {
+    if (publicSignUp || bootstrap.viewer.betaAdmission) {
+      return (
+        <>
+          <SelfServiceSetup
+            viewerName={bootstrap.viewer.name}
+            draft={bootstrap.viewer.selfServiceSetup?.draft}
+            busy={busy}
+            error={error}
+            onSave={async (draft: SelfServiceSetupDraft) => {
+              setBusy(true);
+              setError("");
+              try {
+                const result = await knowhowCommand(
+                  "saveSelfServiceSetup",
+                  draft,
+                );
+                await loadBootstrap();
+                return result;
+              } catch (nextError) {
+                setError(errorMessage(nextError));
+                throw nextError;
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onComplete={async (draft: SelfServiceSetupDraft) => {
+              setBusy(true);
+              setError("");
+              try {
+                const result = await knowhowCommand<{
+                  workspaceId: string;
+                  workspaceSlug: string;
+                }>("completeSelfServiceSetup", draft);
+                if (typeof window !== "undefined") {
+                  window.sessionStorage.removeItem(PENDING_BETA_ACCESS_KEY);
+                }
+                setSignupCredential(null);
+                await openWorkspace(result.workspaceId, true);
+                return result;
+              } catch (nextError) {
+                setError(errorMessage(nextError));
+                throw nextError;
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onSignOut={signOut}
+          />
+          {reauthenticationGate}
+        </>
+      );
+    }
     return (
       <>
         <WorkspaceOnboarding
           viewerName={bootstrap.viewer.name}
-          canCreateWorkspace={bootstrap.viewer.platformAdministrator}
+          canCreateWorkspace={Boolean(
+            bootstrap.viewer.platformRoles?.some((role) =>
+              ["owner", "operations"].includes(role),
+            ),
+          )}
           platform={bootstrap.platform}
           organizations={bootstrap.organizations ?? []}
           busy={busy}
           error={error}
+          route={route}
+          onNavigate={navigate}
           onSaveProvisioning={async (runId, step, data) => {
             setBusy(true);
             setError("");
@@ -1482,13 +1789,13 @@ export default function Home() {
               setBusy(false);
             }
           }}
-          onCompleteProvisioning={async (runId) => {
+          onCompleteProvisioning={async (runId, finalStepData) => {
             setBusy(true);
             setError("");
             try {
               const result = await knowhowCommand<PlatformProvisioningResult>(
                 "completeProvisioningRun",
-                { runId },
+                { runId, finalStepData },
               );
               await loadBootstrap(activeWorkspaceId || undefined);
               return result;
@@ -1501,27 +1808,43 @@ export default function Home() {
           }}
           onAppointOrganizationMember={async (
             organizationId,
-            email,
+            emails,
             roles,
             anchorWorkspaceId,
           ) => {
             setBusy(true);
             setError("");
+            const created: Array<{
+              email: string;
+              appointmentToken: string;
+              expiresAt: string;
+            }> = [];
             try {
-              const result = await knowhowCommand<{
-                appointmentId: string;
-                appointmentToken: string;
-                expiresAt: string;
-              }>("appointOrganizationMember", {
-                organizationId,
-                email,
-                roles,
-                anchorWorkspaceId,
-              });
+              for (const email of emails) {
+                const result = await knowhowCommand<{
+                  appointmentId: string;
+                  appointmentToken: string;
+                  expiresAt: string;
+                }>("appointOrganizationMember", {
+                  organizationId,
+                  email,
+                  roles,
+                  anchorWorkspaceId,
+                });
+                created.push({
+                  email,
+                  appointmentToken: result.appointmentToken,
+                  expiresAt: result.expiresAt,
+                });
+              }
               await loadBootstrap(activeWorkspaceId || undefined);
-              return result;
+              return created;
             } catch (nextError) {
               setError(errorMessage(nextError));
+              if (created.length) {
+                await loadBootstrap(activeWorkspaceId || undefined);
+                return created;
+              }
               throw nextError;
             } finally {
               setBusy(false);
@@ -1551,13 +1874,37 @@ export default function Home() {
               setBusy(false);
             }
           }}
-          onSaveOrganizationDomains={async (organizationId, domains) => {
+          onSetWorkspaceStatus={setPlatformWorkspaceStatus}
+          onAssignAdministrator={assignPlatformWorkspaceAdministrator}
+          onRequestSupport={requestSupportAccess}
+          onExtendSubscription={extendPlatformSubscription}
+          onConvertSubscription={convertPlatformSubscription}
+          onApproveDeletion={approvePlatformDeletion}
+          onCreateBetaAccess={async (input) => {
             setBusy(true);
             setError("");
             try {
-              const result = await knowhowCommand("updateOrganizationDomains", {
-                organizationId,
-                domains,
+              const result = await knowhowCommand<{
+                grant: NonNullable<
+                  BootstrapResponse["platform"]
+                >["betaAccess"]["grants"][number];
+                code: string;
+              }>("createBetaAccessGrant", input);
+              await loadBootstrap(activeWorkspaceId || undefined);
+              return result;
+            } catch (nextError) {
+              setError(errorMessage(nextError));
+              throw nextError;
+            } finally {
+              setBusy(false);
+            }
+          }}
+          onRevokeBetaAccess={async (grantId) => {
+            setBusy(true);
+            setError("");
+            try {
+              const result = await knowhowCommand("revokeBetaAccessGrant", {
+                grantId,
               });
               await loadBootstrap(activeWorkspaceId || undefined);
               return result;
@@ -1568,12 +1915,21 @@ export default function Home() {
               setBusy(false);
             }
           }}
-          onSetWorkspaceStatus={setPlatformWorkspaceStatus}
-          onAssignAdministrator={assignPlatformWorkspaceAdministrator}
-          onRequestSupport={requestSupportAccess}
-          onExtendSubscription={extendPlatformSubscription}
-          onConvertSubscription={convertPlatformSubscription}
-          onApproveDeletion={approvePlatformDeletion}
+          onPlatformControl={async (action, payload, successMessage) => {
+            setBusy(true);
+            setError("");
+            try {
+              const result = await knowhowCommand(action, payload);
+              await loadBootstrap(activeWorkspaceId || undefined);
+              toast.success(successMessage);
+              return result;
+            } catch (nextError) {
+              setError(errorMessage(nextError));
+              throw nextError;
+            } finally {
+              setBusy(false);
+            }
+          }}
           onRevokeAppointment={revokePlatformAppointment}
           onSignOut={signOut}
         />
@@ -1583,21 +1939,6 @@ export default function Home() {
   }
 
   const activeWorkspace = bootstrap.activeWorkspace.workspace;
-  const requestedWorkspaceSlug = routeWorkspaceSlug(route);
-  const requestedWorkspace = requestedWorkspaceSlug
-    ? bootstrap.workspaces.filter(
-        (workspace) =>
-          workspace.slug === requestedWorkspaceSlug &&
-          workspace.status === "active",
-      )
-    : [];
-  if (
-    requestedWorkspaceSlug &&
-    (requestedWorkspace.length !== 1 ||
-      requestedWorkspace[0].id !== activeWorkspace.id)
-  ) {
-    return <OpeningKnowHow />;
-  }
   const workspaceRoute: AppRoute =
     route.kind === "root" || route.kind === "invalid"
       ? {
@@ -1623,6 +1964,7 @@ export default function Home() {
         onError={setError}
         onNavigate={navigate}
         onRegisterNavigationGuard={registerNavigationGuard}
+        onRequestMfaEnrollment={() => setMfaEnrollment({})}
       />
       {reauthenticationGate}
     </>

@@ -206,6 +206,12 @@ test("deletion purge plans freeze exact tenant row, file, and user targets", asy
         workspaceId: "workspace-a",
       }),
     ],
+    idempotency_keys: [
+      stored("legacy-workspace-command", {
+        organizationId: null,
+        workspaceId: "workspace-a",
+      }),
+    ],
     provisioning_runs: [
       stored("workspace-run", {
         organizationId: "org-a",
@@ -237,7 +243,7 @@ test("deletion purge plans freeze exact tenant row, file, and user targets", asy
   );
   assert.equal(plan.version, 3);
   assert.match(plan.bindingHash, /^[0-9a-f]{64}$/);
-  assert.equal(plan.workspaceRows, 8);
+  assert.equal(plan.workspaceRows, 9);
   assert.equal(plan.workspaceFiles, 3);
   assert.equal(plan.organizationDeleted, true);
   assert.equal(plan.organizationRows, 9);
@@ -251,6 +257,13 @@ test("deletion purge plans freeze exact tenant row, file, and user targets", asy
     plan.organizationTargets.some(
       (entry) =>
         entry.tableId === "organizations" && entry.rowIds[0] === "org-a",
+    ),
+  );
+  assert.ok(
+    plan.workspaceTargets.some(
+      (entry) =>
+        entry.tableId === "idempotency_keys" &&
+        entry.rowIds[0] === "legacy-workspace-command",
     ),
   );
   assert.equal(validPurgePlan(plan), true);

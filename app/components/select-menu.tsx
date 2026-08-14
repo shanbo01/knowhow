@@ -61,7 +61,7 @@ export function SelectMenu<T extends string>({
           {leading ? <span className="kh-select-leading" aria-hidden="true">{leading}</span> : null}
           {renderValue && selected ? (
             <>
-              <SelectValue className="sr-only" />
+              <SelectValue className="sr-only">{selected.label}</SelectValue>
               <span className="kh-select-value">{renderValue(selected)}</span>
             </>
           ) : (

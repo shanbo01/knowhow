@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
   Account,
   AppwriteException,
   Client,
-  Functions,
   Messaging,
   Query,
-  Sites,
   Storage,
   TablesDB,
   Users,
@@ -16,12 +13,9 @@ import {
 import { InputFile } from "node-appwrite/file";
 import {
   assertBucketContract,
-  assertControlledMutationBinding,
   assertDatabaseContract,
-  assertFunctionContract,
-  assertSiteContract,
   assertTableContract,
-  controlledSiteOrigin,
+  localSiteOrigin,
   resolveSmokeTarget,
 } from "./appwrite-contract-guards.mjs";
 
@@ -31,14 +25,7 @@ const required = (name) => {
   return value;
 };
 
-const { endpoint, target } = resolveSmokeTarget(required("APPWRITE_ENDPOINT"), {
-  allowStaging: process.argv.includes("--allow-staging"),
-  allowProduction: process.argv.includes("--allow-production"),
-  environment: process.env.KNOWHOW_ENVIRONMENT,
-});
-const endpointUrl = new URL(endpoint);
-const localEndpoint = target === "self-host";
-const controlledTarget = !localEndpoint;
+const { endpoint } = resolveSmokeTarget(required("APPWRITE_ENDPOINT"));
 
 const projectId = required("APPWRITE_PROJECT_ID");
 const apiKey = required("APPWRITE_API_KEY");
@@ -46,15 +33,11 @@ assert.ok(
   apiKey.length >= 20 && !apiKey.toLowerCase().includes("replace-with-"),
   "APPWRITE_API_KEY is invalid.",
 );
-assertControlledMutationBinding({
-  target,
+assert.equal(
   projectId,
-  expectedProjectId: process.env.KNOWHOW_SMOKE_EXPECTED_PROJECT_ID?.trim(),
-  forbiddenProjectId: process.env.KNOWHOW_SMOKE_FORBIDDEN_PROJECT_ID?.trim(),
-  confirmation: process.env.KNOWHOW_SMOKE_MUTATION_CONFIRM,
-  syntheticOnly: process.env.KNOWHOW_SMOKE_SYNTHETIC_ONLY,
-  finalProduction: process.env.KNOWHOW_SMOKE_FINAL_PRODUCTION,
-});
+  "knowhow-local",
+  "The local smoke may run only against the knowhow-local project.",
+);
 const databaseId = process.env.APPWRITE_DATABASE_ID?.trim() || "knowhow_core";
 const mediaBucketId =
   process.env.APPWRITE_PRIVATE_MEDIA_BUCKET_ID?.trim() ||
@@ -78,8 +61,6 @@ const tables = new TablesDB(client);
 const storage = new Storage(client);
 const users = new Users(client);
 const messaging = new Messaging(client);
-const functions = new Functions(client);
-const sites = new Sites(client);
 
 const expectedDatabases = JSON.parse(
   await readFile(new URL("../infrastructure/appwrite/databases.json", import.meta.url)),
@@ -89,9 +70,6 @@ const expectedTables = JSON.parse(
 );
 const expectedBuckets = JSON.parse(
   await readFile(new URL("../infrastructure/appwrite/buckets.json", import.meta.url)),
-);
-const expectedAppwriteConfig = JSON.parse(
-  await readFile(new URL("../appwrite.config.json", import.meta.url)),
 );
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -180,40 +158,6 @@ try {
     "Runtime bucket IDs drift from the checked-in resources",
   );
   pass("private_storage_schema", `${expectedBuckets.length} private buckets match`);
-
-  if (controlledTarget) {
-    const remoteFunctions = await functions.list({
-      queries: [Query.limit(100)],
-      total: false,
-    });
-    assert.deepEqual(
-      remoteFunctions.functions.map((fn) => fn.$id).sort(),
-      expectedAppwriteConfig.functions.map((fn) => fn.$id).sort(),
-      "Deployed Function IDs drift from appwrite.config.json",
-    );
-    for (const expected of expectedAppwriteConfig.functions) {
-      assertFunctionContract(
-        expected,
-        await functions.get({ functionId: expected.$id }),
-      );
-    }
-    const remoteSites = await sites.list({
-      queries: [Query.limit(100)],
-      total: false,
-    });
-    assert.deepEqual(
-      remoteSites.sites.map((site) => site.$id).sort(),
-      expectedAppwriteConfig.sites.map((site) => site.$id).sort(),
-      "Deployed Site IDs drift from appwrite.config.json",
-    );
-    for (const expected of expectedAppwriteConfig.sites) {
-      assertSiteContract(expected, await sites.get({ siteId: expected.$id }));
-    }
-    pass(
-      "function_site_deployments",
-      `${expectedAppwriteConfig.functions.length} Functions and ${expectedAppwriteConfig.sites.length} Site are exact, live, and on their latest ready deployments`,
-    );
-  }
 
   const anonymous = await fetch(
     `${endpoint}/tablesdb/${encodeURIComponent(databaseId)}/tables/idempotency_keys/rows`,
@@ -429,18 +373,6 @@ try {
   pass("server_session_auth", "email/password session and cookie-secret identity succeeded");
 
   const providers = await messaging.listProviders({ total: false });
-  if (controlledTarget) {
-    assert.equal(
-      process.env.KNOWHOW_SMOKE_REQUIRE_EMAIL_PROVIDER,
-      "1",
-      "Controlled smoke must require a Messaging provider.",
-    );
-    assert.equal(
-      process.env.KNOWHOW_SMOKE_REQUIRE_READY,
-      "1",
-      "Controlled smoke must require live Site readiness.",
-    );
-  }
   if (process.env.KNOWHOW_SMOKE_REQUIRE_EMAIL_PROVIDER === "1") {
     assert.ok(providers.providers.length > 0, "No Appwrite Messaging provider is configured");
   }
@@ -450,36 +382,19 @@ try {
   );
 
   const rawSiteOrigin = process.env.KNOWHOW_SMOKE_SITE_ORIGIN?.trim();
-  if (controlledTarget)
-    assert.ok(rawSiteOrigin, "KNOWHOW_SMOKE_SITE_ORIGIN is required for controlled smoke.");
   const siteOrigin = rawSiteOrigin
-    ? controlledSiteOrigin(rawSiteOrigin, target)
+    ? localSiteOrigin(rawSiteOrigin)
     : undefined;
   if (siteOrigin) {
     for (const path of ["/api/health", "/api/auth/health"]) {
       const response = await fetch(`${siteOrigin}${path}`);
       assert.equal(response.status, 200, `${path} returned ${response.status}`);
     }
-    if (process.env.KNOWHOW_SMOKE_REQUIRE_READY === "1" || controlledTarget) {
+    if (process.env.KNOWHOW_SMOKE_REQUIRE_READY === "1") {
       const readyResponse = await fetch(`${siteOrigin}/api/health?ready=1`);
       assert.equal(readyResponse.status, 200, `readiness returned ${readyResponse.status}`);
       const readiness = await readyResponse.json();
       assert.equal(readiness.status, "ready", "Site readiness body did not report ready");
-      if (controlledTarget) {
-        const expectedRelease = required("KNOWHOW_SMOKE_EXPECTED_RELEASE");
-        assert.deepEqual(
-          readiness.deployment,
-          {
-            environment:
-              target.endsWith("-staging") ? "staging" : "production",
-            release: expectedRelease,
-            projectFingerprint: createHash("sha256")
-              .update(`project\0${projectId}`)
-              .digest("hex"),
-          },
-          "The live Site is not bound to the expected environment, release, and Appwrite project",
-        );
-      }
     }
     for (const check of [
       { path: "/api/knowhow" },
@@ -569,8 +484,8 @@ process.stdout.write(
   `${JSON.stringify(
     {
       status: "passed",
-      target,
-      endpoint: endpointUrl.origin,
+      target: "local",
+      endpoint: new URL(endpoint).origin,
       projectId,
       checks,
       cleanup: "transient rows, file, user, session, and transactions removed",

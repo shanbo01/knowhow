@@ -50,7 +50,7 @@ export function LeadForm({ kind }: { kind: LeadKind }) {
       <div className={styles.formSuccess} role="status">
         <CheckCircle2 aria-hidden="true" />
         <h2>Request received</h2>
-        <p>We will review the fit and reply by email. Pilot scheduling and acceptance remain manual.</p>
+        <p>We will reply by email.</p>
       </div>
     );
   }
@@ -62,20 +62,20 @@ export function LeadForm({ kind }: { kind: LeadKind }) {
         <label><span>Work email</span><input name="email" type="email" autoComplete="email" maxLength={320} required /></label>
         <label><span>Organization</span><input name="organization" autoComplete="organization" minLength={2} maxLength={160} required /></label>
         <label><span>Your role</span><input name="role" autoComplete="organization-title" minLength={2} maxLength={120} required /></label>
-        <label><span>People in the proposed team</span><input name="teamSize" type="number" inputMode="numeric" min={1} max={10000} defaultValue={10} required /></label>
-        <label><span>Country</span><input name="country" autoComplete="country-name" minLength={2} maxLength={80} defaultValue="Qatar" required /></label>
+        <label><span>Team size</span><input name="teamSize" type="number" inputMode="numeric" min={1} max={10000} required /></label>
+        <label><span>Country</span><input name="country" autoComplete="country-name" minLength={2} maxLength={80} required /></label>
       </div>
       <label><span>Workflow you want to improve</span><input name="workflow" minLength={2} maxLength={240} placeholder="For example: employee onboarding" required /></label>
       <label className={styles.checkbox}>
         <input name="ordinaryDataOnly" type="checkbox" required />
         <span>I confirm the proposed use excludes credentials, secrets, payments, health data, national IDs, and other sensitive or special-category data.</span>
       </label>
-      <label className={styles.honeypot} aria-hidden="true">Website<input name="website" tabIndex={-1} autoComplete="off" /></label>
+      <input className={styles.honeypot} name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" />
       {error ? <p className={styles.formError} role="alert">{error}</p> : null}
       <button className={styles.primary} type="submit" disabled={state === "submitting"}>
         {state === "submitting" ? <><LoaderCircle className={styles.spin} /> Sending request</> : "Send request"}
       </button>
-      <small>Submitting this form does not create an account or start a pilot. We use these details only to respond to your request.</small>
+      <small>Submitting this form does not create an account. We use these details only to reply.</small>
     </form>
   );
 }

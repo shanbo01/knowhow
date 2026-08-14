@@ -24,7 +24,7 @@ KnowHow limits access to authorized personnel with confidentiality obligations, 
 
 ## 5. Security measures (Annex B)
 
-- Separate Frankfurt projects/environments and server-only product tables/files with empty client permissions.
+- Operator-controlled local Appwrite with server-only product tables/files and empty client permissions.
 - Verified email; secure HTTP-only sessions; administrator TOTP and recovery controls; exact origins, CSRF, rate/size limits, and security headers.
 - Default-deny policy with separate platform, organization, workspace, vault, audience, support, and subscription checks.
 - Private encrypted Storage; local screenshot rasterization/redaction; no raw/form/clipboard/key capture; human privacy review.
@@ -32,13 +32,13 @@ KnowHow limits access to authorized personnel with confidentiality obligations, 
 - Transactions for one-use/last-admin/idempotency/audit/lifecycle/deletion invariants; append-only hash-chained audit.
 - Versioned key rotation; context-bound encrypted notification credentials; secrets outside source/logs.
 - Scrubbed telemetry, content-free logs/analytics/notifications, dependency and secret scanning, CI/security testing.
-- Production Pro daily database backups, isolated restore rehearsal, integrity hashes, media quarantine/reconciliation, incident response.
+- Operator-owned encrypted backups, isolated local restore rehearsal, integrity hashes, media quarantine/reconciliation, and incident response.
 
 Independent media DR, contractual SLA, third-party penetration test, and enterprise identity are expressly not included in this pilot.
 
 ## 6. Subprocessors and transfers
 
-Customer authorizes subprocessors in the approved `subprocessors.md` under the final notice/change mechanism. KnowHow remains responsible for required subprocessor obligations and provides advance notice of material changes for `[period/remedy to be approved]`. Hosting is configured in Frankfurt; email/telemetry may involve other locations. Counsel must approve transfer safeguards and Qatar-specific provisions.
+Customer authorizes enabled third-party services in the approved `subprocessors.md` under the final notice/change mechanism. KnowHow remains responsible for required service-provider obligations and provides advance notice of material changes for `[period/remedy to be approved]`. The application data stays on the documented local infrastructure; optional email or telemetry may involve other locations. Counsel must approve transfer safeguards and Qatar-specific provisions.
 
 ## 7. Data-subject and authority requests
 

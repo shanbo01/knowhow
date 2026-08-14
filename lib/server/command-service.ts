@@ -5,6 +5,7 @@ import type {
   WorkspaceSettings,
 } from "../knowhow-types";
 import { AccessService, type PlatformRole } from "./access-service";
+import { BetaAccessService } from "./beta-access-service";
 import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -26,6 +27,8 @@ import {
   subscriptionForWorkspace,
 } from "./lifecycle-service";
 import { EntitlementService } from "./entitlement-service";
+import { LifecycleSimulationService } from "./lifecycle-simulation-service";
+import { PricingCatalogService } from "./pricing-catalog-service";
 import { GuideAccessService } from "./guide-access-service";
 import { resourceId } from "./ids";
 import {
@@ -42,6 +45,10 @@ import { requireAuthorized } from "./policy";
 import { RecordConflictError, type RecordStore } from "./record-store";
 import type { PrivateObjectStore } from "./private-object-store";
 import type { AuthenticatedIdentity } from "./session-identity";
+import {
+  SelfServiceProvisioningService,
+  type SelfServiceSetupInput,
+} from "./self-service-provisioning-service";
 import { encryptNotificationCredential } from "./notification-secrets";
 import {
   constantTimeEqual,
@@ -349,21 +356,43 @@ function requireReauthentication(value: boolean | undefined) {
   }
 }
 
-function normalizeDomain(value: string) {
-  const domain = value.trim().toLowerCase().replace(/^@/, "");
+function storedCommandResult(action: string, result: unknown) {
   if (
-    domain.length > 253 ||
-    !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(
-      domain,
-    )
+    action === "createBetaAccessGrant" &&
+    typeof result === "object" &&
+    result !== null &&
+    !Array.isArray(result)
   ) {
-    throw new HttpError(
-      400,
-      "DOMAIN_INVALID",
-      "Use an exact registrable email domain.",
-    );
+    const safe = { ...(result as Record<string, unknown>) };
+    delete safe.code;
+    return { ...safe, code: null, replayed: true };
   }
-  return domain;
+  if (
+    action === "completeSelfServiceSetup" &&
+    typeof result === "object" &&
+    result !== null &&
+    !Array.isArray(result)
+  ) {
+    const value = result as Record<string, unknown>;
+    const invite =
+      typeof value.invite === "object" &&
+      value.invite !== null &&
+      !Array.isArray(value.invite)
+        ? (value.invite as Record<string, unknown>)
+        : null;
+    return {
+      ...value,
+      ...(invite
+        ? {
+            invite: {
+              id: invite.id,
+              expiresAt: invite.expiresAt,
+            },
+          }
+        : {}),
+    };
+  }
+  return result;
 }
 
 function pairingCode(length = 12) {
@@ -454,51 +483,115 @@ export class CommandService {
       "idem",
       `${scope}:${identity.userId}:${action}:${idempotencyKey}`,
     );
-    try {
-      return await this.store.transaction(async (transaction) => {
-        const existing = await transaction.get(
+    const conflictAttempts = new Set([
+      "completeProvisioningRun",
+      "completeSelfServiceSetup",
+    ]).has(action)
+      ? 3
+      : 1;
+    for (let attempt = 0; attempt < conflictAttempts; attempt += 1) {
+      try {
+        return await this.store.transaction(async (transaction) => {
+          const existing = await transaction.get(
+            TABLES.idempotencyKeys,
+            idempotencyId,
+          );
+          if (existing) {
+            const replay = decodePayload<{ result?: unknown }>(existing, {});
+            return replay.result;
+          }
+          const scoped = new CommandService(transaction, this.objects);
+          const result = await scoped.handle(
+            identity,
+            action,
+            payload,
+            options,
+          );
+          const resultRecord =
+            typeof result === "object" &&
+            result !== null &&
+            !Array.isArray(result)
+              ? (result as Record<string, unknown>)
+              : null;
+          let storedWorkspaceId =
+            typeof payload.workspaceId === "string"
+              ? payload.workspaceId
+              : typeof payload.targetWorkspaceId === "string"
+                ? payload.targetWorkspaceId
+                : typeof resultRecord?.workspaceId === "string"
+                  ? resultRecord.workspaceId
+                  : null;
+          let storedOrganizationId =
+            typeof resultRecord?.organizationId === "string"
+              ? resultRecord.organizationId
+              : null;
+          // Deletion approval results intentionally expose only the case ID.
+          // Bind their idempotency record to the tenant using the still-live
+          // case row so the later approved purge removes the replay record too.
+          if (
+            action === "approveDeletionCase" &&
+            typeof payload.caseId === "string"
+          ) {
+            const lifecycleCase = await transaction.get(
+              TABLES.lifecycleCases,
+              payload.caseId,
+            );
+            if (typeof lifecycleCase?.workspace_id === "string") {
+              storedWorkspaceId = lifecycleCase.workspace_id;
+            }
+            if (typeof lifecycleCase?.organization_id === "string") {
+              storedOrganizationId = lifecycleCase.organization_id;
+            }
+          }
+          if (storedWorkspaceId && !storedOrganizationId) {
+            const workspace = await transaction.get(
+              TABLES.workspaces,
+              storedWorkspaceId,
+            );
+            if (typeof workspace?.organization_id === "string") {
+              storedOrganizationId = workspace.organization_id;
+            }
+          }
+          await transaction.create(
+            TABLES.idempotencyKeys,
+            idempotencyId,
+            rowData(
+              {
+                organization_id: storedOrganizationId,
+                workspace_id: storedWorkspaceId,
+                user_id: identity.userId,
+                status: "completed",
+                kind: action,
+                idempotency_key: idempotencyKey,
+                request_id: options.requestId,
+                expires_at: new Date(
+                  Date.now() + 24 * 60 * 60 * 1_000,
+                ).toISOString(),
+                created_by: identity.userId,
+              },
+              { result: storedCommandResult(action, result) },
+            ),
+          );
+          return result;
+        });
+      } catch (error) {
+        if (!(error instanceof RecordConflictError)) throw error;
+        const committed = await this.store.get(
           TABLES.idempotencyKeys,
           idempotencyId,
         );
-        if (existing) {
-          const replay = decodePayload<{ result?: unknown }>(existing, {});
+        if (committed?.status === "completed") {
+          const replay = decodePayload<{ result?: unknown }>(committed, {});
           return replay.result;
         }
-        const scoped = new CommandService(transaction, this.objects);
-        const result = await scoped.handle(identity, action, payload, options);
-        await transaction.create(
-          TABLES.idempotencyKeys,
-          idempotencyId,
-          rowData(
-            {
-              workspace_id: scope,
-              user_id: identity.userId,
-              status: "completed",
-              kind: action,
-              idempotency_key: idempotencyKey,
-              request_id: options.requestId,
-              expires_at: new Date(
-                Date.now() + 24 * 60 * 60 * 1_000,
-              ).toISOString(),
-              created_by: identity.userId,
-            },
-            { result },
-          ),
-        );
-        return result;
-      });
-    } catch (error) {
-      if (!(error instanceof RecordConflictError)) throw error;
-      const committed = await this.store.get(
-        TABLES.idempotencyKeys,
-        idempotencyId,
-      );
-      if (committed?.status === "completed") {
-        const replay = decodePayload<{ result?: unknown }>(committed, {});
-        return replay.result;
+        if (attempt === conflictAttempts - 1) throw error;
+        // Appwrite transactions use optimistic concurrency. A provisioning
+        // completion can begin immediately after the preceding draft save, so
+        // allow the prior commit to settle before rebuilding the atomic write.
+        await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** attempt));
       }
-      throw error;
     }
+    throw new Error("Provisioning command retry loop exhausted.");
   }
 
   private async platformRoles(identity: AuthenticatedIdentity) {
@@ -576,6 +669,62 @@ export class CommandService {
     return { appointmentId, token, expiresAt };
   }
 
+  private async createSelfServiceInvite(
+    identity: AuthenticatedIdentity,
+    input: { organizationId: string; workspaceId: string; email: string },
+    options: CommandOptions,
+  ) {
+    const invitationId = resourceId("invite");
+    const expiresAtSeconds = Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
+    const token = await signInviteToken({
+      jti: invitationId,
+      workspaceId: input.workspaceId,
+      role: "viewer",
+      email: input.email,
+      expiresAt: expiresAtSeconds,
+    });
+    const expiresAt = new Date(expiresAtSeconds * 1_000).toISOString();
+    await this.store.create(
+      TABLES.invitations,
+      invitationId,
+      rowData(
+        {
+          organization_id: input.organizationId,
+          workspace_id: input.workspaceId,
+          email: input.email,
+          subject_id: await hashToken(token),
+          status: "active",
+          kind: "viewer",
+          expires_at: expiresAt,
+          created_by: identity.userId,
+          request_id: options.requestId,
+        },
+        {
+          label: `Invite ${input.email}`,
+          role: "viewer",
+          maxUses: 1,
+          useCount: 0,
+          createdAt: nowIso(),
+          source: "self_service_setup",
+        },
+      ),
+    );
+    await queueNotification(this.store, {
+      organizationId: input.organizationId,
+      workspaceId: input.workspaceId,
+      email: input.email,
+      kind: "invitation.created",
+      subjectId: invitationId,
+      idempotencyKey: `${options.idempotencyKey}:self-service-invitation`,
+      payload: { expiresAt, credential: token },
+    });
+    return {
+      id: invitationId,
+      inviteUrl: `/app?invite=${encodeURIComponent(token)}`,
+      expiresAt,
+    };
+  }
+
   private async handle(
     identity: AuthenticatedIdentity,
     action: string,
@@ -604,6 +753,82 @@ export class CommandService {
         ),
       );
       return { theme };
+    }
+
+    if (action === "createBetaAccessGrant") {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform operations access is required.",
+        );
+      }
+      requireReauthentication(options.reauthenticated);
+      const label =
+        payload.label === undefined
+          ? undefined
+          : inputText(payload.label, "Grant label", { max: 128 });
+      const exactEmail =
+        payload.email === undefined ? undefined : inputEmail(payload.email);
+      const expiresAt = inputText(payload.expiresAt, "Grant expiry", {
+        min: 20,
+        max: 40,
+      });
+      const maxUses = inputInteger(payload.maxUses, "Maximum uses", 1, 10_000);
+      return new BetaAccessService(this.store).createGrant({
+        actorUserId: identity.userId,
+        label,
+        exactEmail,
+        expiresAt,
+        maxUses,
+        requestId: options.requestId,
+      });
+    }
+
+    if (action === "revokeBetaAccessGrant") {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform operations access is required.",
+        );
+      }
+      requireReauthentication(options.reauthenticated);
+      const grantId = inputText(payload.grantId, "Beta access grant", {
+        min: 1,
+        max: 36,
+      });
+      const grant = await new BetaAccessService(this.store).revokeGrant({
+        grantId,
+        actorUserId: identity.userId,
+        requestId: options.requestId,
+      });
+      return { grant };
+    }
+
+    if (action === "saveSelfServiceSetup") {
+      const service = new SelfServiceProvisioningService(
+        this.store,
+        new BetaAccessService(this.store),
+      );
+      return service.save(identity, payload as SelfServiceSetupInput, {
+        requestId: options.requestId,
+      });
+    }
+
+    if (action === "completeSelfServiceSetup") {
+      const service = new SelfServiceProvisioningService(
+        this.store,
+        new BetaAccessService(this.store),
+      );
+      return service.complete(identity, payload as SelfServiceSetupInput, {
+        requestId: options.requestId,
+        reauthenticated: options.reauthenticated,
+        createInvite: (input) =>
+          this.createSelfServiceInvite(identity, input, options),
+      });
     }
 
     if (action === "saveProvisioningRun") {
@@ -705,7 +930,7 @@ export class CommandService {
         max: 36,
       });
       const run = await this.store.get(TABLES.provisioningRuns, runId);
-      const draft = run
+      const storedDraft = run
         ? decodePayload<{
             steps?: Record<string, Record<string, unknown>>;
             completedSteps?: number[];
@@ -715,7 +940,7 @@ export class CommandService {
         !run ||
         run.created_by !== identity.userId ||
         run.status !== "draft" ||
-        !draft?.steps
+        !storedDraft?.steps
       ) {
         throw new HttpError(
           404,
@@ -723,6 +948,29 @@ export class CommandService {
           "Provisioning draft not found.",
         );
       }
+      const finalStepData = payload.finalStepData
+        ? provisioningStep(
+            6,
+            inputObject(payload.finalStepData, "Final provisioning step"),
+          )
+        : null;
+      const storedSteps = storedDraft.steps;
+      const draft: {
+        steps: Record<string, Record<string, unknown>>;
+        completedSteps: number[];
+      } = {
+        steps: finalStepData
+          ? {
+              ...storedSteps,
+              "6": finalStepData as Record<string, unknown>,
+            }
+          : storedSteps,
+        completedSteps: finalStepData
+          ? [...new Set([...(storedDraft.completedSteps ?? []), 6])].sort(
+              (left, right) => left - right,
+            )
+          : (storedDraft.completedSteps ?? []),
+      };
       if (
         ![1, 2, 3, 4, 5, 6].every((step) =>
           draft.completedSteps?.includes(step),
@@ -1524,6 +1772,78 @@ export class CommandService {
       };
     }
 
+    if (
+      action === "createPricingCatalog" ||
+      action === "updatePricingCatalog" ||
+      action === "retirePricingCatalog"
+    ) {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform owner or operations access is required to manage pricing.",
+        );
+      }
+      requireReauthentication(options.reauthenticated);
+      const service = new PricingCatalogService(this.store);
+      if (action === "createPricingCatalog") {
+        const catalog = await service.create(
+          identity.userId,
+          inputObject(payload.catalog ?? payload, "Pricing catalog"),
+        );
+        return { catalog };
+      }
+      const catalogId = inputText(payload.catalogId, "Pricing catalog", {
+        min: 1,
+        max: 36,
+      });
+      const expectedRevision = inputInteger(
+        payload.expectedRevision,
+        "Catalog revision",
+        1,
+        2_147_483_647,
+      );
+      const catalog =
+        action === "updatePricingCatalog"
+          ? await service.update(
+              identity.userId,
+              catalogId,
+              expectedRevision,
+              inputObject(payload.catalog, "Pricing catalog"),
+            )
+          : await service.retire(identity.userId, catalogId, expectedRevision);
+      return { catalog };
+    }
+
+    if (
+      action === "createLifecycleSimulationTenant" ||
+      action === "simulateLifecycleState"
+    ) {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform owner or operations access is required for lifecycle simulation.",
+        );
+      }
+      requireReauthentication(options.reauthenticated);
+      const simulation = new LifecycleSimulationService(this.store);
+      if (action === "createLifecycleSimulationTenant") {
+        return simulation.createSyntheticTenant(identity, {
+          label: payload.label,
+          confirmation: payload.confirmation,
+          requestId: options.requestId,
+        });
+      }
+      return simulation.simulate(identity, {
+        workspaceId: payload.targetWorkspaceId,
+        state: payload.state,
+        confirmation: payload.confirmation,
+      });
+    }
+
     if (action === "approveDeletionCase") {
       const platformRoles = await this.platformRoles(identity);
       if (!platformRoles.includes("owner")) {
@@ -1947,8 +2267,8 @@ export class CommandService {
       const limit = inputInteger(
         payload.selfServiceWorkspaceLimit,
         "Self-service limit",
-        0,
-        0,
+        1,
+        100,
       );
       await this.store.upsert(
         TABLES.catalogItems,
@@ -2257,114 +2577,6 @@ export class CommandService {
       return { memberId, roles: nextRoles, status };
     }
 
-    if (action === "updateOrganizationDomains") {
-      requireReauthentication(options.reauthenticated);
-      const organizationId = inputText(payload.organizationId, "Organization", {
-        min: 1,
-        max: 36,
-      });
-      const callerRoles = await this.access.organizationRoles(
-        organizationId,
-        identity.userId,
-      );
-      if (
-        !callerRoles.includes("owner") &&
-        !callerRoles.includes("administrator")
-      ) {
-        throw new HttpError(
-          403,
-          "ORGANIZATION_ADMIN_REQUIRED",
-          "Organization administration access is required.",
-        );
-      }
-      const organizationRow = await this.store.get(
-        TABLES.organizations,
-        organizationId,
-      );
-      if (!organizationRow || organizationRow.status !== "active") {
-        throw new HttpError(
-          404,
-          "ORGANIZATION_NOT_FOUND",
-          "Organization not found.",
-        );
-      }
-      const domains = inputStringList(payload.domains, "Domains", 50, 253).map(
-        normalizeDomain,
-      );
-      const existingDomains = await this.store.list(
-        TABLES.organizationDomains,
-        {
-          filters: [{ field: "organization_id", value: organizationId }],
-        },
-      );
-      for (const row of existingDomains) {
-        await this.store.delete(TABLES.organizationDomains, row.$id);
-      }
-      const workspaces = await this.store.list(TABLES.workspaces, {
-        filters: [{ field: "organization_id", value: organizationId }],
-      });
-      for (const domain of domains) {
-        await this.store.create(
-          TABLES.organizationDomains,
-          resourceId("domain"),
-          rowData(
-            {
-              organization_id: organizationId,
-              workspace_id: workspaces[0]?.$id ?? null,
-              subject_id: domain,
-              status: "active",
-              created_by: identity.userId,
-            },
-            { domain },
-          ),
-        );
-      }
-      for (const workspace of workspaces) {
-        const settingRows = await this.store.list(TABLES.workspaceSettings, {
-          filters: [{ field: "workspace_id", value: workspace.$id }],
-          limit: 1,
-        });
-        const current = settingRows[0]
-          ? decodePayload<WorkspaceSettings>(
-              settingRows[0],
-              DEFAULT_WORKSPACE_SETTINGS,
-            )
-          : DEFAULT_WORKSPACE_SETTINGS;
-        const next = { ...current, allowedDomains: domains };
-        if (settingRows[0]) {
-          await this.store.update(
-            TABLES.workspaceSettings,
-            settingRows[0].$id,
-            rowData({ updated_by: identity.userId }, next),
-          );
-        } else {
-          await this.store.create(
-            TABLES.workspaceSettings,
-            resourceId("settings"),
-            rowData(
-              {
-                organization_id: organizationId,
-                workspace_id: workspace.$id,
-                status: "active",
-                created_by: identity.userId,
-              },
-              next,
-            ),
-          );
-        }
-      }
-      if (workspaces[0]) {
-        await appendAudit(this.store, identity, workspaces[0].$id, {
-          action: "organization.domains-updated",
-          targetType: "organization",
-          targetId: organizationId,
-          summary: "Approved organization domains updated",
-          metadata: { domainCount: domains.length },
-        });
-      }
-      return { domains };
-    }
-
     if (action === "redeemInvite") {
       const token = inputText(payload.token, "Invitation", {
         min: 20,
@@ -2583,16 +2795,28 @@ export class CommandService {
           "Confirm both pilot boundaries before continuing.",
         );
       }
-      const progressId = await deterministicId(
+      const fallbackProgressId = await deterministicId(
         "onboard",
         `${workspaceId}:${identity.userId}`,
       );
-      const existing = await this.store.get(
-        TABLES.onboardingProgress,
-        progressId,
-      );
+      const existingRows = await this.store.list(TABLES.onboardingProgress, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "user_id", value: identity.userId },
+        ],
+        limit: 1,
+      });
+      // Self-service setup creates onboarding before this confirmation and
+      // uses its own stable row ID. Reuse the row selected by the table's
+      // unique workspace/user key instead of attempting a duplicate create.
+      const existing = existingRows[0] ?? null;
+      const progressId = existing?.$id ?? fallbackProgressId;
       const current = existing
-        ? decodePayload<{ startedAt?: string }>(existing, {})
+        ? decodePayload<{
+            startedAt?: string;
+            dismissedAt?: string;
+            skippedSteps?: unknown;
+          }>(existing, {})
         : {};
       const confirmedAt = nowIso();
       await this.store.upsert(
@@ -2612,6 +2836,12 @@ export class CommandService {
             readinessConfirmedAt: confirmedAt,
             ordinaryDataOnly: true,
             pilotPoliciesReviewed: true,
+            ...(typeof current.dismissedAt === "string"
+              ? { dismissedAt: current.dismissedAt }
+              : {}),
+            ...(Array.isArray(current.skippedSteps)
+              ? { skippedSteps: current.skippedSteps }
+              : {}),
           },
         ),
       );
@@ -2623,6 +2853,77 @@ export class CommandService {
         metadata: { ordinaryDataOnly: true, pilotPoliciesReviewed: true },
       });
       return { confirmed: true, confirmedAt };
+    }
+
+    if (action === "dismissOnboarding") {
+      requireAuthorized("workspace.read", context);
+      if (workspaceAccess.supportGrant) {
+        throw new HttpError(
+          403,
+          "ONBOARDING_MEMBERSHIP_REQUIRED",
+          "A permanent workspace member must complete onboarding.",
+        );
+      }
+      const fallbackProgressId = await deterministicId(
+        "onboard",
+        `${workspaceId}:${identity.userId}`,
+      );
+      const existingRows = await this.store.list(TABLES.onboardingProgress, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "user_id", value: identity.userId },
+        ],
+        limit: 1,
+      });
+      const existing = existingRows[0] ?? null;
+      const progressId = existing?.$id ?? fallbackProgressId;
+      const current = existing
+        ? decodePayload<{
+            startedAt?: string;
+            readinessConfirmedAt?: string;
+            ordinaryDataOnly?: boolean;
+            pilotPoliciesReviewed?: boolean;
+            skippedSteps?: unknown;
+          }>(existing, {})
+        : {};
+      const dismissedAt = nowIso();
+      await this.store.upsert(
+        TABLES.onboardingProgress,
+        progressId,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            user_id: identity.userId,
+            status: "active",
+            occurred_at: dismissedAt,
+            updated_by: identity.userId,
+          },
+          {
+            startedAt: current.startedAt ?? dismissedAt,
+            dismissedAt,
+            ...(typeof current.readinessConfirmedAt === "string"
+              ? { readinessConfirmedAt: current.readinessConfirmedAt }
+              : {}),
+            ...(current.ordinaryDataOnly === true
+              ? { ordinaryDataOnly: true }
+              : {}),
+            ...(current.pilotPoliciesReviewed === true
+              ? { pilotPoliciesReviewed: true }
+              : {}),
+            ...(Array.isArray(current.skippedSteps)
+              ? { skippedSteps: current.skippedSteps }
+              : {}),
+          },
+        ),
+      );
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "onboarding.dismissed",
+        targetType: "onboarding",
+        targetId: progressId,
+        summary: "Getting started dismissed",
+      });
+      return { dismissed: true, dismissedAt };
     }
 
     if (action === "createSupportTicket") {
@@ -3024,109 +3325,6 @@ export class CommandService {
       return { revoked: true };
     }
 
-    if (action === "updateAllowedDomains") {
-      requireAuthorized("workspace.domains.manage", context);
-      requireReauthentication(options.reauthenticated);
-      const organizationAccess = await this.access.organizationRoles(
-        workspaceAccess.workspace.organizationId,
-        identity.userId,
-      );
-      if (
-        !organizationAccess.includes("owner") &&
-        !organizationAccess.includes("administrator")
-      ) {
-        throw new HttpError(
-          403,
-          "ORGANIZATION_ADMIN_REQUIRED",
-          "Organization administration access is required to change shared domains.",
-        );
-      }
-      const domains = inputStringList(
-        payload.allowedDomains,
-        "Domains",
-        50,
-        253,
-      ).map(normalizeDomain);
-      const existing = await this.store.list(TABLES.organizationDomains, {
-        filters: [
-          {
-            field: "organization_id",
-            value: workspaceAccess.workspace.organizationId,
-          },
-        ],
-      });
-      for (const row of existing)
-        await this.store.delete(TABLES.organizationDomains, row.$id);
-      for (const domain of domains) {
-        await this.store.create(
-          TABLES.organizationDomains,
-          resourceId("domain"),
-          rowData(
-            {
-              organization_id: workspaceAccess.workspace.organizationId,
-              workspace_id: workspaceId,
-              subject_id: domain,
-              status: "active",
-              created_by: identity.userId,
-            },
-            { domain },
-          ),
-        );
-      }
-      const organizationWorkspaces = await this.store.list(TABLES.workspaces, {
-        filters: [
-          {
-            field: "organization_id",
-            value: workspaceAccess.workspace.organizationId,
-          },
-        ],
-      });
-      for (const organizationWorkspace of organizationWorkspaces) {
-        const settingsRows = await this.store.list(TABLES.workspaceSettings, {
-          filters: [
-            { field: "workspace_id", value: organizationWorkspace.$id },
-          ],
-          limit: 1,
-        });
-        const settings = settingsRows[0]
-          ? {
-              ...DEFAULT_WORKSPACE_SETTINGS,
-              ...decodePayload<Partial<WorkspaceSettings>>(settingsRows[0], {}),
-            }
-          : DEFAULT_WORKSPACE_SETTINGS;
-        const next = { ...settings, allowedDomains: domains };
-        if (settingsRows[0]) {
-          await this.store.update(
-            TABLES.workspaceSettings,
-            settingsRows[0].$id,
-            rowData({ updated_by: identity.userId }, next),
-          );
-        } else {
-          await this.store.create(
-            TABLES.workspaceSettings,
-            resourceId("settings"),
-            rowData(
-              {
-                organization_id: workspaceAccess.workspace.organizationId,
-                workspace_id: organizationWorkspace.$id,
-                status: "active",
-                created_by: identity.userId,
-              },
-              next,
-            ),
-          );
-        }
-      }
-      await appendAudit(this.store, identity, workspaceId, {
-        action: "workspace.domains_updated",
-        targetType: "workspace",
-        targetId: workspaceId,
-        summary: "Approved organization domains updated",
-        metadata: { domainCount: domains.length },
-      });
-      return { allowedDomains: domains };
-    }
-
     if (action === "updateWorkspaceSettings") {
       requireAuthorized("workspace.settings.manage", context);
       const input = inputObject(payload.settings, "Settings");
@@ -3142,13 +3340,6 @@ export class CommandService {
           { min: 4, max: 20 },
         ),
         removeBranding: inputBoolean(input.removeBranding, "Branding"),
-        allowedDomains: DEFAULT_WORKSPACE_SETTINGS.allowedDomains,
-        excludedCaptureHosts: inputStringList(
-          input.excludedCaptureHosts,
-          "Excluded hosts",
-          100,
-          253,
-        ).map((host) => host.toLowerCase()),
         allowRestrictedExports: inputBoolean(
           input.allowRestrictedExports,
           "Restricted exports",
@@ -3170,11 +3361,13 @@ export class CommandService {
       const current = rows[0]
         ? decodePayload<WorkspaceSettings>(rows[0], DEFAULT_WORKSPACE_SETTINGS)
         : DEFAULT_WORKSPACE_SETTINGS;
-      const next = {
-        ...current,
-        ...settings,
-        allowedDomains: current.allowedDomains,
+      const next: WorkspaceSettings = {
         logoUrl: current.logoUrl,
+        accentColor: settings.accentColor,
+        clickTargetColor: settings.clickTargetColor,
+        removeBranding: settings.removeBranding,
+        allowRestrictedExports: settings.allowRestrictedExports,
+        watermarkExports: settings.watermarkExports,
       };
       if (rows[0])
         await this.store.update(
@@ -3200,7 +3393,7 @@ export class CommandService {
         action: "workspace.settings_updated",
         targetType: "workspace",
         targetId: workspaceId,
-        summary: "Workspace capture and export policy updated",
+        summary: "Workspace settings updated",
       });
       return { updated: true };
     }
@@ -3329,29 +3522,6 @@ export class CommandService {
       requireAuthorized("workspace.invitations.manage", context);
       const inviteRole = role(payload.role, true);
       const email = inputEmail(payload.email);
-      const domain = email.slice(email.lastIndexOf("@") + 1);
-      const approvedDomainRows = await this.store.list(
-        TABLES.organizationDomains,
-        {
-          filters: [
-            {
-              field: "organization_id",
-              value: workspaceAccess.workspace.organizationId,
-            },
-            { field: "status", value: "active" },
-          ],
-        },
-      );
-      const approvedDomains = approvedDomainRows.map((row) =>
-        stringValue(row.subject_id),
-      );
-      if (approvedDomains.length && !approvedDomains.includes(domain)) {
-        throw new HttpError(
-          400,
-          "INVITATION_DOMAIN_DENIED",
-          "The email domain is not approved for this organization.",
-        );
-      }
       const label = inputText(payload.label ?? `Invite ${email}`, "Label", {
         min: 2,
         max: 128,
@@ -3557,6 +3727,25 @@ export class CommandService {
         guideDetails.publishedRevisionId,
         "guide.read",
       );
+      const activationKind =
+        guideDetails.authorUserId &&
+        guideDetails.authorUserId !== identity.userId
+          ? action === "recordGuideView"
+            ? "activation.first_teammate_view"
+            : "activation.first_teammate_completion"
+          : null;
+      // Query before staging the ordinary view/completion event. Appwrite's
+      // transaction overlay may otherwise satisfy this filtered query with
+      // the staged ordinary event and suppress the activation milestone.
+      const existingActivation = activationKind
+        ? await this.store.list(TABLES.usageEvents, {
+            filters: [
+              { field: "workspace_id", value: workspaceId },
+              { field: "kind", value: activationKind },
+            ],
+            limit: 1,
+          })
+        : [];
       const kind =
         action === "recordGuideView" ? "guide.viewed" : "guide.completed";
       await this.store.create(
@@ -3604,25 +3793,11 @@ export class CommandService {
           summary: "Published guide completed",
         });
       }
-      if (
-        guideDetails.authorUserId &&
-        guideDetails.authorUserId !== identity.userId
-      ) {
-        const activationKind =
-          action === "recordGuideView"
-            ? "activation.first_teammate_view"
-            : "activation.first_teammate_completion";
-        const existingActivation = await this.store.list(TABLES.usageEvents, {
-          filters: [
-            { field: "workspace_id", value: workspaceId },
-            { field: "kind", value: activationKind },
-          ],
-          limit: 1,
-        });
-        if (!existingActivation.length) {
+      if (activationKind && !existingActivation.length) {
+        const activationKey = `${workspaceId}:${activationKind}`;
           await this.store.create(
             TABLES.usageEvents,
-            resourceId("usage"),
+            await deterministicId("usage", activationKey),
             rowData(
               {
                 organization_id: workspaceAccess.workspace.organizationId,
@@ -3632,13 +3807,12 @@ export class CommandService {
                 kind: activationKind,
                 status: "recorded",
                 occurred_at: nowIso(),
-                request_id: `${options.requestId}:activation`,
+                request_id: await deterministicId("request", activationKey),
                 created_by: identity.userId,
               },
               { contentIncluded: false },
             ),
           );
-        }
       }
       return { recorded: true };
     }

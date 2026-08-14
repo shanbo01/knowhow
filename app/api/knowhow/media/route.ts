@@ -30,6 +30,7 @@ import { requireAuthorized } from "../../../../lib/server/policy";
 import type { RecordStore } from "../../../../lib/server/record-store";
 import { requireVerifiedSession } from "../../../../lib/server/session-identity";
 import { consumeFixedWindows } from "../../../../lib/server/rate-limit-service";
+import { authorizeWorkspaceLogo } from "../../../../lib/server/workspace-logo-media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,7 +123,7 @@ async function configuredLogo(store: RecordStore, workspaceId: string) {
 export async function GET(request: Request) {
   const requestId = correlationId(request);
   try {
-    const { store, objects, identity, url, workspaceId, context } = await workspaceContext(request);
+    const { store, objects, identity, url, workspaceId, access, context } = await workspaceContext(request);
     await consumeFixedWindows(store, [{ scope: "knowhow.media-read", subject: identity.userId, limit: 600, windowSeconds: 60 }]);
     let fileId: string;
     let contentType: string;
@@ -131,14 +132,18 @@ export async function GET(request: Request) {
       requireAuthorized("workspace.read", context);
       const logo = await configuredLogo(store, workspaceId);
       if (!logo.value.logoUrl) throw new HttpError(404, "LOGO_NOT_FOUND", "Workspace logo not found.");
-      fileId = logo.value.logoUrl;
-      const mediaRow = await store.get(TABLES.privateMedia, fileId);
-      if (!mediaRow || mediaRow.workspace_id !== workspaceId || mediaRow.status !== "ready" || mediaRow.kind !== "workspace-logo") {
+      const mediaRow = await store.get(TABLES.privateMedia, logo.value.logoUrl);
+      const authorizedLogo = authorizeWorkspaceLogo(mediaRow, {
+        mediaId: logo.value.logoUrl,
+        workspaceId,
+        organizationId: access.workspace.organizationId,
+      });
+      if (!authorizedLogo) {
         throw new HttpError(404, "LOGO_NOT_FOUND", "Workspace logo not found.");
       }
-      const metadata = decodePayload<{ contentType?: string; sha256?: string }>(mediaRow, {});
-      contentType = metadata.contentType ?? "image/png";
-      expectedHash = metadata.sha256 ?? "";
+      fileId = authorizedLogo.fileId;
+      contentType = authorizedLogo.contentType;
+      expectedHash = authorizedLogo.sha256;
     } else {
       const mediaId = requiredId(url, "mediaId", "Media");
       const mediaRow = await store.get(TABLES.privateMedia, mediaId);
@@ -184,9 +189,6 @@ export async function POST(request: Request) {
     const initialUrl = new URL(request.url);
     if (initialUrl.searchParams.get("kind") === "provisioning-logo") {
       const identity = await requireVerifiedSession(request);
-      if (!identity.mfaEnabled) {
-        throw new HttpError(403, "MFA_ENROLLMENT_REQUIRED", "Set up an authenticator before provisioning organizations.");
-      }
       const { store, objects } = createRequestServices();
       await consumeFixedWindows(store, [{ scope: "knowhow.provisioning-logo", subject: identity.userId, limit: 20, windowSeconds: 600 }]);
       const platformRoles = await store.list(TABLES.platformRoles, {

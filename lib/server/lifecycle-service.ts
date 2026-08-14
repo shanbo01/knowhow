@@ -31,33 +31,54 @@ export function evaluateSubscription(
   now = new Date(),
 ): LifecycleEvaluation {
   if (!subscription) {
-    return { access: "active", expiresAt: null, graceEndsAt: null, deletionEligibleAt: null };
+    return {
+      access: "active",
+      expiresAt: null,
+      graceEndsAt: null,
+      deletionEligibleAt: null,
+    };
   }
   const expiry = validDate(subscription.expiresAt);
   const graceDays = Math.max(0, Math.min(30, subscription.graceDays));
-  const retentionDays = Math.max(graceDays, Math.min(365, subscription.retentionDays));
+  const retentionDays = Math.max(
+    graceDays,
+    Math.min(365, subscription.retentionDays),
+  );
   const graceEnd = expiry === null ? null : expiry + graceDays * DAY;
-  const deletionEligible = expiry === null ? null : expiry + retentionDays * DAY;
+  const deletionEligible =
+    expiry === null ? null : expiry + retentionDays * DAY;
   const base = {
     expiresAt: expiry === null ? null : new Date(expiry).toISOString(),
     graceEndsAt: graceEnd === null ? null : new Date(graceEnd).toISOString(),
-    deletionEligibleAt: deletionEligible === null ? null : new Date(deletionEligible).toISOString(),
+    deletionEligibleAt:
+      deletionEligible === null
+        ? null
+        : new Date(deletionEligible).toISOString(),
   };
 
   if (subscription.status === "deleted") return { access: "deleted", ...base };
-  if (subscription.status === "deleting") return { access: "deleting", ...base };
-  if (subscription.status === "deletion_pending") return { access: "deletion_pending", ...base };
-  if (subscription.status === "cancelled") return { access: "suspended", ...base };
-  if (subscription.kind === "paid" && expiry === null) return { access: "active", ...base };
-  if (expiry === null || now.getTime() < expiry) return { access: "active", ...base };
-  if (graceEnd !== null && now.getTime() < graceEnd) return { access: "read_only", ...base };
+  if (subscription.status === "deleting")
+    return { access: "deleting", ...base };
+  if (subscription.status === "deletion_pending")
+    return { access: "deletion_pending", ...base };
+  if (subscription.status === "cancelled")
+    return { access: "suspended", ...base };
+  if (subscription.kind === "paid" && expiry === null)
+    return { access: "active", ...base };
+  if (expiry === null || now.getTime() < expiry)
+    return { access: "active", ...base };
+  if (graceEnd !== null && now.getTime() < graceEnd)
+    return { access: "read_only", ...base };
   if (deletionEligible !== null && now.getTime() >= deletionEligible) {
     return { access: "deletion_pending", ...base };
   }
   return { access: "suspended", ...base };
 }
 
-export async function subscriptionForWorkspace(store: RecordStore, workspaceId: string) {
+export async function subscriptionForWorkspace(
+  store: RecordStore,
+  workspaceId: string,
+) {
   const rows = await store.list(TABLES.subscriptions, {
     filters: [{ field: "workspace_id", value: workspaceId }],
     order: "desc",
@@ -67,22 +88,31 @@ export async function subscriptionForWorkspace(store: RecordStore, workspaceId: 
   if (!row) return null;
   const decoded = decodePayload<Partial<SubscriptionRecord>>(row, {});
   const value: SubscriptionRecord = {
-    kind: (decoded.kind ?? row.kind ?? "design_partner") as SubscriptionRecord["kind"],
+    kind: (decoded.kind ??
+      row.kind ??
+      "design_partner") as SubscriptionRecord["kind"],
     startsAt: decoded.startsAt ?? row.$createdAt,
     expiresAt: decoded.expiresAt ?? null,
     graceDays: decoded.graceDays ?? 7,
     retentionDays: decoded.retentionDays ?? 90,
     publicTrial: false,
     manualContract: decoded.manualContract ?? true,
-    status: (decoded.status ?? row.status ?? "active") as SubscriptionRecord["status"],
+    status: (decoded.status ??
+      row.status ??
+      "active") as SubscriptionRecord["status"],
     ...decoded,
   };
   return { row, value };
 }
 
 async function stableId(prefix: string, value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  const hex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   return `${prefix}_${hex.slice(0, 35 - prefix.length)}`;
 }
 
@@ -92,16 +122,26 @@ function notices(subscription: SubscriptionRecord): Notice[] {
   const start = validDate(subscription.startsAt);
   const expiry = validDate(subscription.expiresAt);
   if (start === null || expiry === null) return [];
-  const prefix = subscription.kind === "trial" ? "trial" : subscription.kind === "design_partner" ? "pilot" : "subscription";
+  const prefix =
+    subscription.kind === "trial"
+      ? "trial"
+      : subscription.kind === "design_partner"
+        ? "pilot"
+        : "subscription";
   const graceEnd = expiry + subscription.graceDays * DAY;
   const eligible = expiry + subscription.retentionDays * DAY;
   return [
     { kind: `${prefix}.welcome`, at: start },
-    ...(subscription.kind === "trial" ? [{ kind: "trial.activation_help", at: start + 7 * DAY }] : []),
+    ...(subscription.kind === "trial"
+      ? [{ kind: "trial.activation_help", at: start + 7 * DAY }]
+      : []),
     { kind: `${prefix}.expiry_4d`, at: expiry - 4 * DAY },
     { kind: `${prefix}.expiry_1d`, at: expiry - DAY },
     { kind: `${prefix}.expired`, at: expiry },
-    { kind: `${prefix}.grace_midpoint`, at: expiry + Math.floor(subscription.graceDays / 2) * DAY },
+    {
+      kind: `${prefix}.grace_midpoint`,
+      at: expiry + Math.floor(subscription.graceDays / 2) * DAY,
+    },
     { kind: `${prefix}.grace_1d`, at: graceEnd - DAY },
     { kind: `${prefix}.suspended`, at: graceEnd },
     { kind: "retention.30d_after_expiry", at: expiry + 30 * DAY },
@@ -123,8 +163,15 @@ export class LifecycleService {
   constructor(private readonly store: RecordStore) {}
 
   async sweep(now = new Date()) {
-    const subscriptions = await this.store.list(TABLES.subscriptions, { limit: 50_001 });
-    const results: Array<{ workspaceId: string; access: LifecycleAccess; notifications: number; caseCreated: boolean }> = [];
+    const subscriptions = await this.store.list(TABLES.subscriptions, {
+      limit: 50_001,
+    });
+    const results: Array<{
+      workspaceId: string;
+      access: LifecycleAccess;
+      notifications: number;
+      caseCreated: boolean;
+    }> = [];
     for (const row of subscriptions) {
       if (!row.workspace_id) continue;
       results.push(await this.sweepSubscription(row, now));
@@ -132,24 +179,59 @@ export class LifecycleService {
     return results;
   }
 
-  private async sweepSubscription(row: StoredRecord<RecordData>, now: Date) {
+  /**
+   * Apply the same lifecycle transition used by the operations sweep to one
+   * workspace while a command transaction is already open. This is used only
+   * by the guarded non-production simulator; it deliberately does not provide
+   * an alternate state-transition implementation.
+   */
+  async sweepWorkspaceInTransaction(workspaceId: string, now = new Date()) {
+    const rows = await this.store.list(TABLES.subscriptions, {
+      filters: [{ field: "workspace_id", value: workspaceId }],
+      order: "desc",
+      limit: 10,
+    });
+    const row = rows.find((item) => item.status !== "cancelled") ?? rows[0];
+    if (!row) {
+      throw new Error(`Subscription for ${workspaceId} does not exist.`);
+    }
+    return this.sweepSubscription(row, now, true);
+  }
+
+  private async sweepSubscription(
+    row: StoredRecord<RecordData>,
+    now: Date,
+    transactionAlreadyOpen = false,
+  ) {
     const subscription = decodePayload<SubscriptionRecord>(row, null as never);
     const workspaceId = String(row.workspace_id);
     const evaluation = evaluateSubscription(subscription, now);
     let notificationCount = 0;
     let caseCreated = false;
 
-    await this.store.transaction(async (transaction) => {
-      const workspaceRow = await transaction.get(TABLES.workspaces, workspaceId);
+    const apply = async (transaction: RecordStore) => {
+      const workspaceRow = await transaction.get(
+        TABLES.workspaces,
+        workspaceId,
+      );
       if (!workspaceRow) return;
-      const workspace = decodePayload<WorkspaceRecord>(workspaceRow, null as never);
-      const organizationRow = await transaction.get(TABLES.organizations, workspace.organizationId);
+      const workspace = decodePayload<WorkspaceRecord>(
+        workspaceRow,
+        null as never,
+      );
+      const organizationRow = await transaction.get(
+        TABLES.organizations,
+        workspace.organizationId,
+      );
       const organization = organizationRow
         ? decodePayload<OrganizationRecord>(organizationRow, null as never)
         : null;
 
       const status = desiredStatus(evaluation.access);
-      if (subscription.status !== status || subscription.lastEvaluatedAt !== now.toISOString()) {
+      if (
+        subscription.status !== status ||
+        subscription.lastEvaluatedAt !== now.toISOString()
+      ) {
         await transaction.update(
           TABLES.subscriptions,
           row.$id,
@@ -166,40 +248,81 @@ export class LifecycleService {
         );
       }
 
-      const shouldSuspend = ["suspended", "deletion_pending", "deleting", "deleted"].includes(evaluation.access);
-      if (shouldSuspend && (workspace.status !== "suspended" || workspace.suspensionReason !== "lifecycle")) {
+      const shouldSuspend = [
+        "suspended",
+        "deletion_pending",
+        "deleting",
+        "deleted",
+      ].includes(evaluation.access);
+      if (
+        shouldSuspend &&
+        (workspace.status !== "suspended" ||
+          workspace.suspensionReason !== "lifecycle")
+      ) {
         await transaction.update(
           TABLES.workspaces,
           workspaceId,
           rowData(
-            { organization_id: workspace.organizationId, slug: workspace.slug, status: "suspended", updated_by: "knowhow_ops" },
-            { ...workspace, status: "suspended", suspensionReason: "lifecycle" },
+            {
+              organization_id: workspace.organizationId,
+              slug: workspace.slug,
+              status: "suspended",
+              updated_by: "knowhow_ops",
+            },
+            {
+              ...workspace,
+              status: "suspended",
+              suspensionReason: "lifecycle",
+            },
           ),
         );
-      } else if (!shouldSuspend && workspace.status === "suspended" && workspace.suspensionReason === "lifecycle") {
+      } else if (
+        !shouldSuspend &&
+        workspace.status === "suspended" &&
+        workspace.suspensionReason === "lifecycle"
+      ) {
         await transaction.update(
           TABLES.workspaces,
           workspaceId,
           rowData(
-            { organization_id: workspace.organizationId, slug: workspace.slug, status: "active", updated_by: "knowhow_ops" },
+            {
+              organization_id: workspace.organizationId,
+              slug: workspace.slug,
+              status: "active",
+              updated_by: "knowhow_ops",
+            },
             { ...workspace, status: "active", suspensionReason: null },
           ),
         );
       }
 
-      const administrators = (await transaction.list(TABLES.workspaceMembers, {
-        filters: [{ field: "workspace_id", value: workspaceId }, { field: "status", value: "active" }],
-      })).filter((member) =>
-        decodePayload<WorkspaceMemberRecord>(member, { name: "", roles: [], capabilities: [], groupIds: [] }).roles.includes("administrator"),
+      const administrators = (
+        await transaction.list(TABLES.workspaceMembers, {
+          filters: [
+            { field: "workspace_id", value: workspaceId },
+            { field: "status", value: "active" },
+          ],
+        })
+      ).filter((member) =>
+        decodePayload<WorkspaceMemberRecord>(member, {
+          name: "",
+          roles: [],
+          capabilities: [],
+          groupIds: [],
+        }).roles.includes("administrator"),
       );
       for (const notice of notices(subscription)) {
         if (notice.at > now.getTime()) continue;
         for (const administrator of administrators) {
-          const email = typeof administrator.email === "string" ? administrator.email : null;
+          const email =
+            typeof administrator.email === "string"
+              ? administrator.email
+              : null;
           if (!email) continue;
           const idempotencyKey = `${row.$id}:${notice.kind}:${administrator.user_id}`;
           const id = await stableId("notice", idempotencyKey);
-          if (await transaction.get(TABLES.notificationDeliveries, id)) continue;
+          if (await transaction.get(TABLES.notificationDeliveries, id))
+            continue;
           await transaction.create(
             TABLES.notificationDeliveries,
             id,
@@ -228,7 +351,10 @@ export class LifecycleService {
         }
       }
 
-      if (evaluation.access === "deletion_pending" && evaluation.deletionEligibleAt) {
+      if (
+        evaluation.access === "deletion_pending" &&
+        evaluation.deletionEligibleAt
+      ) {
         const caseId = await stableId("delete", `${row.$id}:tenant-deletion`);
         const existing = await transaction.get(TABLES.lifecycleCases, caseId);
         if (!existing) {
@@ -261,10 +387,16 @@ export class LifecycleService {
         }
 
         const day = now.toISOString().slice(0, 10);
-        for (const ownerEmail of (process.env.KNOWHOW_PLATFORM_OWNER_EMAILS ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean)) {
+        for (const ownerEmail of (
+          process.env.KNOWHOW_PLATFORM_OWNER_EMAILS ?? ""
+        )
+          .split(",")
+          .map((value) => value.trim().toLowerCase())
+          .filter(Boolean)) {
           const idempotencyKey = `${caseId}:critical:${day}:${ownerEmail}`;
           const noticeId = await stableId("notice", idempotencyKey);
-          if (await transaction.get(TABLES.notificationDeliveries, noticeId)) continue;
+          if (await transaction.get(TABLES.notificationDeliveries, noticeId))
+            continue;
           await transaction.create(
             TABLES.notificationDeliveries,
             noticeId,
@@ -280,13 +412,24 @@ export class LifecycleService {
                 idempotency_key: idempotencyKey,
                 created_by: "knowhow_ops",
               },
-              { workspaceName: workspace.name, organizationName: organization?.displayName ?? workspace.name, eligibleAt: evaluation.deletionEligibleAt },
+              {
+                workspaceName: workspace.name,
+                organizationName: organization?.displayName ?? workspace.name,
+                eligibleAt: evaluation.deletionEligibleAt,
+              },
             ),
           );
           notificationCount += 1;
         }
       }
-    });
-    return { workspaceId, access: evaluation.access, notifications: notificationCount, caseCreated };
+    };
+    if (transactionAlreadyOpen) await apply(this.store);
+    else await this.store.transaction(apply);
+    return {
+      workspaceId,
+      access: evaluation.access,
+      notifications: notificationCount,
+      caseCreated,
+    };
   }
 }

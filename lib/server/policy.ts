@@ -9,7 +9,6 @@ export type PolicyAction =
   | "platform.settings.manage"
   | "workspace.read"
   | "workspace.settings.manage"
-  | "workspace.domains.manage"
   | "workspace.members.manage"
   | "workspace.groups.manage"
   | "workspace.invitations.manage"
@@ -59,7 +58,7 @@ export interface AuthorizationContext {
    * customer-approved support grant instead of permanent membership. Support
    * actors remain transient identities even when the granted role is
    * administrator: they may operate the workspace but never change its
-   * membership, identity eligibility, or governance.
+   * membership or governance.
    */
   supportGrant?: SupportGrantFacts;
 }
@@ -147,12 +146,11 @@ export function authorize(
       action === "workspace.members.manage" ||
       action === "workspace.groups.manage" ||
       action === "workspace.invitations.manage" ||
-      action === "workspace.domains.manage" ||
       action === "workspace.support.decide"
     ) {
       return deny(
         "SUPPORT_GRANT_RESTRICTED",
-        "Temporary support access cannot change membership, invitations, domains, groups, or support governance.",
+        "Temporary support access cannot change membership, invitations, groups, or support governance.",
       );
     }
   }
@@ -174,7 +172,6 @@ export function authorize(
   if (
     action === "workspace.members.manage" ||
     action === "workspace.groups.manage" ||
-    action === "workspace.domains.manage" ||
     action === "workspace.support.decide"
   ) {
     return roles.has("administrator") && !context.supportGrant

@@ -2,15 +2,11 @@ export const APPWRITE_RESOURCES = {
   database: "knowhow_core",
   privateMediaBucket: "knowhow_private_media",
   exportsBucket: "knowhow_exports",
-  site: "knowhow_web",
-  operationsFunction: "knowhow_ops",
-  exportFunction: "knowhow_export",
 } as const;
 
 export const TABLES = {
   organizations: "organizations",
   organizationBranding: "organization_branding",
-  organizationDomains: "organization_domains",
   organizationMemberships: "organization_memberships",
   workspaces: "workspaces",
   workspaceSettings: "workspace_settings",
@@ -27,6 +23,8 @@ export const TABLES = {
   privateMedia: "private_media",
   invitations: "invitations",
   initialAdminAppointments: "initial_admin_appointments",
+  betaAccessGrants: "beta_access_grants",
+  betaAccessEvents: "beta_access_events",
   extensionDevices: "extension_devices",
   platformRoles: "platform_roles",
   supportCases: "support_cases",
@@ -53,4 +51,3 @@ export const TABLES = {
 export type TableName = (typeof TABLES)[keyof typeof TABLES];
 
 export const ALL_TABLES = Object.freeze(Object.values(TABLES));
-

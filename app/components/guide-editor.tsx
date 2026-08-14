@@ -94,7 +94,7 @@ function newStep(kind: EditorBlockKind = "action"): EditorBlock {
   return {
     id: newId("step"),
     kind,
-    title: kind === "heading" ? "Section heading" : "New step",
+    title: kind === "heading" ? "" : "",
     description: "",
   };
 }
@@ -292,6 +292,12 @@ export function GuideEditor({
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
   const [groupSearch, setGroupSearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
+  const ensureDraftRef = useRef<Promise<GuideSaveResult> | null>(null);
+  const [draftIds, setDraftIds] = useState<GuideSaveResult | null>(
+    guide?.workingRevision
+      ? { guideId: guide.id, revisionId: guide.workingRevision.id }
+      : null,
+  );
 
   const source = revision?.source ?? "manual";
   const isCaptured = source === "browser-capture";
@@ -398,31 +404,95 @@ export function GuideEditor({
     if (isCaptured) setPrivacyReviewed(false);
   }
 
+  async function ensureWorkingDraft() {
+    if (guide?.workingRevision) {
+      return { guideId: guide.id, revisionId: guide.workingRevision.id };
+    }
+    if (draftIds) return draftIds;
+    if (!ensureDraftRef.current) {
+      ensureDraftRef.current = onSave({
+        guideId: guide?.id,
+        revisionId: guide?.workingRevision?.id,
+        title: title.trim() || "Untitled guide",
+        summary: summary.trim() || "Draft in progress",
+        category: category.trim(),
+        tags: tags
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        systemReferences: systemReferences
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        steps: steps.map((step) => ({
+          ...step,
+          title:
+            step.title.trim() ||
+            (step.kind === "heading" ? "Section heading" : "Untitled step"),
+        })),
+        audiences: audiences.length
+          ? audiences
+          : [{ kind: "workspace", label: "Entire workspace" }],
+        source,
+        privacyReviewed,
+        transition: "draft",
+      }).then((result) => {
+        setDraftIds(result);
+        return result;
+      });
+    }
+    return ensureDraftRef.current;
+  }
+
   async function handleScreenshotUpload(step: EditorBlock, file: File) {
-    if (!guide?.workingRevision) return;
     setUploadingStepId(step.id);
     setLocalError("");
     try {
+      const draft = await ensureWorkingDraft();
       const raster = await rasterizeReplacement(file);
       const result = await replaceDraftScreenshot({
         workspaceId: workspace.id,
-        guideId: guide.id,
-        revisionId: guide.workingRevision.id,
+        guideId: draft.guideId,
+        revisionId: draft.revisionId,
         stepId: step.id,
         bytes: raster.blob,
         width: raster.width,
         height: raster.height,
-        redactionState: guide.screenshotsLockedAt ? "redacted" : "pending",
+        redactionState: guide?.screenshotsLockedAt ? "redacted" : "pending",
       });
-      updateScreenshotState(step, {
+      const screenshotPatch: Partial<EditorBlock> = {
         screenshotMediaId: result.mediaId,
         screenshotUrl: undefined,
         crop: undefined,
         annotations: undefined,
         redactions: undefined,
-      });
+      };
+      const nextSteps = steps.map((item) =>
+        item.id === step.id ? { ...item, ...screenshotPatch } : item,
+      );
+      updateScreenshotState(step, screenshotPatch);
       await onMediaChanged?.();
+      if (!guide) {
+        // Creating the working draft and attaching its screenshot are both
+        // durable at this point. The route replacement that exposes the new
+        // guide ID is an internal continuation of the upload, not an attempt
+        // to discard the editor. Keep the navigation guard from opening its
+        // leave prompt while this component is being replaced.
+        setSavedSnapshot(guideDraftSnapshot({
+          title,
+          summary,
+          category,
+          tags,
+          systemReferences,
+          steps: nextSteps,
+          audiences,
+          privacyReviewed,
+        }));
+        dirtyRef.current = false;
+        onSaved?.(draft, "draft");
+      }
     } catch (error) {
+      ensureDraftRef.current = null;
       setLocalError(error instanceof Error ? error.message : "The screenshot could not be uploaded.");
     } finally {
       setUploadingStepId("");
@@ -669,10 +739,10 @@ export function GuideEditor({
             <span className={`editor-save-state${isDirty ? " dirty" : ""}`} role={localError ? "alert" : "status"}>
               {localError || (flattening ? "Preparing screenshots…" : isDirty ? "Unsaved" : "Saved")}
             </span>
-            <Button variant="outline" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
+            <Button variant={guide ? "outline" : undefined} type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
               <Save /> Save
             </Button>
-            <Button type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
+            <Button variant={guide ? undefined : "outline"} type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
               <Send /> Request review
             </Button>
             <Button className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector">
@@ -761,7 +831,7 @@ export function GuideEditor({
                             accentColor={workspace.settings.accentColor}
                             clickTargetColor={workspace.settings.clickTargetColor}
                             locked={Boolean(guide?.screenshotsLockedAt)}
-                            canReplace={Boolean(guide?.workingRevision)}
+                            canReplace={Boolean(guide?.workingRevision || draftIds)}
                             busy={uploadingStepId === step.id}
                             onChange={(patch) => updateScreenshotState(step, patch)}
                             onReplaceFile={(file) => void handleScreenshotUpload(step, file)}
@@ -771,7 +841,7 @@ export function GuideEditor({
                           <div
                             className={`screenshot-placeholder${dragOverStepId === step.id ? " drag-over" : ""}`}
                             onDragOver={(event) => {
-                              if (!guide?.workingRevision || uploadingStepId) return;
+                              if (uploadingStepId) return;
                               event.preventDefault();
                               setDragOverStepId(step.id);
                             }}
@@ -779,20 +849,20 @@ export function GuideEditor({
                             onDrop={(event) => {
                               event.preventDefault();
                               setDragOverStepId((current) => (current === step.id ? "" : current));
-                              if (!guide?.workingRevision || uploadingStepId) return;
+                              if (uploadingStepId) return;
                               const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
                               if (file) void handleScreenshotUpload(step, file);
                             }}
                           >
                             <ImagePlus />
                             <span>Capture with the KnowHow extension, drag and drop, or upload a screenshot manually.</span>
-                            <label className={`button secondary small${!guide?.workingRevision || uploadingStepId ? " disabled" : ""}`}>
+                            <label className={`button secondary small${uploadingStepId ? " disabled" : ""}`}>
                               <ImagePlus /> {uploadingStepId === step.id ? "Uploading…" : "Upload screenshot"}
                               <input
                                 className="visually-hidden"
                                 type="file"
                                 accept="image/png,image/jpeg"
-                                disabled={!guide?.workingRevision || Boolean(uploadingStepId)}
+                                disabled={Boolean(uploadingStepId)}
                                 onChange={(event) => {
                                   const file = event.target.files?.[0];
                                   event.target.value = "";
@@ -800,7 +870,6 @@ export function GuideEditor({
                                 }}
                               />
                             </label>
-                            {!guide?.workingRevision ? <small>Save a private draft before uploading a screenshot.</small> : null}
                           </div>
                         )}
                       </div>
@@ -835,7 +904,7 @@ export function GuideEditor({
             </button>
           </main>
 
-          {inspectorOpen ? <button className="editor-inspector-backdrop" type="button" aria-label="Close guide settings" onClick={() => setInspectorOpen(false)} /> : null}
+          {inspectorOpen ? <button className="editor-inspector-backdrop" type="button" aria-hidden="true" tabIndex={-1} onClick={() => setInspectorOpen(false)} /> : null}
           <aside id="guide-editor-inspector" className={`editor-sidebar${inspectorOpen ? " open" : ""}`} aria-label="Guide settings">
             <div className="editor-sidebar-heading">
               <div><span className="eyebrow">Guide settings</span><strong>Access and privacy</strong></div>

@@ -9,11 +9,19 @@ export type WorkspaceSection =
   | "vault"
   | "settings";
 
+export type PlatformSection =
+  | "overview"
+  | "leads"
+  | "accounts"
+  | "support"
+  | "billing"
+  | "ops";
+
 export type GuideRevisionMode = "published" | "working";
 
 export type AppRoute =
   | { kind: "root" }
-  | { kind: "platform" }
+  | { kind: "platform"; section: PlatformSection; workspaceId?: string }
   | { kind: "workspace-section"; workspaceSlug: string; section: WorkspaceSection }
   | { kind: "guide-new"; workspaceSlug: string }
   | { kind: "guide-view"; workspaceSlug: string; guideId: string; revision: GuideRevisionMode }
@@ -32,6 +40,15 @@ const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
   "organization",
   "vault",
   "settings",
+];
+
+const PLATFORM_SECTIONS: readonly PlatformSection[] = [
+  "overview",
+  "leads",
+  "accounts",
+  "support",
+  "billing",
+  "ops",
 ];
 
 function safeSegment(value: string) {
@@ -58,6 +75,10 @@ function isWorkspaceSection(value: string): value is WorkspaceSection {
   return WORKSPACE_SECTIONS.includes(value as WorkspaceSection);
 }
 
+function isPlatformSection(value: string): value is PlatformSection {
+  return PLATFORM_SECTIONS.includes(value as PlatformSection);
+}
+
 export function workspaceHref(workspaceSlug: string, section: WorkspaceSection = "overview") {
   const base = `/w/${safeSegment(workspaceSlug)}`;
   return section === "overview" ? base : `${base}/${section}`;
@@ -79,8 +100,15 @@ export function guideEditorHref(workspaceSlug: string, guideId: string) {
   return `${workspaceHref(workspaceSlug, "guides")}/${safeSegment(guideId)}/edit`;
 }
 
-export function platformHref() {
-  return "/platform";
+export function platformHref(
+  section: PlatformSection = "overview",
+  workspaceId?: string,
+) {
+  if (section === "overview") return "/platform";
+  if (section === "accounts" && workspaceId) {
+    return `/platform/accounts/${safeSegment(workspaceId)}`;
+  }
+  return `/platform/${section}`;
 }
 
 export function routeWorkspaceSlug(route: AppRoute) {
@@ -90,33 +118,46 @@ export function routeWorkspaceSlug(route: AppRoute) {
 export function parseAppRoute(pathname: string, search = ""): AppRoute {
   const normalizedPath = cleanPathname(pathname);
   if (normalizedPath === "/" || normalizedPath === "/app") return { kind: "root" };
-  if (normalizedPath === "/platform") return { kind: "platform" };
 
   const rawSegments = normalizedPath.split("/").filter(Boolean);
   const segments = rawSegments.map(decodeSegment);
   if (!segments.every(isSafeRouteSegment)) return { kind: "invalid" };
-  const [scope, workspaceSlug, ...rest] = segments as string[];
-  if (scope !== "w" || !workspaceSlug) return { kind: "invalid" };
+  const [scope, ...rest] = segments as string[];
 
-  if (rest.length === 0) {
+  if (scope === "platform") {
+    if (rest.length === 0) return { kind: "platform", section: "overview" };
+    const section = rest[0];
+    if (!isPlatformSection(section)) return { kind: "invalid" };
+    if (section === "accounts" && rest.length === 2) {
+      return { kind: "platform", section: "accounts", workspaceId: rest[1] };
+    }
+    if (rest.length === 1) return { kind: "platform", section };
+    return { kind: "invalid" };
+  }
+
+  if (scope !== "w" || !rest[0]) return { kind: "invalid" };
+  const workspaceSlug = rest[0];
+  const nested = rest.slice(1);
+
+  if (nested.length === 0) {
     return { kind: "workspace-section", workspaceSlug, section: "overview" };
   }
 
-  if (rest.length === 1 && isWorkspaceSection(rest[0])) {
-    return { kind: "workspace-section", workspaceSlug, section: rest[0] };
+  if (nested.length === 1 && isWorkspaceSection(nested[0])) {
+    return { kind: "workspace-section", workspaceSlug, section: nested[0] };
   }
 
-  if (rest[0] !== "guides") return { kind: "invalid" };
-  if (rest.length === 2 && rest[1] === "new") {
+  if (nested[0] !== "guides") return { kind: "invalid" };
+  if (nested.length === 2 && nested[1] === "new") {
     return { kind: "guide-new", workspaceSlug };
   }
 
-  const guideId = rest[1];
+  const guideId = nested[1];
   if (!guideId) return { kind: "invalid" };
-  if (rest.length === 3 && rest[2] === "edit") {
+  if (nested.length === 3 && nested[2] === "edit") {
     return { kind: "guide-edit", workspaceSlug, guideId };
   }
-  if (rest.length === 2) {
+  if (nested.length === 2) {
     const revision = new URLSearchParams(search).get("revision") === "working"
       ? "working"
       : "published";

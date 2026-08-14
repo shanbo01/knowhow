@@ -1,27 +1,21 @@
-# Pilot subprocessor and third-party service list
+# Third-party service list
 
-Status: draft inventory. Legal/privacy must verify current legal entities, service terms, processing locations, transfer safeguards, and notification contacts before publishing or executing a DPA. Update this list before adding/changing a processor.
+Status: draft inventory. Legal/privacy must verify every enabled integration before real data is used.
 
-| Provider | Purpose | Intended data | Configured location / limitation |
+The Appwrite database, Auth service, and private Storage run on operator-controlled local infrastructure. The Appwrite software vendor does not receive KnowHow data through this architecture. If the operator later places the machine, backups, or network under another provider, that provider must be reviewed and added here before use.
+
+| Provider | Purpose | Intended data | Limitation |
 | --- | --- | --- | --- |
-| Appwrite Cloud | Authentication, TablesDB, private Storage, Functions, Sites, platform logs/backups | Accounts, tenant records, approved guide content, redacted media, exports, operational metadata | Separate Staging/Production projects in Frankfurt; Production Pro daily database backups |
-| Resend, integrated with Appwrite Messaging/direct adapter where needed | Account, invitation, pilot/lifecycle, support, deletion, lead, and operational email | Recipient address, content-minimized template, delivery/idempotency metadata; short-lived invitation/appointment credential only when required | Sender/DNS verification required; confirm legal entity and processing locations in contract |
-| Sentry | Error/performance monitoring and alerts | Scrubbed route shapes, error class/code, request ID, operation, status, aggregate timing; no intended user/content/header/body data | PII disabled and event scrubber enforced; confirm project region/contract/retention |
+| Resend, when enabled | Account, invitation, support, and operational email | Recipient address, minimized template content, delivery metadata | Optional; leave credentials blank to keep delivery in local Mailpit |
+| Sentry, when enabled | Error and performance monitoring | Scrubbed route shapes, error codes, request IDs, aggregate timing | Optional; PII disabled and the event scrubber remains enforced |
 
 ## Distribution platforms
 
-Google Chrome Web Store and Microsoft Edge Add-ons distribute signed extension packages and update metadata. KnowHow does not intentionally send customer guide content, screenshots, Appwrite sessions, or extension device credentials to store operators. Counsel must decide whether and how to disclose these platforms as subprocessors or independent distribution providers.
-
-## Development/operations services
-
-GitHub may host source and CI artifacts, but production/customer data and secrets must not enter the repository, ordinary CI fixtures, issues, or build artifacts. If production evidence or customer-related support is later stored in another SaaS, add and approve that service before use.
+Google Chrome Web Store and Microsoft Edge Add-ons may distribute extension packages. The local unpacked-extension workflow does not send guide content, screenshots, Appwrite sessions, or device credentials to a store operator.
 
 ## Change process
 
-1. Security/privacy reviews purpose, data minimization, location, access, retention, deletion, breach terms, subprocessors, and transfer safeguards.
-2. Legal approves the contract/DPA and Qatar-specific requirements.
-3. Update this document and notify design partners under their executed notice/objection terms.
-4. Configure and test with synthetic data; update threat model, privacy notice, retention, incident, and readiness evidence.
-5. No provider receives pilot data before approval is complete.
-
-Owner/version/effective date and last verification: `[pending]`
+1. Review purpose, data minimization, location, access, retention, deletion, and breach terms.
+2. Update this inventory and the privacy/DPA drafts.
+3. Test the integration with disposable data.
+4. Do not enable a new provider for real data until the required approvals are complete.

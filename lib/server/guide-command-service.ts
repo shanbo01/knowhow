@@ -25,7 +25,7 @@ import {
 } from "./domain-records";
 import { normalizeGuideAudiences, normalizeGuideSteps } from "./guide-input";
 import { HttpError } from "./http-security";
-import { resourceId } from "./ids";
+import { deterministicResourceId, resourceId } from "./ids";
 import { inputBoolean, inputStringList, inputText, slugify } from "./input";
 import { TABLES } from "./appwrite-resources";
 import { requireAuthorized, type AuthorizationContext, type GuideAuthorizationFacts } from "./policy";
@@ -820,6 +820,16 @@ export class GuideCommandService {
     const revision = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
     const facts = await this.guideFacts(identity, workspaceAccess, guide, revision);
     requireAuthorized("guide.publish", { ...context, guide: facts });
+    // Check before staging the ordinary guide.published row. Appwrite's
+    // transaction overlay can otherwise return a staged row to a later
+    // filtered list query and make the first-publication event look present.
+    const priorPublications = await this.store.list(TABLES.usageEvents, {
+      filters: [
+        { field: "workspace_id", value: workspaceId },
+        { field: "kind", value: "activation.first_guide_published" },
+      ],
+      limit: 1,
+    });
     const publishedAt = nowIso();
     if (guide.publishedRevisionId) {
       const previous = await this.loadRevision(guide.publishedRevisionId, guideId, workspaceId);
@@ -859,17 +869,11 @@ export class GuideCommandService {
         { revisionId: revision.row.$id },
       ),
     );
-    const priorPublications = await this.store.list(TABLES.usageEvents, {
-      filters: [
-        { field: "workspace_id", value: workspaceId },
-        { field: "kind", value: "activation.first_guide_published" },
-      ],
-      limit: 1,
-    });
     if (!priorPublications.length) {
+      const activationKey = `${workspaceId}:activation.first_guide_published`;
       await this.store.create(
         TABLES.usageEvents,
-        resourceId("usage"),
+        await deterministicResourceId("usage", activationKey),
         rowData(
           {
             organization_id: workspaceAccess.workspace.organizationId,
@@ -879,7 +883,10 @@ export class GuideCommandService {
             kind: "activation.first_guide_published",
             status: "recorded",
             occurred_at: publishedAt,
-            request_id: `${options.requestId}:activation`,
+            request_id: await deterministicResourceId(
+              "request",
+              activationKey,
+            ),
             created_by: identity.userId,
           },
           {

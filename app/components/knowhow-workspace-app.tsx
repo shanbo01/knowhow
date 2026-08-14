@@ -27,7 +27,6 @@ import {
   History,
   ImagePlus,
   KeyRound,
-  Laptop,
   LayoutDashboard,
   LifeBuoy,
   Link2,
@@ -67,7 +66,13 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
-import { regenerateMfaRecoveryCodes } from "../../lib/auth-client";
+import {
+  disableMfa,
+  regenerateMfaRecoveryCodes,
+  revokeOtherSessions,
+  updateAccountName,
+  updateAccountPassword,
+} from "../../lib/auth-client";
 import {
   downloadAuthorizedExport,
   removeWorkspaceLogo,
@@ -80,17 +85,20 @@ import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
 import {
   ensureKnowHowExtension,
+  extensionStoreUrls,
   syncKnowHowExtension,
   type ExtensionCompanion,
 } from "../../lib/extension-bridge";
 import type {
   AdminAppointment,
+  BetaAccessGrant,
   BootstrapResponse,
   Guide,
   GuideSearchResult,
   Invitation,
   OrganizationAdministration,
   OrganizationRole,
+  PlatformPricingCatalog,
   PlatformProvisioningResult,
   PlatformProvisioningRun,
   PlatformWorkspace,
@@ -112,6 +120,7 @@ import {
   workspaceHref,
   type AppRoute,
   type GuideRevisionMode,
+  type PlatformSection,
   type WorkspaceSection,
 } from "../../lib/workspace-routes";
 import { useTheme } from "./theme-provider";
@@ -123,9 +132,11 @@ import {
 } from "./guide-editor";
 import { AuthorizedMedia } from "./authorized-media";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
+import { HexColorPicker } from "./hex-color-picker";
 import { SelectMenu } from "./select-menu";
 import { ProductBrand } from "./product-brand";
 import { WorkspaceLogo } from "./workspace-logo";
+import { ExtensionInstallInstructions } from "./extension-install-instructions";
 import {
   Dialog,
   DialogContent,
@@ -189,6 +200,7 @@ type DialogState =
   | { type: "invite" }
   | { type: "member"; member: WorkspaceMember }
   | { type: "extension" }
+  | { type: "setup-wizard" }
   | { type: "account-security" }
   | { type: "platform-create" }
   | { type: "assign-admin"; workspace: PlatformWorkspace }
@@ -208,6 +220,32 @@ const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
   { view: "Vault", icon: KeyRound },
   { view: "Settings", icon: Settings },
 ];
+
+const PLATFORM_NAV: Array<{
+  section: PlatformSection;
+  label: string;
+  icon: typeof LayoutDashboard;
+}> = [
+  { section: "overview", label: "Overview", icon: LayoutDashboard },
+  { section: "leads", label: "Leads", icon: Mail },
+  { section: "accounts", label: "Accounts", icon: Building2 },
+  { section: "support", label: "Support", icon: LifeBuoy },
+  { section: "billing", label: "Billing", icon: CalendarDays },
+  { section: "ops", label: "Activity", icon: History },
+];
+
+const NAV_LABELS: Record<View, string> = {
+  Overview: "Home",
+  Guides: "Library",
+  Capture: "Capture",
+  Groups: "Groups",
+  Members: "People & access",
+  Support: "Support",
+  Organization: "Organization",
+  Vault: "Vault",
+  Settings: "Workspace settings",
+  Platform: "Platform console",
+};
 
 const VIEW_TO_SECTION: Record<Exclude<View, "Platform">, WorkspaceSection> = {
   Overview: "overview",
@@ -241,6 +279,19 @@ const ROLE_COPY: Record<WorkspaceRole, string> = {
   viewer: "Read published guides shared with their audiences",
 };
 
+function workspaceAccessLabel(roles: WorkspaceRole[]) {
+  if (roles.includes("administrator")) return "Workspace administrator";
+
+  const operationalRoles = (
+    ["creator", "reviewer", "publisher"] as WorkspaceRole[]
+  ).filter((role) => roles.includes(role));
+  if (operationalRoles.length) {
+    return operationalRoles.map(titleCase).join(" · ");
+  }
+
+  return "Workspace member";
+}
+
 function messageFromError(error: unknown) {
   return error instanceof Error
     ? error.message
@@ -265,6 +316,14 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function formatMinorAmount(value: number | null, currency: string) {
+  if (value === null) return "Price not published";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+  }).format(value / 100);
+}
+
 function initials(name: string, email = "") {
   const source = name.trim() || email;
   return source
@@ -279,6 +338,88 @@ function titleCase(value: string) {
   return value
     .replace(/[-_.]/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function countPhrase(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+const INVITE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_BULK_INVITES = 50;
+
+function parseInviteEmails(value: string) {
+  const tokens = value
+    .split(/[\s,;]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  const emails: string[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (
+      token.length < 5 ||
+      token.length > 320 ||
+      !INVITE_EMAIL_PATTERN.test(token)
+    ) {
+      invalid.push(token);
+      continue;
+    }
+    if (seen.has(token)) continue;
+    seen.add(token);
+    emails.push(token);
+  }
+  return { emails, invalid };
+}
+
+function workspaceOptionLabel(workspace: {
+  id: string;
+  name: string;
+  slug: string;
+}) {
+  const name = workspace.name.trim();
+  const slug = workspace.slug.trim();
+  if (name && slug && name !== workspace.id) return `${name} · ${slug}`;
+  if (name && name !== workspace.id) return name;
+  return slug || workspace.id;
+}
+
+function formatEntitlement(kind: string, value: string | number | boolean) {
+  const labels: Record<string, string> = {
+    maximumUsers: "People",
+    maximumCreators: "Creators",
+    storageBytes: "Storage",
+    extensionEnabled: "Capture",
+    supportEnabled: "Support",
+    removeBranding: "Custom branding",
+    publicSignup: "Public signup",
+    payments: "Payments",
+    ssoScim: "SSO / SCIM",
+  };
+  const label = labels[kind] ?? titleCase(kind);
+  if (typeof value === "boolean") return value ? label : null;
+  if (kind === "storageBytes") return `${label} ${formatBytes(Number(value))}`;
+  return `${label}: ${value}`;
+}
+
+function TrialChip({
+  subscription,
+}: {
+  subscription?: {
+    access: string;
+    expiresAt: string | null;
+    graceEndsAt: string | null;
+  };
+}) {
+  if (!subscription) return null;
+  if (subscription.access === "read_only") {
+    return (
+      <span className="trial-chip">
+        Read-only until {formatDate(subscription.graceEndsAt ?? subscription.expiresAt ?? undefined)}
+      </span>
+    );
+  }
+  if (subscription.access !== "active" || !subscription.expiresAt) return null;
+  return <span className="trial-chip">Ends {formatDate(subscription.expiresAt)}</span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -336,7 +477,10 @@ function Modal({
       }}
     >
       <DialogContent
-        className={cn("kh-dialog-content", wide && "kh-dialog-wide")}
+        className={cn(
+          "kh-dialog-content",
+          wide && "kh-dialog-wide sm:max-w-3xl",
+        )}
       >
         <DialogHeader className="kh-dialog-header">
           <div>
@@ -510,24 +654,26 @@ function ListPagination({
 }
 
 const ONBOARDING_STEP_COPY: Record<
-  NonNullable<BootstrapResponse["activeWorkspace"]>["onboarding"]["steps"][number]["id"],
+  NonNullable<
+    BootstrapResponse["activeWorkspace"]
+  >["onboarding"]["steps"][number]["id"],
   { title: string; description: string }
 > = {
   workspace_readiness: {
     title: "Confirm workspace readiness",
-    description: "Review the pilot data boundary and operating policies.",
+    description: "Agree to keep ordinary business-process data in this workspace.",
   },
   teammate_invitation: {
     title: "Invite a teammate",
-    description: "Issue an exact-email, single-use workspace invitation.",
+    description: "Send an invitation to the person who will try a guide with you.",
   },
   extension_installation: {
     title: "Install the capture extension",
-    description: "Connect the approved Chrome or Edge build to this workspace.",
+    description: "Connect Chrome or Edge so you can record a real workflow.",
   },
   first_capture: {
-    title: "Complete the first capture",
-    description: "Capture one ordinary business process and finish privacy review.",
+    title: "Capture the first workflow",
+    description: "Record one ordinary process and review the screenshots.",
   },
   first_edit: {
     title: "Edit the draft",
@@ -535,141 +681,206 @@ const ONBOARDING_STEP_COPY: Record<
   },
   first_publication: {
     title: "Publish the first guide",
-    description: "Complete review and publish to an explicit audience.",
+    description: "Review it and publish it to the people who need it.",
   },
   teammate_completion: {
-    title: "Rehearse teammate completion",
-    description: "Have another member open and complete the published guide.",
+    title: "Have a teammate complete it",
+    description: "Ask them to open the published guide and mark it complete.",
   },
 };
 
-function OnboardingChecklist({
+function SetupWizard({
   onboarding,
   busy,
   canCapture,
   canManageAccess,
+  chrome = "card",
   onConfirmReadiness,
   onNavigate,
+  onOpenExtension,
+  onDismiss,
 }: {
   onboarding: NonNullable<BootstrapResponse["activeWorkspace"]>["onboarding"];
   busy: boolean;
   canCapture: boolean;
   canManageAccess: boolean;
+  chrome?: "card" | "plain";
   onConfirmReadiness: () => Promise<void>;
   onNavigate: (view: View) => void;
+  onOpenExtension: () => void;
+  onDismiss: () => Promise<void>;
 }) {
   const [ordinaryDataOnly, setOrdinaryDataOnly] = useState(false);
   const [policiesReviewed, setPoliciesReviewed] = useState(false);
   if (onboarding.completedAt) return null;
   const current = onboarding.steps.find((step) => !step.completed);
   const completed = onboarding.steps.filter((step) => step.completed).length;
+  if (!current) return null;
+  const copy = ONBOARDING_STEP_COPY[current.id];
+  const continueBlocked =
+    busy ||
+    (current.id === "teammate_invitation" && !canManageAccess) ||
+    (["extension_installation", "first_capture"].includes(current.id) &&
+      !canCapture);
 
   const nextAction = () => {
-    if (!current) return;
     if (current.id === "teammate_invitation") {
       if (canManageAccess) onNavigate("Members");
       return;
     }
-    if (
-      current.id === "extension_installation" ||
-      current.id === "first_capture"
-    ) {
+    if (current.id === "extension_installation") {
+      if (canCapture) onOpenExtension();
+      return;
+    }
+    if (current.id === "first_capture") {
       if (canCapture) onNavigate("Capture");
       return;
     }
     onNavigate("Guides");
   };
 
-  return (
-    <Card className="onboarding-checklist">
-      <CardHeader className="dashboard-card-header">
-        <div>
-          <CardTitle>Pilot activation</CardTitle>
-          <CardDescription>
-            Resume the real workflow until another teammate completes it.
-          </CardDescription>
-        </div>
-        <Badge variant="outline">
-          {completed} of {onboarding.steps.length}
-        </Badge>
-      </CardHeader>
-      <CardContent className="onboarding-checklist-content">
-        <ol>
-          {onboarding.steps.map((step, index) => (
-            <li
-              key={step.id}
-              className={step.completed ? "complete" : current?.id === step.id ? "current" : ""}
-            >
-              <span>{step.completed ? <Check /> : index + 1}</span>
-              <div>
-                <strong>{ONBOARDING_STEP_COPY[step.id].title}</strong>
-                <small>{ONBOARDING_STEP_COPY[step.id].description}</small>
-              </div>
-            </li>
-          ))}
-        </ol>
-        {current?.id === "workspace_readiness" ? (
-          <div className="onboarding-readiness">
-            <label className="choice-row">
-              <input
-                type="checkbox"
-                checked={ordinaryDataOnly}
-                onChange={(event) => setOrdinaryDataOnly(event.target.checked)}
-              />
-              <span>
-                <strong>Ordinary business-process data only</strong>
-                <small>No credentials, payments, health data, national IDs, or sensitive data.</small>
-              </span>
-            </label>
-            <label className="choice-row">
-              <input
-                type="checkbox"
-                checked={policiesReviewed}
-                onChange={(event) => setPoliciesReviewed(event.target.checked)}
-              />
-              <span>
-                <strong>Pilot policies reviewed</strong>
-                <small>The workspace owner has reviewed the agreed terms and capture boundaries.</small>
-              </span>
-            </label>
-            <Button
-              size="sm"
-              type="button"
-              disabled={busy || !ordinaryDataOnly || !policiesReviewed}
-              onClick={() => void onConfirmReadiness()}
-            >
-              <ShieldCheck /> Confirm readiness
-            </Button>
+  const body = (
+    <>
+      {chrome === "card" ? (
+        <div className="onboarding-wizard-header">
+          <div className="onboarding-checklist-copy">
+            <CardTitle>Getting started</CardTitle>
+            <Badge variant="outline">
+              {completed} of {onboarding.steps.length}
+            </Badge>
           </div>
-        ) : current ? (
-          <div className="onboarding-next-action">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            aria-label="Dismiss getting started"
+            disabled={busy}
+            onClick={() => void onDismiss()}
+          >
+            <X />
+          </Button>
+        </div>
+      ) : (
+        <div className="onboarding-wizard-header">
+          <Badge variant="outline">
+            {completed} of {onboarding.steps.length}
+          </Badge>
+        </div>
+      )}
+      <ol aria-label="Getting started steps">
+        {onboarding.steps.map((step, index) => (
+          <li
+            key={step.id}
+            className={
+              step.completed
+                ? "complete"
+                : current.id === step.id
+                  ? "current"
+                  : ""
+            }
+            title={ONBOARDING_STEP_COPY[step.id].title}
+          >
+            <span>{step.completed ? <Check /> : index + 1}</span>
+            <strong className="visually-hidden">
+              {ONBOARDING_STEP_COPY[step.id].title}
+            </strong>
+          </li>
+        ))}
+      </ol>
+      <div className="onboarding-wizard-step">
+        <strong>Next: {copy.title}</strong>
+        <p>{copy.description}</p>
+        {current.id === "teammate_invitation" && !canManageAccess ? (
+          <small>
+            Ask a workspace administrator to invite the first teammate.
+          </small>
+        ) : current.id === "first_capture" && !canCapture ? (
+          <small>
+            Ask a creator or workspace administrator to complete the first
+            capture.
+          </small>
+        ) : current.id === "extension_installation" && !canCapture ? (
+          <small>
+            Ask a creator or workspace administrator to install Capture.
+          </small>
+        ) : null}
+      </div>
+      {current.id === "workspace_readiness" ? (
+        <div className="onboarding-readiness">
+          <label className="choice-row">
+            <input
+              type="checkbox"
+              checked={ordinaryDataOnly}
+              onChange={(event) => setOrdinaryDataOnly(event.target.checked)}
+            />
             <span>
-              <strong>Next: {ONBOARDING_STEP_COPY[current.id].title}</strong>
+              <strong>Ordinary business-process data only</strong>
               <small>
-                {current.id === "teammate_invitation" && !canManageAccess
-                  ? "Ask a workspace administrator to invite the first teammate."
-                  : current.id === "first_capture" && !canCapture
-                    ? "Ask a creator or workspace administrator to complete the first capture."
-                    : "KnowHow records this milestone automatically."}
+                No credentials, payments, health data, national IDs, or
+                sensitive data.
               </small>
             </span>
-            <Button
-              variant="outline"
-              size="sm"
-              type="button"
-              disabled={
-                busy ||
-                (current.id === "teammate_invitation" && !canManageAccess) ||
-                (["extension_installation", "first_capture"].includes(current.id) &&
-                  !canCapture)
-              }
-              onClick={nextAction}
-            >
-              Continue <ArrowRight />
-            </Button>
-          </div>
-        ) : null}
-      </CardContent>
+          </label>
+          <label className="choice-row">
+            <input
+              type="checkbox"
+              checked={policiesReviewed}
+              onChange={(event) => setPoliciesReviewed(event.target.checked)}
+            />
+            <span>
+              <strong>Workspace policies reviewed</strong>
+              <small>
+                You have reviewed the terms and capture boundaries for this
+                workspace.
+              </small>
+            </span>
+          </label>
+          <Button
+            size="sm"
+            type="button"
+            disabled={busy || !ordinaryDataOnly || !policiesReviewed}
+            onClick={() => void onConfirmReadiness()}
+          >
+            <ShieldCheck /> Confirm readiness
+          </Button>
+        </div>
+      ) : (
+        <div className="onboarding-wizard-actions">
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            disabled={continueBlocked}
+            onClick={nextAction}
+          >
+            {current.id === "extension_installation"
+              ? "Install and pair"
+              : "Continue"}{" "}
+            <ArrowRight />
+          </Button>
+        </div>
+      )}
+      <div className="onboarding-wizard-footer">
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          disabled={busy}
+          onClick={() => void onDismiss()}
+        >
+          I’ll do this later
+        </Button>
+      </div>
+    </>
+  );
+
+  if (chrome === "plain") {
+    return <div className="onboarding-wizard-body">{body}</div>;
+  }
+
+  return (
+    <Card className="onboarding-checklist onboarding-wizard" size="sm">
+      <CardContent className="onboarding-checklist-content">{body}</CardContent>
     </Card>
   );
 }
@@ -685,6 +896,8 @@ function OverviewView({
   onOpenGuide,
   onNavigate,
   onConfirmReadiness,
+  onOpenExtension,
+  onDismiss,
 }: {
   data: NonNullable<BootstrapResponse["activeWorkspace"]>;
   viewerName: string;
@@ -696,6 +909,8 @@ function OverviewView({
   onOpenGuide: (guide: Guide) => void;
   onNavigate: (view: View) => void;
   onConfirmReadiness: () => Promise<void>;
+  onOpenExtension: () => void;
+  onDismiss: () => Promise<void>;
 }) {
   const { metrics, guides, groups, members } = data;
   const recent = [...guides]
@@ -760,44 +975,82 @@ function OverviewView({
   const visibleMembers = members
     .filter((item) => item.status === "active")
     .slice(0, 4);
+  const hasReviewWork = guides.some(
+    (guide) => guide.canReview || guide.canPublish,
+  );
 
   return (
     <div className="workspace-overview">
       <section className="overview-page-header">
         <div className="overview-heading">
-          <h1>Dashboard</h1>
-          <p>Monitor knowledge, reviews, engagement, and audience coverage.</p>
-        </div>
-        <div className="overview-header-actions">
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            disabled={!canCapture}
-            onClick={() => onNavigate("Capture")}
-          >
-            <Sparkles /> Capture workflow
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            disabled={!canCreate}
-            onClick={onNewGuide}
-          >
-            <Plus /> New guide
-          </Button>
+          <h1>{guides.length === 0 ? "Welcome" : "Dashboard"}</h1>
+          <p>
+            {guides.length === 0
+              ? "Start with a capture, a written guide, or an invitation."
+              : canManageAccess
+              ? "Monitor knowledge, reviews, engagement, and audience coverage."
+              : canCreate
+                ? "Continue your drafts, capture workflows, and follow reviews through publication."
+                : hasReviewWork
+                  ? "Review work waiting for you and move approved guidance toward publication."
+                  : "Find the published guidance available to you and continue where you left off."}
+          </p>
         </div>
       </section>
 
-      <OnboardingChecklist
-        onboarding={data.onboarding}
-        busy={busy}
-        canCapture={canCapture}
-        canManageAccess={canManageAccess}
-        onConfirmReadiness={onConfirmReadiness}
-        onNavigate={onNavigate}
-      />
+      {(canManageAccess || canCapture) &&
+      !data.onboarding.completedAt &&
+      !data.onboarding.dismissedAt ? (
+        <SetupWizard
+          onboarding={data.onboarding}
+          busy={busy}
+          canCapture={canCapture}
+          canManageAccess={canManageAccess}
+          onConfirmReadiness={onConfirmReadiness}
+          onNavigate={onNavigate}
+          onOpenExtension={onOpenExtension}
+          onDismiss={onDismiss}
+        />
+      ) : null}
 
+      {guides.length === 0 ? (
+        data.onboarding.completedAt || !(canManageAccess || canCapture) ? (
+        <section className="first-run-panel">
+          <div>
+            <p className="eyebrow">Get started</p>
+            <h2>Make this workspace useful in the next few minutes.</h2>
+            <p>
+              Capture a real workflow, write the first guide, or invite someone
+              to try it with you.
+            </p>
+          </div>
+          <div className="first-run-actions">
+            {canCapture ? (
+              <button type="button" onClick={() => onNavigate("Capture")}>
+                <Sparkles />
+                <strong>Capture a workflow</strong>
+                <span>Record the steps in Chrome or Edge.</span>
+              </button>
+            ) : null}
+            {canCreate ? (
+              <button type="button" onClick={onNewGuide}>
+                <Plus />
+                <strong>Write a guide</strong>
+                <span>Start a private draft from scratch.</span>
+              </button>
+            ) : null}
+            {canManageAccess ? (
+              <button type="button" onClick={() => onNavigate("Members")}>
+                <Users />
+                <strong>Invite a teammate</strong>
+                <span>Send a single-use invitation to their email.</span>
+              </button>
+            ) : null}
+          </div>
+        </section>
+        ) : null
+      ) : (
+        <>
       <section className="metric-grid overview-metric-grid">
         <GreetingCard name={viewerName} workspaceName={data.workspace.name} />
         <MetricCard
@@ -1130,6 +1383,8 @@ function OverviewView({
           </CardContent>
         </Card>
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1187,11 +1442,9 @@ function GuidesView({
             interrupting the live revision.
           </p>
         </div>
-        <Button type="button" disabled={!canCreate} onClick={onNew}>
-          <Plus /> New guide
-        </Button>
       </div>
       <section className="card table-card">
+        {guides.length ? (
         <div className="filter-bar">
           <label className="search-field">
             <Search />
@@ -1225,6 +1478,7 @@ function GuidesView({
             {filtered.length} {filtered.length === 1 ? "guide" : "guides"}
           </span>
         </div>
+        ) : null}
         {filtered.length ? (
           <div className="guide-table">
             {visibleGuides.map((guide) => {
@@ -1376,9 +1630,20 @@ function GuidesView({
           </div>
         ) : (
           <EmptyState
-            icon={Search}
-            title="No matching guides"
-            description="Try another search or lifecycle filter."
+            icon={guides.length ? Search : BookOpen}
+            title={guides.length ? "No matching guides" : "No guides yet"}
+            description={
+              guides.length
+                ? "Try another search or lifecycle filter."
+                : "Create the first guide for this workspace."
+            }
+            action={
+              !guides.length && canCreate ? (
+                <Button onClick={onNew}>
+                  <Plus /> Create guide
+                </Button>
+              ) : undefined
+            }
           />
         )}
         {filtered.length ? (
@@ -1700,10 +1965,8 @@ function GuideViewer({
 }
 
 function CaptureView({
-  onOpenExtension,
   canCapture,
 }: {
-  onOpenExtension: () => void;
   canCapture: boolean;
 }) {
   return (
@@ -1716,45 +1979,22 @@ function CaptureView({
             Record clicks and navigation, redact locally, then send an editable
             private draft to KnowHow.
           </p>
+          {!canCapture ? (
+            <p className="privacy-caption">
+              Capture is not enabled for your role in this workspace.
+            </p>
+          ) : null}
         </div>
-        <Button type="button" disabled={!canCapture} onClick={onOpenExtension}>
-          <Laptop /> Pair extension
-        </Button>
       </div>
       <section className="capture-hero card">
-        <div className="capture-demo">
-          <div className="fake-browser">
-            <div className="fake-browser-top">
-              <span />
-              <span />
-              <span />
-              <div>portal.example.com</div>
-            </div>
-            <div className="fake-browser-body">
-              <span className="recording-pill">
-                <span /> Recording · portal.example.com
-              </span>
-              <div className="capture-target" />
-              <div className="blur-block blur-one" />
-              <div className="blur-block blur-two" />
-            </div>
-          </div>
-          <div className="capture-controls">
-            <span>
-              <Pause /> Pause means zero new events or screenshots
-            </span>
-            <span>
-              <ShieldCheck /> Redaction happens before upload
-            </span>
-          </div>
-        </div>
         <div className="capture-copy">
-          <p className="eyebrow">A safer recorder</p>
-          <h2>Nothing leaves the browser until privacy review.</h2>
+          <p className="eyebrow">Browser extension</p>
+          <h2>Pair Chrome or Edge, then record the real work.</h2>
           <p>
-            KnowHow captures click context and rasterized screenshots without
-            passwords, clipboard contents, raw keystrokes, incognito sessions,
-            or password-manager pages.
+            KnowHow captures click context and screenshots without passwords,
+            clipboard contents, raw keystrokes, incognito sessions, or
+            password-manager pages. Redaction happens before anything is
+            uploaded.
           </p>
           <ol>
             <li>
@@ -1850,9 +2090,6 @@ function GroupsView({
             their workspace role.
           </p>
         </div>
-        <Button type="button" disabled={busy} onClick={onNew}>
-          <Plus /> New group
-        </Button>
       </div>
       <section className="group-directory-card">
         {groups.length ? (
@@ -2089,9 +2326,6 @@ function MembersView({
             person receives.
           </p>
         </div>
-        <button className="button primary" disabled={busy} onClick={onInvite}>
-          <UserPlus /> Invite teammate
-        </button>
       </div>
       {pendingSupport.length ? (
         <section className="card table-card">
@@ -2136,7 +2370,7 @@ function MembersView({
             <p className="eyebrow">People</p>
             <h2>
               {visibleMembers.length === members.length
-                ? `${members.length} workspace members`
+                ? countPhrase(members.length, "workspace member")
                 : `${visibleMembers.length} of ${members.length} members`}
             </h2>
           </div>
@@ -2172,9 +2406,6 @@ function MembersView({
                   {member.roles.map((role) => (
                     <span key={role}>{titleCase(role)}</span>
                   ))}
-                  {member.capabilities?.includes("vault") ? (
-                    <span>Vault</span>
-                  ) : null}
                 </span>
                 <span className="group-list">
                   {member.groupIds.length} groups
@@ -2278,6 +2509,13 @@ function MembersView({
             icon={Link2}
             title="No invitation links"
             description="Create a signed, expiring link with a basic preassigned role."
+            action={
+              !busy ? (
+                <button className="button primary" type="button" onClick={onInvite}>
+                  <UserPlus /> Invite teammate
+                </button>
+              ) : undefined
+            }
           />
         )}
       </section>
@@ -2315,7 +2553,7 @@ function SupportDecisionDialog({
           {request.requesterEmail} requested {titleCase(request.requestedRole)}{" "}
           access for {request.requestedDurationHours} hours to this workspace.
           Approving grants temporary access that expires automatically and is
-          fully audited; membership, domains, invitations, and groups stay
+          fully audited; membership, invitations, and groups stay
           locked for support identities.
         </p>
         <div className="support-reason-box">
@@ -2360,7 +2598,7 @@ function SupportDecisionDialog({
               <strong>Explicitly approve administrator-level support</strong>
               <small>
                 The support identity may operate the workspace but cannot change
-                membership, invitations, domains, groups, or support governance.
+                membership, invitations, groups, or support governance.
               </small>
             </span>
           </label>
@@ -2413,9 +2651,6 @@ function MemberDialog({
   onSuspend: () => Promise<void>;
 }) {
   const [roles, setRoles] = useState(member.roles);
-  const [vault, setVault] = useState(
-    member.capabilities?.includes("vault") ?? false,
-  );
   return (
     <Modal
       title={member.name || member.email}
@@ -2455,23 +2690,9 @@ function MemberDialog({
             </label>
           ))}
         </div>
-        <label className="choice-row emphasized">
-          <input
-            type="checkbox"
-            checked={vault}
-            onChange={(event) => setVault(event.target.checked)}
-          />
-          <span>
-            <strong>Encrypted vault access</strong>
-            <small>
-              Separate capability for storing and decrypting workspace
-              credentials.
-            </small>
-          </span>
-        </label>
         <p className="privacy-caption">
-          <Shield /> Changing roles or vault access does not add the member to
-          any content audience.
+          <Shield /> Changing roles does not add the member to any content
+          audience.
         </p>
         <footer className="modal-footer">
           <button
@@ -2489,7 +2710,12 @@ function MemberDialog({
             className="button primary"
             type="button"
             disabled={busy || roles.length === 0}
-            onClick={() => onSave(roles, vault ? ["vault"] : [])}
+            onClick={() =>
+              onSave(
+                roles,
+                member.capabilities?.includes("vault") ? ["vault"] : [],
+              )
+            }
           >
             <Check /> Save
           </button>
@@ -2509,97 +2735,156 @@ function InviteDialog({
   origin: string;
   onClose: () => void;
   onCreate: (payload: {
-    email: string;
+    emails: string[];
     label: string;
     role: WorkspaceRole;
     expiresInHours: number;
-    maxUses: number;
-  }) => Promise<{ token: string } | void>;
+  }) => Promise<Array<{ email: string; token: string }>>;
 }) {
   const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
+  const [emailDraft, setEmailDraft] = useState("");
   const [role, setRole] = useState<WorkspaceRole>("viewer");
   const [expires, setExpires] = useState(72);
-  const [url, setUrl] = useState("");
+  const [created, setCreated] = useState<
+    Array<{ email: string; token: string }>
+  >([]);
+  const parsed = parseInviteEmails(emailDraft);
+  const overLimit = parsed.emails.length > MAX_BULK_INVITES;
+
   return (
     <Modal
       title="Invite a teammate"
       eyebrow="Signed workspace access"
       onClose={onClose}
+      wide
     >
       <form
-        className="modal-form"
+        className="modal-form invite-form"
         onSubmit={async (event) => {
           event.preventDefault();
+          if (
+            !parsed.emails.length ||
+            parsed.invalid.length ||
+            overLimit
+          ) {
+            return;
+          }
           const result = await onCreate({
-            email: email.trim().toLowerCase(),
-            label: label.trim() || `Invite ${email.trim().toLowerCase()}`,
+            emails: parsed.emails,
+            label: label.trim(),
             role,
             expiresInHours: expires,
-            maxUses: 1,
           });
-          if (result?.token)
-            setUrl(`${origin}/app?invite=${encodeURIComponent(result.token)}`);
+          if (result.length) setCreated(result);
         }}
       >
-        {url ? (
+        {created.length ? (
           <div className="created-invite">
             <CheckCircle2 />
             <div>
-              <strong>Invitation ready</strong>
-              <p>The token is shown once. Copy it now.</p>
+              <strong>
+                {created.length === 1
+                  ? "Invitation ready"
+                  : `${created.length} invitations ready`}
+              </strong>
+              <p>Each token is shown once. Copy the links now.</p>
             </div>
-            <div className="copy-field">
-              <input readOnly value={url} />
+            <div className="created-invite-list">
+              {created.map((item) => {
+                const url = `${origin}/app?invite=${encodeURIComponent(item.token)}`;
+                return (
+                  <div className="copy-field" key={item.email}>
+                    <span className="created-invite-email">{item.email}</span>
+                    <input readOnly value={url} aria-label={`${item.email} invitation link`} />
+                    <button
+                      className="button secondary"
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(url)}
+                    >
+                      <Copy /> Copy
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {created.length > 1 ? (
               <button
-                className="button secondary"
+                className="button ghost small"
                 type="button"
-                onClick={() => navigator.clipboard.writeText(url)}
+                onClick={() =>
+                  navigator.clipboard.writeText(
+                    created
+                      .map(
+                        (item) =>
+                          `${item.email}\t${origin}/app?invite=${encodeURIComponent(item.token)}`,
+                      )
+                      .join("\n"),
+                  )
+                }
               >
-                <Copy /> Copy
+                <Copy /> Copy all links
               </button>
-            </div>
+            ) : null}
           </div>
         ) : (
           <>
             <label className="field">
-              <span>Invitee email</span>
-              <input
+              <span>Invitee emails</span>
+              <textarea
                 required
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="teammate@example.com"
+                className="invite-emails"
+                value={emailDraft}
+                onChange={(event) => setEmailDraft(event.target.value)}
+                placeholder={"teammate@example.com\nops@example.com"}
+                aria-label="Invitee emails"
+                rows={6}
               />
               <small>
-                The credential is bound to this exact verified email address.
+                Paste one address per line, or separate them with commas. Each
+                person must sign in or create an account with that exact email.
+                {parsed.emails.length
+                  ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
+                  : ""}
               </small>
+              {parsed.invalid.length ? (
+                <small className="form-error" role="alert">
+                  Not valid: {parsed.invalid.slice(0, 6).join(", ")}
+                  {parsed.invalid.length > 6
+                    ? ` +${parsed.invalid.length - 6} more`
+                    : ""}
+                </small>
+              ) : null}
+              {overLimit ? (
+                <small className="form-error" role="alert">
+                  Invite at most {MAX_BULK_INVITES} people at a time.
+                </small>
+              ) : null}
             </label>
-            <label className="field">
-              <span>Internal label</span>
-              <input
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="August contractor onboarding"
-              />
-            </label>
-            <div className="field">
-              <span>Preassigned basic role</span>
-              <SelectMenu
-                className="form-select"
-                value={role}
-                onChange={setRole}
-                ariaLabel="Preassigned basic role"
-                options={WORKSPACE_ROLES.filter(
-                  (item) => item !== "administrator",
-                ).map((item) => ({ value: item, label: titleCase(item) }))}
-              />
-              <small>
-                Administrator access must be assigned after membership is
-                verified.
-              </small>
-            </div>
-            <div className="form-grid two">
+            <div className="invite-settings">
+              <label className="field">
+                <span>Internal label</span>
+                <input
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
+                  placeholder="August contractor onboarding"
+                />
+              </label>
+              <div className="field">
+                <span>Preassigned basic role</span>
+                <SelectMenu
+                  className="form-select"
+                  value={role}
+                  onChange={setRole}
+                  ariaLabel="Preassigned basic role"
+                  options={WORKSPACE_ROLES.filter(
+                    (item) => item !== "administrator",
+                  ).map((item) => ({ value: item, label: titleCase(item) }))}
+                />
+                <small>
+                  Administrator access must be assigned after membership is
+                  verified.
+                </small>
+              </div>
               <div className="field">
                 <span>Expires after</span>
                 <SelectMenu
@@ -2615,33 +2900,33 @@ function InviteDialog({
                   ]}
                 />
               </div>
-              <div className="field">
-                <span>Maximum uses</span>
-                <div className="support-reason-box">
-                  <strong>1</strong>
-                  <p>Every pilot invitation is single-use.</p>
-                </div>
-              </div>
             </div>
             <p className="privacy-caption">
-              <LockKeyhole /> No generic links. Every redemption requires the
-              exact verified email, is single-use, expires, and is audited.
+              <LockKeyhole /> No generic links. Every invitation is scoped to
+              one verified email, single-use, expiring, and audited.
             </p>
           </>
         )}
         <footer className="modal-footer">
           <span />
           <button className="button secondary" type="button" onClick={onClose}>
-            {url ? "Done" : "Cancel"}
+            {created.length ? "Done" : "Cancel"}
           </button>
-          {!url ? (
+          {!created.length ? (
             <button
               className="button primary"
               type="submit"
-              disabled={busy || !email.includes("@")}
+              disabled={
+                busy ||
+                !parsed.emails.length ||
+                parsed.invalid.length > 0 ||
+                overLimit
+              }
             >
-              {busy ? <LoaderCircle className="spin" /> : <Link2 />} Create
-              invitation
+              {busy ? <LoaderCircle className="spin" /> : <Link2 />}{" "}
+              {parsed.emails.length > 1
+                ? `Create ${parsed.emails.length} invitations`
+                : "Create invitation"}
             </button>
           ) : null}
         </footer>
@@ -2664,7 +2949,7 @@ function SupportView({
   onClose: (ticketId: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState(tickets[0]?.id ?? "");
-  const [creating, setCreating] = useState(tickets.length === 0);
+  const [creating, setCreating] = useState(false);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
   const selected =
@@ -2872,39 +3157,24 @@ function SettingsView({
   workspaceName,
   initial,
   busy,
-  canManageDomains,
   onSave,
-  onSaveDomains,
   onRefresh,
 }: {
   workspaceId: string;
   workspaceName: string;
   initial: WorkspaceSettings;
   busy: boolean;
-  canManageDomains: boolean;
   onSave: (settings: WorkspaceSettings) => Promise<void>;
-  onSaveDomains: (domains: string[]) => Promise<void>;
   onRefresh: () => Promise<BootstrapResponse>;
 }) {
   const [settings, setSettings] = useState(initial);
-  const [domains, setDomains] = useState(initial.allowedDomains.join("\n"));
-  const [hosts, setHosts] = useState(initial.excludedCaptureHosts.join("\n"));
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState("");
-  const [domainBusy, setDomainBusy] = useState(false);
   const update = <K extends keyof WorkspaceSettings>(
     key: K,
     value: WorkspaceSettings[K],
   ) => setSettings((current) => ({ ...current, [key]: value }));
   const disabled = busy || logoBusy;
-  const uniqueList = (value: string) => [
-    ...new Set(
-      value
-        .split(/\r?\n|,/)
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
   async function refreshLogoState() {
     const refreshed = await onRefresh();
     const logoUrl = refreshed.activeWorkspace?.workspace.settings.logoUrl;
@@ -2917,22 +3187,19 @@ function SettingsView({
           <p className="eyebrow">Workspace administration</p>
           <h1>Settings & policies</h1>
           <p>
-            Control identity eligibility, capture boundaries, branding, and
-            restricted exports.
+            Control branding and restricted exports for this workspace.
           </p>
         </div>
         <button
           className="button primary"
           disabled={disabled}
-          onClick={() =>
-            onSave({ ...settings, excludedCaptureHosts: uniqueList(hosts) })
-          }
+          onClick={() => void onSave(settings)}
         >
           <Check /> Save settings
         </button>
       </div>
       <div className="settings-grid">
-        <section className="card settings-card">
+        <section className="card settings-card document-identity-card">
           <div className="settings-title">
             <span>
               <Paintbrush />
@@ -3023,52 +3290,27 @@ function SettingsView({
               {logoError}
             </p>
           ) : null}
-          <div className="form-grid two">
-            <label className="field color-field">
-              <span>Document accent</span>
-              <span>
-                <input
-                  type="color"
-                  value={settings.accentColor}
-                  onChange={(event) =>
-                    update("accentColor", event.target.value)
-                  }
-                />
-                <input
-                  value={settings.accentColor}
-                  onChange={(event) =>
-                    update("accentColor", event.target.value)
-                  }
-                />
-              </span>
-              <small>
-                Used in guide branding and annotations, not the application
-                interface.
-              </small>
-            </label>
-            <label className="field color-field">
-              <span>Click target</span>
-              <span>
-                <input
-                  type="color"
-                  value={settings.clickTargetColor}
-                  onChange={(event) =>
-                    update("clickTargetColor", event.target.value)
-                  }
-                />
-                <input
-                  value={settings.clickTargetColor}
-                  onChange={(event) =>
-                    update("clickTargetColor", event.target.value)
-                  }
-                />
-              </span>
-            </label>
+          <div className="color-picker-grid">
+            <HexColorPicker
+              value={settings.accentColor}
+              onChange={(value) => update("accentColor", value)}
+              label="Document accent"
+              ariaLabel="Pick document accent"
+              hint="Used in guide branding and annotations, not the application interface."
+            />
+            <HexColorPicker
+              value={settings.clickTargetColor}
+              onChange={(value) => update("clickTargetColor", value)}
+              label="Click target"
+              ariaLabel="Pick click target color"
+              hint="Marks the next click in recorded guide steps."
+            />
           </div>
-          <label className="choice-row emphasized">
+          <label className={`choice-row emphasized${settings.removeBranding ? "" : " locked-choice"}`}>
             <input
               type="checkbox"
               checked={settings.removeBranding}
+              disabled={!settings.removeBranding}
               onChange={(event) =>
                 update("removeBranding", event.target.checked)
               }
@@ -3076,98 +3318,12 @@ function SettingsView({
             <span>
               <strong>Remove KnowHow branding</strong>
               <small>
-                Available as a workspace or subscription entitlement.
+                {settings.removeBranding
+                  ? "KnowHow branding is hidden on exports for this workspace."
+                  : "Locked on this plan. Included on company and on-prem plans."}
               </small>
             </span>
           </label>
-        </section>
-        {canManageDomains ? (
-          <section className="card settings-card">
-            <div className="settings-title">
-              <span>
-                <Mail />
-              </span>
-              <div>
-                <h2>Approved email domains</h2>
-                <p>
-                  Invitation policy only. A domain never creates an account or
-                  grants access.
-                </p>
-              </div>
-            </div>
-            <label className="field">
-              <span>One exact domain per line</span>
-              <textarea
-                rows={6}
-                value={domains}
-                onChange={(event) => setDomains(event.target.value)}
-                placeholder={"example.com\nsubsidiary.co.uk"}
-              />
-            </label>
-            <p className="privacy-caption">
-              <ShieldCheck /> Email-scoped invitations must match exactly.
-              Subdomains, lookalikes, and suffix matches are rejected.
-            </p>
-            <button
-              className="button secondary"
-              type="button"
-              disabled={disabled || domainBusy}
-              onClick={async () => {
-                setDomainBusy(true);
-                try {
-                  await onSaveDomains(uniqueList(domains));
-                } finally {
-                  setDomainBusy(false);
-                }
-              }}
-            >
-              {domainBusy ? <LoaderCircle className="spin" /> : <Check />} Save
-              domains
-            </button>
-          </section>
-        ) : (
-          <section className="card settings-card">
-            <div className="settings-title">
-              <span>
-                <Mail />
-              </span>
-              <div>
-                <h2>Approved email domains</h2>
-                <p>
-                  Shared organization domains can be changed only by an
-                  organization owner or administrator.
-                </p>
-              </div>
-            </div>
-            <p className="privacy-caption">
-              <ShieldCheck /> Workspace administration alone never changes
-              organization-wide identity eligibility.
-            </p>
-          </section>
-        )}
-        <section className="card settings-card">
-          <div className="settings-title">
-            <span>
-              <Laptop />
-            </span>
-            <div>
-              <h2>Capture policy</h2>
-              <p>Blocked hosts are enforced by the paired extension.</p>
-            </div>
-          </div>
-          <label className="field">
-            <span>Excluded hostnames</span>
-            <textarea
-              rows={6}
-              value={hosts}
-              onChange={(event) => setHosts(event.target.value)}
-              placeholder={"vault.example.com\npasswords.example.net"}
-            />
-          </label>
-          <p className="privacy-caption">
-            <LockKeyhole /> Password managers, browser internals, extension
-            pages, and incognito sessions are always blocked.
-          </p>
         </section>
         <section className="card settings-card">
           <div className="settings-title">
@@ -3615,9 +3771,134 @@ function RowMenu({ children }: { children: ReactNode }) {
   );
 }
 
+function PlatformPagedList<T>({
+  items,
+  initialPageSize = 10,
+  alwaysShowControls = false,
+  children,
+}: {
+  items: T[];
+  initialPageSize?: number;
+  alwaysShowControls?: boolean;
+  children: (visible: T[]) => ReactNode;
+}) {
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(initialPageSize);
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const visible = items.slice(safePage * pageSize, safePage * pageSize + pageSize);
+  return (
+    <>
+      {children(visible)}
+      {alwaysShowControls || items.length > 5 ? (
+        <ListPagination
+          total={items.length}
+          page={safePage}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPageSize(next);
+            setPage(0);
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function PlatformAuditList({
+  audits,
+  workspaceName,
+}: {
+  audits: NonNullable<BootstrapResponse["platform"]>["platformAudits"];
+  workspaceName: (workspaceId: string) => string;
+}) {
+  const [query, setQuery] = useState("");
+  const [action, setAction] = useState("all");
+  const actionOptions = [...new Set(audits.map((audit) => audit.action))].sort();
+  const rows = audits.filter((audit) => {
+    const term = query.trim().toLowerCase();
+    const haystack = [
+      audit.action,
+      titleCase(audit.action),
+      workspaceName(audit.workspaceId),
+    ]
+      .join(" ")
+      .toLowerCase();
+    const matchesQuery = !term || haystack.includes(term);
+    const matchesAction = action === "all" || audit.action === action;
+    return matchesQuery && matchesAction;
+  });
+
+  if (!audits.length) {
+    return (
+      <p className="empty-copy">No control-plane audit events recorded.</p>
+    );
+  }
+
+  return (
+    <>
+      <div className="filter-bar">
+        <label className="search-field">
+          <Search />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search actions or workspaces"
+          />
+        </label>
+        <SelectMenu
+          className="filter-select"
+          leading={<Filter />}
+          value={action}
+          onChange={setAction}
+          ariaLabel="Filter audit events by action"
+          options={[
+            { value: "all", label: "All actions" },
+            ...actionOptions.map((value) => ({
+              value,
+              label: titleCase(value),
+            })),
+          ]}
+        />
+        <span className="result-count">
+          {rows.length} {rows.length === 1 ? "event" : "events"}
+        </span>
+      </div>
+      {rows.length ? (
+        <PlatformPagedList
+          key={`${query}:${action}`}
+          items={rows}
+          initialPageSize={5}
+          alwaysShowControls
+        >
+          {(visible) =>
+            visible.map((audit) => (
+              <div className="platform-compact-row" key={audit.id}>
+                <span className="member-main">
+                  <strong>{titleCase(audit.action)}</strong>
+                  <small>{workspaceName(audit.workspaceId)}</small>
+                </span>
+                <time dateTime={audit.occurredAt}>
+                  {formatDate(audit.occurredAt, true)}
+                </time>
+              </div>
+            ))
+          }
+        </PlatformPagedList>
+      ) : (
+        <p className="empty-copy">No matching control-plane changes.</p>
+      )}
+    </>
+  );
+}
+
 export function PlatformView({
   platform,
   busy,
+  section = "overview",
+  workspaceId,
+  onNavigate,
   onProvision,
   onStatus,
   onAssign,
@@ -3626,9 +3907,15 @@ export function PlatformView({
   onConvertSubscription,
   onApproveDeletion,
   onRevokeAppointment,
+  onCreateBetaAccess,
+  canManagePlatformControls = false,
+  onPlatformControl,
 }: {
   platform: NonNullable<BootstrapResponse["platform"]>;
   busy: boolean;
+  section?: PlatformSection;
+  workspaceId?: string;
+  onNavigate?: (href: string) => void;
   onProvision: () => void;
   onStatus: (
     workspaceId: string,
@@ -3649,9 +3936,29 @@ export function PlatformView({
   ) => Promise<unknown>;
   onApproveDeletion: (caseId: string, confirmation: string) => Promise<unknown>;
   onRevokeAppointment: (appointment: AdminAppointment) => void;
+  canManageBetaAccess?: boolean;
+  onCreateBetaAccess?: (input: {
+    label?: string;
+    email?: string;
+    expiresAt: string;
+    maxUses: number;
+  }) => Promise<{ grant: BetaAccessGrant; code: string }>;
+  onRevokeBetaAccess?: (grantId: string) => Promise<unknown>;
+  canManagePlatformControls?: boolean;
+  onPlatformControl?: (
+    action:
+      | "createPricingCatalog"
+      | "updatePricingCatalog"
+      | "retirePricingCatalog"
+      | "createLifecycleSimulationTenant"
+      | "simulateLifecycleState",
+    payload: Record<string, unknown>,
+    successMessage: string,
+  ) => Promise<unknown>;
 }) {
   const { metrics, workspaces, settings, appointments } = platform;
   const [query, setQuery] = useState("");
+  const [pipelineStatus, setPipelineStatus] = useState("all");
   const [lifecycleAction, setLifecycleAction] = useState<{
     mode: "extend" | "convert";
     openedAt: number;
@@ -3662,7 +3969,20 @@ export function PlatformView({
   const [deletionCase, setDeletionCase] = useState<
     NonNullable<BootstrapResponse["platform"]>["deletionCases"][number] | null
   >(null);
+  const [betaAccessOpen, setBetaAccessOpen] = useState(false);
+  const [pricingCatalogOpen, setPricingCatalogOpen] = useState<
+    PlatformPricingCatalog | "create" | null
+  >(null);
+  const [simulationDialog, setSimulationDialog] = useState<
+    | { mode: "create" }
+    | { mode: "advance"; workspace: PlatformWorkspace }
+    | null
+  >(null);
   const platformNow = Date.parse(platform.generatedAt);
+  const pricingCatalogs = platform.pricingCatalogs ?? [];
+  const simulationWorkspaces = workspaces.filter(
+    (workspace) => workspace.simulation?.synthetic,
+  );
   const workspaceName = (workspaceId: string) =>
     workspaces.find((workspace) => workspace.id === workspaceId)?.name ??
     "Unknown workspace";
@@ -3679,469 +3999,753 @@ export function PlatformView({
       )
     );
   });
+  const accountRows = filtered.filter(
+    (workspace) =>
+      pipelineStatus === "all" || workspace.status === pipelineStatus,
+  );
+  const leadRows = platform.leads.filter((lead) => {
+    const term = query.trim().toLowerCase();
+    const haystack = [
+      lead.organization,
+      lead.contactName,
+      lead.email,
+      lead.kind,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const matchesQuery = !term || haystack.includes(term);
+    const matchesStatus =
+      pipelineStatus === "all" || lead.status === pipelineStatus;
+    return matchesQuery && matchesStatus;
+  });
+  const supportRows = platform.support.filter((ticket) => {
+    const term = query.trim().toLowerCase();
+    const haystack = [
+      workspaceName(ticket.workspaceId),
+      ticket.requesterName,
+      ticket.status,
+    ]
+      .join(" ")
+      .toLowerCase();
+    const matchesQuery = !term || haystack.includes(term);
+    const matchesStatus =
+      pipelineStatus === "all" || ticket.status === pipelineStatus;
+    return matchesQuery && matchesStatus;
+  });
+  const openSection = (next: PlatformSection, id?: string) => {
+    onNavigate?.(platformHref(next, id));
+  };
+  const selectedWorkspace =
+    section === "accounts" && workspaceId
+      ? (workspaces.find((item) => item.id === workspaceId) ?? null)
+      : null;
+  const selectedSubscription = selectedWorkspace
+    ? platform.subscriptions.find(
+        (item) => item.workspaceId === selectedWorkspace.id,
+      )
+    : null;
+  const selectedEntitlements = selectedWorkspace
+    ? platform.entitlements.filter(
+        (item) => item.workspaceId === selectedWorkspace.id,
+      )
+    : [];
+  const selectedActivation = selectedWorkspace
+    ? platform.activation.find(
+        (item) => item.workspaceId === selectedWorkspace.id,
+      )
+    : null;
+  const selectedSupport = selectedWorkspace
+    ? platform.support.filter(
+        (item) => item.workspaceId === selectedWorkspace.id,
+      )
+    : [];
+  const selectedAudits = selectedWorkspace
+    ? platform.platformAudits.filter(
+        (item) => item.workspaceId === selectedWorkspace.id,
+      )
+    : [];
+  const heading =
+    section === "leads"
+      ? {
+          eyebrow: "Inbound",
+          title: "Leads",
+          copy: "Contact requests from the public site. Customer document contents stay private.",
+        }
+      : section === "accounts"
+        ? {
+            eyebrow: "Tenants",
+            title: selectedWorkspace ? selectedWorkspace.name : "Accounts",
+            copy: selectedWorkspace
+              ? "Subscription, people, support, and usage for this workspace."
+              : "Every workspace, with organization context where it exists.",
+          }
+        : section === "support"
+          ? {
+              eyebrow: "Support SLA",
+              title: "Support",
+              copy: "Open support work across tenants. One-business-day target.",
+            }
+          : section === "billing"
+            ? {
+                eyebrow: "Commercial lifecycle",
+                title: "Billing",
+                copy: "Subscriptions, entitlements, and private pricing catalogs.",
+              }
+            : section === "ops"
+              ? {
+                  eyebrow: "Control plane",
+                  title: "Activity",
+                  copy: "Audit, delivery failures, deletion approvals, and appointments.",
+                }
+              : {
+                  eyebrow: "Product owner",
+                  title: "Platform administration",
+                  copy: "Manage tenant health and aggregate usage without opening customer document contents or secrets.",
+                };
+
   return (
     <div className="view-stack">
       <div className="page-heading">
         <div>
-          <p className="eyebrow">Product owner</p>
-          <h1>Platform administration</h1>
-          <p>
-            Manage tenant health and aggregate usage without opening customer
-            document contents or secrets.
-          </p>
-        </div>
-        <div className="modal-actions">
-          <span className="platform-shield">
-            <ShieldCheck /> Content-private metrics
-          </span>
-          <button
-            className="button primary"
-            type="button"
-            disabled={busy}
-            onClick={onProvision}
-          >
-            <Building2 /> Provision organization
-          </button>
+          {selectedWorkspace ? (
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => openSection("accounts")}
+            >
+              <ArrowLeft /> Accounts
+            </button>
+          ) : null}
+          <p className="eyebrow">{heading.eyebrow}</p>
+          <h1>{heading.title}</h1>
+          <p>{heading.copy}</p>
         </div>
       </div>
-      <section className="metric-grid platform-metrics">
-        <MetricCard
-          label="Users"
-          value={metrics.users}
-          hint="Across all workspaces"
-          icon={Users}
-        />
-        <MetricCard
-          label="Active workspaces"
-          value={metrics.activeWorkspaces}
-          hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
-          icon={Building2}
-          tone="accent"
-        />
-        <MetricCard
-          label="Guides"
-          value={metrics.published + metrics.drafts}
-          hint={`${metrics.published} published · ${metrics.drafts} drafts`}
-          icon={BookOpen}
-        />
-        <MetricCard
-          label="Captures"
-          value={metrics.captures}
-          hint={`${metrics.failedOperations} failed operations`}
-          icon={Sparkles}
-        />
-        <MetricCard
-          label="Views"
-          value={metrics.views}
-          hint={`${metrics.completions} completions`}
-          icon={Eye}
-        />
-        <MetricCard
-          label="Exports"
-          value={metrics.exports}
-          hint={formatBytes(metrics.storageBytes)}
-          icon={FileDown}
-        />
-      </section>
-      <section className="card table-card">
-        <div className="section-heading compact">
-          <div>
-            <p className="eyebrow">Operational health</p>
-            <h2>Pilot control plane</h2>
-          </div>
-          <span className="privacy-caption">
-            <ShieldCheck /> Counts and timestamps only
-          </span>
-        </div>
-        <div className="metric-grid operational-metrics">
-          <MetricCard
-            label="Failed notifications"
-            value={platform.systemHealth.failedNotifications}
-            hint="Queued delivery requires attention"
-            icon={Mail}
-            tone={
-              platform.systemHealth.failedNotifications ? "warning" : undefined
-            }
-          />
-          <MetricCard
-            label="Overdue support"
-            value={platform.systemHealth.overdueSupport}
-            hint="One-business-day target"
-            icon={LifeBuoy}
-            tone={platform.systemHealth.overdueSupport ? "warning" : undefined}
-          />
-          <MetricCard
-            label="Expiring soon"
-            value={platform.systemHealth.expiringWithinSevenDays}
-            hint="Within seven days"
-            icon={CalendarDays}
-            tone={
-              platform.systemHealth.expiringWithinSevenDays
-                ? "warning"
-                : undefined
-            }
-          />
-          <MetricCard
-            label="Deletion approvals"
-            value={platform.systemHealth.deletionApprovals}
-            hint="Owner confirmation required"
-            icon={Trash2}
-            tone={
-              platform.systemHealth.deletionApprovals ? "warning" : undefined
-            }
-          />
-          <MetricCard
-            label="Failed operations"
-            value={platform.systemHealth.failedOperations}
-            hint="Content-free usage events"
-            icon={CircleAlert}
-            tone={
-              platform.systemHealth.failedOperations ? "warning" : undefined
-            }
-          />
-        </div>
-        {platform.provisioningRuns.length ? (
-          <div className="empty-inline">
-            <Building2 />
-            <span>
-              <strong>
-                {platform.provisioningRuns.length} resumable provisioning{" "}
-                {platform.provisioningRuns.length === 1 ? "draft" : "drafts"}
-              </strong>
-              <small>
-                Most recent updated{" "}
-                {formatDate(platform.provisioningRuns[0].updatedAt, true)} ·{" "}
-                {platform.provisioningRuns[0].completedSteps.length} of 6 steps
-                saved
-              </small>
-            </span>
-            <button
-              className="button secondary small"
-              type="button"
-              disabled={busy}
-              onClick={onProvision}
-            >
-              Resume
-            </button>
-          </div>
-        ) : null}
-      </section>
-      <section className="card table-card">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Tenant directory</p>
-            <h2>Every workspace</h2>
-          </div>
-          <span className="privacy-caption">
-            <LockKeyhole /> Metadata only
-          </span>
-        </div>
-        <div className="filter-bar">
-          <label className="search-field">
-            <Search />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search workspaces, slugs, or administrators"
+
+      {section === "overview" ? (
+        <>
+          <section className="metric-grid platform-metrics">
+            <MetricCard
+              label="Users"
+              value={metrics.users}
+              hint="Across all workspaces"
+              icon={Users}
             />
-          </label>
-          <span className="result-count">
-            {filtered.length}{" "}
-            {filtered.length === 1 ? "workspace" : "workspaces"}
-          </span>
-        </div>
-        <div className="platform-table">
-          <div className="platform-row platform-head">
-            <span>Workspace</span>
-            <span>Administrators</span>
-            <span>Guides</span>
-            <span>Usage</span>
-            <span>Storage</span>
-            <span>Status</span>
-            <span />
-          </div>
-          {filtered.map((workspace) => (
-            <div className="platform-row" key={workspace.id}>
-              <span className="workspace-cell">
-                <span className="workspace-avatar">
-                  {workspace.name.slice(0, 1)}
-                </span>
+            <MetricCard
+              label="Active workspaces"
+              value={metrics.activeWorkspaces}
+              hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
+              icon={Building2}
+              tone="accent"
+            />
+            <MetricCard
+              label="Guides"
+              value={metrics.published + metrics.drafts}
+              hint={`${metrics.published} published · ${metrics.drafts} drafts`}
+              icon={BookOpen}
+            />
+            <MetricCard
+              label="Captures"
+              value={metrics.captures}
+              hint={`${metrics.failedOperations} failed operations`}
+              icon={Sparkles}
+            />
+            <MetricCard
+              label="Views"
+              value={metrics.views}
+              hint={`${metrics.completions} completions`}
+              icon={Eye}
+            />
+            <MetricCard
+              label="Exports"
+              value={metrics.exports}
+              hint={formatBytes(metrics.storageBytes)}
+              icon={FileDown}
+            />
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Operational health</p>
+                <h2>Control plane</h2>
+              </div>
+              <span className="privacy-caption">
+                <ShieldCheck /> Counts and timestamps only
+              </span>
+            </div>
+            <div className="platform-queue">
+              <button type="button" onClick={() => openSection("ops")}>
+                <Mail />
                 <span>
-                  <strong>{workspace.name}</strong>
+                  <strong>Failed notifications</strong>
+                  <small>Queued delivery requires attention</small>
+                </span>
+                <b>{platform.systemHealth.failedNotifications}</b>
+              </button>
+              <button type="button" onClick={() => openSection("support")}>
+                <LifeBuoy />
+                <span>
+                  <strong>Overdue support</strong>
+                  <small>One-business-day target</small>
+                </span>
+                <b>{platform.systemHealth.overdueSupport}</b>
+              </button>
+              <button type="button" onClick={() => openSection("billing")}>
+                <CalendarDays />
+                <span>
+                  <strong>Expiring soon</strong>
+                  <small>Within seven days</small>
+                </span>
+                <b>{platform.systemHealth.expiringWithinSevenDays}</b>
+              </button>
+              <button type="button" onClick={() => openSection("ops")}>
+                <Trash2 />
+                <span>
+                  <strong>Deletion approvals</strong>
+                  <small>Owner confirmation required</small>
+                </span>
+                <b>{platform.systemHealth.deletionApprovals}</b>
+              </button>
+              <button type="button" onClick={() => openSection("ops")}>
+                <CircleAlert />
+                <span>
+                  <strong>Failed operations</strong>
+                  <small>Content-free usage events</small>
+                </span>
+                <b>{platform.systemHealth.failedOperations}</b>
+              </button>
+            </div>
+            {platform.provisioningRuns.length ? (
+              <div className="empty-inline">
+                <Building2 />
+                <span>
+                  <strong>
+                    {platform.provisioningRuns.length} resumable provisioning{" "}
+                    {platform.provisioningRuns.length === 1 ? "draft" : "drafts"}
+                  </strong>
                   <small>
-                    {workspace.memberCount} members · created{" "}
-                    {formatDate(workspace.createdAt)}
-                    {workspace.supportGrant
-                      ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}`
-                      : workspace.supportRequest?.status === "pending"
-                        ? " · support request pending"
-                        : ""}
+                    Most recent updated{" "}
+                    {formatDate(platform.provisioningRuns[0].updatedAt, true)} ·{" "}
+                    {platform.provisioningRuns[0].completedSteps.length} of 6
+                    steps saved
                   </small>
                 </span>
-              </span>
-              <span>
-                {workspace.administrators.length ? (
-                  workspace.administrators.map((admin) => (
-                    <small key={admin.userId}>
-                      {admin.name || admin.email}
-                    </small>
-                  ))
-                ) : (
-                  <small>None assigned</small>
-                )}
                 <button
-                  className="text-button"
-                  onClick={() => onAssign(workspace)}
+                  className="button secondary small"
+                  type="button"
+                  disabled={busy}
+                  onClick={onProvision}
+                >
+                  Resume
+                </button>
+              </div>
+            ) : null}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Workspace isolation</p>
+                <h2>Isolated workspaces, explicit membership</h2>
+              </div>
+              <LockKeyhole />
+            </div>
+            <div className="empty-inline">
+              <StatusBadge status="active" />
+              <span>
+                <strong>
+                  Self-service limit: {settings.selfServiceWorkspaceLimit}
+                </strong>
+                <small>
+                  Anyone can create an organization and first workspace. Each
+                  owner can create up to {settings.selfServiceWorkspaceLimit}{" "}
+                  trial workspace
+                  {settings.selfServiceWorkspaceLimit === 1 ? "" : "s"};
+                  membership in any other workspace remains exact-email and
+                  invitation-only.
+                </small>
+              </span>
+            </div>
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Platform audit</p>
+                <h2>Recent control-plane changes</h2>
+              </div>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => openSection("ops")}
+              >
+                View activity <ArrowRight />
+              </button>
+            </div>
+            {platform.platformAudits.length ? (
+              platform.platformAudits.slice(0, 5).map((audit) => (
+                <div className="platform-compact-row" key={audit.id}>
+                  <span className="member-main">
+                    <strong>{titleCase(audit.action)}</strong>
+                    <small>{workspaceName(audit.workspaceId)}</small>
+                  </span>
+                  <time dateTime={audit.occurredAt}>
+                    {formatDate(audit.occurredAt, true)}
+                  </time>
+                </div>
+              ))
+            ) : (
+              <p className="empty-copy">No control-plane audit events recorded.</p>
+            )}
+          </section>
+        </>
+      ) : null}
+
+      {section === "leads" ? (
+        <section className="card table-card">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Inbound requests</p>
+              <h2>Contact leads</h2>
+            </div>
+            <Mail />
+          </div>
+          <div className="filter-bar">
+            <label className="search-field">
+              <Search />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search leads"
+              />
+            </label>
+            <SelectMenu
+              className="filter-select"
+              leading={<Filter />}
+              value={pipelineStatus}
+              onChange={setPipelineStatus}
+              ariaLabel="Filter leads by status"
+              options={[
+                { value: "all", label: "All statuses" },
+                ...[...new Set(platform.leads.map((lead) => lead.status))].map(
+                  (status) => ({
+                    value: status,
+                    label: titleCase(status.replaceAll("_", " ")),
+                  }),
+                ),
+              ]}
+            />
+            <span className="result-count">
+              {leadRows.length} {leadRows.length === 1 ? "lead" : "leads"}
+            </span>
+          </div>
+          {leadRows.length ? (
+            <PlatformPagedList items={leadRows}>
+              {(visible) =>
+                visible.map((lead) => (
+                  <div className="platform-compact-row" key={lead.id}>
+                    <span className="member-main">
+                      <strong>
+                        {lead.organization || lead.contactName || lead.email}
+                      </strong>
+                      <small>
+                        {lead.contactName || "Unnamed contact"} · {lead.email}
+                      </small>
+                      <small>
+                        {titleCase(lead.kind)} · {formatDate(lead.occurredAt, true)}
+                      </small>
+                    </span>
+                    <StatusBadge status={lead.status} />
+                  </div>
+                ))
+              }
+            </PlatformPagedList>
+          ) : (
+            <p className="empty-copy">No contact requests recorded.</p>
+          )}
+        </section>
+      ) : null}
+
+      {section === "accounts" && !selectedWorkspace ? (
+        <>
+          {platform.organizations.length ? (
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Organizations</p>
+                  <h2>Company directory</h2>
+                </div>
+                <Building2 />
+              </div>
+              <PlatformPagedList items={platform.organizations}>
+                {(visible) =>
+                  visible.map((organization) => (
+                    <div className="platform-compact-row" key={organization.id}>
+                      <span className="member-main">
+                        <strong>{organization.displayName}</strong>
+                        <small>
+                          {organization.legalName} · {organization.country}
+                        </small>
+                      </span>
+                      <strong>
+                        {countPhrase(organization.workspaceCount, "workspace")}
+                      </strong>
+                      <StatusBadge status={organization.status} />
+                    </div>
+                  ))
+                }
+              </PlatformPagedList>
+            </section>
+          ) : null}
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Tenant directory</p>
+                <h2>Every workspace</h2>
+              </div>
+              <span className="privacy-caption">
+                <LockKeyhole /> Metadata only
+              </span>
+            </div>
+            <div className="filter-bar">
+              <label className="search-field">
+                <Search />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search workspaces, slugs, or administrators"
+                />
+              </label>
+              <SelectMenu
+                className="filter-select"
+                leading={<Filter />}
+                value={pipelineStatus}
+                onChange={setPipelineStatus}
+                ariaLabel="Filter workspaces by status"
+                options={[
+                  { value: "all", label: "All statuses" },
+                  { value: "active", label: "Active" },
+                  { value: "suspended", label: "Suspended" },
+                  { value: "archived", label: "Archived" },
+                ]}
+              />
+              <span className="result-count">
+                {accountRows.length}{" "}
+                {accountRows.length === 1 ? "workspace" : "workspaces"}
+              </span>
+            </div>
+            <div className="platform-table">
+              <div className="platform-row platform-head">
+                <span>Workspace</span>
+                <span>Administrators</span>
+                <span>Guides</span>
+                <span>Usage</span>
+                <span>Storage</span>
+                <span>Status</span>
+                <span />
+              </div>
+              <PlatformPagedList items={accountRows}>
+                {(visible) =>
+                  visible.map((workspace) => (
+                    <div className="platform-row" key={workspace.id}>
+                      <button
+                        className="workspace-cell text-button"
+                        type="button"
+                        onClick={() => openSection("accounts", workspace.id)}
+                      >
+                        <span className="workspace-avatar">
+                          {workspace.name.slice(0, 1)}
+                        </span>
+                        <span>
+                          <strong>{workspace.name}</strong>
+                          <small>
+                            {workspace.slug} ·{" "}
+                            {countPhrase(workspace.memberCount, "member")} · created{" "}
+                            {formatDate(workspace.createdAt)}
+                            {workspace.supportGrant
+                              ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}`
+                              : workspace.supportRequest?.status === "pending"
+                                ? " · support request pending"
+                                : ""}
+                          </small>
+                        </span>
+                      </button>
+                      <span className="platform-admins">
+                        {workspace.administrators.length ? (
+                          workspace.administrators.map((admin) => (
+                            <small key={admin.userId}>
+                              {admin.name || admin.email}
+                            </small>
+                          ))
+                        ) : (
+                          <small>None assigned</small>
+                        )}
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => onAssign(workspace)}
+                        >
+                          <UserCog /> Assign
+                        </button>
+                      </span>
+                      <span>
+                        <strong>{workspace.publishedCount}</strong>
+                        <small>{workspace.draftCount} drafts</small>
+                      </span>
+                      <span>
+                        <strong>{workspace.views} views</strong>
+                        <small>{workspace.exports} exports</small>
+                      </span>
+                      <span>{formatBytes(workspace.storageBytes)}</span>
+                      <span>
+                        <StatusBadge status={workspace.status} />
+                      </span>
+                      <span>
+                        <RowMenu>
+                          {workspace.status === "active" &&
+                          !workspace.supportGrant ? (
+                            <button
+                              disabled={busy}
+                              onClick={() => onRequestSupport(workspace)}
+                            >
+                              <ShieldCheck /> Request support access
+                            </button>
+                          ) : null}
+                          {workspace.status !== "active" ? (
+                            <button
+                              disabled={busy}
+                              onClick={() => onStatus(workspace.id, "active")}
+                            >
+                              <RefreshCw /> Restore
+                            </button>
+                          ) : null}
+                          {workspace.status === "active" ? (
+                            <button
+                              disabled={busy}
+                              onClick={() => onStatus(workspace.id, "suspended")}
+                            >
+                              <Pause /> Suspend
+                            </button>
+                          ) : null}
+                          {workspace.status !== "archived" ? (
+                            <button
+                              disabled={busy}
+                              onClick={() => onStatus(workspace.id, "archived")}
+                            >
+                              <Archive /> Archive
+                            </button>
+                          ) : null}
+                        </RowMenu>
+                      </span>
+                    </div>
+                  ))
+                }
+              </PlatformPagedList>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {selectedWorkspace ? (
+        <>
+          <section className="card table-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Account</p>
+                <h2>{selectedWorkspace.slug}</h2>
+              </div>
+              <StatusBadge status={selectedWorkspace.status} />
+            </div>
+            <div className="platform-compact-row">
+              <span className="member-main">
+                <strong>
+                  {countPhrase(selectedWorkspace.memberCount, "member")}
+                </strong>
+                <small>
+                  {selectedWorkspace.publishedCount} published ·{" "}
+                  {selectedWorkspace.draftCount} drafts ·{" "}
+                  {selectedWorkspace.views} views ·{" "}
+                  {formatBytes(selectedWorkspace.storageBytes)}
+                </small>
+              </span>
+              <div className="modal-actions compact-actions">
+                <button
+                  className="button secondary small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onAssign(selectedWorkspace)}
                 >
                   <UserCog /> Assign
                 </button>
-              </span>
-              <span>
-                <strong>{workspace.publishedCount}</strong>
-                <small>{workspace.draftCount} drafts</small>
-              </span>
-              <span>
-                <strong>{workspace.views} views</strong>
-                <small>{workspace.exports} exports</small>
-              </span>
-              <span>{formatBytes(workspace.storageBytes)}</span>
-              <span>
-                <StatusBadge status={workspace.status} />
-              </span>
-              <span>
-                <RowMenu>
-                  {workspace.status === "active" && !workspace.supportGrant ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onRequestSupport(workspace)}
-                    >
-                      <ShieldCheck /> Request support access
-                    </button>
-                  ) : null}
-                  {workspace.status !== "active" ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onStatus(workspace.id, "active")}
-                    >
-                      <RefreshCw /> Restore
-                    </button>
-                  ) : null}
-                  {workspace.status === "active" ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onStatus(workspace.id, "suspended")}
-                    >
-                      <Pause /> Suspend
-                    </button>
-                  ) : null}
-                  {workspace.status !== "archived" ? (
-                    <button
-                      disabled={busy}
-                      onClick={() => onStatus(workspace.id, "archived")}
-                    >
-                      <Archive /> Archive
-                    </button>
-                  ) : null}
-                </RowMenu>
-              </span>
+                {selectedWorkspace.status === "active" &&
+                !selectedWorkspace.supportGrant ? (
+                  <button
+                    className="button secondary small"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onRequestSupport(selectedWorkspace)}
+                  >
+                    Support
+                  </button>
+                ) : null}
+                {selectedWorkspace.status === "active" ? (
+                  <button
+                    className="button ghost small"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onStatus(selectedWorkspace.id, "suspended")}
+                  >
+                    Suspend
+                  </button>
+                ) : (
+                  <button
+                    className="button ghost small"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onStatus(selectedWorkspace.id, "active")}
+                  >
+                    Restore
+                  </button>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      </section>
-      <section className="card settings-card invitation-policy-card">
-        <div className="settings-title">
-          <span>
-            <LockKeyhole />
-          </span>
-          <div>
-            <h2>Registered accounts, invitation-only workspaces</h2>
-            <p>
-              Public account registration is enabled. Registration grants no
-              tenant access: organizations are created only through controlled
-              provisioning, and every workspace member still needs an
-              exact-email, single-use credential.
-            </p>
-          </div>
-        </div>
-        <div className="policy-lock-row">
-          <StatusBadge status="active" />
-          <span>
-            <strong>
-              Self-service limit: {settings.selfServiceWorkspaceLimit}
-            </strong>
-            <small>Automatic workspace creation remains server-enforced at zero.</small>
-          </span>
-        </div>
-      </section>
-
-      <section className="card table-card">
-        <div className="section-heading compact">
-          <div>
-            <p className="eyebrow">Commercial lifecycle</p>
-            <h2>Subscriptions and entitlements</h2>
-          </div>
-          <span className="privacy-caption">
-            <ShieldCheck /> Manual contracts only
-          </span>
-        </div>
-        {platform.subscriptions.length ? (
-          platform.subscriptions.map((subscription) => {
-            const entitlements = platform.entitlements.filter(
-              (entitlement) =>
-                entitlement.workspaceId === subscription.workspaceId,
-            );
-            return (
-              <div className="platform-ops-row" key={subscription.id}>
+            {selectedWorkspace.administrators.map((admin) => (
+              <div className="platform-compact-row" key={admin.userId}>
+                <span className="member-main">
+                  <strong>{admin.name || admin.email}</strong>
+                  <small>{admin.email}</small>
+                </span>
+                <small>Administrator</small>
+              </div>
+            ))}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Commercial lifecycle</p>
+                <h2>Subscription</h2>
+              </div>
+            </div>
+            {selectedSubscription ? (
+              <div className="platform-ops-row">
                 <span className="invite-icon">
                   <CalendarDays />
                 </span>
                 <span className="member-main">
-                  <strong>{workspaceName(subscription.workspaceId)}</strong>
+                  <strong>{titleCase(selectedSubscription.kind)}</strong>
                   <small>
-                    {titleCase(subscription.kind)} · access{" "}
-                    {titleCase(subscription.access)} ·
-                    {subscription.expiresAt
-                      ? ` expires ${formatDate(subscription.expiresAt, true)}`
-                      : " no fixed expiry"}
+                    access {titleCase(selectedSubscription.access)}
+                    {selectedSubscription.expiresAt
+                      ? ` · expires ${formatDate(selectedSubscription.expiresAt, true)}`
+                      : " · no fixed expiry"}
                   </small>
                   <small>
-                    {entitlements.length
-                      ? entitlements
-                          .map(
-                            (entitlement) =>
-                              `${titleCase(entitlement.kind)}: ${String(entitlement.value)}`,
+                    {selectedEntitlements.length
+                      ? selectedEntitlements
+                          .map((entitlement) =>
+                            formatEntitlement(
+                              entitlement.kind,
+                              entitlement.value,
+                            ),
                           )
+                          .filter(Boolean)
                           .join(" · ")
                       : "No explicit entitlement overrides"}
                   </small>
                 </span>
-                <StatusBadge status={subscription.status} />
-                <div className="modal-actions compact-actions">
-                  {subscription.expiresAt ? (
-                    <button
-                      className="button secondary small"
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        setLifecycleAction({
-                          mode: "extend",
-                          subscription,
-                          openedAt: Date.now(),
-                        })
-                      }
-                    >
-                      Extend
-                    </button>
-                  ) : null}
-                  {subscription.kind !== "paid" ? (
-                    <button
-                      className="button secondary small"
-                      type="button"
-                      disabled={busy}
-                      onClick={() =>
-                        setLifecycleAction({
-                          mode: "convert",
-                          subscription,
-                          openedAt: Date.now(),
-                        })
-                      }
-                    >
-                      Record contract
-                    </button>
-                  ) : null}
-                </div>
+                <StatusBadge status={selectedSubscription.status} />
               </div>
-            );
-          })
-        ) : (
-          <div className="empty-inline">
-            <CalendarDays />
-            <span>
-              <strong>No subscriptions</strong>
-              <small>
-                Provisioning creates an explicit pilot subscription.
-              </small>
-            </span>
-          </div>
-        )}
-      </section>
-
-      <div className="settings-grid platform-operations-grid">
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Activation milestones</p>
-              <h2>First-value progress</h2>
+            ) : (
+              <p className="empty-copy">No subscription recorded.</p>
+            )}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Activation</p>
+                <h2>First-value progress</h2>
+              </div>
             </div>
-            <Activity />
-          </div>
-          {platform.activation.length ? (
-            platform.activation.map((activation) => {
-              const achieved = [
-                activation.firstPublishedAt,
-                activation.firstTeammateViewAt,
-                activation.firstTeammateCompletionAt,
-              ].filter(Boolean).length;
-              return (
-                <div
-                  className="platform-compact-row"
-                  key={activation.workspaceId}
-                >
-                  <span className="member-main">
-                    <strong>{workspaceName(activation.workspaceId)}</strong>
-                    <small>
-                      {activation.firstPublishedAt
-                        ? `Published ${formatDate(activation.firstPublishedAt, true)}`
-                        : "Awaiting first publication"}
-                    </small>
-                    <small>
-                      {activation.firstTeammateViewAt
-                        ? `Teammate view ${formatDate(activation.firstTeammateViewAt, true)}`
-                        : "Awaiting teammate view"}
-                      {activation.firstTeammateCompletionAt
-                        ? ` · completion ${formatDate(activation.firstTeammateCompletionAt, true)}`
-                        : " · awaiting completion"}
-                    </small>
-                  </span>
-                  <strong>{achieved}/3</strong>
-                </div>
-              );
-            })
-          ) : (
-            <p className="empty-copy">No activation events recorded.</p>
-          )}
-        </section>
-
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Pilot leads</p>
-              <h2>Controlled intake</h2>
-            </div>
-            <Mail />
-          </div>
-          {platform.leads.length ? (
-            platform.leads.slice(0, 12).map((lead) => (
-              <div className="platform-compact-row" key={lead.id}>
+            {selectedActivation ? (
+              <div className="platform-compact-row">
                 <span className="member-main">
-                  <strong>
-                    {lead.organization || lead.contactName || lead.email}
-                  </strong>
                   <small>
-                    {lead.contactName || "Unnamed contact"} · {lead.email}
+                    {selectedActivation.firstPublishedAt
+                      ? `Published ${formatDate(selectedActivation.firstPublishedAt, true)}`
+                      : "Awaiting first publication"}
                   </small>
                   <small>
-                    {titleCase(lead.kind)} · {formatDate(lead.occurredAt, true)}
+                    {selectedActivation.firstTeammateViewAt
+                      ? `Teammate view ${formatDate(selectedActivation.firstTeammateViewAt, true)}`
+                      : "Awaiting teammate view"}
+                    {selectedActivation.firstTeammateCompletionAt
+                      ? ` · completion ${formatDate(selectedActivation.firstTeammateCompletionAt, true)}`
+                      : " · awaiting completion"}
                   </small>
                 </span>
-                <StatusBadge status={lead.status} />
+                <strong>
+                  {
+                    [
+                      selectedActivation.firstPublishedAt,
+                      selectedActivation.firstTeammateViewAt,
+                      selectedActivation.firstTeammateCompletionAt,
+                    ].filter(Boolean).length
+                  }
+                  /3
+                </strong>
               </div>
-            ))
-          ) : (
-            <p className="empty-copy">No pilot requests recorded.</p>
-          )}
-        </section>
+            ) : (
+              <p className="empty-copy">No activation events recorded.</p>
+            )}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Support SLA</p>
+                <h2>Open support work</h2>
+              </div>
+            </div>
+            {selectedSupport.length ? (
+              selectedSupport.map((ticket) => (
+                <div className="platform-compact-row" key={ticket.id}>
+                  <span className="member-main">
+                    <strong>{ticket.requesterName}</strong>
+                    <small>
+                      target {formatDate(ticket.responseTargetAt, true)}
+                    </small>
+                  </span>
+                  <StatusBadge status={ticket.status} />
+                </div>
+              ))
+            ) : (
+              <p className="empty-copy">No support cases for this account.</p>
+            )}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Platform audit</p>
+                <h2>Recent control-plane changes</h2>
+              </div>
+            </div>
+            {selectedAudits.length ? (
+              selectedAudits.slice(0, 8).map((audit) => (
+                <div className="platform-compact-row" key={audit.id}>
+                  <span className="member-main">
+                    <strong>{titleCase(audit.action)}</strong>
+                  </span>
+                  <time dateTime={audit.occurredAt}>
+                    {formatDate(audit.occurredAt, true)}
+                  </time>
+                </div>
+              ))
+            ) : (
+              <p className="empty-copy">No control-plane audit events recorded.</p>
+            )}
+          </section>
+        </>
+      ) : null}
 
+      {section === "support" ? (
         <section className="card table-card">
           <div className="section-heading compact">
             <div>
@@ -4150,171 +4754,614 @@ export function PlatformView({
             </div>
             <LifeBuoy />
           </div>
-          {platform.support.length ? (
-            platform.support.slice(0, 12).map((ticket) => {
-              const overdue =
-                ticket.status === "waiting_support" &&
-                Date.parse(ticket.responseTargetAt) < platformNow;
-              return (
-                <div className="platform-compact-row" key={ticket.id}>
-                  <span className="member-main">
-                    <strong>{workspaceName(ticket.workspaceId)}</strong>
-                    <small>
-                      {ticket.requesterName} · target{" "}
-                      {formatDate(ticket.responseTargetAt, true)}
-                    </small>
-                  </span>
-                  <StatusBadge status={overdue ? "overdue" : ticket.status} />
-                </div>
-              );
-            })
+          <div className="filter-bar">
+            <label className="search-field">
+              <Search />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search support work"
+              />
+            </label>
+            <SelectMenu
+              className="filter-select"
+              leading={<Filter />}
+              value={pipelineStatus}
+              onChange={setPipelineStatus}
+              ariaLabel="Filter support by status"
+              options={[
+                { value: "all", label: "All statuses" },
+                ...[
+                  ...new Set(platform.support.map((ticket) => ticket.status)),
+                ].map((status) => ({
+                  value: status,
+                  label: titleCase(status.replaceAll("_", " ")),
+                })),
+              ]}
+            />
+            <span className="result-count">
+              {supportRows.length}{" "}
+              {supportRows.length === 1 ? "case" : "cases"}
+            </span>
+          </div>
+          {supportRows.length ? (
+            <PlatformPagedList items={supportRows}>
+              {(visible) =>
+                visible.map((ticket) => {
+                  const overdue =
+                    ticket.status === "waiting_support" &&
+                    Date.parse(ticket.responseTargetAt) < platformNow;
+                  return (
+                    <button
+                      className="platform-compact-row"
+                      type="button"
+                      key={ticket.id}
+                      onClick={() => openSection("accounts", ticket.workspaceId)}
+                    >
+                      <span className="member-main">
+                        <strong>{workspaceName(ticket.workspaceId)}</strong>
+                        <small>
+                          {ticket.requesterName} · target{" "}
+                          {formatDate(ticket.responseTargetAt, true)}
+                        </small>
+                      </span>
+                      <StatusBadge status={overdue ? "overdue" : ticket.status} />
+                    </button>
+                  );
+                })
+              }
+            </PlatformPagedList>
           ) : (
             <p className="empty-copy">No support cases recorded.</p>
           )}
         </section>
+      ) : null}
 
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Delivery failures</p>
-              <h2>Notification retry queue</h2>
-            </div>
-            <CircleAlert />
-          </div>
-          {platform.notificationFailures.length ? (
-            platform.notificationFailures.slice(0, 12).map((failure) => (
-              <div className="platform-compact-row" key={failure.id}>
-                <span className="member-main">
-                  <strong>{workspaceName(failure.workspaceId)}</strong>
-                  <small>
-                    {titleCase(failure.kind)} · last failure{" "}
-                    {formatDate(failure.lastFailedAt, true)}
-                  </small>
-                </span>
-                <strong>{failure.attempts} attempts</strong>
+      {section === "billing" ? (
+        <>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Commercial lifecycle</p>
+                <h2>Subscriptions and entitlements</h2>
               </div>
-            ))
-          ) : (
-            <p className="empty-copy">No failed notification deliveries.</p>
-          )}
-        </section>
-      </div>
+              <span className="privacy-caption">
+                <ShieldCheck /> Manual contracts only
+              </span>
+            </div>
+            {platform.subscriptions.length ? (
+              <PlatformPagedList items={platform.subscriptions}>
+                {(visible) =>
+                  visible.map((subscription) => {
+                    const entitlements = platform.entitlements.filter(
+                      (entitlement) =>
+                        entitlement.workspaceId === subscription.workspaceId,
+                    );
+                    return (
+                      <div className="platform-ops-row" key={subscription.id}>
+                        <span className="invite-icon">
+                          <CalendarDays />
+                        </span>
+                        <button
+                          className="member-main text-button"
+                          type="button"
+                          onClick={() =>
+                            openSection("accounts", subscription.workspaceId)
+                          }
+                        >
+                          <strong>
+                            {workspaceName(subscription.workspaceId)}
+                          </strong>
+                          <small>
+                            {titleCase(subscription.kind)} · access{" "}
+                            {titleCase(subscription.access)} ·
+                            {subscription.expiresAt
+                              ? ` expires ${formatDate(subscription.expiresAt, true)}`
+                              : " no fixed expiry"}
+                          </small>
+                          <small>
+                            {entitlements.length
+                              ? entitlements
+                                  .map((entitlement) =>
+                                    formatEntitlement(
+                                      entitlement.kind,
+                                      entitlement.value,
+                                    ),
+                                  )
+                                  .filter(Boolean)
+                                  .join(" · ")
+                              : "No explicit entitlement overrides"}
+                          </small>
+                        </button>
+                        <StatusBadge status={subscription.status} />
+                        <div className="modal-actions compact-actions">
+                          {subscription.expiresAt ? (
+                            <button
+                              className="button secondary small"
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                setLifecycleAction({
+                                  mode: "extend",
+                                  subscription,
+                                  openedAt: Date.now(),
+                                })
+                              }
+                            >
+                              Extend
+                            </button>
+                          ) : null}
+                          {subscription.kind !== "paid" ? (
+                            <button
+                              className="button secondary small"
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                setLifecycleAction({
+                                  mode: "convert",
+                                  subscription,
+                                  openedAt: Date.now(),
+                                })
+                              }
+                            >
+                              Record contract
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })
+                }
+              </PlatformPagedList>
+            ) : (
+              <div className="empty-inline">
+                <CalendarDays />
+                <span>
+                  <strong>No subscriptions</strong>
+                  <small>
+                    Provisioning creates an explicit trial subscription.
+                  </small>
+                </span>
+              </div>
+            )}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Commercial configuration</p>
+                <h2>Private pricing catalog</h2>
+              </div>
+              {canManagePlatformControls && onPlatformControl ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPricingCatalogOpen("create")}
+                >
+                  <Plus /> New catalog
+                </button>
+              ) : (
+                <span className="privacy-caption">
+                  <ShieldCheck /> Owner or operations only
+                </span>
+              )}
+            </div>
+            <p className="empty-copy beta-access-copy">
+              Version trial timing, capacity, internal prices, and included
+              services without publishing numeric pricing. Security fundamentals
+              remain included and payment collection stays off until you enable
+              it.
+            </p>
+            {pricingCatalogs.length ? (
+              pricingCatalogs.map((catalog) => (
+                <div className="platform-ops-row" key={catalog.id}>
+                  <span className="invite-icon">
+                    <BarChart3 />
+                  </span>
+                  <span className="member-main">
+                    <strong>{catalog.name}</strong>
+                    <small>
+                      {catalog.catalogVersion} · {catalog.trial.days}-day trial ·{" "}
+                      {catalog.trial.graceDays}-day grace ·{" "}
+                      {catalog.trial.retentionDays}-day retention
+                    </small>
+                    <small>
+                      {formatMinorAmount(
+                        catalog.baseWorkspace.amountMinor,
+                        catalog.currency,
+                      )}{" "}
+                      per workspace · {catalog.baseWorkspace.includedActiveCreators}{" "}
+                      creators · {catalog.baseWorkspace.includedActiveUsers} users ·{" "}
+                      {formatBytes(catalog.baseWorkspace.includedStorageBytes)}
+                    </small>
+                  </span>
+                  <StatusBadge status={catalog.status} />
+                  {canManagePlatformControls && onPlatformControl ? (
+                    <div className="modal-actions compact-actions">
+                      {catalog.status !== "retired" ? (
+                        <button
+                          className="button secondary small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => setPricingCatalogOpen(catalog)}
+                        >
+                          Edit
+                        </button>
+                      ) : null}
+                      {catalog.status !== "retired" ? (
+                        <button
+                          className="button ghost small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Retire ${catalog.name}? Existing subscriptions keep their recorded terms.`,
+                              )
+                            )
+                              void onPlatformControl(
+                                "retirePricingCatalog",
+                                {
+                                  catalogId: catalog.id,
+                                  expectedRevision: catalog.revision,
+                                },
+                                "Pricing catalog retired",
+                              ).catch(() => undefined);
+                          }}
+                        >
+                          Retire
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <div className="empty-inline">
+                <ShieldCheck />
+                <span>
+                  <strong>Secure trial defaults are active</strong>
+                  <small>
+                    Until a dated catalog is created, self-service uses the
+                    built-in 14-day trial with 7-day grace and 90-day retention.
+                  </small>
+                </span>
+              </div>
+            )}
+          </section>
+          {platform.lifecycleSimulation ? (
+            <details className="card table-card developer-tools">
+              <summary className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Tools</p>
+                  <h2>Developer tools</h2>
+                </div>
+              </summary>
+              {platform.lifecycleSimulation.enabled &&
+              canManagePlatformControls &&
+              onPlatformControl ? (
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSimulationDialog({ mode: "create" })}
+                >
+                  <Sparkles /> Create synthetic tenant
+                </button>
+              ) : (
+                <StatusBadge
+                  status={
+                    platform.lifecycleSimulation.enabled ? "ready" : "disabled"
+                  }
+                />
+              )}
+              <div className="empty-inline">
+                <ShieldCheck />
+                <span>
+                  <strong>Production is permanently excluded.</strong>
+                  <small>
+                    The simulator only advances disposable tenants it creates and
+                    invokes the same lifecycle sweep, notices, retention case, and
+                    deletion-approval boundary used by operations.
+                  </small>
+                </span>
+              </div>
+              {platform.lifecycleSimulation.enabled
+                ? simulationWorkspaces.map((workspace) => {
+                    const subscription = platform.subscriptions.find(
+                      (item) => item.workspaceId === workspace.id,
+                    );
+                    const complete =
+                      workspace.simulation?.lastState === "pending_deletion";
+                    return (
+                      <div className="platform-ops-row" key={workspace.id}>
+                        <span className="invite-icon danger-icon">
+                          <RefreshCw />
+                        </span>
+                        <span className="member-main">
+                          <strong>{workspace.name}</strong>
+                          <small>
+                            Last state{" "}
+                            {workspace.simulation?.lastState
+                              ? titleCase(workspace.simulation.lastState)
+                              : "unset"}
+                            {subscription
+                              ? ` · ${titleCase(subscription.access)}`
+                              : ""}
+                          </small>
+                        </span>
+                        {complete || !onPlatformControl ? null : (
+                          <button
+                            className="button secondary small"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              setSimulationDialog({
+                                mode: "advance",
+                                workspace,
+                              })
+                            }
+                          >
+                            Advance state
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                : null}
+            </details>
+          ) : null}
+        </>
+      ) : null}
 
-      <section className="card table-card deletion-control-card">
-        <div className="section-heading compact">
-          <div>
-            <p className="eyebrow">Retention boundary</p>
-            <h2>Deletion approvals</h2>
-          </div>
-          <span className="privacy-caption">
-            <Trash2 /> Two-stage purge
-          </span>
-        </div>
-        {platform.deletionCases.length ? (
-          platform.deletionCases.map((item) => {
-            const eligible = Date.parse(item.eligibleAt) <= platformNow;
-            return (
-              <div className="platform-ops-row" key={item.id}>
-                <span className="invite-icon danger-icon">
-                  <Trash2 />
-                </span>
-                <span className="member-main">
-                  <strong>{workspaceName(item.workspaceId)}</strong>
+      {section === "ops" ? (
+        <>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Delivery failures</p>
+                <h2>Notification retry queue</h2>
+              </div>
+              <CircleAlert />
+            </div>
+            {platform.notificationFailures.length ? (
+              <PlatformPagedList items={platform.notificationFailures}>
+                {(visible) =>
+                  visible.map((failure) => (
+                    <button
+                      className="platform-compact-row"
+                      type="button"
+                      key={failure.id}
+                      onClick={() =>
+                        openSection("accounts", failure.workspaceId)
+                      }
+                    >
+                      <span className="member-main">
+                        <strong>{workspaceName(failure.workspaceId)}</strong>
+                        <small>
+                          {titleCase(failure.kind)} · last failure{" "}
+                          {formatDate(failure.lastFailedAt, true)}
+                        </small>
+                      </span>
+                      <strong>{failure.attempts} attempts</strong>
+                    </button>
+                  ))
+                }
+              </PlatformPagedList>
+            ) : (
+              <p className="empty-copy">No failed notification deliveries.</p>
+            )}
+          </section>
+          <section className="card table-card deletion-control-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Retention boundary</p>
+                <h2>Deletion approvals</h2>
+              </div>
+              <span className="privacy-caption">
+                <Trash2 /> Two-stage purge
+              </span>
+            </div>
+            {platform.deletionCases.length ? (
+              platform.deletionCases.map((item) => {
+                const eligible = Date.parse(item.eligibleAt) <= platformNow;
+                return (
+                  <div className="platform-ops-row" key={item.id}>
+                    <span className="invite-icon danger-icon">
+                      <Trash2 />
+                    </span>
+                    <span className="member-main">
+                      <strong>{workspaceName(item.workspaceId)}</strong>
+                      <small>
+                        Retention eligibility {formatDate(item.eligibleAt, true)}
+                      </small>
+                      <small>
+                        {item.confirmationText
+                          ? "Typed platform-owner confirmation is required."
+                          : "Only a platform owner can see the confirmation phrase."}
+                      </small>
+                    </span>
+                    <StatusBadge status={item.status} />
+                    {item.status === "awaiting_approval" &&
+                    item.confirmationText ? (
+                      <button
+                        className="button danger-button small"
+                        type="button"
+                        disabled={busy || !eligible}
+                        onClick={() => setDeletionCase(item)}
+                      >
+                        {eligible ? "Review deletion" : "Retention active"}
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="empty-inline">
+                <ShieldCheck />
+                <span>
+                  <strong>No deletion approvals pending</strong>
                   <small>
-                    Retention eligibility {formatDate(item.eligibleAt, true)}
-                  </small>
-                  <small>
-                    {item.confirmationText
-                      ? "Typed platform-owner confirmation is required."
-                      : "Only a platform owner can see the confirmation phrase."}
+                    Expired tenants remain recoverable until retention ends and an
+                    owner explicitly approves purge.
                   </small>
                 </span>
-                <StatusBadge status={item.status} />
-                {item.status === "awaiting_approval" &&
-                item.confirmationText ? (
+              </div>
+            )}
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Platform audit</p>
+                <h2>Recent control-plane changes</h2>
+              </div>
+              <History />
+            </div>
+            <PlatformAuditList
+              audits={platform.platformAudits}
+              workspaceName={workspaceName}
+            />
+          </section>
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Activation milestones</p>
+                <h2>First-value progress</h2>
+              </div>
+              <Activity />
+            </div>
+            {platform.activation.length ? (
+              <PlatformPagedList items={platform.activation}>
+                {(visible) =>
+                  visible.map((activation) => {
+                    const achieved = [
+                      activation.firstPublishedAt,
+                      activation.firstTeammateViewAt,
+                      activation.firstTeammateCompletionAt,
+                    ].filter(Boolean).length;
+                    return (
+                      <button
+                        className="platform-compact-row"
+                        type="button"
+                        key={activation.workspaceId}
+                        onClick={() =>
+                          openSection("accounts", activation.workspaceId)
+                        }
+                      >
+                        <span className="member-main">
+                          <strong>{workspaceName(activation.workspaceId)}</strong>
+                          <small>
+                            {activation.firstPublishedAt
+                              ? `Published ${formatDate(activation.firstPublishedAt, true)}`
+                              : "Awaiting first publication"}
+                          </small>
+                        </span>
+                        <strong>{achieved}/3</strong>
+                      </button>
+                    );
+                  })
+                }
+              </PlatformPagedList>
+            ) : (
+              <p className="empty-copy">No activation events recorded.</p>
+            )}
+          </section>
+          {appointments.length ? (
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Client administrator appointments</p>
+                  <h2>Pending appointments</h2>
+                </div>
+                <LockKeyhole />
+              </div>
+              {appointments.map((appointment) => (
+                <div className="invite-row" key={appointment.id}>
+                  <span className="invite-icon">
+                    <UserCog />
+                  </span>
+                  <span className="member-main">
+                    <strong>{appointment.email}</strong>
+                    <small>
+                      Appointed administrator · expires{" "}
+                      {formatDate(appointment.expiresAt, true)} · the acceptance
+                      link was shown once at creation
+                    </small>
+                  </span>
+                  <StatusBadge status="active" />
                   <button
-                    className="button danger-button small"
-                    type="button"
-                    disabled={busy || !eligible}
-                    onClick={() => setDeletionCase(item)}
+                    className="button ghost small"
+                    disabled={busy}
+                    onClick={() => onRevokeAppointment(appointment)}
                   >
-                    {eligible ? "Review deletion" : "Retention active"}
+                    Revoke
                   </button>
-                ) : null}
-              </div>
+                </div>
+              ))}
+            </section>
+          ) : null}
+        </>
+      ) : null}
+      {pricingCatalogOpen && onPlatformControl ? (
+        <PricingCatalogDialog
+          busy={busy}
+          catalog={
+            pricingCatalogOpen === "create" ? null : pricingCatalogOpen
+          }
+          generatedAt={platform.generatedAt}
+          onClose={() => setPricingCatalogOpen(null)}
+          onSave={async (catalog, input) => {
+            if (catalog) {
+              await onPlatformControl(
+                "updatePricingCatalog",
+                {
+                  catalogId: catalog.id,
+                  expectedRevision: catalog.revision,
+                  catalog: input,
+                },
+                "Pricing catalog updated",
+              );
+            } else {
+              await onPlatformControl(
+                "createPricingCatalog",
+                { catalog: input },
+                "Pricing catalog created",
+              );
+            }
+            setPricingCatalogOpen(null);
+          }}
+        />
+      ) : null}
+      {simulationDialog &&
+      platform.lifecycleSimulation &&
+      onPlatformControl ? (
+        <LifecycleSimulationDialog
+          busy={busy}
+          dialog={simulationDialog}
+          states={platform.lifecycleSimulation.states}
+          createConfirmation={platform.lifecycleSimulation.createConfirmation}
+          onClose={() => setSimulationDialog(null)}
+          onRun={async (action, payload) => {
+            await onPlatformControl(
+              action,
+              payload,
+              action === "createLifecycleSimulationTenant"
+                ? "Synthetic lifecycle tenant created"
+                : "Synthetic lifecycle state advanced",
             );
-          })
-        ) : (
-          <div className="empty-inline">
-            <ShieldCheck />
-            <span>
-              <strong>No deletion approvals pending</strong>
-              <small>
-                Expired tenants remain recoverable until retention ends and an
-                owner explicitly approves purge.
-              </small>
-            </span>
-          </div>
-        )}
-      </section>
-
-      <section className="card table-card">
-        <div className="section-heading compact">
-          <div>
-            <p className="eyebrow">Platform audit</p>
-            <h2>Recent control-plane changes</h2>
-          </div>
-          <History />
-        </div>
-        {platform.platformAudits.length ? (
-          platform.platformAudits.slice(0, 20).map((audit) => (
-            <div className="platform-compact-row" key={audit.id}>
-              <span className="member-main">
-                <strong>{titleCase(audit.action)}</strong>
-                <small>{workspaceName(audit.workspaceId)}</small>
-              </span>
-              <time dateTime={audit.occurredAt}>
-                {formatDate(audit.occurredAt, true)}
-              </time>
-            </div>
-          ))
-        ) : (
-          <p className="empty-copy">No control-plane audit events recorded.</p>
-        )}
-      </section>
-      {appointments.length ? (
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Client administrator appointments</p>
-              <h2>Pending appointments</h2>
-            </div>
-            <LockKeyhole />
-          </div>
-          {appointments.map((appointment) => (
-            <div className="invite-row" key={appointment.id}>
-              <span className="invite-icon">
-                <UserCog />
-              </span>
-              <span className="member-main">
-                <strong>{appointment.email}</strong>
-                <small>
-                  Appointed administrator · expires{" "}
-                  {formatDate(appointment.expiresAt, true)} · the acceptance
-                  link was shown once at creation
-                </small>
-              </span>
-              <StatusBadge status="active" />
-              <button
-                className="button ghost small"
-                disabled={busy}
-                onClick={() => onRevokeAppointment(appointment)}
-              >
-                Revoke
-              </button>
-            </div>
-          ))}
-        </section>
+            setSimulationDialog(null);
+          }}
+        />
+      ) : null}
+      {betaAccessOpen && onCreateBetaAccess ? (
+        <BetaAccessDialog
+          busy={busy}
+          initialExpiresAt={new Date(platformNow + 14 * 86_400_000)
+            .toISOString()
+            .slice(0, 10)}
+          onClose={() => setBetaAccessOpen(false)}
+          onCreate={onCreateBetaAccess}
+        />
       ) : null}
       {lifecycleAction ? (
         <SubscriptionLifecycleDialog
@@ -4339,6 +5386,797 @@ export function PlatformView({
         />
       ) : null}
     </div>
+  );
+}
+
+function PricingCatalogDialog({
+  busy,
+  catalog,
+  generatedAt,
+  onClose,
+  onSave,
+}: {
+  busy: boolean;
+  catalog: PlatformPricingCatalog | null;
+  generatedAt: string;
+  onClose: () => void;
+  onSave: (
+    catalog: PlatformPricingCatalog | null,
+    input: Record<string, unknown>,
+  ) => Promise<void>;
+}) {
+  const [slug, setSlug] = useState(catalog?.slug ?? "current-trial");
+  const [version, setVersion] = useState(
+    catalog?.catalogVersion ?? "trial-v1",
+  );
+  const [name, setName] = useState(catalog?.name ?? "KnowHow trial");
+  const [description, setDescription] = useState(
+    catalog?.description ??
+      "No-card trial with governed capture and support.",
+  );
+  const [status, setStatus] = useState<"draft" | "scheduled" | "active">(
+    catalog?.status === "draft" ||
+      catalog?.status === "scheduled" ||
+      catalog?.status === "active"
+      ? catalog.status
+      : "draft",
+  );
+  const [currency, setCurrency] = useState(catalog?.currency ?? "USD");
+  const [effectiveFrom, setEffectiveFrom] = useState(
+    (catalog?.effectiveFrom ?? generatedAt).slice(0, 10),
+  );
+  const [effectiveUntil, setEffectiveUntil] = useState(
+    catalog?.effectiveUntil?.slice(0, 10) ?? "",
+  );
+  const [trialDays, setTrialDays] = useState(catalog?.trial.days ?? 14);
+  const [graceDays, setGraceDays] = useState(catalog?.trial.graceDays ?? 7);
+  const [retentionDays, setRetentionDays] = useState(
+    catalog?.trial.retentionDays ?? 90,
+  );
+  const [creators, setCreators] = useState(
+    catalog?.baseWorkspace.includedActiveCreators ?? 25,
+  );
+  const [users, setUsers] = useState(
+    catalog?.baseWorkspace.includedActiveUsers ?? 100,
+  );
+  const [storageGb, setStorageGb] = useState(
+    (catalog?.baseWorkspace.includedStorageBytes ?? 5_000_000_000) /
+      1_000_000_000,
+  );
+  const amountValue = (value: number | null | undefined) =>
+    value === null || value === undefined ? "" : String(value / 100);
+  const [baseAmount, setBaseAmount] = useState(
+    amountValue(catalog?.baseWorkspace.amountMinor),
+  );
+  const [creatorAmount, setCreatorAmount] = useState(
+    amountValue(catalog?.additionalUsage.creator.amountMinor),
+  );
+  const [userAmount, setUserAmount] = useState(
+    amountValue(catalog?.additionalUsage.user.amountMinor),
+  );
+  const [storageAmount, setStorageAmount] = useState(
+    amountValue(catalog?.additionalUsage.storage.amountMinor),
+  );
+  const [extensionIncluded, setExtensionIncluded] = useState(
+    catalog?.features.some(
+      (item) => item.key === "browser_extension" && item.included,
+    ) ?? true,
+  );
+  const [exportsIncluded, setExportsIncluded] = useState(
+    catalog?.features.some(
+      (item) => item.key === "governed_exports" && item.included,
+    ) ?? true,
+  );
+  const [supportIncluded, setSupportIncluded] = useState(
+    catalog?.services.some(
+      (item) => item.key === "in_app_support" && item.included,
+    ) ?? true,
+  );
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  const parseMinorAmount = (value: string, label: string) => {
+    if (!value.trim()) return null;
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error(`${label} must be a positive amount or blank.`);
+    }
+    return Math.round(amount * 100);
+  };
+  const mergeItem = (
+    items: PlatformPricingCatalog["features"],
+    item: PlatformPricingCatalog["features"][number],
+  ) => [...items.filter((candidate) => candidate.key !== item.key), item];
+
+  return (
+    <Modal
+      title={catalog ? "Edit pricing catalog" : "Create pricing catalog"}
+      eyebrow="MFA-protected commercial control"
+      onClose={onClose}
+      wide
+    >
+      <form
+        className="modal-form pricing-catalog-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setWorking(true);
+          setError("");
+          try {
+            const existingFeatures = catalog?.features ?? [];
+            const existingServices = catalog?.services ?? [];
+            const features = mergeItem(
+              mergeItem(existingFeatures, {
+                key: "browser_extension",
+                label: "Browser capture extension",
+                included: extensionIncluded,
+                note: "Capture, redact, review, and pair managed devices.",
+              }),
+              {
+                key: "governed_exports",
+                label: "Governed exports",
+                included: exportsIncluded,
+                note: "Policy-controlled PDF, HTML, and Markdown exports.",
+              },
+            );
+            const services = mergeItem(existingServices, {
+              key: "in_app_support",
+              label: "In-app support",
+              included: supportIncluded,
+              note: "One-business-day response target.",
+            });
+            const input = {
+              ...(!catalog ? { slug: slug.trim() } : {}),
+              catalogVersion: version.trim(),
+              name: name.trim(),
+              description: description.trim(),
+              status,
+              currency: currency.trim().toUpperCase(),
+              effectiveFrom: new Date(
+                `${effectiveFrom}T00:00:00.000Z`,
+              ).toISOString(),
+              effectiveUntil: effectiveUntil
+                ? new Date(`${effectiveUntil}T23:59:59.999Z`).toISOString()
+                : null,
+              selfServiceTrial: true,
+              trial: { days: trialDays, graceDays, retentionDays },
+              baseWorkspace: {
+                amountMinor: parseMinorAmount(baseAmount, "Base price"),
+                includedActiveCreators: creators,
+                includedActiveUsers: users,
+                includedStorageBytes: Math.round(storageGb * 1_000_000_000),
+              },
+              additionalUsage: {
+                creator: {
+                  amountMinor: parseMinorAmount(
+                    creatorAmount,
+                    "Creator price",
+                  ),
+                },
+                user: {
+                  amountMinor: parseMinorAmount(userAmount, "User price"),
+                },
+                storage: {
+                  amountMinor: parseMinorAmount(
+                    storageAmount,
+                    "Storage price",
+                  ),
+                },
+              },
+              features,
+              services,
+            };
+            void onSave(catalog, input)
+              .catch((nextError) => setError(messageFromError(nextError)))
+              .finally(() => setWorking(false));
+          } catch (nextError) {
+            setError(messageFromError(nextError));
+            setWorking(false);
+          }
+        }}
+      >
+        <div className="settings-grid compact-settings-grid">
+          {!catalog ? (
+            <label>
+              <span>Internal slug</span>
+              <input
+                value={slug}
+                onChange={(event) => setSlug(event.target.value)}
+                required
+              />
+            </label>
+          ) : null}
+          <label>
+            <span>Version</span>
+            <input
+              value={version}
+              onChange={(event) => setVersion(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            <span>Name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            <span>Status</span>
+            <SelectMenu
+              className="form-select"
+              value={status}
+              onChange={(value) =>
+                setStatus(
+                  value as "draft" | "scheduled" | "active",
+                )
+              }
+              ariaLabel="Catalog status"
+              options={[
+                { value: "draft", label: "Draft" },
+                { value: "scheduled", label: "Scheduled" },
+                { value: "active", label: "Active" },
+              ]}
+            />
+          </label>
+        </div>
+        <label>
+          <span>Description</span>
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={2}
+          />
+        </label>
+        <div className="settings-grid compact-settings-grid">
+          <label>
+            <span>Currency</span>
+            <input
+              value={currency}
+              onChange={(event) => setCurrency(event.target.value)}
+              maxLength={3}
+              required
+            />
+          </label>
+          <label>
+            <span>Effective from</span>
+            <input
+              type="date"
+              value={effectiveFrom}
+              onChange={(event) => setEffectiveFrom(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            <span>Effective until</span>
+            <input
+              type="date"
+              value={effectiveUntil}
+              onChange={(event) => setEffectiveUntil(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="settings-grid compact-settings-grid">
+          <label>
+            <span>Trial days</span>
+            <input
+              type="number"
+              min={1}
+              max={90}
+              value={trialDays}
+              onChange={(event) => setTrialDays(Number(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Grace days</span>
+            <input
+              type="number"
+              min={0}
+              max={30}
+              value={graceDays}
+              onChange={(event) => setGraceDays(Number(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Retention days</span>
+            <input
+              type="number"
+              min={30}
+              max={365}
+              value={retentionDays}
+              onChange={(event) =>
+                setRetentionDays(Number(event.target.value))
+              }
+              required
+            />
+          </label>
+        </div>
+        <div className="settings-grid compact-settings-grid">
+          <label>
+            <span>Included creators</span>
+            <input
+              type="number"
+              min={1}
+              value={creators}
+              onChange={(event) => setCreators(Number(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Included users</span>
+            <input
+              type="number"
+              min={1}
+              value={users}
+              onChange={(event) => setUsers(Number(event.target.value))}
+              required
+            />
+          </label>
+          <label>
+            <span>Included storage (GB)</span>
+            <input
+              type="number"
+              min={0.001}
+              step={0.1}
+              value={storageGb}
+              onChange={(event) => setStorageGb(Number(event.target.value))}
+              required
+            />
+          </label>
+        </div>
+        <div className="settings-grid compact-settings-grid">
+          <label>
+            <span>Base monthly price</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={baseAmount}
+              onChange={(event) => setBaseAmount(event.target.value)}
+              placeholder="Not published"
+            />
+          </label>
+          <label>
+            <span>Additional creator</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={creatorAmount}
+              onChange={(event) => setCreatorAmount(event.target.value)}
+              placeholder="Not published"
+            />
+          </label>
+          <label>
+            <span>Additional user</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={userAmount}
+              onChange={(event) => setUserAmount(event.target.value)}
+              placeholder="Not published"
+            />
+          </label>
+          <label>
+            <span>Storage per GB</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={storageAmount}
+              onChange={(event) => setStorageAmount(event.target.value)}
+              placeholder="Not published"
+            />
+          </label>
+        </div>
+        <div className="checkbox-stack">
+          <label>
+            <input
+              type="checkbox"
+              checked={extensionIncluded}
+              onChange={(event) => setExtensionIncluded(event.target.checked)}
+            />
+            Browser capture extension included
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={exportsIncluded}
+              onChange={(event) => setExportsIncluded(event.target.checked)}
+            />
+            Governed exports included
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={supportIncluded}
+              onChange={(event) => setSupportIncluded(event.target.checked)}
+            />
+            In-app support included
+          </label>
+        </div>
+        <div className="empty-inline">
+          <ShieldCheck />
+          <span>
+            <strong>Security is never an add-on.</strong>
+            <small>
+              Tenant isolation, MFA, encryption, audit, backup, and retention
+              controls stay included. Payment collection remains off.
+            </small>
+          </span>
+        </div>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="modal-actions">
+          <button className="button ghost" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={busy || working}
+          >
+            {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
+            {catalog ? "Save catalog" : "Create catalog"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+type PlatformLifecycleState =
+  | "trial_active"
+  | "near_expiry"
+  | "read_only"
+  | "suspended"
+  | "retention"
+  | "deletion_eligible"
+  | "pending_deletion";
+
+function LifecycleSimulationDialog({
+  busy,
+  dialog,
+  states,
+  createConfirmation,
+  onClose,
+  onRun,
+}: {
+  busy: boolean;
+  dialog:
+    | { mode: "create" }
+    | { mode: "advance"; workspace: PlatformWorkspace };
+  states: ReadonlyArray<PlatformLifecycleState>;
+  createConfirmation: string;
+  onClose: () => void;
+  onRun: (
+    action: "createLifecycleSimulationTenant" | "simulateLifecycleState",
+    payload: Record<string, unknown>,
+  ) => Promise<void>;
+}) {
+  const currentState =
+    dialog.mode === "advance"
+      ? (dialog.workspace.simulation?.lastState as PlatformLifecycleState) ??
+        "trial_active"
+      : "trial_active";
+  const currentIndex = Math.max(0, states.indexOf(currentState));
+  const availableStates = states.slice(currentIndex + 1);
+  const [state, setState] = useState<PlatformLifecycleState>(
+    availableStates[0] ?? "pending_deletion",
+  );
+  const [label, setLabel] = useState("Lifecycle QA");
+  const [confirmation, setConfirmation] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const expected =
+    dialog.mode === "create"
+      ? createConfirmation
+      : `SIMULATE ${dialog.workspace.slug} AS ${state.toUpperCase()}`;
+
+  return (
+    <Modal
+      title={
+        dialog.mode === "create"
+          ? "Create synthetic lifecycle tenant"
+          : "Advance synthetic lifecycle"
+      }
+      eyebrow="Non-production only"
+      onClose={onClose}
+    >
+      <form
+        className="modal-form lifecycle-simulation-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setWorking(true);
+          setError("");
+          const action =
+            dialog.mode === "create"
+              ? "createLifecycleSimulationTenant"
+              : "simulateLifecycleState";
+          const payload =
+            dialog.mode === "create"
+              ? { label: label.trim(), confirmation }
+              : {
+                  targetWorkspaceId: dialog.workspace.id,
+                  state,
+                  confirmation,
+                };
+          void onRun(action, payload)
+            .catch((nextError) => setError(messageFromError(nextError)))
+            .finally(() => setWorking(false));
+        }}
+      >
+        <div className="empty-inline">
+          <CircleAlert />
+          <span>
+            <strong>Only disposable synthetic records are eligible.</strong>
+            <small>
+              State changes cannot be rewound. Deletion still requires the
+              separate platform-owner approval and purge workflow.
+            </small>
+          </span>
+        </div>
+        {dialog.mode === "create" ? (
+          <label className="field">
+            <span>Simulation label</span>
+            <input
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              minLength={2}
+              maxLength={64}
+              required
+            />
+          </label>
+        ) : (
+          <label className="field">
+            <span>Target state</span>
+            <SelectMenu
+              className="form-select"
+              value={state}
+              onChange={(value) => {
+                setState(value as PlatformLifecycleState);
+                setConfirmation("");
+              }}
+              ariaLabel="Target lifecycle state"
+              options={availableStates.map((candidate) => ({
+                value: candidate,
+                label: titleCase(candidate),
+              }))}
+            />
+          </label>
+        )}
+        <label className="field">
+          <span>Type this exact confirmation</span>
+          <code>{expected}</code>
+          <input
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            required
+          />
+        </label>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <div className="modal-actions">
+          <button className="button ghost" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={
+              busy ||
+              working ||
+              confirmation !== expected ||
+              (dialog.mode === "create" && label.trim().length < 2)
+            }
+          >
+            {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
+            {dialog.mode === "create" ? "Create tenant" : "Advance state"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function BetaAccessDialog({
+  busy,
+  initialExpiresAt,
+  onClose,
+  onCreate,
+}: {
+  busy: boolean;
+  initialExpiresAt: string;
+  onClose: () => void;
+  onCreate: (input: {
+    label?: string;
+    email?: string;
+    expiresAt: string;
+    maxUses: number;
+  }) => Promise<{ grant: BetaAccessGrant; code: string }>;
+}) {
+  const [label, setLabel] = useState("");
+  const [email, setEmail] = useState("");
+  const [expiryDate, setExpiryDate] = useState(initialExpiresAt);
+  const [maxUses, setMaxUses] = useState(1);
+  const [result, setResult] = useState<{
+    grant: BetaAccessGrant;
+    code: string;
+  } | null>(null);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  const registrationLink = result
+    ? `${typeof window === "undefined" ? "" : window.location.origin}/register?beta=${encodeURIComponent(result.code)}`
+    : "";
+
+  async function copy(value: string, message: string) {
+    await navigator.clipboard.writeText(value);
+    toast.success(message);
+  }
+
+  return (
+    <Modal
+      title={result ? "Beta access is ready" : "Generate beta access"}
+      eyebrow="MFA-protected admission"
+      onClose={onClose}
+    >
+      {result ? (
+        <div className="beta-access-result">
+          <div className="self-service-ready">
+            <CheckCircle2 />
+            <span>
+              <strong>Copy this credential now.</strong>
+              <small>
+                Only its hash is stored. Closing this dialog permanently hides
+                the code.
+              </small>
+            </span>
+          </div>
+          <label className="auth-field">
+            <span>Registration link</span>
+            <div className="auth-input-wrap beta-access-output">
+              <Link2 />
+              <input readOnly value={registrationLink} />
+              <button
+                type="button"
+                aria-label="Copy registration link"
+                onClick={() =>
+                  void copy(registrationLink, "Registration link copied")
+                }
+              >
+                <Copy />
+              </button>
+            </div>
+          </label>
+          <label className="auth-field">
+            <span>Access code</span>
+            <div className="auth-input-wrap beta-access-output">
+              <KeyRound />
+              <input readOnly value={result.code} />
+              <button
+                type="button"
+                aria-label="Copy beta access code"
+                onClick={() =>
+                  void copy(result.code, "Beta access code copied")
+                }
+              >
+                <Copy />
+              </button>
+            </div>
+          </label>
+          <div className="modal-actions">
+            <button className="button primary" type="button" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="settings-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setWorking(true);
+            setError("");
+            void onCreate({
+              ...(label.trim() ? { label: label.trim() } : {}),
+              ...(email.trim() ? { email: email.trim().toLowerCase() } : {}),
+              expiresAt: new Date(`${expiryDate}T23:59:59.000Z`).toISOString(),
+              maxUses,
+            })
+              .then(setResult)
+              .catch((nextError) =>
+                setError(
+                  nextError instanceof Error
+                    ? nextError.message
+                    : "Beta access could not be created.",
+                ),
+              )
+              .finally(() => setWorking(false));
+          }}
+        >
+          <label className="auth-field">
+            <span>
+              Label <small>Optional internal context</small>
+            </span>
+            <div className="auth-input-wrap">
+              <KeyRound />
+              <input
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+                placeholder="August design partners"
+              />
+            </div>
+          </label>
+          <label className="auth-field">
+            <span>
+              Approved email <small>Blank allows any recipient</small>
+            </span>
+            <div className="auth-input-wrap">
+              <Mail />
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="tester@company.com"
+              />
+            </div>
+          </label>
+          <div className="settings-grid compact-settings-grid">
+            <label>
+              <span>Expires</span>
+              <input
+                type="date"
+                min={new Date().toISOString().slice(0, 10)}
+                value={expiryDate}
+                onChange={(event) => setExpiryDate(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              <span>Maximum uses</span>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={maxUses}
+                onChange={(event) => setMaxUses(Number(event.target.value))}
+                required
+              />
+            </label>
+          </div>
+          {error ? (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="modal-actions">
+            <button className="button ghost" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              type="submit"
+              disabled={busy || working || !expiryDate || maxUses < 1}
+            >
+              {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
+              Generate one-time code
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
   );
 }
 
@@ -4622,7 +6460,7 @@ const ORGANIZATION_ROLES: Array<{
   {
     value: "administrator",
     label: "Administrator",
-    description: "Organization identity, domains, and workspace directory",
+    description: "Organization identity and workspace directory",
   },
   {
     value: "billing",
@@ -4641,32 +6479,30 @@ export function OrganizationView({
   busy,
   onAppoint,
   onUpdate,
-  onSaveDomains,
   onRevokeAppointment,
 }: {
   organization: OrganizationAdministration;
   busy: boolean;
-  onAppoint: (
-    email: string,
-    roles: OrganizationRole[],
-    anchorWorkspaceId: string,
-  ) => Promise<{
-    appointmentId: string;
-    appointmentToken: string;
-    expiresAt: string;
-  }>;
+  onAppoint: (payload: {
+    emails: string[];
+    roles: OrganizationRole[];
+    anchorWorkspaceId: string;
+  }) => Promise<
+    Array<{
+      email: string;
+      appointmentToken: string;
+      expiresAt: string;
+    }>
+  >;
   onUpdate: (
     memberId: string,
     roles: OrganizationRole[],
     status: "active" | "revoked",
   ) => Promise<unknown>;
-  onSaveDomains: (domains: string[]) => Promise<unknown>;
   onRevokeAppointment: (appointmentId: string) => Promise<unknown>;
 }) {
   const [appointing, setAppointing] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
-  const [domains, setDomains] = useState(organization.domains.join("\n"));
-  const [domainsBusy, setDomainsBusy] = useState(false);
   const canManage = organization.roles.includes("owner");
   const editingMember = organization.members.find(
     (member) => member.id === editingMemberId,
@@ -4678,8 +6514,8 @@ export function OrganizationView({
           <p className="eyebrow">Organization governance</p>
           <h1>{organization.displayName}</h1>
           <p>
-            Govern identity and commercial metadata separately from workspace
-            content access. Organization roles never grant guide visibility.
+            People and workspaces for this company. Organization roles do not
+            grant access to guides.
           </p>
         </div>
         {canManage ? (
@@ -4699,78 +6535,26 @@ export function OrganizationView({
             <Building2 />
           </span>
           <div>
-            <h2>{organization.legalName}</h2>
+            <h2>{organization.legalName || organization.displayName}</h2>
             <p>
-              {organization.country} · {titleCase(organization.status)} · your
-              roles: {organization.roles.map(titleCase).join(", ")}
+              Legal name · {organization.country} ·{" "}
+              {titleCase(organization.status)} · your roles:{" "}
+              {organization.roles.map(titleCase).join(", ")}
             </p>
           </div>
         </div>
         <p className="privacy-caption">
-          <LockKeyhole /> Organization authority is checked from explicit
-          membership rows. Email labels and environment variables never grant
-          authority.
+          <LockKeyhole /> Organization administrators manage people. They do
+          not automatically see workspace guides.
         </p>
       </section>
-      {organization.roles.some((role) =>
-        ["owner", "administrator"].includes(role),
-      ) ? (
-        <section className="card settings-card">
-          <div className="settings-title">
-            <span>
-              <Globe2 />
-            </span>
-            <div>
-              <h2>Approved organization domains</h2>
-              <p>
-                Domains establish request eligibility only; they never grant
-                membership or guide access.
-              </p>
-            </div>
-          </div>
-          <label className="field">
-            <span>One exact domain per line</span>
-            <textarea
-              rows={4}
-              value={domains}
-              onChange={(event) => setDomains(event.target.value)}
-              placeholder={"example.com\nsubsidiary.example"}
-            />
-          </label>
-          <p className="privacy-caption">
-            <ShieldCheck /> Changes apply consistently to every workspace in
-            this organization and require current TOTP verification.
-          </p>
-          <button
-            className="button secondary"
-            type="button"
-            disabled={busy || domainsBusy}
-            onClick={async () => {
-              setDomainsBusy(true);
-              try {
-                await onSaveDomains([
-                  ...new Set(
-                    domains
-                      .split(/\r?\n|,/)
-                      .map((item) => item.trim().toLowerCase())
-                      .filter(Boolean),
-                  ),
-                ]);
-              } finally {
-                setDomainsBusy(false);
-              }
-            }}
-          >
-            {domainsBusy ? <LoaderCircle className="spin" /> : <Check />} Save
-            organization domains
-          </button>
-        </section>
-      ) : null}
       <section className="card table-card">
         <div className="section-heading compact">
           <div>
             <p className="eyebrow">Workspace directory</p>
-            <h2>{organization.workspaces.length} isolated workspaces</h2>
+            <h2>
+              {countPhrase(organization.workspaces.length, "workspace")}
+            </h2>
           </div>
           <ShieldCheck />
         </div>
@@ -4782,8 +6566,7 @@ export function OrganizationView({
             <span className="member-main">
               <strong>{workspace.name}</strong>
               <small>
-                {workspace.slug} · organization authority does not open this
-                workspace
+                {workspace.slug}
               </small>
             </span>
             <StatusBadge status={workspace.status} />
@@ -4795,7 +6578,9 @@ export function OrganizationView({
           <div className="section-heading compact">
             <div>
               <p className="eyebrow">Governance roster</p>
-              <h2>{organization.members.length} organization members</h2>
+              <h2>
+                {countPhrase(organization.members.length, "organization member")}
+              </h2>
             </div>
             <span className="privacy-caption">
               <ShieldCheck /> Minimum two active owners
@@ -4899,52 +6684,92 @@ function OrganizationAppointmentDialog({
   organization: OrganizationAdministration;
   busy: boolean;
   onClose: () => void;
-  onAppoint: (
-    email: string,
-    roles: OrganizationRole[],
-    anchorWorkspaceId: string,
-  ) => Promise<{ appointmentToken: string; expiresAt: string }>;
+  onAppoint: (payload: {
+    emails: string[];
+    roles: OrganizationRole[];
+    anchorWorkspaceId: string;
+  }) => Promise<
+    Array<{
+      email: string;
+      appointmentToken: string;
+      expiresAt: string;
+    }>
+  >;
 }) {
-  const [email, setEmail] = useState("");
+  const [emailDraft, setEmailDraft] = useState("");
   const [roles, setRoles] = useState<OrganizationRole[]>(["administrator"]);
   const [workspaceId, setWorkspaceId] = useState(
     organization.workspaces[0]?.id ?? "",
   );
-  const [credential, setCredential] = useState<{
-    token: string;
-    expiresAt: string;
-  } | null>(null);
+  const [created, setCreated] = useState<
+    Array<{ email: string; appointmentToken: string; expiresAt: string }>
+  >([]);
   const [error, setError] = useState("");
-  const link = credential
-    ? `${window.location.origin}/app?appointment=${encodeURIComponent(credential.token)}`
-    : "";
+  const parsed = parseInviteEmails(emailDraft);
+  const overLimit = parsed.emails.length > MAX_BULK_INVITES;
+  const origin =
+    typeof window === "undefined" ? "" : window.location.origin;
+
   return (
     <Modal
       title="Appoint organization member"
       eyebrow="Email-bound governance role"
       onClose={onClose}
+      wide
     >
-      {credential ? (
-        <div className="modal-form created-invite">
+      {created.length ? (
+        <div className="modal-form invite-form created-invite">
           <CheckCircle2 />
           <div>
-            <strong>Appointment queued</strong>
+            <strong>
+              {created.length === 1
+                ? "Appointment queued"
+                : `${created.length} appointments queued`}
+            </strong>
             <p>
-              The fallback credential is shown once and expires{" "}
-              {formatDate(credential.expiresAt, true)}.
+              Each fallback credential is shown once. Copy the links now.
             </p>
           </div>
-          <div className="copy-field">
-            <span>{email.toLowerCase()}</span>
-            <input readOnly value={link} />
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => navigator.clipboard.writeText(link)}
-            >
-              <Copy /> Copy appointment link
-            </button>
+          <div className="created-invite-list">
+            {created.map((item) => {
+              const url = `${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`;
+              return (
+                <div className="copy-field" key={item.email}>
+                  <span className="created-invite-email">{item.email}</span>
+                  <input
+                    readOnly
+                    value={url}
+                    aria-label={`${item.email} appointment link`}
+                  />
+                  <button
+                    className="button secondary"
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(url)}
+                  >
+                    <Copy /> Copy
+                  </button>
+                </div>
+              );
+            })}
           </div>
+          {created.length > 1 ? (
+            <button
+              className="button ghost small"
+              type="button"
+              onClick={() =>
+                navigator.clipboard.writeText(
+                  created
+                    .map(
+                      (item) =>
+                        `${item.email}\t${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`,
+                    )
+                    .join("\n"),
+                )
+              }
+            >
+              <Copy /> Copy all links
+            </button>
+          ) : null}
           <footer className="modal-footer">
             <span />
             <button className="button primary" type="button" onClick={onClose}>
@@ -4954,20 +6779,26 @@ function OrganizationAppointmentDialog({
         </div>
       ) : (
         <form
-          className="modal-form"
+          className="modal-form invite-form"
           onSubmit={async (event) => {
             event.preventDefault();
+            if (
+              !parsed.emails.length ||
+              parsed.invalid.length ||
+              overLimit ||
+              !roles.length ||
+              !workspaceId
+            ) {
+              return;
+            }
             setError("");
             try {
-              const result = await onAppoint(
-                email.trim().toLowerCase(),
+              const result = await onAppoint({
+                emails: parsed.emails,
                 roles,
-                workspaceId,
-              );
-              setCredential({
-                token: result.appointmentToken,
-                expiresAt: result.expiresAt,
+                anchorWorkspaceId: workspaceId,
               });
+              if (result.length) setCreated(result);
             } catch (nextError) {
               setError(messageFromError(nextError));
             }
@@ -4978,13 +6809,36 @@ function OrganizationAppointmentDialog({
             access separately from the workspace Members page.
           </p>
           <label className="field">
-            <span>Verified account email</span>
-            <input
+            <span>Verified account emails</span>
+            <textarea
               required
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              className="invite-emails"
+              value={emailDraft}
+              onChange={(event) => setEmailDraft(event.target.value)}
+              placeholder={"owner@example.com\nbilling@example.com"}
+              aria-label="Verified account emails"
+              rows={6}
             />
+            <small>
+              Paste one address per line, or separate them with commas. Each
+              person must already have that verified account.
+              {parsed.emails.length
+                ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
+                : ""}
+            </small>
+            {parsed.invalid.length ? (
+              <small className="form-error" role="alert">
+                Not valid: {parsed.invalid.slice(0, 6).join(", ")}
+                {parsed.invalid.length > 6
+                  ? ` +${parsed.invalid.length - 6} more`
+                  : ""}
+              </small>
+            ) : null}
+            {overLimit ? (
+              <small className="form-error" role="alert">
+                Appoint at most {MAX_BULK_INVITES} people at a time.
+              </small>
+            ) : null}
           </label>
           <div className="role-picker">
             {ORGANIZATION_ROLES.map((role) => (
@@ -5008,20 +6862,20 @@ function OrganizationAppointmentDialog({
             ))}
           </div>
           <div className="field">
-            <span>Audit anchor workspace</span>
+            <span>Audit workspace</span>
             <SelectMenu
               className="form-select"
               value={workspaceId}
               onChange={setWorkspaceId}
-              ariaLabel="Audit anchor workspace"
+              ariaLabel="Audit workspace"
               options={organization.workspaces.map((workspace) => ({
                 value: workspace.id,
-                label: workspace.name,
+                label: workspaceOptionLabel(workspace),
               }))}
             />
             <small>
-              This locates the appointment audit event; it does not grant
-              workspace access.
+              Used only to locate the audit event. It does not grant workspace
+              access.
             </small>
           </div>
           {error ? (
@@ -5042,10 +6896,18 @@ function OrganizationAppointmentDialog({
               className="button primary"
               type="submit"
               disabled={
-                busy || !email.includes("@") || !roles.length || !workspaceId
+                busy ||
+                !parsed.emails.length ||
+                parsed.invalid.length > 0 ||
+                overLimit ||
+                !roles.length ||
+                !workspaceId
               }
             >
-              <UserPlus /> Create appointment
+              <UserPlus />{" "}
+              {parsed.emails.length > 1
+                ? `Create ${parsed.emails.length} appointments`
+                : "Create appointment"}
             </button>
           </footer>
         </form>
@@ -5341,12 +7203,13 @@ function ExtensionDialog({
 }: {
   busy: boolean;
   companion: ExtensionCompanion;
-  state: "checking" | "missing" | "connected";
+  state: "checking" | "missing" | "error" | "unavailable" | "connected";
   onClose: () => void;
   onLink: (options?: { force?: boolean }) => Promise<unknown>;
   onRevoke: () => Promise<void>;
 }) {
   const [connectionError, setConnectionError] = useState("");
+  const stores = extensionStoreUrls();
 
   async function relink() {
     setConnectionError("");
@@ -5385,66 +7248,43 @@ function ExtensionDialog({
             <div>
               <strong>Install the KnowHow extension</strong>
               <p>
-                Use your organization&apos;s approved unlisted store listing. Store
-                delivery preserves the stable extension ID and automatic updates.
+                {stores.chrome || stores.edge
+                  ? "Add it from Chrome or Edge, then come back here to connect it to this workspace."
+                  : "Download it, load it in Chrome or Edge, then come back here to connect it to this workspace."}
               </p>
-              {process.env.NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL ? (
-                <a
-                  className="button secondary"
-                  href={process.env.NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <Download /> Install for Chrome
-                </a>
-              ) : null}
-              {process.env.NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL ? (
-                <a
-                  className="button secondary"
-                  href={process.env.NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <Download /> Install for Edge
-                </a>
-              ) : null}
-              {!process.env.NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL &&
-              !process.env.NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL ? (
-                <p className="privacy-caption">
-                  Development only: run the validated extension build and load
-                  <code> extension/dist </code> through browser developer mode.
-                </p>
-              ) : null}
+              <ExtensionInstallInstructions
+                actionClassName="button primary"
+                showPageLink
+              />
             </div>
           </li>
           <li>
             <span>2</span>
             <div>
-              <strong>Nothing to pair</strong>
+              <strong>Connect it to this workspace</strong>
               <p>
-                Because you are signed in here, KnowHow hands this workspace to
-                the installed extension by itself. There is no code to copy and
-                no button to press.
+                After it is installed, KnowHow pairs it automatically while you
+                are signed in. There is no code to copy.
               </p>
               {state === "checking" ? (
                 <button className="button primary" disabled>
                   <LoaderCircle className="spin" /> Checking extension
                 </button>
-              ) : state === "missing" ? (
+              ) : state === "connected" ? (
+                <span className="extension-connected">
+                  <CheckCircle2 /> Connected to {companion.workspaceName}
+                </span>
+              ) : (
                 <button
                   className="button primary"
                   type="button"
-                  disabled={busy}
+                  disabled={busy || state === "unavailable"}
                   onClick={() => {
                     void relink();
                   }}
                 >
-                  <Link2 /> Retry connection
+                  <Link2 /> Try again
                 </button>
-              ) : (
-                <span className="extension-connected">
-                  <CheckCircle2 /> Connected to {companion.workspaceName}
-                </span>
               )}
             </div>
           </li>
@@ -5464,15 +7304,30 @@ function ExtensionDialog({
                   void revokeDevices().catch(() => undefined);
                 }}
               >
-                <Trash2 /> Revoke browser access
+                <Trash2 /> Disconnect this browser
               </button>
             </div>
           </li>
         </ol>
+        {state === "unavailable" ? (
+          <p className="form-error">
+            This browser cannot run extensions. Install KnowHow Capture in
+            Chrome or Edge, then open this workspace there.
+          </p>
+        ) : null}
         {state === "missing" ? (
           <p className="form-error">
-            KnowHow could not reach the extension. Install or reload it, then
-            retry.
+            KnowHow could not find the capture extension. Install it
+            {stores.chrome || stores.edge
+              ? " from the store"
+              : " with the download above"}
+            , then try again.
+          </p>
+        ) : null}
+        {state === "error" ? (
+          <p className="form-error">
+            The extension is installed, but pairing did not finish. Reload the
+            extension, then try again.
           </p>
         ) : null}
         {connectionError ? (
@@ -5495,10 +7350,26 @@ function ExtensionDialog({
   );
 }
 
-function AccountSecurityDialog({ onClose }: { onClose: () => void }) {
+function AccountSecurityDialog({
+  name,
+  email,
+  mfaEnabled,
+  onClose,
+  onEnable,
+}: {
+  name: string;
+  email: string;
+  mfaEnabled: boolean;
+  onClose: () => void;
+  onEnable: () => void;
+}) {
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [displayName, setDisplayName] = useState(name);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [nextPassword, setNextPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   async function regenerate() {
     setWorking(true);
@@ -5516,11 +7387,90 @@ function AccountSecurityDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function turnOff() {
+    if (
+      !window.confirm(
+        "Turn off authenticator protection? You will only need your password to sign in.",
+      )
+    ) {
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      await disableMfa();
+      toast.success("Authenticator protection is off");
+      onClose();
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function saveName() {
+    setWorking(true);
+    setError("");
+    try {
+      await updateAccountName(displayName.trim());
+      toast.success("Name updated");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function savePassword() {
+    if (nextPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setError("The two new passwords do not match.");
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      await updateAccountPassword(currentPassword, nextPassword);
+      setCurrentPassword("");
+      setNextPassword("");
+      setConfirmPassword("");
+      toast.success("Password updated");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function signOutOtherDevices() {
+    if (
+      !window.confirm(
+        "Sign out every other browser and device? This session will stay signed in.",
+      )
+    ) {
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      await revokeOtherSessions();
+      toast.success("Other sessions signed out");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <Modal
-      title="Account security"
-      eyebrow="Authenticator recovery"
+      title="Account settings"
+      eyebrow={email}
       onClose={onClose}
+      wide
     >
       <div className="modal-form">
         {recoveryCodes.length ? (
@@ -5554,15 +7504,75 @@ function AccountSecurityDialog({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <>
+            <label className="field">
+              <span>Name</span>
+              <input
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+            <button
+              className="button secondary small"
+              type="button"
+              disabled={working || displayName.trim().length < 2}
+              onClick={() => void saveName()}
+            >
+              Save name
+            </button>
+            <label className="field">
+              <span>Current password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>New password</span>
+              <input
+                type="password"
+                minLength={8}
+                autoComplete="new-password"
+                value={nextPassword}
+                onChange={(event) => setNextPassword(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Confirm new password</span>
+              <input
+                type="password"
+                minLength={8}
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+            </label>
+            <button
+              className="button secondary small"
+              type="button"
+              disabled={working || !currentPassword || !nextPassword}
+              onClick={() => void savePassword()}
+            >
+              Update password
+            </button>
             <p className="modal-copy">
-              Generate a replacement set if your saved codes are unavailable.
-              You will confirm a current authenticator code before KnowHow
-              replaces them.
+              {mfaEnabled
+                ? "Authenticator sign-in is on for this account. You can replace recovery codes or turn it off."
+                : "Authenticator apps are optional. Turn one on if you want a second step at sign-in."}
             </p>
             <p className="privacy-caption">
-              <LockKeyhole /> KnowHow shows recovery codes only once and never
-              includes them in logs, email, or support records.
+              <LockKeyhole /> Recovery codes are shown once and never included
+              in logs, email, or support records.
             </p>
+            <button
+              className="button ghost small"
+              type="button"
+              disabled={working}
+              onClick={() => void signOutOtherDevices()}
+            >
+              Sign out other devices
+            </button>
           </>
         )}
         {error ? (
@@ -5573,17 +7583,37 @@ function AccountSecurityDialog({ onClose }: { onClose: () => void }) {
         <footer className="modal-footer">
           <span />
           <button className="button secondary" type="button" onClick={onClose}>
-            {recoveryCodes.length ? "I saved the codes" : "Cancel"}
+            {recoveryCodes.length ? "I saved the codes" : "Close"}
           </button>
-          {!recoveryCodes.length ? (
+          {!recoveryCodes.length && mfaEnabled ? (
+            <>
+              <button
+                className="button ghost"
+                type="button"
+                disabled={working}
+                onClick={() => void turnOff()}
+              >
+                Turn off
+              </button>
+              <button
+                className="button primary"
+                type="button"
+                disabled={working}
+                onClick={() => void regenerate()}
+              >
+                {working ? <LoaderCircle className="spin" /> : <RotateCcw />}{" "}
+                Regenerate codes
+              </button>
+            </>
+          ) : null}
+          {!recoveryCodes.length && !mfaEnabled ? (
             <button
               className="button primary"
               type="button"
               disabled={working}
-              onClick={() => void regenerate()}
+              onClick={onEnable}
             >
-              {working ? <LoaderCircle className="spin" /> : <RotateCcw />} Regenerate
-              codes
+              <ShieldCheck /> Turn on authenticator
             </button>
           ) : null}
         </footer>
@@ -5627,6 +7657,7 @@ export function KnowHowWorkspaceApp({
   onError,
   onNavigate,
   onRegisterNavigationGuard,
+  onRequestMfaEnrollment,
 }: {
   data: BootstrapResponse;
   activeWorkspaceId: string;
@@ -5640,6 +7671,7 @@ export function KnowHowWorkspaceApp({
   onError: (message: string) => void;
   onNavigate: (href: string, options?: { replace?: boolean }) => void;
   onRegisterNavigationGuard: (guard: NavigationGuard | null) => void;
+  onRequestMfaEnrollment?: () => void;
 }) {
   const active = data.activeWorkspace!;
   const {
@@ -5682,9 +7714,13 @@ export function KnowHowWorkspaceApp({
             route.kind === "guide-edit"
           ? "Guides"
           : "Overview";
+  const platformSection =
+    route.kind === "platform" ? route.section : "overview";
+  const platformAccountId =
+    route.kind === "platform" ? route.workspaceId : undefined;
 
   const [extensionLink, setExtensionLink] = useState<
-    "checking" | "missing" | "connected"
+    "checking" | "missing" | "error" | "unavailable" | "connected"
   >("checking");
   const extensionCompanion = useMemo<ExtensionCompanion>(
     () => ({
@@ -5768,19 +7804,28 @@ export function KnowHowWorkspaceApp({
   // workspace, which keeps repeat visits to a single ping.
   const linkExtension = useCallback(
     async (options: { force?: boolean } = {}) => {
-      const state = await ensureKnowHowExtension(
-        extensionCompanion,
-        () =>
-          knowhowCommand<{ code: string; expiresAt: string }>(
-            "createPairingCode",
-            {
-              workspaceId: workspace.id,
-            },
-          ),
-        options,
-      );
-      setExtensionLink(state.installed ? "connected" : "missing");
-      return state;
+      try {
+        const state = await ensureKnowHowExtension(
+          extensionCompanion,
+          () =>
+            knowhowCommand<{ code: string; expiresAt: string }>(
+              "createPairingCode",
+              {
+                workspaceId: workspace.id,
+              },
+            ),
+          options,
+        );
+        if (!state.installed) {
+          setExtensionLink(state.reason);
+          return state;
+        }
+        setExtensionLink("connected");
+        return state;
+      } catch (error) {
+        setExtensionLink("error");
+        throw error;
+      }
     },
     [extensionCompanion, workspace.id],
   );
@@ -5792,7 +7837,11 @@ export function KnowHowWorkspaceApp({
         : syncKnowHowExtension(extensionCompanion).then(() =>
             setExtensionLink("connected"),
           );
-      void attempt.catch(() => setExtensionLink("missing"));
+      void attempt.catch(() => {
+        setExtensionLink((current) =>
+          current === "checking" ? "missing" : current,
+        );
+      });
     };
     link();
     window.addEventListener("focus", link);
@@ -5897,18 +7946,18 @@ export function KnowHowWorkspaceApp({
       : data.viewer.platformAdministrator;
   const publishedRestricted = Boolean(
     routeGuide?.publishedRevision &&
-      !routeGuide.publishedRevision.audiences.some(
-        (item) => item.kind === "workspace",
-      ),
+    !routeGuide.publishedRevision.audiences.some(
+      (item) => item.kind === "workspace",
+    ),
   );
   const routeGuideAuthor =
     routeGuide?.workingRevision?.authorId ??
     routeGuide?.publishedRevision?.authorId;
   const canRestoreRouteGuide = Boolean(
     workspaceMutable &&
-      routeGuide &&
-      (isAdmin ||
-        (roles.includes("creator") && routeGuideAuthor === data.viewer.id)),
+    routeGuide &&
+    (isAdmin ||
+      (roles.includes("creator") && routeGuideAuthor === data.viewer.id)),
   );
   const publishedViewKey = useRef("");
 
@@ -5934,6 +7983,7 @@ export function KnowHowWorkspaceApp({
 
   const visibleNav = [
     ...NAV_ITEMS.filter((item) => {
+      if (item.view === "Capture") return canCapture;
       if (item.view === "Vault") return canUseVault;
       if (item.view === "Organization") return Boolean(organization);
       if (["Groups", "Members", "Settings"].includes(item.view)) return isAdmin;
@@ -5948,8 +7998,79 @@ export function KnowHowWorkspaceApp({
   );
   const governanceNavigation = visibleNav.filter(
     ({ view: item }) =>
-      !["Overview", "Guides", "Capture", "Support"].includes(item),
+      !["Overview", "Guides", "Capture", "Support", "Platform"].includes(item),
   );
+  const platformNavigation = visibleNav.filter(
+    ({ view: item }) => item === "Platform",
+  );
+  const onboardingAudience = isAdmin || canCapture;
+  const onboardingRemaining = active.onboarding.steps.filter(
+    (step) => !step.completed,
+  ).length;
+  const showSetupNav =
+    onboardingAudience &&
+    !active.onboarding.completedAt &&
+    Boolean(active.onboarding.dismissedAt);
+  const accessLabel =
+    view === "Platform"
+      ? "Platform administrator"
+      : workspaceAccessLabel(roles);
+
+  let primaryAction: {
+    label: string;
+    icon: typeof Plus;
+    disabled: boolean;
+    onClick: () => void;
+  } | null = null;
+
+  if (view === "Platform" && data.viewer.platformAdministrator) {
+    primaryAction = {
+      label: "Provision organization",
+      icon: Building2,
+      disabled: busy,
+      onClick: () => setDialog({ type: "platform-create" }),
+    };
+  } else if (view === "Members" && isAdmin) {
+    primaryAction = {
+      label: "Invite teammate",
+      icon: UserPlus,
+      disabled: busy || !workspaceMutable,
+      onClick: () => setDialog({ type: "invite" }),
+    };
+  } else if (view === "Groups" && isAdmin) {
+    primaryAction = {
+      label: "New group",
+      icon: Group,
+      disabled: busy || !workspaceMutable,
+      onClick: () => setDialog({ type: "group", group: null }),
+    };
+  } else if (
+    (view === "Overview" || view === "Guides") &&
+    canCreate &&
+    workspaceMutable
+  ) {
+    primaryAction = {
+      label: "New guide",
+      icon: Plus,
+      disabled: busy,
+      onClick: () => onNavigate(newGuideHref(workspace.slug)),
+    };
+  } else if (view === "Capture" && canCapture) {
+    primaryAction = {
+      label: "Install and pair",
+      icon: Sparkles,
+      disabled: busy,
+      onClick: () => setDialog({ type: "extension" }),
+    };
+  } else if (view === "Vault" && canUseVault) {
+    primaryAction = {
+      label: "New vault item",
+      icon: KeyRound,
+      disabled: busy || !workspaceMutable,
+      onClick: () => setDialog({ type: "vault-editor", item: null }),
+    };
+  }
+  const PrimaryActionIcon = primaryAction?.icon;
 
   if (!canAccessCurrentView) {
     return (
@@ -6145,7 +8266,17 @@ export function KnowHowWorkspaceApp({
   return (
     <SidebarProvider>
       <div
-        className="app-shell"
+        className="app-shell experience-shell"
+        data-view={view.toLowerCase()}
+        data-access={
+          view === "Platform"
+            ? "platform"
+            : isAdmin
+              ? "administrator"
+              : canCreate
+                ? "contributor"
+                : "member"
+        }
         style={
           {
             "--workspace-accent": workspace.settings.accentColor,
@@ -6158,7 +8289,9 @@ export function KnowHowWorkspaceApp({
             <div className="sidebar-brand">
               <ProductBrand compact />
             </div>
-            <p className="sidebar-section-label">Active workspace</p>
+            <p className="sidebar-section-label">
+              {view === "Platform" ? "Workspace switcher" : "Active workspace"}
+            </p>
             <SelectMenu
               className="workspace-menu"
               contentClassName="workspace-menu-options"
@@ -6180,13 +8313,57 @@ export function KnowHowWorkspaceApp({
                   />
                   <span className="workspace-menu-copy">
                     <strong>{workspace.name}</strong>
-                    <small>{roles.map(titleCase).join(" · ")}</small>
+                    <small>{workspaceAccessLabel(roles)}</small>
                   </span>
                 </>
               )}
             />
           </SidebarHeader>
           <SidebarContent>
+            {view === "Platform" ? (
+              <>
+                <SidebarGroup className="workspace-nav-group">
+                  <nav className="main-nav" aria-label="Leave platform console">
+                    <SidebarMenu>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton
+                          type="button"
+                          onClick={() =>
+                            onNavigate(workspaceHref(workspace.slug))
+                          }
+                        >
+                          <ArrowLeft />
+                          <span>Back to workspace</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    </SidebarMenu>
+                  </nav>
+                </SidebarGroup>
+              <SidebarGroup className="workspace-nav-group">
+                <p className="sidebar-section-label">Platform</p>
+                <nav className="main-nav" aria-label="Platform navigation">
+                  <SidebarMenu>
+                    {PLATFORM_NAV.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <SidebarMenuItem key={item.section}>
+                          <SidebarMenuButton
+                            isActive={platformSection === item.section}
+                            type="button"
+                            onClick={() => onNavigate(platformHref(item.section))}
+                          >
+                            <Icon />
+                            <span>{item.label}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </nav>
+              </SidebarGroup>
+              </>
+            ) : (
+              <>
             <SidebarGroup className="workspace-nav-group">
               <p className="sidebar-section-label">Workspace</p>
               <nav className="main-nav" aria-label="Workspace navigation">
@@ -6199,7 +8376,7 @@ export function KnowHowWorkspaceApp({
                         onClick={() => navigateToView(item)}
                       >
                         <Icon />
-                        <span>{item}</span>
+                        <span>{NAV_LABELS[item]}</span>
                       </SidebarMenuButton>
                       {item === "Guides" && active.metrics.reviews ? (
                         <SidebarMenuBadge>
@@ -6208,13 +8385,31 @@ export function KnowHowWorkspaceApp({
                       ) : null}
                     </SidebarMenuItem>
                   ))}
+                  {showSetupNav ? (
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        isActive={dialog?.type === "setup-wizard"}
+                        type="button"
+                        onClick={() => setDialog({ type: "setup-wizard" })}
+                      >
+                        <ClipboardCheck />
+                        <span>Getting started</span>
+                      </SidebarMenuButton>
+                      {onboardingRemaining ? (
+                        <SidebarMenuBadge>{onboardingRemaining}</SidebarMenuBadge>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ) : null}
                 </SidebarMenu>
               </nav>
             </SidebarGroup>
             {governanceNavigation.length ? (
               <SidebarGroup className="workspace-nav-group governance-nav-group">
-                <p className="sidebar-section-label">Governance</p>
-                <nav className="main-nav" aria-label="Governance navigation">
+                <p className="sidebar-section-label">Manage workspace</p>
+                <nav
+                  className="main-nav"
+                  aria-label="Workspace administration navigation"
+                >
                   <SidebarMenu>
                     {governanceNavigation.map(({ view: item, icon: Icon }) => (
                       <SidebarMenuItem key={item}>
@@ -6224,7 +8419,7 @@ export function KnowHowWorkspaceApp({
                           onClick={() => navigateToView(item)}
                         >
                           <Icon />
-                          <span>{item}</span>
+                          <span>{NAV_LABELS[item]}</span>
                         </SidebarMenuButton>
                         {item === "Members" && pendingSupportCount ? (
                           <SidebarMenuBadge className="nav-badge">
@@ -6237,28 +8432,48 @@ export function KnowHowWorkspaceApp({
                 </nav>
               </SidebarGroup>
             ) : null}
+            {platformNavigation.length ? (
+              <SidebarGroup className="workspace-nav-group admin-nav-group">
+                <p className="sidebar-section-label">Administration</p>
+                <nav className="main-nav" aria-label="Platform navigation">
+                  <SidebarMenu>
+                    {platformNavigation.map(({ view: item, icon: Icon }) => (
+                      <SidebarMenuItem key={item}>
+                        <SidebarMenuButton
+                          isActive={view === item}
+                          type="button"
+                          onClick={() => navigateToView(item)}
+                        >
+                          <Icon />
+                          <span>{NAV_LABELS[item]}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </nav>
+              </SidebarGroup>
+            ) : null}
+              </>
+            )}
           </SidebarContent>
-          <SidebarFooter>
-            <button
-              className="capture-shortcut"
-              type="button"
-              disabled={!canCapture}
-              onClick={() => setDialog({ type: "extension" })}
-            >
-              <span>
-                <Sparkles />
-              </span>
-              <span>
-                <strong>Capture workflow</strong>
-                <small>
-                  {canCapture
-                    ? "Chrome & Edge extension"
-                    : "Creator access required"}
-                </small>
-              </span>
-              <ArrowRight />
-            </button>
-          </SidebarFooter>
+          {canCapture && view !== "Platform" ? (
+            <SidebarFooter>
+              <button
+                className="capture-shortcut"
+                type="button"
+                onClick={() => setDialog({ type: "extension" })}
+              >
+                <span>
+                  <Sparkles />
+                </span>
+                <span>
+                  <strong>Capture workflow</strong>
+                  <small>Chrome & Edge extension</small>
+                </span>
+                <ArrowRight />
+              </button>
+            </SidebarFooter>
+          ) : null}
         </Sidebar>
 
         <div className="app-main">
@@ -6266,20 +8481,49 @@ export function KnowHowWorkspaceApp({
             <div className="topbar-start">
               <SidebarTrigger className="mobile-menu" />
               <div className="topbar-workspace">
-                <WorkspaceLogo
-                  workspaceId={workspace.id}
-                  workspaceName={workspace.name}
-                  logoKey={workspace.settings.logoUrl}
-                  size="sm"
-                />
-                <span>
-                  <small>Workspace</small>
-                  <strong>{workspace.name}</strong>
+                {view === "Platform" ? (
+                  <span className="topbar-context-mark" aria-hidden="true">
+                    <Shield />
+                  </span>
+                ) : (
+                  <WorkspaceLogo
+                    workspaceId={workspace.id}
+                    workspaceName={workspace.name}
+                    logoKey={workspace.settings.logoUrl}
+                    size="sm"
+                  />
+                )}
+                <span className="topbar-context-copy">
+                  <small>
+                    {view === "Platform"
+                      ? (PLATFORM_NAV.find((item) => item.section === platformSection)
+                          ?.label ?? "Platform")
+                      : NAV_LABELS[view]}
+                  </small>
+                  <strong>
+                    {view === "Platform"
+                      ? "KnowHow administration"
+                      : workspace.name}
+                  </strong>
+                  {view !== "Platform" ? (
+                    <TrialChip subscription={workspace.subscription} />
+                  ) : null}
                 </span>
               </div>
             </div>
             <div className="topbar-search-slot">
-              <GlobalGuideSearch guides={guides} onOpen={openGuide} />
+              {view === "Platform" ? (
+                <div className="platform-topbar-summary">
+                  <ShieldCheck />
+                  <span>
+                    <strong>Control plane</strong>
+                    <small>Customer content remains private</small>
+                  </span>
+                </div>
+              ) : guides.length &&
+                !["Organization", "Settings", "Support"].includes(view) ? (
+                <GlobalGuideSearch guides={guides} onOpen={openGuide} />
+              ) : null}
             </div>
             <div className="topbar-actions">
               <Button
@@ -6303,24 +8547,17 @@ export function KnowHowWorkspaceApp({
               >
                 {resolvedTheme === "dark" ? <Sun /> : <Moon />}
               </Button>
-              <Button
-                className="top-create"
-                size="sm"
-                type="button"
-                disabled={
-                  busy ||
-                  (view === "Platform"
-                    ? !data.viewer.platformAdministrator
-                    : !canCreate || !workspaceMutable)
-                }
-                onClick={() =>
-                  view === "Platform"
-                    ? setDialog({ type: "platform-create" })
-                    : onNavigate(newGuideHref(workspace.slug))
-                }
-              >
-                <Plus /> {view === "Platform" ? "Organization" : "Create"}
-              </Button>
+              {primaryAction && PrimaryActionIcon ? (
+                <Button
+                  className="top-create topbar-primary-action"
+                  size="sm"
+                  type="button"
+                  disabled={primaryAction.disabled}
+                  onClick={primaryAction.onClick}
+                >
+                  <PrimaryActionIcon /> {primaryAction.label}
+                </Button>
+              ) : null}
               <DropdownMenu>
                 <DropdownMenuTrigger
                   className="profile-button"
@@ -6340,13 +8577,16 @@ export function KnowHowWorkspaceApp({
                     <DropdownMenuLabel>
                       <strong>{data.viewer.name}</strong>
                       <small>{data.viewer.email}</small>
+                      <span className="profile-access-context">
+                        {accessLabel}
+                      </span>
                     </DropdownMenuLabel>
                   </DropdownMenuGroup>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => setDialog({ type: "account-security" })}
                   >
-                    <KeyRound /> Account security
+                    <KeyRound /> Account settings
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={onSignOut}>
@@ -6409,6 +8649,10 @@ export function KnowHowWorkspaceApp({
                     "Pilot workspace readiness confirmed",
                   ).then(() => undefined)
                 }
+                onOpenExtension={() => setDialog({ type: "extension" })}
+                onDismiss={() =>
+                  command("dismissOnboarding", {}, "").then(() => undefined)
+                }
               />
             ) : null}
             {view === "Guides" ? (
@@ -6425,10 +8669,7 @@ export function KnowHowWorkspaceApp({
               />
             ) : null}
             {view === "Capture" ? (
-              <CaptureView
-                canCapture={canCapture}
-                onOpenExtension={() => setDialog({ type: "extension" })}
-              />
+              <CaptureView canCapture={canCapture} />
             ) : null}
             {view === "Groups" && isAdmin ? (
               <GroupsView
@@ -6523,22 +8764,51 @@ export function KnowHowWorkspaceApp({
               <OrganizationView
                 organization={organization}
                 busy={busy}
-                onAppoint={(email, roles, anchorWorkspaceId) =>
-                  command<{
-                    appointmentId: string;
+                onAppoint={async ({ emails, roles, anchorWorkspaceId }) => {
+                  onBusyChange(true);
+                  onError("");
+                  const created: Array<{
+                    email: string;
                     appointmentToken: string;
                     expiresAt: string;
-                  }>(
-                    "appointOrganizationMember",
-                    {
-                      organizationId: organization.id,
-                      email,
-                      roles,
-                      anchorWorkspaceId,
-                    },
-                    "Organization appointment created",
-                  )
-                }
+                  }> = [];
+                  try {
+                    for (const email of emails) {
+                      const result = await knowhowCommand<{
+                        appointmentId: string;
+                        appointmentToken: string;
+                        expiresAt: string;
+                      }>("appointOrganizationMember", {
+                        organizationId: organization.id,
+                        email,
+                        roles,
+                        anchorWorkspaceId,
+                      });
+                      created.push({
+                        email,
+                        appointmentToken: result.appointmentToken,
+                        expiresAt: result.expiresAt,
+                      });
+                    }
+                    await onRefresh();
+                    toast.success(
+                      created.length === 1
+                        ? "Organization appointment created"
+                        : `${created.length} organization appointments created`,
+                    );
+                    return created;
+                  } catch (error) {
+                    if (created.length) await onRefresh();
+                    const suffix = created.length
+                      ? ` Created ${created.length} of ${emails.length}.`
+                      : "";
+                    onError(`${messageFromError(error)}${suffix}`);
+                    if (created.length) return created;
+                    throw error;
+                  } finally {
+                    onBusyChange(false);
+                  }
+                }}
                 onUpdate={(memberId, roles, status) =>
                   command(
                     "updateOrganizationMember",
@@ -6549,13 +8819,6 @@ export function KnowHowWorkspaceApp({
                       status,
                     },
                     "Organization membership updated",
-                  )
-                }
-                onSaveDomains={(domains) =>
-                  command(
-                    "updateOrganizationDomains",
-                    { organizationId: organization.id, domains },
-                    "Organization domains updated",
                   )
                 }
                 onRevokeAppointment={(appointmentId) =>
@@ -6574,24 +8837,12 @@ export function KnowHowWorkspaceApp({
                 workspaceName={workspace.name}
                 initial={workspace.settings}
                 busy={busy || !workspaceMutable}
-                canManageDomains={Boolean(
-                  organization?.roles.some((role) =>
-                    ["owner", "administrator"].includes(role),
-                  ),
-                )}
                 onRefresh={onRefresh}
                 onSave={async (settings) => {
                   await command(
                     "updateWorkspaceSettings",
                     { settings },
-                    "Workspace policies saved",
-                  );
-                }}
-                onSaveDomains={async (allowedDomains) => {
-                  await command(
-                    "updateAllowedDomains",
-                    { allowedDomains },
-                    "Approved domains saved",
+                    "Workspace settings saved",
                   );
                 }}
               />
@@ -6602,6 +8853,9 @@ export function KnowHowWorkspaceApp({
               <PlatformView
                 platform={data.platform}
                 busy={busy}
+                section={platformSection}
+                workspaceId={platformAccountId}
+                onNavigate={onNavigate}
                 onProvision={() => setDialog({ type: "platform-create" })}
                 onStatus={(workspaceId, status) => {
                   if (window.confirm(`${titleCase(status)} this workspace?`))
@@ -6652,6 +8906,33 @@ export function KnowHowWorkspaceApp({
                     "Tenant purge approved",
                   );
                 }}
+                canManageBetaAccess={Boolean(
+                  data.viewer.platformRoles?.some((role) =>
+                    ["owner", "operations"].includes(role),
+                  ),
+                )}
+                onCreateBetaAccess={async (input) => {
+                  return command(
+                    "createBetaAccessGrant",
+                    input,
+                    "Private-beta access generated",
+                  ) as Promise<{ grant: BetaAccessGrant; code: string }>;
+                }}
+                onRevokeBetaAccess={(grantId) =>
+                  command(
+                    "revokeBetaAccessGrant",
+                    { grantId },
+                    "Private-beta access revoked",
+                  )
+                }
+                canManagePlatformControls={Boolean(
+                  data.viewer.platformRoles?.some((role) =>
+                    ["owner", "operations"].includes(role),
+                  ),
+                )}
+                onPlatformControl={(action, payload, successMessage) =>
+                  command(action, payload, successMessage)
+                }
                 onRevokeAppointment={(appointment) => {
                   if (
                     window.confirm(
@@ -6732,13 +9013,47 @@ export function KnowHowWorkspaceApp({
             busy={busy}
             origin={window.location.origin}
             onClose={() => setDialog(null)}
-            onCreate={(payload) =>
-              command<{ token: string }>(
-                "createInvite",
-                payload,
-                "Invitation created",
-              )
-            }
+            onCreate={async (payload) => {
+              onBusyChange(true);
+              onError("");
+              const created: Array<{ email: string; token: string }> = [];
+              try {
+                for (const email of payload.emails) {
+                  const label = (
+                    payload.label || `Invite ${email}`
+                  ).slice(0, 128);
+                  const result = await knowhowCommand<{ token: string }>(
+                    "createInvite",
+                    {
+                      workspaceId: workspace.id,
+                      email,
+                      label,
+                      role: payload.role,
+                      expiresInHours: payload.expiresInHours,
+                      maxUses: 1,
+                    },
+                  );
+                  created.push({ email, token: result.token });
+                }
+                await onRefresh();
+                toast.success(
+                  created.length === 1
+                    ? "Invitation created"
+                    : `${created.length} invitations created`,
+                );
+                return created;
+              } catch (error) {
+                if (created.length) await onRefresh();
+                const suffix = created.length
+                  ? ` Created ${created.length} of ${payload.emails.length}.`
+                  : "";
+                onError(`${messageFromError(error)}${suffix}`);
+                if (created.length) return created;
+                throw error;
+              } finally {
+                onBusyChange(false);
+              }
+            }}
           />
         ) : null}
         {dialog?.type === "extension" && canCapture ? (
@@ -6757,6 +9072,41 @@ export function KnowHowWorkspaceApp({
             }
           />
         ) : null}
+        {dialog?.type === "setup-wizard" && onboardingAudience ? (
+          <Modal
+            title="Getting started"
+            eyebrow="Workspace setup"
+            onClose={() => setDialog(null)}
+          >
+            <SetupWizard
+              onboarding={active.onboarding}
+              busy={busy}
+              canCapture={canCapture}
+              canManageAccess={isAdmin}
+              chrome="plain"
+              onConfirmReadiness={() =>
+                command(
+                  "confirmOnboardingReadiness",
+                  {
+                    ordinaryDataOnly: true,
+                    pilotPoliciesReviewed: true,
+                  },
+                  "Pilot workspace readiness confirmed",
+                ).then(() => undefined)
+              }
+              onNavigate={(nextView) => {
+                setDialog(null);
+                navigateToView(nextView);
+              }}
+              onOpenExtension={() => setDialog({ type: "extension" })}
+              onDismiss={() =>
+                command("dismissOnboarding", {}, "").then(() => {
+                  setDialog(null);
+                })
+              }
+            />
+          </Modal>
+        ) : null}
         {dialog?.type === "platform-create" &&
         data.viewer.platformAdministrator ? (
           <PlatformProvisioningDialog
@@ -6770,10 +9120,10 @@ export function KnowHowWorkspaceApp({
                 "",
               )
             }
-            onComplete={(runId) =>
+            onComplete={(runId, finalStepData) =>
               command<PlatformProvisioningResult>(
                 "completeProvisioningRun",
-                { runId },
+                { runId, finalStepData },
                 "Organization provisioned",
               )
             }
@@ -6871,7 +9221,16 @@ export function KnowHowWorkspaceApp({
           />
         ) : null}
         {dialog?.type === "account-security" ? (
-          <AccountSecurityDialog onClose={() => setDialog(null)} />
+          <AccountSecurityDialog
+            name={data.viewer.name}
+            email={data.viewer.email}
+            mfaEnabled={Boolean(data.viewer.mfaEnabled)}
+            onClose={() => setDialog(null)}
+            onEnable={() => {
+              setDialog(null);
+              onRequestMfaEnrollment?.();
+            }}
+          />
         ) : null}
         {busy ? (
           <div className="busy-indicator" role="status">
@@ -6956,7 +9315,10 @@ export function PlatformProvisioningDialog({
     currentStep: number;
     completedSteps: number[];
   }>;
-  onComplete: (runId: string) => Promise<PlatformProvisioningResult>;
+  onComplete: (
+    runId: string,
+    finalStepData: Record<string, unknown>,
+  ) => Promise<PlatformProvisioningResult>;
 }) {
   const identity = provisioningRecord(initialRun, 1);
   const branding = provisioningRecord(initialRun, 2);
@@ -7186,6 +9548,15 @@ export function PlatformProvisioningDialog({
     setSaving(true);
     setError("");
     try {
+      if (complete) {
+        if (!runId) {
+          throw new Error(
+            "Save organization identity before completing provisioning.",
+          );
+        }
+        setCreated(await onComplete(runId, stepData(step)));
+        return;
+      }
       if (step === 2 && logoFile) {
         if (!runId)
           throw new Error(
@@ -7208,7 +9579,7 @@ export function PlatformProvisioningDialog({
         });
         setCompletedSteps(saved.completedSteps);
         if (closeAfterSave) onClose();
-        else if (!complete) setStep(3);
+        else setStep(3);
         return;
       }
       const saved = await onSave(runId, step, stepData(step));
@@ -7220,9 +9591,7 @@ export function PlatformProvisioningDialog({
           ...items.slice(1),
         ]);
       }
-      if (complete) {
-        setCreated(await onComplete(saved.runId));
-      } else if (closeAfterSave) {
+      if (closeAfterSave) {
         onClose();
       } else {
         setStep(Math.min(6, step + 1));
@@ -7293,7 +9662,7 @@ export function PlatformProvisioningDialog({
   const working = busy || saving;
   return (
     <Modal
-      title="Provision a pilot organization"
+      title="Provision an organization"
       eyebrow={
         runId
           ? `Resumable draft · step ${step} of 6`
@@ -7845,7 +10214,7 @@ export function SupportRequestDialog({
           <small>
             Administrator-level access only ever operates within the
             customer&apos;s approval and remains locked out of membership,
-            invitations, domains, groups, and support governance.
+            invitations, groups, and support governance.
           </small>
         </div>
         <label className="field">

@@ -50,7 +50,6 @@ const PURGE_TABLES = [
 const ORGANIZATION_PURGE_TABLES = [
   "organizations",
   "organization_branding",
-  "organization_domains",
   "organization_memberships",
   "workspaces",
   "workspace_settings",
@@ -90,6 +89,8 @@ const USER_REFERENCE_TABLES = [
   "platform_roles",
   "catalog_items",
   "leads",
+  "beta_access_grants",
+  "beta_access_events",
 ];
 
 function services(req) {
@@ -406,6 +407,17 @@ function manifestCount(manifest, property) {
 
 function assertWorkspaceScope(rows, tableId, workspaceId, organizationId) {
   for (const row of rows) {
+    // Command idempotency rows created before tenant scope was persisted have
+    // an exact workspace binding but a null organization binding. Preserve
+    // deletion compatibility for those rows without relaxing any other table
+    // or accepting a conflicting organization.
+    if (
+      tableId === "idempotency_keys" &&
+      row.workspace_id === workspaceId &&
+      row.organization_id == null
+    ) {
+      continue;
+    }
     if (row.organization_id !== organizationId)
       throw new Error(
         `PURGE_SCOPE_MISMATCH:${tableId}:${workspaceId}:${row.$id}`,
@@ -1075,6 +1087,66 @@ function escapeHtml(value) {
   );
 }
 
+function localWorkerEmulation() {
+  if (process.env.KNOWHOW_LOCAL_WORKER_MODE !== "emulated") return null;
+  if (process.env.KNOWHOW_ENVIRONMENT !== "development")
+    throw new Error("LOCAL_WORKER_ENVIRONMENT_INVALID");
+  if (process.env.APPWRITE_FUNCTION_PROJECT_ID !== "knowhow-local")
+    throw new Error("LOCAL_WORKER_PROJECT_INVALID");
+  let endpoint;
+  let mailpit;
+  try {
+    endpoint = new URL(process.env.APPWRITE_FUNCTION_API_ENDPOINT || "");
+    mailpit = new URL(process.env.KNOWHOW_LOCAL_MAILPIT_URL || "");
+  } catch {
+    throw new Error("LOCAL_WORKER_URL_INVALID");
+  }
+  const localHost = (url) =>
+    url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (
+    endpoint.protocol !== "http:" ||
+    !localHost(endpoint) ||
+    endpoint.pathname.replace(/\/$/, "") !== "/v1" ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash
+  ) {
+    throw new Error("LOCAL_WORKER_ENDPOINT_INVALID");
+  }
+  if (
+    mailpit.protocol !== "http:" ||
+    !localHost(mailpit) ||
+    mailpit.port !== "8025" ||
+    (mailpit.pathname !== "/" && mailpit.pathname !== "") ||
+    mailpit.username ||
+    mailpit.password ||
+    mailpit.search ||
+    mailpit.hash
+  ) {
+    throw new Error("LOCAL_MAILPIT_URL_INVALID");
+  }
+  return { mailpitOrigin: mailpit.origin };
+}
+
+async function sendViaMailpit(email, template) {
+  const local = localWorkerEmulation();
+  if (!local) throw new Error("LOCAL_MAILPIT_DISABLED");
+  const response = await fetch(`${local.mailpitOrigin}/api/v1/send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      From: { Email: "notifications@knowhow.local", Name: "KnowHow" },
+      To: [{ Email: email }],
+      Subject: template.subject,
+      HTML: template.html,
+      Tags: ["knowhow-local"],
+    }),
+  });
+  if (!response.ok) throw new Error(`MAILPIT_${response.status}`);
+  return "mailpit-http";
+}
+
 function emailTemplate(kind, details) {
   const workspace = escapeHtml(
     details.workspaceName || "your KnowHow workspace",
@@ -1209,6 +1281,7 @@ async function sendViaResend(email, template, idempotencyKey) {
 }
 
 async function deliverNotifications({ tables, messaging, users }, now) {
+  const localMailpit = localWorkerEmulation();
   const due = await listAll(
     tables,
     "notification_deliveries",
@@ -1233,31 +1306,36 @@ async function deliverNotifications({ tables, messaging, users }, now) {
       }
       const template = emailTemplate(row.kind, templateDetails);
       let delivery = "appwrite-messaging";
-      let userId = row.user_id;
-      if (!userId && row.email) {
-        const match = await users.list({
-          queries: [Query.equal("email", [row.email]), Query.limit(1)],
-          total: false,
-        });
-        userId = match.users[0]?.$id;
-      }
-      if (userId) {
-        try {
-          await messaging.createEmail({
-            messageId: row.$id,
-            subject: template.subject,
-            content: template.html,
-            users: [userId],
-            html: true,
-          });
-        } catch (caught) {
-          if (caught?.code !== 409) throw caught;
-          delivery = "appwrite-messaging-replay";
-        }
-      } else if (row.email) {
-        delivery = await sendViaResend(row.email, template, row.$id);
+      if (localMailpit) {
+        if (!row.email) throw new Error("NOTIFICATION_EMAIL_REQUIRED");
+        delivery = await sendViaMailpit(row.email, template);
       } else {
-        throw new Error("NOTIFICATION_TARGET_MISSING");
+        let userId = row.user_id;
+        if (!userId && row.email) {
+          const match = await users.list({
+            queries: [Query.equal("email", [row.email]), Query.limit(1)],
+            total: false,
+          });
+          userId = match.users[0]?.$id;
+        }
+        if (userId) {
+          try {
+            await messaging.createEmail({
+              messageId: row.$id,
+              subject: template.subject,
+              content: template.html,
+              users: [userId],
+              html: true,
+            });
+          } catch (caught) {
+            if (caught?.code !== 409) throw caught;
+            delivery = "appwrite-messaging-replay";
+          }
+        } else if (row.email) {
+          delivery = await sendViaResend(row.email, template, row.$id);
+        } else {
+          throw new Error("NOTIFICATION_TARGET_MISSING");
+        }
       }
       await tables.updateRow({
         databaseId: DATABASE_ID,
@@ -1915,10 +1993,13 @@ export {
   decryptNotificationCredential,
   emailTemplate,
   evaluate,
+  localWorkerEmulation,
   lifecycleNotices,
   purgeApproved,
   reconcileOrphans,
   runLifecycle,
+  sendViaMailpit,
+  services,
   scrubNotificationCredential,
   validPurgePlan,
 };

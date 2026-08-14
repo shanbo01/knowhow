@@ -28,6 +28,102 @@ export type WorkspaceRecord = {
   auditSequence: number;
   auditHash: string;
   suspensionReason?: "manual" | "lifecycle" | null;
+  /**
+   * Set only on disposable tenants created by the guarded lifecycle simulator.
+   * Production code never infers this marker from a name or email address.
+   */
+  simulation?: {
+    synthetic: true;
+    disposable: true;
+    lifecycleAllowed: true;
+    createdBy: string;
+    createdAt: string;
+  };
+};
+
+export type PricingCatalogStatus = "draft" | "scheduled" | "active" | "retired";
+
+export type CatalogCharge = {
+  amountMinor: number | null;
+  unit:
+    | "workspace_month"
+    | "active_creator_month"
+    | "active_user_month"
+    | "storage_gb_month"
+    | "one_time"
+    | "manual_contract";
+};
+
+export type CatalogEntitlementItem = {
+  key: string;
+  label: string;
+  included: boolean;
+  note: string;
+};
+
+export type PricingCatalogRecord = {
+  schemaVersion: 1;
+  catalogVersion: string;
+  name: string;
+  description: string;
+  status: PricingCatalogStatus;
+  currency: string;
+  effectiveFrom: string;
+  effectiveUntil: string | null;
+  selfServiceTrial: boolean;
+  trial: {
+    days: number;
+    graceDays: number;
+    retentionDays: number;
+  };
+  baseWorkspace: CatalogCharge & {
+    unit: "workspace_month";
+    includedActiveCreators: number;
+    includedActiveUsers: number;
+    includedStorageBytes: number;
+  };
+  additionalUsage: {
+    creator: CatalogCharge & { unit: "active_creator_month" };
+    user: CatalogCharge & { unit: "active_user_month" };
+    storage: CatalogCharge & { unit: "storage_gb_month" };
+  };
+  features: CatalogEntitlementItem[];
+  services: CatalogEntitlementItem[];
+  futureOptions: {
+    ssoScim: CatalogCharge & {
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+    supportSla: CatalogCharge & {
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+      level: string;
+      responseTargetHours: number | null;
+    };
+    sovereignDeployment: CatalogCharge & {
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+    dedicatedDeployment: CatalogCharge & {
+      unit: "manual_contract";
+      available: boolean;
+      included: boolean;
+    };
+  };
+  /** Core identity, isolation, encryption and audit controls are never gated. */
+  securityFundamentalsIncluded: true;
+  paymentsEnabled: false;
+  manualContractAllowed: true;
+  revision: number;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  retiredAt?: string;
+  retiredBy?: string;
 };
 
 export type SubscriptionKind = "design_partner" | "trial" | "paid";
@@ -66,7 +162,8 @@ export type LifecycleAccess =
 export type LifecycleCaseRecord = {
   kind: "tenant_deletion_approval";
   subscriptionId: string;
-  status: "awaiting_approval" | "approved" | "purging" | "completed" | "cancelled";
+  status:
+    "awaiting_approval" | "approved" | "purging" | "completed" | "cancelled";
   eligibleAt: string;
   confirmationText: string;
   createdAt: string;
@@ -137,13 +234,19 @@ export type ExportJobRecord = {
   failureCode?: string;
 };
 
-export type WorkspaceMemberRecord = Omit<WorkspaceMember, "id" | "userId" | "email" | "status"> & {
+export type WorkspaceMemberRecord = Omit<
+  WorkspaceMember,
+  "id" | "userId" | "email" | "status"
+> & {
   name: string;
   roles: WorkspaceRole[];
   capabilities: Array<"vault">;
 };
 
-export type WorkspaceGroupRecord = Omit<WorkspaceGroup, "id" | "memberIds" | "memberCount">;
+export type WorkspaceGroupRecord = Omit<
+  WorkspaceGroup,
+  "id" | "memberIds" | "memberCount"
+>;
 
 export type GuideRecord = {
   title: string;
@@ -220,8 +323,6 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   accentColor: "#2f6fed",
   clickTargetColor: "#ef4444",
   removeBranding: false,
-  allowedDomains: [],
-  excludedCaptureHosts: [],
   allowRestrictedExports: false,
   watermarkExports: true,
 };
@@ -237,14 +338,19 @@ export function decodePayload<T>(row: unknown, fallback: T): T {
         ? (row as { payload_json?: unknown }).payload_json
         : undefined;
     const parsed = JSON.parse(String(payloadJson)) as unknown;
-    return parsed !== null && typeof parsed === "object" ? (parsed as T) : fallback;
+    return parsed !== null && typeof parsed === "object"
+      ? (parsed as T)
+      : fallback;
   } catch {
     return fallback;
   }
 }
 
 export function rowData(
-  fields: Record<string, string | number | boolean | null | string[] | number[] | undefined>,
+  fields: Record<
+    string,
+    string | number | boolean | null | string[] | number[] | undefined
+  >,
   payload: unknown,
 ): RecordData {
   const result: RecordData = { payload_json: encodePayload(payload) };
