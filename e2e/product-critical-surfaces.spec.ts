@@ -236,7 +236,10 @@ test.describe("critical pilot product surfaces", () => {
     await expect(
       page.getByRole("heading", { name: "Provision an organization" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("heading", { name: "Provision an organization" }),
+    ).not.toBeVisible();
 
     await page.goto("/platform/accounts");
     await expect
@@ -247,7 +250,7 @@ test.describe("critical pilot product surfaces", () => {
       )
       .toBe(true);
     const activeWorkspaceRow = page
-      .locator(".platform-row")
+      .locator(".member-row")
       .filter({ hasText: "Alpha Operations" });
     await activeWorkspaceRow.getByRole("button", { name: "Workspace actions" }).click();
     page.once("dialog", (dialog) => dialog.accept());

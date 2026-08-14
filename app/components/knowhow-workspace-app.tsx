@@ -3990,6 +3990,49 @@ export function PlatformView({
     platform.systemHealth.expiringWithinSevenDays +
     platform.systemHealth.deletionApprovals +
     platform.systemHealth.failedOperations;
+  const healthQueues: Array<{
+    label: string;
+    description: string;
+    value: number;
+    icon: typeof Mail;
+    section: PlatformSection;
+  }> = [
+    {
+      label: "Failed notifications",
+      description: "Delivery retry queue",
+      value: platform.systemHealth.failedNotifications,
+      icon: Mail,
+      section: "ops",
+    },
+    {
+      label: "Overdue support",
+      description: "One-business-day target",
+      value: platform.systemHealth.overdueSupport,
+      icon: LifeBuoy,
+      section: "support",
+    },
+    {
+      label: "Expiring soon",
+      description: "Within seven days",
+      value: platform.systemHealth.expiringWithinSevenDays,
+      icon: CalendarDays,
+      section: "billing",
+    },
+    {
+      label: "Deletion approvals",
+      description: "Owner confirmation required",
+      value: platform.systemHealth.deletionApprovals,
+      icon: Trash2,
+      section: "ops",
+    },
+    {
+      label: "Failed operations",
+      description: "Content-free usage events",
+      value: platform.systemHealth.failedOperations,
+      icon: CircleAlert,
+      section: "ops",
+    },
+  ];
   const openSupportCount = platform.support.filter(
     (ticket) => ticket.status !== "closed",
   ).length;
@@ -4167,80 +4210,28 @@ export function PlatformView({
           <h1>{heading.title}</h1>
           <p>{heading.copy}</p>
         </div>
-        <div className="platform-page-scope" role="note">
-          <ShieldCheck />
-          <span>
-            <strong>Privacy boundary</strong>
-            <small>Metadata and aggregate usage only</small>
-          </span>
+        <div className="modal-actions">
+          <Badge variant="outline" role="note">
+            <ShieldCheck />
+            Metadata and aggregate usage only
+          </Badge>
+          {section === "overview" ? (
+            <Button
+              className="sm:hidden"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={onProvision}
+            >
+              <Plus /> Provision organization
+            </Button>
+          ) : null}
         </div>
       </div>
 
       {section === "overview" ? (
         <>
-          <section
-            className={cn(
-              "platform-command-card",
-              attentionTotal ? "has-attention" : "is-healthy",
-            )}
-          >
-            <div className="platform-command-copy">
-              <span className="platform-command-icon">
-                {attentionTotal ? <CircleAlert /> : <CheckCircle2 />}
-              </span>
-              <div>
-                <p className="eyebrow">Command center</p>
-                <h2>
-                  {attentionTotal
-                    ? `${countPhrase(attentionTotal, "item")} need attention`
-                    : "Everything is operating normally"}
-                </h2>
-                <p>
-                  {attentionTotal
-                    ? "Review the live queues below, then open the affected account for context and action."
-                    : `No delivery, support, retention, or usage failures across ${countPhrase(workspaces.length, "workspace")}.`}
-                </p>
-              </div>
-            </div>
-            <div className="platform-command-actions">
-              <Button
-                variant="outline"
-                size="sm"
-                type="button"
-                onClick={() => openSection("accounts")}
-              >
-                <Building2 /> Browse accounts
-              </Button>
-              <Button
-                size="sm"
-                type="button"
-                disabled={busy}
-                onClick={onProvision}
-              >
-                <Plus /> Provision organization
-              </Button>
-            </div>
-            <div className="platform-command-meta">
-              <span>
-                <ShieldCheck /> Customer content remains private
-              </span>
-              <span>
-                <RefreshCw /> Snapshot {formatDate(platform.generatedAt, true)}
-              </span>
-              {platform.provisioningRuns.length ? (
-                <button type="button" disabled={busy} onClick={onProvision}>
-                  <Building2 />
-                  {countPhrase(
-                    platform.provisioningRuns.length,
-                    "resumable provisioning draft",
-                  )}
-                  <ArrowRight />
-                </button>
-              ) : null}
-            </div>
-          </section>
-
-          <section className="metric-grid platform-metrics">
+          <section className="metric-grid overview-metric-grid">
             <MetricCard
               label="Workspaces"
               value={workspaces.length}
@@ -4261,143 +4252,122 @@ export function PlatformView({
               icon={BookOpen}
             />
             <MetricCard
-              label="Engagement"
-              value={metrics.views + metrics.completions}
-              hint={`${metrics.views} views · ${metrics.completions} completions`}
-              icon={Eye}
-            />
-            <MetricCard
-              label="Operations"
-              value={metrics.captures + metrics.exports}
-              hint={`${metrics.captures} captures · ${metrics.exports} exports`}
+              label="Total activity"
+              value={
+                metrics.views +
+                metrics.completions +
+                metrics.captures +
+                metrics.exports
+              }
+              hint={`${metrics.views} views · ${metrics.captures} captures · ${metrics.exports} exports`}
               icon={Activity}
             />
           </section>
 
-          <div className="platform-overview-grid">
-            <section className="card table-card platform-health-card">
-              <div className="section-heading compact">
+          <div className="dashboard-work-grid">
+            <Card className="dashboard-guide-queue">
+              <CardHeader className="dashboard-card-header">
                 <div>
-                  <p className="eyebrow">Operational health</p>
-                  <h2>Live queues</h2>
+                  <CardTitle>Live queues</CardTitle>
+                  <CardDescription>
+                    Delivery, support, retention, and account health.
+                  </CardDescription>
                 </div>
-                <span className="privacy-caption">
-                  <ShieldCheck /> Counts and timestamps only
-                </span>
-              </div>
-              <div className="platform-queue">
-                <button
-                  className={cn(
-                    platform.systemHealth.failedNotifications && "needs-attention",
-                  )}
-                  type="button"
-                  onClick={() => openSection("ops")}
-                >
-                  <Mail />
-                  <span>
-                    <strong>Failed notifications</strong>
-                    <small>Delivery retry queue</small>
-                  </span>
-                  <b>{platform.systemHealth.failedNotifications}</b>
-                </button>
-                <button
-                  className={cn(
-                    platform.systemHealth.overdueSupport && "needs-attention",
-                  )}
-                  type="button"
-                  onClick={() => openSection("support")}
-                >
-                  <LifeBuoy />
-                  <span>
-                    <strong>Overdue support</strong>
-                    <small>One-business-day target</small>
-                  </span>
-                  <b>{platform.systemHealth.overdueSupport}</b>
-                </button>
-                <button
-                  className={cn(
-                    platform.systemHealth.expiringWithinSevenDays &&
-                      "needs-attention",
-                  )}
-                  type="button"
-                  onClick={() => openSection("billing")}
-                >
-                  <CalendarDays />
-                  <span>
-                    <strong>Expiring soon</strong>
-                    <small>Within seven days</small>
-                  </span>
-                  <b>{platform.systemHealth.expiringWithinSevenDays}</b>
-                </button>
-                <button
-                  className={cn(
-                    platform.systemHealth.deletionApprovals && "needs-attention",
-                  )}
-                  type="button"
-                  onClick={() => openSection("ops")}
-                >
-                  <Trash2 />
-                  <span>
-                    <strong>Deletion approvals</strong>
-                    <small>Owner confirmation required</small>
-                  </span>
-                  <b>{platform.systemHealth.deletionApprovals}</b>
-                </button>
-                <button
-                  className={cn(
-                    platform.systemHealth.failedOperations && "needs-attention",
-                  )}
-                  type="button"
-                  onClick={() => openSection("ops")}
-                >
-                  <CircleAlert />
-                  <span>
-                    <strong>Failed operations</strong>
-                    <small>Content-free usage events</small>
-                  </span>
-                  <b>{platform.systemHealth.failedOperations}</b>
-                </button>
-              </div>
-            </section>
-            <section className="card table-card platform-audit-preview">
-              <div className="section-heading compact">
+                <Badge variant="outline">
+                  {attentionTotal
+                    ? `${attentionTotal} need attention`
+                    : "All clear"}
+                </Badge>
+              </CardHeader>
+              <CardContent className="dashboard-queue-content">
+                <div className="dashboard-queue-list">
+                  {healthQueues.map((queue) => {
+                    const Icon = queue.icon;
+                    return (
+                      <button
+                        className="dashboard-queue-row"
+                        type="button"
+                        key={queue.label}
+                        onClick={() => openSection(queue.section)}
+                      >
+                        <span className="queue-guide-icon">
+                          <Icon />
+                        </span>
+                        <span className="queue-guide-main">
+                          <strong>{queue.label}</strong>
+                          <small>{queue.description}</small>
+                        </span>
+                        <StatusBadge
+                          status={queue.value ? "attention" : "clear"}
+                        />
+                        <strong>{queue.value}</strong>
+                        <ArrowRight />
+                      </button>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="access-health-card">
+              <CardHeader className="dashboard-card-header">
                 <div>
-                  <p className="eyebrow">Platform audit</p>
-                  <h2>Recent changes</h2>
+                  <CardTitle>Recent changes</CardTitle>
+                  <CardDescription>
+                    Content-free platform audit events.
+                  </CardDescription>
                 </div>
-                <button
-                  className="text-button"
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   type="button"
+                  aria-label="View all platform activity"
                   onClick={() => openSection("ops")}
                 >
-                  View all <ArrowRight />
-                </button>
-              </div>
-              {platform.platformAudits.length ? (
-                platform.platformAudits.slice(0, 5).map((audit) => (
-                  <div className="platform-compact-row" key={audit.id}>
-                    <span className="member-main">
-                      <strong>{titleCase(audit.action)}</strong>
-                      <small>{workspaceName(audit.workspaceId)}</small>
-                    </span>
-                    <time dateTime={audit.occurredAt}>
-                      {formatDate(audit.occurredAt, true)}
-                    </time>
+                  <ArrowRight />
+                </Button>
+              </CardHeader>
+              <CardContent className="review-queue-content">
+                {platform.platformAudits.length ? (
+                  <div>
+                    {platform.platformAudits.slice(0, 5).map((audit) => (
+                      <button
+                        className="review-queue-row"
+                        type="button"
+                        key={audit.id}
+                        onClick={() =>
+                          audit.workspaceId
+                            ? openSection("accounts", audit.workspaceId)
+                            : openSection("ops")
+                        }
+                      >
+                        <span className="review-state-icon">
+                          <History />
+                        </span>
+                        <span>
+                          <strong>{titleCase(audit.action)}</strong>
+                          <small>
+                            {workspaceName(audit.workspaceId)} ·{" "}
+                            {formatDate(audit.occurredAt, true)}
+                          </small>
+                        </span>
+                        <ArrowRight />
+                      </button>
+                    ))}
                   </div>
-                ))
-              ) : (
-                <p className="empty-copy">
-                  No control-plane audit events recorded.
-                </p>
-              )}
-            </section>
+                ) : (
+                  <EmptyState
+                    icon={History}
+                    title="No recent changes"
+                    description="Control-plane audit events will appear here."
+                  />
+                )}
+              </CardContent>
+            </Card>
           </div>
 
-          <section className="platform-boundary-note">
+          <section className="policy-lock-row">
+            <LockKeyhole />
             <span>
-              <LockKeyhole />
-            </span>
-            <div>
               <strong>Isolated workspaces, explicit membership</strong>
               <small>
                 Self-service limit: {settings.selfServiceWorkspaceLimit}{" "}
@@ -4405,8 +4375,7 @@ export function PlatformView({
                 {settings.selfServiceWorkspaceLimit === 1 ? "" : "s"} per owner;
                 every other membership is exact-email and invitation-only.
               </small>
-            </div>
-            <StatusBadge status="active" />
+            </span>
           </section>
         </>
       ) : null}
@@ -4473,20 +4442,15 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <div className="platform-empty-state">
-                <span>
-                  <Mail />
-                </span>
-                <strong>No inbound requests</strong>
-                <small>
-                  New contact and demo requests will appear here with their
-                  current pipeline status.
-                </small>
-              </div>
+              <EmptyState
+                icon={Mail}
+                title="No inbound requests"
+                description="New contact and demo requests will appear here with their current pipeline status."
+              />
             )}
           </section>
 
-          <section className="card table-card platform-beta-access-card">
+          <section className="card table-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Private beta</p>
@@ -4507,20 +4471,12 @@ export function PlatformView({
                 </span>
               )}
             </div>
-            <div className="platform-beta-summary">
-              <span>
-                <strong>{activeBetaGrants.length}</strong>
-                <small>active grants</small>
-              </span>
-              <span>
-                <strong>{platform.betaAccess.events.length}</strong>
-                <small>recorded events</small>
-              </span>
-              <p>
-                Issue time-limited, usage-capped admission without exposing the
-                underlying code after creation.
-              </p>
-            </div>
+            <p className="empty-copy">
+              {countPhrase(activeBetaGrants.length, "active grant")} ·{" "}
+              {countPhrase(platform.betaAccess.events.length, "recorded event")}.
+              Issue time-limited, usage-capped admission without exposing the
+              underlying code after creation.
+            </p>
             {platform.betaAccess.grants.length ? (
               <PlatformPagedList items={platform.betaAccess.grants}>
                 {(visible) =>
@@ -4566,13 +4522,11 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <div className="platform-empty-state compact">
-                <span>
-                  <KeyRound />
-                </span>
-                <strong>No beta access grants yet</strong>
-                <small>Create a scoped grant when a private-beta user is ready.</small>
-              </div>
+              <EmptyState
+                icon={KeyRound}
+                title="No beta access grants yet"
+                description="Create a scoped grant when a private-beta user is ready."
+              />
             )}
           </section>
         </>
@@ -4581,37 +4535,34 @@ export function PlatformView({
       {section === "accounts" && !selectedWorkspace ? (
         <>
           <section
-            className="platform-summary-strip"
+            className="metric-grid overview-metric-grid"
             aria-label="Account summary"
           >
-            <article>
-              <Building2 />
-              <span>
-                <strong>{workspaces.length}</strong>
-                <small>workspaces</small>
-              </span>
-            </article>
-            <article>
-              <CheckCircle2 />
-              <span>
-                <strong>{metrics.activeWorkspaces}</strong>
-                <small>active</small>
-              </span>
-            </article>
-            <article>
-              <Users />
-              <span>
-                <strong>{platformAdministratorCount}</strong>
-                <small>administrators</small>
-              </span>
-            </article>
-            <article>
-              <Building2 />
-              <span>
-                <strong>{platform.organizations.length}</strong>
-                <small>organizations</small>
-              </span>
-            </article>
+            <MetricCard
+              label="Workspaces"
+              value={workspaces.length}
+              hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
+              icon={Building2}
+              tone="accent"
+            />
+            <MetricCard
+              label="Active"
+              value={metrics.activeWorkspaces}
+              hint="Currently available to members"
+              icon={CheckCircle2}
+            />
+            <MetricCard
+              label="Administrators"
+              value={platformAdministratorCount}
+              hint="Unique workspace administrators"
+              icon={Users}
+            />
+            <MetricCard
+              label="Organizations"
+              value={platform.organizations.length}
+              hint="Companies in the tenant directory"
+              icon={Building2}
+            />
           </section>
           <section className="card table-card">
             <div className="section-heading compact">
@@ -4650,82 +4601,56 @@ export function PlatformView({
                 {accountRows.length === 1 ? "workspace" : "workspaces"}
               </span>
             </div>
-            <div className="platform-table platform-account-table">
-              <div className="platform-row platform-account-row platform-head">
-                <span>Workspace</span>
-                <span>Administrators</span>
-                <span>Activity</span>
-                <span>Status</span>
-                <span />
-              </div>
+            <div className="member-table">
               <PlatformPagedList items={accountRows}>
                 {(visible) =>
                   visible.map((workspace) => (
-                    <div
-                      className="platform-row platform-account-row"
-                      key={workspace.id}
-                    >
+                    <div className="member-row" key={workspace.id}>
+                      <span className="avatar">
+                        {workspace.name.slice(0, 1)}
+                      </span>
                       <button
-                        className="workspace-cell text-button"
+                        className="member-main text-button"
                         type="button"
                         onClick={() => openSection("accounts", workspace.id)}
                       >
-                        <span className="workspace-avatar">
-                          {workspace.name.slice(0, 1)}
-                        </span>
-                        <span>
-                          <strong>{workspace.name}</strong>
-                          <small>
-                            {workspace.slug} ·{" "}
-                            {countPhrase(workspace.memberCount, "member")} · created{" "}
-                            {formatDate(workspace.createdAt)}
-                            {workspace.supportGrant
-                              ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}`
-                              : workspace.supportRequest?.status === "pending"
-                                ? " · support request pending"
-                                : ""}
-                          </small>
-                        </span>
+                        <strong>{workspace.name}</strong>
+                        <small>
+                          {workspace.slug} ·{" "}
+                          {countPhrase(workspace.memberCount, "member")} · created{" "}
+                          {formatDate(workspace.createdAt)}
+                          {workspace.supportGrant
+                            ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}`
+                            : workspace.supportRequest?.status === "pending"
+                              ? " · support request pending"
+                              : ""}
+                        </small>
                       </button>
-                      <span className="platform-admins">
+                      <span className="role-list">
                         {workspace.administrators.length ? (
                           workspace.administrators.map((admin) => (
-                            <small key={admin.userId}>
+                            <span key={admin.userId}>
                               {admin.name || admin.email}
-                            </small>
+                            </span>
                           ))
                         ) : (
-                          <small>None assigned</small>
+                          <span>None assigned</span>
                         )}
-                        <button
-                          className="text-button"
-                          type="button"
-                          onClick={() => onAssign(workspace)}
-                        >
-                          <UserCog /> Assign
-                        </button>
                       </span>
-                      <span className="platform-account-usage">
-                        <span>
-                          <strong>
-                            {workspace.publishedCount + workspace.draftCount}
-                          </strong>
-                          <small>guides</small>
-                        </span>
-                        <span>
-                          <strong>{workspace.views}</strong>
-                          <small>views</small>
-                        </span>
-                        <span>
-                          <strong>{formatBytes(workspace.storageBytes)}</strong>
-                          <small>storage</small>
-                        </span>
+                      <span className="group-list">
+                        {workspace.publishedCount + workspace.draftCount} guides ·{" "}
+                        {workspace.views} views ·{" "}
+                        {formatBytes(workspace.storageBytes)}
                       </span>
-                      <span>
+                      <div className="modal-actions compact-actions">
                         <StatusBadge status={workspace.status} />
-                      </span>
-                      <span>
                         <RowMenu>
+                          <button
+                            disabled={busy}
+                            onClick={() => onAssign(workspace)}
+                          >
+                            <UserCog /> Assign administrator
+                          </button>
                           {workspace.status === "active" &&
                           !workspace.supportGrant ? (
                             <button
@@ -4760,7 +4685,7 @@ export function PlatformView({
                             </button>
                           ) : null}
                         </RowMenu>
-                      </span>
+                      </div>
                     </div>
                   ))
                 }
@@ -4768,20 +4693,20 @@ export function PlatformView({
             </div>
           </section>
           {platform.organizations.length ? (
-            <details className="card table-card platform-organizations-card">
+            <details className="card table-card developer-tools">
               <summary className="section-heading compact">
                 <div>
                   <p className="eyebrow">Organizations</p>
                   <h2>Company directory</h2>
                 </div>
-                <span className="platform-details-summary">
+                <span className="privacy-caption">
                   {countPhrase(platform.organizations.length, "organization")}
                   <ChevronDown />
                 </span>
               </summary>
-              <div className="platform-organization-grid">
+              <div className="member-table">
                 {platform.organizations.map((organization) => (
-                  <article key={organization.id}>
+                  <div className="platform-ops-row" key={organization.id}>
                     <span className="invite-icon">
                       <Building2 />
                     </span>
@@ -4798,7 +4723,7 @@ export function PlatformView({
                       </small>
                     </span>
                     <StatusBadge status={organization.status} />
-                  </article>
+                  </div>
                 ))}
               </div>
             </details>
@@ -4809,42 +4734,38 @@ export function PlatformView({
       {selectedWorkspace ? (
         <>
           <section
-            className="platform-summary-strip"
+            className="metric-grid overview-metric-grid"
             aria-label={`${selectedWorkspace.name} account summary`}
           >
-            <article>
-              <Users />
-              <span>
-                <strong>{selectedWorkspace.memberCount}</strong>
-                <small>members</small>
-              </span>
-            </article>
-            <article>
-              <BookOpen />
-              <span>
-                <strong>
-                  {selectedWorkspace.publishedCount +
-                    selectedWorkspace.draftCount}
-                </strong>
-                <small>guides</small>
-              </span>
-            </article>
-            <article>
-              <Eye />
-              <span>
-                <strong>{selectedWorkspace.views}</strong>
-                <small>views</small>
-              </span>
-            </article>
-            <article>
-              <FileDown />
-              <span>
-                <strong>{formatBytes(selectedWorkspace.storageBytes)}</strong>
-                <small>storage</small>
-              </span>
-            </article>
+            <MetricCard
+              label="Members"
+              value={selectedWorkspace.memberCount}
+              hint="People with workspace access"
+              icon={Users}
+              tone="accent"
+            />
+            <MetricCard
+              label="Guides"
+              value={
+                selectedWorkspace.publishedCount + selectedWorkspace.draftCount
+              }
+              hint={`${selectedWorkspace.publishedCount} published · ${selectedWorkspace.draftCount} drafts`}
+              icon={BookOpen}
+            />
+            <MetricCard
+              label="Views"
+              value={selectedWorkspace.views}
+              hint="Aggregate workspace engagement"
+              icon={Eye}
+            />
+            <MetricCard
+              label="Storage"
+              value={formatBytes(selectedWorkspace.storageBytes)}
+              hint="Files and captured media"
+              icon={FileDown}
+            />
           </section>
-          <section className="card table-card platform-account-hero">
+          <section className="card table-card">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Account</p>
@@ -4852,7 +4773,10 @@ export function PlatformView({
               </div>
               <StatusBadge status={selectedWorkspace.status} />
             </div>
-            <div className="platform-account-summary-row">
+            <div className="platform-ops-row">
+              <span className="invite-icon">
+                <Building2 />
+              </span>
               <span className="member-main">
                 <strong>
                   Workspace administration
@@ -4906,22 +4830,24 @@ export function PlatformView({
                 )}
               </div>
             </div>
-            <div className="platform-account-admins">
+            <div className="member-table">
               {selectedWorkspace.administrators.map((admin) => (
-                <div className="platform-compact-row" key={admin.userId}>
-                  <span className="workspace-avatar">
+                <div className="member-row" key={admin.userId}>
+                  <span className="avatar">
                     {initials(admin.name, admin.email)}
                   </span>
                   <span className="member-main">
                     <strong>{admin.name || admin.email}</strong>
                     <small>{admin.email}</small>
                   </span>
-                  <small>Administrator</small>
+                  <span className="role-list">
+                    <span>Administrator</span>
+                  </span>
                 </div>
               ))}
             </div>
           </section>
-          <div className="platform-account-detail-grid">
+          <div className="settings-grid">
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -5001,7 +4927,7 @@ export function PlatformView({
               <p className="empty-copy">No activation events recorded.</p>
             )}
           </section>
-          <section className="card table-card platform-account-support-card">
+          <section className="card table-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Support SLA</p>
@@ -5024,7 +4950,7 @@ export function PlatformView({
               <p className="empty-copy">No support cases for this account.</p>
             )}
           </section>
-          <section className="card table-card platform-account-audit-card">
+          <section className="card table-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Platform audit</p>
@@ -5052,47 +4978,43 @@ export function PlatformView({
 
       {section === "support" ? (
         <>
-        <section className="platform-summary-strip" aria-label="Support summary">
-          <article>
-            <LifeBuoy />
-            <span>
-              <strong>{openSupportCount}</strong>
-              <small>open cases</small>
-            </span>
-          </article>
-          <article>
-            <CircleAlert />
-            <span>
-              <strong>{platform.systemHealth.overdueSupport}</strong>
-              <small>overdue</small>
-            </span>
-          </article>
-          <article>
-            <Mail />
-            <span>
-              <strong>
-                {
-                  platform.support.filter(
-                    (ticket) => ticket.status === "waiting_support",
-                  ).length
-                }
-              </strong>
-              <small>waiting on support</small>
-            </span>
-          </article>
-          <article>
-            <CheckCircle2 />
-            <span>
-              <strong>
-                {
-                  platform.support.filter(
-                    (ticket) => ticket.status === "closed",
-                  ).length
-                }
-              </strong>
-              <small>closed</small>
-            </span>
-          </article>
+        <section
+          className="metric-grid overview-metric-grid"
+          aria-label="Support summary"
+        >
+          <MetricCard
+            label="Open cases"
+            value={openSupportCount}
+            hint="Current cross-workspace queue"
+            icon={LifeBuoy}
+            tone="accent"
+          />
+          <MetricCard
+            label="Overdue"
+            value={platform.systemHealth.overdueSupport}
+            hint="Outside the one-business-day target"
+            icon={CircleAlert}
+            tone={platform.systemHealth.overdueSupport ? "warning" : "default"}
+          />
+          <MetricCard
+            label="Waiting on support"
+            value={
+              platform.support.filter(
+                (ticket) => ticket.status === "waiting_support",
+              ).length
+            }
+            hint="Cases needing a support response"
+            icon={Mail}
+          />
+          <MetricCard
+            label="Closed"
+            value={
+              platform.support.filter((ticket) => ticket.status === "closed")
+                .length
+            }
+            hint="Completed support cases"
+            icon={CheckCircle2}
+          />
         </section>
         <section className="card table-card">
           <div className="section-heading compact">
@@ -5135,39 +5057,50 @@ export function PlatformView({
           </div>
           {supportRows.length ? (
             <PlatformPagedList items={supportRows}>
-              {(visible) =>
-                visible.map((ticket) => {
-                  const overdue =
-                    ticket.status === "waiting_support" &&
-                    Date.parse(ticket.responseTargetAt) < platformNow;
-                  return (
-                    <button
-                      className="platform-compact-row platform-support-row"
-                      type="button"
-                      key={ticket.id}
-                      onClick={() => openSection("accounts", ticket.workspaceId)}
-                    >
-                      <span className="member-main">
-                        <strong>{workspaceName(ticket.workspaceId)}</strong>
-                        <small>
-                          {ticket.requesterName} · target{" "}
-                          {formatDate(ticket.responseTargetAt, true)}
-                        </small>
-                      </span>
-                      <StatusBadge status={overdue ? "overdue" : ticket.status} />
-                    </button>
-                  );
-                })
-              }
+              {(visible) => (
+                <div className="member-table">
+                  {visible.map((ticket) => {
+                    const overdue =
+                      ticket.status === "waiting_support" &&
+                      Date.parse(ticket.responseTargetAt) < platformNow;
+                    return (
+                      <button
+                        className="member-row clickable"
+                        type="button"
+                        key={ticket.id}
+                        onClick={() =>
+                          openSection("accounts", ticket.workspaceId)
+                        }
+                      >
+                        <span className="invite-icon">
+                          <LifeBuoy />
+                        </span>
+                        <span className="member-main">
+                          <strong>{workspaceName(ticket.workspaceId)}</strong>
+                          <small>{ticket.requesterName}</small>
+                        </span>
+                        <StatusBadge
+                          status={overdue ? "overdue" : ticket.status}
+                        />
+                        <span className="role-list">
+                          <span>Support case</span>
+                        </span>
+                        <span className="group-list">
+                          Target {formatDate(ticket.responseTargetAt, true)}
+                        </span>
+                        <ArrowRight />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </PlatformPagedList>
           ) : (
-            <div className="platform-empty-state compact">
-              <span>
-                <CheckCircle2 />
-              </span>
-              <strong>No support work in this view</strong>
-              <small>Change the filter to review completed cases.</small>
-            </div>
+            <EmptyState
+              icon={CheckCircle2}
+              title="No support work in this view"
+              description="Change the filter to review completed cases."
+            />
           )}
         </section>
         </>
@@ -5176,49 +5109,47 @@ export function PlatformView({
       {section === "billing" ? (
         <>
           <section
-            className="platform-summary-strip"
+            className="metric-grid overview-metric-grid"
             aria-label="Subscription summary"
           >
-            <article>
-              <CalendarDays />
-              <span>
-                <strong>{platform.subscriptions.length}</strong>
-                <small>subscriptions</small>
-              </span>
-            </article>
-            <article>
-              <Sparkles />
-              <span>
-                <strong>
-                  {
-                    platform.subscriptions.filter(
-                      (subscription) => subscription.kind === "trial",
-                    ).length
-                  }
-                </strong>
-                <small>trials</small>
-              </span>
-            </article>
-            <article>
-              <CheckCircle2 />
-              <span>
-                <strong>
-                  {
-                    platform.subscriptions.filter(
-                      (subscription) => subscription.kind === "paid",
-                    ).length
-                  }
-                </strong>
-                <small>contracts</small>
-              </span>
-            </article>
-            <article>
-              <CircleAlert />
-              <span>
-                <strong>{platform.systemHealth.expiringWithinSevenDays}</strong>
-                <small>expiring soon</small>
-              </span>
-            </article>
+            <MetricCard
+              label="Subscriptions"
+              value={platform.subscriptions.length}
+              hint="Across all workspaces"
+              icon={CalendarDays}
+              tone="accent"
+            />
+            <MetricCard
+              label="Trials"
+              value={
+                platform.subscriptions.filter(
+                  (subscription) => subscription.kind === "trial",
+                ).length
+              }
+              hint="Time-limited workspace access"
+              icon={Sparkles}
+            />
+            <MetricCard
+              label="Contracts"
+              value={
+                platform.subscriptions.filter(
+                  (subscription) => subscription.kind === "paid",
+                ).length
+              }
+              hint="Manually recorded agreements"
+              icon={CheckCircle2}
+            />
+            <MetricCard
+              label="Expiring soon"
+              value={platform.systemHealth.expiringWithinSevenDays}
+              hint="Within the next seven days"
+              icon={CircleAlert}
+              tone={
+                platform.systemHealth.expiringWithinSevenDays
+                  ? "warning"
+                  : "default"
+              }
+            />
           </section>
           <section className="card table-card">
             <div className="section-heading compact">
@@ -5275,10 +5206,7 @@ export function PlatformView({
                         entitlement.workspaceId === subscription.workspaceId,
                     );
                     return (
-                      <div
-                        className="platform-ops-row platform-subscription-row"
-                        key={subscription.id}
-                      >
+                      <div className="platform-ops-row" key={subscription.id}>
                         <span className="invite-icon">
                           <CalendarDays />
                         </span>
@@ -5354,16 +5282,11 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <div className="platform-empty-state compact">
-                <span>
-                  <CalendarDays />
-                </span>
-                <strong>No matching subscriptions</strong>
-                <small>
-                  Try another filter, or provision an organization to create a
-                  trial subscription.
-                </small>
-              </div>
+              <EmptyState
+                icon={CalendarDays}
+                title="No matching subscriptions"
+                description="Try another filter, or provision an organization to create a trial subscription."
+              />
             )}
           </section>
           <section className="card table-card">
@@ -5387,7 +5310,7 @@ export function PlatformView({
                 </span>
               )}
             </div>
-            <p className="empty-copy beta-access-copy">
+            <p className="empty-copy">
               Version trial timing, capacity, internal prices, and included
               services without publishing numeric pricing. Security fundamentals
               remain included and payment collection stays off until you enable
@@ -5558,39 +5481,38 @@ export function PlatformView({
       {section === "ops" ? (
         <>
           <section
-            className="platform-summary-strip"
+            className="metric-grid overview-metric-grid"
             aria-label="Control-plane summary"
           >
-            <article>
-              <Mail />
-              <span>
-                <strong>{platform.notificationFailures.length}</strong>
-                <small>delivery failures</small>
-              </span>
-            </article>
-            <article>
-              <Trash2 />
-              <span>
-                <strong>{actionableDeletionCases.length}</strong>
-                <small>deletion reviews</small>
-              </span>
-            </article>
-            <article>
-              <History />
-              <span>
-                <strong>{platform.platformAudits.length}</strong>
-                <small>audit events</small>
-              </span>
-            </article>
-            <article>
-              <Activity />
-              <span>
-                <strong>{platform.activation.length}</strong>
-                <small>activation journeys</small>
-              </span>
-            </article>
+            <MetricCard
+              label="Delivery failures"
+              value={platform.notificationFailures.length}
+              hint="Notifications waiting for retry"
+              icon={Mail}
+              tone={
+                platform.notificationFailures.length ? "warning" : "default"
+              }
+            />
+            <MetricCard
+              label="Deletion reviews"
+              value={actionableDeletionCases.length}
+              hint="Cases requiring owner action"
+              icon={Trash2}
+            />
+            <MetricCard
+              label="Audit events"
+              value={platform.platformAudits.length}
+              hint="Recent control-plane changes"
+              icon={History}
+            />
+            <MetricCard
+              label="Activation journeys"
+              value={platform.activation.length}
+              hint="Workspaces tracked to first value"
+              icon={Activity}
+            />
           </section>
-          <div className="platform-operations-grid">
+          <div className="settings-grid">
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -5624,13 +5546,11 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <div className="platform-empty-state compact">
-                <span>
-                  <CheckCircle2 />
-                </span>
-                <strong>Delivery queue is clear</strong>
-                <small>No failed notifications are waiting for retry.</small>
-              </div>
+              <EmptyState
+                icon={CheckCircle2}
+                title="Delivery queue is clear"
+                description="No failed notifications are waiting for retry."
+              />
             )}
           </section>
           <section className="card table-card deletion-control-card">
@@ -5690,7 +5610,7 @@ export function PlatformView({
               </div>
             )}
           </section>
-          <section className="card table-card platform-ops-wide">
+          <section className="card table-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Platform audit</p>
@@ -5748,7 +5668,7 @@ export function PlatformView({
             )}
           </section>
           {appointments.length ? (
-            <section className="card table-card platform-appointments-card">
+            <section className="card table-card">
               <div className="section-heading compact">
                 <div>
                   <p className="eyebrow">Client administrator appointments</p>
@@ -7756,7 +7676,7 @@ function PlatformGlobalSearch({
   }
 
   return (
-    <div className="global-search platform-global-search" ref={box}>
+    <div className="global-search" ref={box}>
       <label className="search-field global-search-field">
         <Search />
         <input
@@ -7780,11 +7700,10 @@ function PlatformGlobalSearch({
           placeholder="Search accounts, admins, or platform sections"
           aria-label="Search the platform console"
         />
-        <kbd aria-hidden="true">Ctrl K</kbd>
       </label>
       {open ? (
         <div
-          className="search-results platform-search-results"
+          className="search-results"
           role="listbox"
           aria-label="Platform search results"
         >
@@ -7796,7 +7715,7 @@ function PlatformGlobalSearch({
               const Icon = result.icon;
               return (
                 <button
-                  className="search-result platform-search-result"
+                  className="search-result"
                   type="button"
                   key={result.key}
                   onClick={() => openResult(result.href)}
@@ -8940,16 +8859,29 @@ export function KnowHowWorkspaceApp({
               <ProductBrand compact />
             </div>
             {view === "Platform" ? (
-              <div className="platform-sidebar-context">
-                <span className="platform-sidebar-context-icon">
-                  <ShieldCheck />
-                </span>
-                <span>
-                  <small>Platform console</small>
-                  <strong>All workspaces</strong>
-                </span>
-                <StatusBadge status="active" />
-              </div>
+              <>
+                <p className="sidebar-section-label">Active scope</p>
+                <SelectMenu
+                  className="workspace-menu"
+                  value="all-workspaces"
+                  onChange={() => undefined}
+                  ariaLabel="Platform scope"
+                  options={[
+                    { value: "all-workspaces", label: "All workspaces" },
+                  ]}
+                  renderValue={() => (
+                    <>
+                      <span className="workspace-role-icon">
+                        <ShieldCheck />
+                      </span>
+                      <span className="workspace-menu-copy">
+                        <strong>All workspaces</strong>
+                        <small>Platform administration</small>
+                      </span>
+                    </>
+                  )}
+                />
+              </>
             ) : (
               <>
                 <p className="sidebar-section-label">Active workspace</p>
@@ -9170,7 +9102,7 @@ export function KnowHowWorkspaceApp({
                   </small>
                   <strong>
                     {view === "Platform"
-                      ? "KnowHow administration"
+                      ? "All workspaces"
                       : workspace.name}
                   </strong>
                   {view !== "Platform" ? (
