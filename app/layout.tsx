@@ -10,6 +10,7 @@ import "./globals.css";
 import "./auth-experience.css";
 import "./workspace-experience.css";
 import "./ui-system.css";
+import "./platform-experience.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 

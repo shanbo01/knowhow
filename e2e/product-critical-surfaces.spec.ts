@@ -223,6 +223,14 @@ test.describe("critical pilot product surfaces", () => {
       page.getByRole("heading", { name: "Platform administration" }),
     ).toBeVisible();
     await expect(page.getByText("Self-service limit: 0")).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      )
+      .toBe(true);
+    await expectNoWcagViolations(page);
 
     await page.getByRole("button", { name: "Provision organization" }).first().click();
     await expect(
@@ -231,6 +239,13 @@ test.describe("critical pilot product surfaces", () => {
     await page.getByRole("button", { name: "Close", exact: true }).click();
 
     await page.goto("/platform/accounts");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      )
+      .toBe(true);
     const activeWorkspaceRow = page
       .locator(".platform-row")
       .filter({ hasText: "Alpha Operations" });

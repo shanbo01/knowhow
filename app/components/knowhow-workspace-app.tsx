@@ -3907,7 +3907,9 @@ export function PlatformView({
   onConvertSubscription,
   onApproveDeletion,
   onRevokeAppointment,
+  canManageBetaAccess = false,
   onCreateBetaAccess,
+  onRevokeBetaAccess,
   canManagePlatformControls = false,
   onPlatformControl,
 }: {
@@ -3958,7 +3960,9 @@ export function PlatformView({
 }) {
   const { metrics, workspaces, settings, appointments } = platform;
   const [query, setQuery] = useState("");
-  const [pipelineStatus, setPipelineStatus] = useState("all");
+  const [pipelineStatus, setPipelineStatus] = useState(
+    section === "support" ? "open" : "all",
+  );
   const [lifecycleAction, setLifecycleAction] = useState<{
     mode: "extend" | "convert";
     openedAt: number;
@@ -3980,6 +3984,26 @@ export function PlatformView({
   >(null);
   const platformNow = Date.parse(platform.generatedAt);
   const pricingCatalogs = platform.pricingCatalogs ?? [];
+  const attentionTotal =
+    platform.systemHealth.failedNotifications +
+    platform.systemHealth.overdueSupport +
+    platform.systemHealth.expiringWithinSevenDays +
+    platform.systemHealth.deletionApprovals +
+    platform.systemHealth.failedOperations;
+  const openSupportCount = platform.support.filter(
+    (ticket) => ticket.status !== "closed",
+  ).length;
+  const activeBetaGrants = platform.betaAccess.grants.filter(
+    (grant) => grant.status === "active",
+  );
+  const platformAdministratorCount = new Set(
+    workspaces.flatMap((workspace) =>
+      workspace.administrators.map((admin) => admin.userId),
+    ),
+  ).size;
+  const actionableDeletionCases = platform.deletionCases.filter(
+    (item) => item.status !== "completed",
+  );
   const simulationWorkspaces = workspaces.filter(
     (workspace) => workspace.simulation?.synthetic,
   );
@@ -4030,9 +4054,31 @@ export function PlatformView({
       .toLowerCase();
     const matchesQuery = !term || haystack.includes(term);
     const matchesStatus =
-      pipelineStatus === "all" || ticket.status === pipelineStatus;
+      pipelineStatus === "all" ||
+      (pipelineStatus === "open"
+        ? ticket.status !== "closed"
+        : ticket.status === pipelineStatus);
     return matchesQuery && matchesStatus;
   });
+  const subscriptionRows = platform.subscriptions
+    .filter((subscription) => {
+      const term = query.trim().toLowerCase();
+      const matchesQuery =
+        !term ||
+        `${workspaceName(subscription.workspaceId)} ${subscription.kind} ${subscription.status} ${subscription.access}`
+          .toLowerCase()
+          .includes(term);
+      const matchesStatus =
+        pipelineStatus === "all" || subscription.status === pipelineStatus;
+      return matchesQuery && matchesStatus;
+    })
+    .sort((left, right) => {
+      if (!left.expiresAt && !right.expiresAt) return 0;
+      if (!left.expiresAt) return 1;
+      if (!right.expiresAt) return -1;
+      return left.expiresAt.localeCompare(right.expiresAt);
+    });
+
   const openSection = (next: PlatformSection, id?: string) => {
     onNavigate?.(platformHref(next, id));
   };
@@ -4121,281 +4167,452 @@ export function PlatformView({
           <h1>{heading.title}</h1>
           <p>{heading.copy}</p>
         </div>
+        <div className="platform-page-scope" role="note">
+          <ShieldCheck />
+          <span>
+            <strong>Privacy boundary</strong>
+            <small>Metadata and aggregate usage only</small>
+          </span>
+        </div>
       </div>
 
       {section === "overview" ? (
         <>
+          <section
+            className={cn(
+              "platform-command-card",
+              attentionTotal ? "has-attention" : "is-healthy",
+            )}
+          >
+            <div className="platform-command-copy">
+              <span className="platform-command-icon">
+                {attentionTotal ? <CircleAlert /> : <CheckCircle2 />}
+              </span>
+              <div>
+                <p className="eyebrow">Command center</p>
+                <h2>
+                  {attentionTotal
+                    ? `${countPhrase(attentionTotal, "item")} need attention`
+                    : "Everything is operating normally"}
+                </h2>
+                <p>
+                  {attentionTotal
+                    ? "Review the live queues below, then open the affected account for context and action."
+                    : `No delivery, support, retention, or usage failures across ${countPhrase(workspaces.length, "workspace")}.`}
+                </p>
+              </div>
+            </div>
+            <div className="platform-command-actions">
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={() => openSection("accounts")}
+              >
+                <Building2 /> Browse accounts
+              </Button>
+              <Button
+                size="sm"
+                type="button"
+                disabled={busy}
+                onClick={onProvision}
+              >
+                <Plus /> Provision organization
+              </Button>
+            </div>
+            <div className="platform-command-meta">
+              <span>
+                <ShieldCheck /> Customer content remains private
+              </span>
+              <span>
+                <RefreshCw /> Snapshot {formatDate(platform.generatedAt, true)}
+              </span>
+              {platform.provisioningRuns.length ? (
+                <button type="button" disabled={busy} onClick={onProvision}>
+                  <Building2 />
+                  {countPhrase(
+                    platform.provisioningRuns.length,
+                    "resumable provisioning draft",
+                  )}
+                  <ArrowRight />
+                </button>
+              ) : null}
+            </div>
+          </section>
+
           <section className="metric-grid platform-metrics">
             <MetricCard
-              label="Users"
-              value={metrics.users}
-              hint="Across all workspaces"
-              icon={Users}
-            />
-            <MetricCard
-              label="Active workspaces"
-              value={metrics.activeWorkspaces}
+              label="Workspaces"
+              value={workspaces.length}
               hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
               icon={Building2}
               tone="accent"
             />
             <MetricCard
-              label="Guides"
+              label="People"
+              value={metrics.users}
+              hint="Across every tenant"
+              icon={Users}
+            />
+            <MetricCard
+              label="Knowledge"
               value={metrics.published + metrics.drafts}
               hint={`${metrics.published} published · ${metrics.drafts} drafts`}
               icon={BookOpen}
             />
             <MetricCard
-              label="Captures"
-              value={metrics.captures}
-              hint={`${metrics.failedOperations} failed operations`}
-              icon={Sparkles}
-            />
-            <MetricCard
-              label="Views"
-              value={metrics.views}
-              hint={`${metrics.completions} completions`}
+              label="Engagement"
+              value={metrics.views + metrics.completions}
+              hint={`${metrics.views} views · ${metrics.completions} completions`}
               icon={Eye}
             />
             <MetricCard
-              label="Exports"
-              value={metrics.exports}
-              hint={formatBytes(metrics.storageBytes)}
-              icon={FileDown}
+              label="Operations"
+              value={metrics.captures + metrics.exports}
+              hint={`${metrics.captures} captures · ${metrics.exports} exports`}
+              icon={Activity}
             />
           </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Operational health</p>
-                <h2>Control plane</h2>
+
+          <div className="platform-overview-grid">
+            <section className="card table-card platform-health-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Operational health</p>
+                  <h2>Live queues</h2>
+                </div>
+                <span className="privacy-caption">
+                  <ShieldCheck /> Counts and timestamps only
+                </span>
               </div>
-              <span className="privacy-caption">
-                <ShieldCheck /> Counts and timestamps only
-              </span>
-            </div>
-            <div className="platform-queue">
-              <button type="button" onClick={() => openSection("ops")}>
-                <Mail />
-                <span>
-                  <strong>Failed notifications</strong>
-                  <small>Queued delivery requires attention</small>
-                </span>
-                <b>{platform.systemHealth.failedNotifications}</b>
-              </button>
-              <button type="button" onClick={() => openSection("support")}>
-                <LifeBuoy />
-                <span>
-                  <strong>Overdue support</strong>
-                  <small>One-business-day target</small>
-                </span>
-                <b>{platform.systemHealth.overdueSupport}</b>
-              </button>
-              <button type="button" onClick={() => openSection("billing")}>
-                <CalendarDays />
-                <span>
-                  <strong>Expiring soon</strong>
-                  <small>Within seven days</small>
-                </span>
-                <b>{platform.systemHealth.expiringWithinSevenDays}</b>
-              </button>
-              <button type="button" onClick={() => openSection("ops")}>
-                <Trash2 />
-                <span>
-                  <strong>Deletion approvals</strong>
-                  <small>Owner confirmation required</small>
-                </span>
-                <b>{platform.systemHealth.deletionApprovals}</b>
-              </button>
-              <button type="button" onClick={() => openSection("ops")}>
-                <CircleAlert />
-                <span>
-                  <strong>Failed operations</strong>
-                  <small>Content-free usage events</small>
-                </span>
-                <b>{platform.systemHealth.failedOperations}</b>
-              </button>
-            </div>
-            {platform.provisioningRuns.length ? (
-              <div className="empty-inline">
-                <Building2 />
-                <span>
-                  <strong>
-                    {platform.provisioningRuns.length} resumable provisioning{" "}
-                    {platform.provisioningRuns.length === 1 ? "draft" : "drafts"}
-                  </strong>
-                  <small>
-                    Most recent updated{" "}
-                    {formatDate(platform.provisioningRuns[0].updatedAt, true)} ·{" "}
-                    {platform.provisioningRuns[0].completedSteps.length} of 6
-                    steps saved
-                  </small>
-                </span>
+              <div className="platform-queue">
                 <button
-                  className="button secondary small"
+                  className={cn(
+                    platform.systemHealth.failedNotifications && "needs-attention",
+                  )}
                   type="button"
-                  disabled={busy}
-                  onClick={onProvision}
+                  onClick={() => openSection("ops")}
                 >
-                  Resume
+                  <Mail />
+                  <span>
+                    <strong>Failed notifications</strong>
+                    <small>Delivery retry queue</small>
+                  </span>
+                  <b>{platform.systemHealth.failedNotifications}</b>
+                </button>
+                <button
+                  className={cn(
+                    platform.systemHealth.overdueSupport && "needs-attention",
+                  )}
+                  type="button"
+                  onClick={() => openSection("support")}
+                >
+                  <LifeBuoy />
+                  <span>
+                    <strong>Overdue support</strong>
+                    <small>One-business-day target</small>
+                  </span>
+                  <b>{platform.systemHealth.overdueSupport}</b>
+                </button>
+                <button
+                  className={cn(
+                    platform.systemHealth.expiringWithinSevenDays &&
+                      "needs-attention",
+                  )}
+                  type="button"
+                  onClick={() => openSection("billing")}
+                >
+                  <CalendarDays />
+                  <span>
+                    <strong>Expiring soon</strong>
+                    <small>Within seven days</small>
+                  </span>
+                  <b>{platform.systemHealth.expiringWithinSevenDays}</b>
+                </button>
+                <button
+                  className={cn(
+                    platform.systemHealth.deletionApprovals && "needs-attention",
+                  )}
+                  type="button"
+                  onClick={() => openSection("ops")}
+                >
+                  <Trash2 />
+                  <span>
+                    <strong>Deletion approvals</strong>
+                    <small>Owner confirmation required</small>
+                  </span>
+                  <b>{platform.systemHealth.deletionApprovals}</b>
+                </button>
+                <button
+                  className={cn(
+                    platform.systemHealth.failedOperations && "needs-attention",
+                  )}
+                  type="button"
+                  onClick={() => openSection("ops")}
+                >
+                  <CircleAlert />
+                  <span>
+                    <strong>Failed operations</strong>
+                    <small>Content-free usage events</small>
+                  </span>
+                  <b>{platform.systemHealth.failedOperations}</b>
                 </button>
               </div>
-            ) : null}
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Workspace isolation</p>
-                <h2>Isolated workspaces, explicit membership</h2>
-              </div>
-              <LockKeyhole />
-            </div>
-            <div className="empty-inline">
-              <StatusBadge status="active" />
-              <span>
-                <strong>
-                  Self-service limit: {settings.selfServiceWorkspaceLimit}
-                </strong>
-                <small>
-                  Anyone can create an organization and first workspace. Each
-                  owner can create up to {settings.selfServiceWorkspaceLimit}{" "}
-                  trial workspace
-                  {settings.selfServiceWorkspaceLimit === 1 ? "" : "s"};
-                  membership in any other workspace remains exact-email and
-                  invitation-only.
-                </small>
-              </span>
-            </div>
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Platform audit</p>
-                <h2>Recent control-plane changes</h2>
-              </div>
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => openSection("ops")}
-              >
-                View activity <ArrowRight />
-              </button>
-            </div>
-            {platform.platformAudits.length ? (
-              platform.platformAudits.slice(0, 5).map((audit) => (
-                <div className="platform-compact-row" key={audit.id}>
-                  <span className="member-main">
-                    <strong>{titleCase(audit.action)}</strong>
-                    <small>{workspaceName(audit.workspaceId)}</small>
-                  </span>
-                  <time dateTime={audit.occurredAt}>
-                    {formatDate(audit.occurredAt, true)}
-                  </time>
+            </section>
+            <section className="card table-card platform-audit-preview">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Platform audit</p>
+                  <h2>Recent changes</h2>
                 </div>
-              ))
-            ) : (
-              <p className="empty-copy">No control-plane audit events recorded.</p>
-            )}
+                <button
+                  className="text-button"
+                  type="button"
+                  onClick={() => openSection("ops")}
+                >
+                  View all <ArrowRight />
+                </button>
+              </div>
+              {platform.platformAudits.length ? (
+                platform.platformAudits.slice(0, 5).map((audit) => (
+                  <div className="platform-compact-row" key={audit.id}>
+                    <span className="member-main">
+                      <strong>{titleCase(audit.action)}</strong>
+                      <small>{workspaceName(audit.workspaceId)}</small>
+                    </span>
+                    <time dateTime={audit.occurredAt}>
+                      {formatDate(audit.occurredAt, true)}
+                    </time>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-copy">
+                  No control-plane audit events recorded.
+                </p>
+              )}
+            </section>
+          </div>
+
+          <section className="platform-boundary-note">
+            <span>
+              <LockKeyhole />
+            </span>
+            <div>
+              <strong>Isolated workspaces, explicit membership</strong>
+              <small>
+                Self-service limit: {settings.selfServiceWorkspaceLimit}{" "}
+                trial workspace
+                {settings.selfServiceWorkspaceLimit === 1 ? "" : "s"} per owner;
+                every other membership is exact-email and invitation-only.
+              </small>
+            </div>
+            <StatusBadge status="active" />
           </section>
         </>
       ) : null}
 
       {section === "leads" ? (
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Inbound requests</p>
-              <h2>Contact leads</h2>
-            </div>
-            <Mail />
-          </div>
-          <div className="filter-bar">
-            <label className="search-field">
-              <Search />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search leads"
-              />
-            </label>
-            <SelectMenu
-              className="filter-select"
-              leading={<Filter />}
-              value={pipelineStatus}
-              onChange={setPipelineStatus}
-              ariaLabel="Filter leads by status"
-              options={[
-                { value: "all", label: "All statuses" },
-                ...[...new Set(platform.leads.map((lead) => lead.status))].map(
-                  (status) => ({
-                    value: status,
-                    label: titleCase(status.replaceAll("_", " ")),
-                  }),
-                ),
-              ]}
-            />
-            <span className="result-count">
-              {leadRows.length} {leadRows.length === 1 ? "lead" : "leads"}
-            </span>
-          </div>
-          {leadRows.length ? (
-            <PlatformPagedList items={leadRows}>
-              {(visible) =>
-                visible.map((lead) => (
-                  <div className="platform-compact-row" key={lead.id}>
-                    <span className="member-main">
-                      <strong>
-                        {lead.organization || lead.contactName || lead.email}
-                      </strong>
-                      <small>
-                        {lead.contactName || "Unnamed contact"} · {lead.email}
-                      </small>
-                      <small>
-                        {titleCase(lead.kind)} · {formatDate(lead.occurredAt, true)}
-                      </small>
-                    </span>
-                    <StatusBadge status={lead.status} />
-                  </div>
-                ))
-              }
-            </PlatformPagedList>
-          ) : (
-            <p className="empty-copy">No contact requests recorded.</p>
-          )}
-        </section>
-      ) : null}
-
-      {section === "accounts" && !selectedWorkspace ? (
         <>
-          {platform.organizations.length ? (
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Organizations</p>
-                  <h2>Company directory</h2>
-                </div>
-                <Building2 />
+          <section className="card table-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Inbound requests</p>
+                <h2>Contact leads</h2>
               </div>
-              <PlatformPagedList items={platform.organizations}>
+              <Mail />
+            </div>
+            <div className="filter-bar">
+              <label className="search-field">
+                <Search />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search leads"
+                />
+              </label>
+              <SelectMenu
+                className="filter-select"
+                leading={<Filter />}
+                value={pipelineStatus}
+                onChange={setPipelineStatus}
+                ariaLabel="Filter leads by status"
+                options={[
+                  { value: "all", label: "All statuses" },
+                  ...[...new Set(platform.leads.map((lead) => lead.status))].map(
+                    (status) => ({
+                      value: status,
+                      label: titleCase(status.replaceAll("_", " ")),
+                    }),
+                  ),
+                ]}
+              />
+              <span className="result-count" aria-live="polite">
+                {leadRows.length} {leadRows.length === 1 ? "lead" : "leads"}
+              </span>
+            </div>
+            {leadRows.length ? (
+              <PlatformPagedList items={leadRows}>
                 {(visible) =>
-                  visible.map((organization) => (
-                    <div className="platform-compact-row" key={organization.id}>
+                  visible.map((lead) => (
+                    <div className="platform-compact-row" key={lead.id}>
                       <span className="member-main">
-                        <strong>{organization.displayName}</strong>
+                        <strong>
+                          {lead.organization || lead.contactName || lead.email}
+                        </strong>
                         <small>
-                          {organization.legalName} · {organization.country}
+                          {lead.contactName || "Unnamed contact"} · {lead.email}
+                        </small>
+                        <small>
+                          {titleCase(lead.kind)} ·{" "}
+                          {formatDate(lead.occurredAt, true)}
                         </small>
                       </span>
-                      <strong>
-                        {countPhrase(organization.workspaceCount, "workspace")}
-                      </strong>
-                      <StatusBadge status={organization.status} />
+                      <StatusBadge status={lead.status} />
                     </div>
                   ))
                 }
               </PlatformPagedList>
-            </section>
-          ) : null}
+            ) : (
+              <div className="platform-empty-state">
+                <span>
+                  <Mail />
+                </span>
+                <strong>No inbound requests</strong>
+                <small>
+                  New contact and demo requests will appear here with their
+                  current pipeline status.
+                </small>
+              </div>
+            )}
+          </section>
+
+          <section className="card table-card platform-beta-access-card">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Private beta</p>
+                <h2>Access grants</h2>
+              </div>
+              {canManageBetaAccess && onCreateBetaAccess ? (
+                <button
+                  className="button primary small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setBetaAccessOpen(true)}
+                >
+                  <Plus /> Create access
+                </button>
+              ) : (
+                <span className="privacy-caption">
+                  <LockKeyhole /> Owner or operations only
+                </span>
+              )}
+            </div>
+            <div className="platform-beta-summary">
+              <span>
+                <strong>{activeBetaGrants.length}</strong>
+                <small>active grants</small>
+              </span>
+              <span>
+                <strong>{platform.betaAccess.events.length}</strong>
+                <small>recorded events</small>
+              </span>
+              <p>
+                Issue time-limited, usage-capped admission without exposing the
+                underlying code after creation.
+              </p>
+            </div>
+            {platform.betaAccess.grants.length ? (
+              <PlatformPagedList items={platform.betaAccess.grants}>
+                {(visible) =>
+                  visible.map((grant) => (
+                    <div className="platform-ops-row" key={grant.id}>
+                      <span className="invite-icon">
+                        <KeyRound />
+                      </span>
+                      <span className="member-main">
+                        <strong>{grant.label || "Private beta access"}</strong>
+                        <small>
+                          {grant.exactEmail || "Any approved email"} · expires{" "}
+                          {formatDate(grant.expiresAt, true)}
+                        </small>
+                        <small>
+                          {grant.usedCount} used · {grant.reservedCount} reserved ·{" "}
+                          {Math.max(
+                            0,
+                            grant.maxUses - grant.usedCount - grant.reservedCount,
+                          )}{" "}
+                          remaining
+                        </small>
+                      </span>
+                      <StatusBadge status={grant.status} />
+                      {grant.status === "active" && onRevokeBetaAccess ? (
+                        <button
+                          className="button ghost small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            if (window.confirm(`Revoke ${grant.label}?`)) {
+                              void onRevokeBetaAccess(grant.id).catch(
+                                () => undefined,
+                              );
+                            }
+                          }}
+                        >
+                          Revoke
+                        </button>
+                      ) : null}
+                    </div>
+                  ))
+                }
+              </PlatformPagedList>
+            ) : (
+              <div className="platform-empty-state compact">
+                <span>
+                  <KeyRound />
+                </span>
+                <strong>No beta access grants yet</strong>
+                <small>Create a scoped grant when a private-beta user is ready.</small>
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
+
+      {section === "accounts" && !selectedWorkspace ? (
+        <>
+          <section
+            className="platform-summary-strip"
+            aria-label="Account summary"
+          >
+            <article>
+              <Building2 />
+              <span>
+                <strong>{workspaces.length}</strong>
+                <small>workspaces</small>
+              </span>
+            </article>
+            <article>
+              <CheckCircle2 />
+              <span>
+                <strong>{metrics.activeWorkspaces}</strong>
+                <small>active</small>
+              </span>
+            </article>
+            <article>
+              <Users />
+              <span>
+                <strong>{platformAdministratorCount}</strong>
+                <small>administrators</small>
+              </span>
+            </article>
+            <article>
+              <Building2 />
+              <span>
+                <strong>{platform.organizations.length}</strong>
+                <small>organizations</small>
+              </span>
+            </article>
+          </section>
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -4428,25 +4645,26 @@ export function PlatformView({
                   { value: "archived", label: "Archived" },
                 ]}
               />
-              <span className="result-count">
+              <span className="result-count" aria-live="polite">
                 {accountRows.length}{" "}
                 {accountRows.length === 1 ? "workspace" : "workspaces"}
               </span>
             </div>
-            <div className="platform-table">
-              <div className="platform-row platform-head">
+            <div className="platform-table platform-account-table">
+              <div className="platform-row platform-account-row platform-head">
                 <span>Workspace</span>
                 <span>Administrators</span>
-                <span>Guides</span>
-                <span>Usage</span>
-                <span>Storage</span>
+                <span>Activity</span>
                 <span>Status</span>
                 <span />
               </div>
               <PlatformPagedList items={accountRows}>
                 {(visible) =>
                   visible.map((workspace) => (
-                    <div className="platform-row" key={workspace.id}>
+                    <div
+                      className="platform-row platform-account-row"
+                      key={workspace.id}
+                    >
                       <button
                         className="workspace-cell text-button"
                         type="button"
@@ -4487,15 +4705,22 @@ export function PlatformView({
                           <UserCog /> Assign
                         </button>
                       </span>
-                      <span>
-                        <strong>{workspace.publishedCount}</strong>
-                        <small>{workspace.draftCount} drafts</small>
+                      <span className="platform-account-usage">
+                        <span>
+                          <strong>
+                            {workspace.publishedCount + workspace.draftCount}
+                          </strong>
+                          <small>guides</small>
+                        </span>
+                        <span>
+                          <strong>{workspace.views}</strong>
+                          <small>views</small>
+                        </span>
+                        <span>
+                          <strong>{formatBytes(workspace.storageBytes)}</strong>
+                          <small>storage</small>
+                        </span>
                       </span>
-                      <span>
-                        <strong>{workspace.views} views</strong>
-                        <small>{workspace.exports} exports</small>
-                      </span>
-                      <span>{formatBytes(workspace.storageBytes)}</span>
                       <span>
                         <StatusBadge status={workspace.status} />
                       </span>
@@ -4542,12 +4767,84 @@ export function PlatformView({
               </PlatformPagedList>
             </div>
           </section>
+          {platform.organizations.length ? (
+            <details className="card table-card platform-organizations-card">
+              <summary className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Organizations</p>
+                  <h2>Company directory</h2>
+                </div>
+                <span className="platform-details-summary">
+                  {countPhrase(platform.organizations.length, "organization")}
+                  <ChevronDown />
+                </span>
+              </summary>
+              <div className="platform-organization-grid">
+                {platform.organizations.map((organization) => (
+                  <article key={organization.id}>
+                    <span className="invite-icon">
+                      <Building2 />
+                    </span>
+                    <span className="member-main">
+                      <strong>{organization.displayName}</strong>
+                      <small>
+                        {organization.legalName} · {organization.country}
+                      </small>
+                      <small>
+                        {countPhrase(
+                          organization.workspaceCount,
+                          "workspace",
+                        )}
+                      </small>
+                    </span>
+                    <StatusBadge status={organization.status} />
+                  </article>
+                ))}
+              </div>
+            </details>
+          ) : null}
         </>
       ) : null}
 
       {selectedWorkspace ? (
         <>
-          <section className="card table-card">
+          <section
+            className="platform-summary-strip"
+            aria-label={`${selectedWorkspace.name} account summary`}
+          >
+            <article>
+              <Users />
+              <span>
+                <strong>{selectedWorkspace.memberCount}</strong>
+                <small>members</small>
+              </span>
+            </article>
+            <article>
+              <BookOpen />
+              <span>
+                <strong>
+                  {selectedWorkspace.publishedCount +
+                    selectedWorkspace.draftCount}
+                </strong>
+                <small>guides</small>
+              </span>
+            </article>
+            <article>
+              <Eye />
+              <span>
+                <strong>{selectedWorkspace.views}</strong>
+                <small>views</small>
+              </span>
+            </article>
+            <article>
+              <FileDown />
+              <span>
+                <strong>{formatBytes(selectedWorkspace.storageBytes)}</strong>
+                <small>storage</small>
+              </span>
+            </article>
+          </section>
+          <section className="card table-card platform-account-hero">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Account</p>
@@ -4555,16 +4852,17 @@ export function PlatformView({
               </div>
               <StatusBadge status={selectedWorkspace.status} />
             </div>
-            <div className="platform-compact-row">
+            <div className="platform-account-summary-row">
               <span className="member-main">
                 <strong>
-                  {countPhrase(selectedWorkspace.memberCount, "member")}
+                  Workspace administration
                 </strong>
                 <small>
-                  {selectedWorkspace.publishedCount} published ·{" "}
-                  {selectedWorkspace.draftCount} drafts ·{" "}
-                  {selectedWorkspace.views} views ·{" "}
-                  {formatBytes(selectedWorkspace.storageBytes)}
+                  Created {formatDate(selectedWorkspace.createdAt)} ·{" "}
+                  {countPhrase(
+                    selectedWorkspace.administrators.length,
+                    "administrator",
+                  )}
                 </small>
               </span>
               <div className="modal-actions compact-actions">
@@ -4608,16 +4906,22 @@ export function PlatformView({
                 )}
               </div>
             </div>
-            {selectedWorkspace.administrators.map((admin) => (
-              <div className="platform-compact-row" key={admin.userId}>
-                <span className="member-main">
-                  <strong>{admin.name || admin.email}</strong>
-                  <small>{admin.email}</small>
-                </span>
-                <small>Administrator</small>
-              </div>
-            ))}
+            <div className="platform-account-admins">
+              {selectedWorkspace.administrators.map((admin) => (
+                <div className="platform-compact-row" key={admin.userId}>
+                  <span className="workspace-avatar">
+                    {initials(admin.name, admin.email)}
+                  </span>
+                  <span className="member-main">
+                    <strong>{admin.name || admin.email}</strong>
+                    <small>{admin.email}</small>
+                  </span>
+                  <small>Administrator</small>
+                </div>
+              ))}
+            </div>
           </section>
+          <div className="platform-account-detail-grid">
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -4697,7 +5001,7 @@ export function PlatformView({
               <p className="empty-copy">No activation events recorded.</p>
             )}
           </section>
-          <section className="card table-card">
+          <section className="card table-card platform-account-support-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Support SLA</p>
@@ -4720,7 +5024,7 @@ export function PlatformView({
               <p className="empty-copy">No support cases for this account.</p>
             )}
           </section>
-          <section className="card table-card">
+          <section className="card table-card platform-account-audit-card">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Platform audit</p>
@@ -4742,10 +5046,54 @@ export function PlatformView({
               <p className="empty-copy">No control-plane audit events recorded.</p>
             )}
           </section>
+          </div>
         </>
       ) : null}
 
       {section === "support" ? (
+        <>
+        <section className="platform-summary-strip" aria-label="Support summary">
+          <article>
+            <LifeBuoy />
+            <span>
+              <strong>{openSupportCount}</strong>
+              <small>open cases</small>
+            </span>
+          </article>
+          <article>
+            <CircleAlert />
+            <span>
+              <strong>{platform.systemHealth.overdueSupport}</strong>
+              <small>overdue</small>
+            </span>
+          </article>
+          <article>
+            <Mail />
+            <span>
+              <strong>
+                {
+                  platform.support.filter(
+                    (ticket) => ticket.status === "waiting_support",
+                  ).length
+                }
+              </strong>
+              <small>waiting on support</small>
+            </span>
+          </article>
+          <article>
+            <CheckCircle2 />
+            <span>
+              <strong>
+                {
+                  platform.support.filter(
+                    (ticket) => ticket.status === "closed",
+                  ).length
+                }
+              </strong>
+              <small>closed</small>
+            </span>
+          </article>
+        </section>
         <section className="card table-card">
           <div className="section-heading compact">
             <div>
@@ -4770,6 +5118,7 @@ export function PlatformView({
               onChange={setPipelineStatus}
               ariaLabel="Filter support by status"
               options={[
+                { value: "open", label: "Open cases" },
                 { value: "all", label: "All statuses" },
                 ...[
                   ...new Set(platform.support.map((ticket) => ticket.status)),
@@ -4779,7 +5128,7 @@ export function PlatformView({
                 })),
               ]}
             />
-            <span className="result-count">
+            <span className="result-count" aria-live="polite">
               {supportRows.length}{" "}
               {supportRows.length === 1 ? "case" : "cases"}
             </span>
@@ -4793,7 +5142,7 @@ export function PlatformView({
                     Date.parse(ticket.responseTargetAt) < platformNow;
                   return (
                     <button
-                      className="platform-compact-row"
+                      className="platform-compact-row platform-support-row"
                       type="button"
                       key={ticket.id}
                       onClick={() => openSection("accounts", ticket.workspaceId)}
@@ -4812,13 +5161,65 @@ export function PlatformView({
               }
             </PlatformPagedList>
           ) : (
-            <p className="empty-copy">No support cases recorded.</p>
+            <div className="platform-empty-state compact">
+              <span>
+                <CheckCircle2 />
+              </span>
+              <strong>No support work in this view</strong>
+              <small>Change the filter to review completed cases.</small>
+            </div>
           )}
         </section>
+        </>
       ) : null}
 
       {section === "billing" ? (
         <>
+          <section
+            className="platform-summary-strip"
+            aria-label="Subscription summary"
+          >
+            <article>
+              <CalendarDays />
+              <span>
+                <strong>{platform.subscriptions.length}</strong>
+                <small>subscriptions</small>
+              </span>
+            </article>
+            <article>
+              <Sparkles />
+              <span>
+                <strong>
+                  {
+                    platform.subscriptions.filter(
+                      (subscription) => subscription.kind === "trial",
+                    ).length
+                  }
+                </strong>
+                <small>trials</small>
+              </span>
+            </article>
+            <article>
+              <CheckCircle2 />
+              <span>
+                <strong>
+                  {
+                    platform.subscriptions.filter(
+                      (subscription) => subscription.kind === "paid",
+                    ).length
+                  }
+                </strong>
+                <small>contracts</small>
+              </span>
+            </article>
+            <article>
+              <CircleAlert />
+              <span>
+                <strong>{platform.systemHealth.expiringWithinSevenDays}</strong>
+                <small>expiring soon</small>
+              </span>
+            </article>
+          </section>
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -4829,8 +5230,44 @@ export function PlatformView({
                 <ShieldCheck /> Manual contracts only
               </span>
             </div>
-            {platform.subscriptions.length ? (
-              <PlatformPagedList items={platform.subscriptions}>
+            <div className="filter-bar">
+              <label className="search-field">
+                <Search />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search accounts or subscription types"
+                />
+              </label>
+              <SelectMenu
+                className="filter-select"
+                leading={<Filter />}
+                value={pipelineStatus}
+                onChange={setPipelineStatus}
+                ariaLabel="Filter subscriptions by status"
+                options={[
+                  { value: "all", label: "All statuses" },
+                  ...[
+                    ...new Set(
+                      platform.subscriptions.map(
+                        (subscription) => subscription.status,
+                      ),
+                    ),
+                  ].map((status) => ({
+                    value: status,
+                    label: titleCase(status.replaceAll("_", " ")),
+                  })),
+                ]}
+              />
+              <span className="result-count" aria-live="polite">
+                {subscriptionRows.length}{" "}
+                {subscriptionRows.length === 1
+                  ? "subscription"
+                  : "subscriptions"}
+              </span>
+            </div>
+            {subscriptionRows.length ? (
+              <PlatformPagedList items={subscriptionRows}>
                 {(visible) =>
                   visible.map((subscription) => {
                     const entitlements = platform.entitlements.filter(
@@ -4838,7 +5275,10 @@ export function PlatformView({
                         entitlement.workspaceId === subscription.workspaceId,
                     );
                     return (
-                      <div className="platform-ops-row" key={subscription.id}>
+                      <div
+                        className="platform-ops-row platform-subscription-row"
+                        key={subscription.id}
+                      >
                         <span className="invite-icon">
                           <CalendarDays />
                         </span>
@@ -4914,14 +5354,15 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <div className="empty-inline">
-                <CalendarDays />
+              <div className="platform-empty-state compact">
                 <span>
-                  <strong>No subscriptions</strong>
-                  <small>
-                    Provisioning creates an explicit trial subscription.
-                  </small>
+                  <CalendarDays />
                 </span>
+                <strong>No matching subscriptions</strong>
+                <small>
+                  Try another filter, or provision an organization to create a
+                  trial subscription.
+                </small>
               </div>
             )}
           </section>
@@ -5116,6 +5557,40 @@ export function PlatformView({
 
       {section === "ops" ? (
         <>
+          <section
+            className="platform-summary-strip"
+            aria-label="Control-plane summary"
+          >
+            <article>
+              <Mail />
+              <span>
+                <strong>{platform.notificationFailures.length}</strong>
+                <small>delivery failures</small>
+              </span>
+            </article>
+            <article>
+              <Trash2 />
+              <span>
+                <strong>{actionableDeletionCases.length}</strong>
+                <small>deletion reviews</small>
+              </span>
+            </article>
+            <article>
+              <History />
+              <span>
+                <strong>{platform.platformAudits.length}</strong>
+                <small>audit events</small>
+              </span>
+            </article>
+            <article>
+              <Activity />
+              <span>
+                <strong>{platform.activation.length}</strong>
+                <small>activation journeys</small>
+              </span>
+            </article>
+          </section>
+          <div className="platform-operations-grid">
           <section className="card table-card">
             <div className="section-heading compact">
               <div>
@@ -5149,7 +5624,13 @@ export function PlatformView({
                 }
               </PlatformPagedList>
             ) : (
-              <p className="empty-copy">No failed notification deliveries.</p>
+              <div className="platform-empty-state compact">
+                <span>
+                  <CheckCircle2 />
+                </span>
+                <strong>Delivery queue is clear</strong>
+                <small>No failed notifications are waiting for retry.</small>
+              </div>
             )}
           </section>
           <section className="card table-card deletion-control-card">
@@ -5162,8 +5643,8 @@ export function PlatformView({
                 <Trash2 /> Two-stage purge
               </span>
             </div>
-            {platform.deletionCases.length ? (
-              platform.deletionCases.map((item) => {
+            {actionableDeletionCases.length ? (
+              actionableDeletionCases.map((item) => {
                 const eligible = Date.parse(item.eligibleAt) <= platformNow;
                 return (
                   <div className="platform-ops-row" key={item.id}>
@@ -5209,7 +5690,7 @@ export function PlatformView({
               </div>
             )}
           </section>
-          <section className="card table-card">
+          <section className="card table-card platform-ops-wide">
             <div className="section-heading compact">
               <div>
                 <p className="eyebrow">Platform audit</p>
@@ -5267,7 +5748,7 @@ export function PlatformView({
             )}
           </section>
           {appointments.length ? (
-            <section className="card table-card">
+            <section className="card table-card platform-appointments-card">
               <div className="section-heading compact">
                 <div>
                   <p className="eyebrow">Client administrator appointments</p>
@@ -5300,6 +5781,7 @@ export function PlatformView({
               ))}
             </section>
           ) : null}
+          </div>
         </>
       ) : null}
       {pricingCatalogOpen && onPlatformControl ? (
@@ -7193,6 +7675,157 @@ function GlobalGuideSearch({
   );
 }
 
+function PlatformGlobalSearch({
+  platform,
+  onNavigate,
+}: {
+  platform: NonNullable<BootstrapResponse["platform"]>;
+  onNavigate: (href: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement | null>(null);
+  const input = useRef<HTMLInputElement | null>(null);
+  const results = useMemo(() => {
+    const phrase = query.trim().toLowerCase();
+    const navigation = PLATFORM_NAV.filter(
+      (item) =>
+        !phrase ||
+        item.label.toLowerCase().includes(phrase) ||
+        item.section.toLowerCase().includes(phrase),
+    ).map((item) => ({
+      key: `section:${item.section}`,
+      label: item.label,
+      description:
+        item.section === "overview"
+          ? "Platform command center"
+          : `Open platform ${item.label.toLowerCase()}`,
+      href: platformHref(item.section),
+      icon: item.icon,
+      kind: "Section",
+    }));
+    const workspaces = platform.workspaces
+      .filter((workspace) => {
+        if (!phrase) return false;
+        const administrators = workspace.administrators
+          .map((admin) => `${admin.name} ${admin.email}`)
+          .join(" ");
+        return `${workspace.name} ${workspace.slug} ${administrators}`
+          .toLowerCase()
+          .includes(phrase);
+      })
+      .map((workspace) => ({
+        key: `workspace:${workspace.id}`,
+        label: workspace.name,
+        description: `${workspace.slug} · ${countPhrase(workspace.memberCount, "member")}`,
+        href: platformHref("accounts", workspace.id),
+        icon: Building2,
+        kind: "Account",
+      }));
+
+    return [...workspaces, ...navigation].slice(0, 8);
+  }, [platform.workspaces, query]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        input.current?.focus();
+        setOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (box.current && !box.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open]);
+
+  function openResult(href: string) {
+    setOpen(false);
+    setQuery("");
+    onNavigate(href);
+  }
+
+  return (
+    <div className="global-search platform-global-search" ref={box}>
+      <label className="search-field global-search-field">
+        <Search />
+        <input
+          ref={input}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpen(false);
+              setQuery("");
+            }
+            if (event.key === "Enter" && results[0]) {
+              event.preventDefault();
+              openResult(results[0].href);
+            }
+          }}
+          placeholder="Search accounts, admins, or platform sections"
+          aria-label="Search the platform console"
+        />
+        <kbd aria-hidden="true">Ctrl K</kbd>
+      </label>
+      {open ? (
+        <div
+          className="search-results platform-search-results"
+          role="listbox"
+          aria-label="Platform search results"
+        >
+          <p className="search-result-count">
+            {query.trim() ? "Best matches" : "Jump to a platform section"}
+          </p>
+          {results.length ? (
+            results.map((result) => {
+              const Icon = result.icon;
+              return (
+                <button
+                  className="search-result platform-search-result"
+                  type="button"
+                  key={result.key}
+                  onClick={() => openResult(result.href)}
+                >
+                  <span className="guide-icon">
+                    <Icon />
+                  </span>
+                  <span className="search-result-main">
+                    <span className="guide-title-line">
+                      <strong>{result.label}</strong>
+                      <span className="workspace-label">{result.kind}</span>
+                    </span>
+                    <small>{result.description}</small>
+                  </span>
+                  <ArrowRight />
+                </button>
+              );
+            })
+          ) : (
+            <p className="search-empty">
+              No accounts or sections match &ldquo;{query.trim()}&rdquo;.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ExtensionDialog({
   busy,
   companion,
@@ -8015,6 +8648,23 @@ export function KnowHowWorkspaceApp({
     view === "Platform"
       ? "Platform administrator"
       : workspaceAccessLabel(roles);
+  const platformNavCounts: Partial<Record<PlatformSection, number>> =
+    data.platform
+      ? {
+          leads: data.platform.leads.filter(
+            (lead) => !["closed", "converted", "rejected"].includes(lead.status),
+          ).length,
+          accounts: data.platform.workspaces.length,
+          support: data.platform.support.filter(
+            (ticket) => ticket.status !== "closed",
+          ).length,
+          billing: data.platform.systemHealth.expiringWithinSevenDays,
+          ops:
+            data.platform.systemHealth.failedNotifications +
+            data.platform.systemHealth.deletionApprovals +
+            data.platform.systemHealth.failedOperations,
+        }
+      : {};
 
   let primaryAction: {
     label: string;
@@ -8289,35 +8939,48 @@ export function KnowHowWorkspaceApp({
             <div className="sidebar-brand">
               <ProductBrand compact />
             </div>
-            <p className="sidebar-section-label">
-              {view === "Platform" ? "Workspace switcher" : "Active workspace"}
-            </p>
-            <SelectMenu
-              className="workspace-menu"
-              contentClassName="workspace-menu-options"
-              value={activeWorkspaceId}
-              disabled={busy}
-              onChange={(value) => void onSelectWorkspace(value)}
-              ariaLabel="Switch workspace"
-              options={data.workspaces.map((item) => ({
-                value: item.id,
-                label: item.name,
-              }))}
-              renderValue={() => (
-                <>
-                  <WorkspaceLogo
-                    workspaceId={workspace.id}
-                    workspaceName={workspace.name}
-                    logoKey={workspace.settings.logoUrl}
-                    size="md"
-                  />
-                  <span className="workspace-menu-copy">
-                    <strong>{workspace.name}</strong>
-                    <small>{workspaceAccessLabel(roles)}</small>
-                  </span>
-                </>
-              )}
-            />
+            {view === "Platform" ? (
+              <div className="platform-sidebar-context">
+                <span className="platform-sidebar-context-icon">
+                  <ShieldCheck />
+                </span>
+                <span>
+                  <small>Platform console</small>
+                  <strong>All workspaces</strong>
+                </span>
+                <StatusBadge status="active" />
+              </div>
+            ) : (
+              <>
+                <p className="sidebar-section-label">Active workspace</p>
+                <SelectMenu
+                  className="workspace-menu"
+                  contentClassName="workspace-menu-options"
+                  value={activeWorkspaceId}
+                  disabled={busy}
+                  onChange={(value) => void onSelectWorkspace(value)}
+                  ariaLabel="Switch workspace"
+                  options={data.workspaces.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  }))}
+                  renderValue={() => (
+                    <>
+                      <WorkspaceLogo
+                        workspaceId={workspace.id}
+                        workspaceName={workspace.name}
+                        logoKey={workspace.settings.logoUrl}
+                        size="md"
+                      />
+                      <span className="workspace-menu-copy">
+                        <strong>{workspace.name}</strong>
+                        <small>{workspaceAccessLabel(roles)}</small>
+                      </span>
+                    </>
+                  )}
+                />
+              </>
+            )}
           </SidebarHeader>
           <SidebarContent>
             {view === "Platform" ? (
@@ -8333,7 +8996,7 @@ export function KnowHowWorkspaceApp({
                           }
                         >
                           <ArrowLeft />
-                          <span>Back to workspace</span>
+                          <span>Back to {workspace.name}</span>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
                     </SidebarMenu>
@@ -8355,6 +9018,11 @@ export function KnowHowWorkspaceApp({
                             <Icon />
                             <span>{item.label}</span>
                           </SidebarMenuButton>
+                          {platformNavCounts[item.section] ? (
+                            <SidebarMenuBadge>
+                              {platformNavCounts[item.section]}
+                            </SidebarMenuBadge>
+                          ) : null}
                         </SidebarMenuItem>
                       );
                     })}
@@ -8512,14 +9180,11 @@ export function KnowHowWorkspaceApp({
               </div>
             </div>
             <div className="topbar-search-slot">
-              {view === "Platform" ? (
-                <div className="platform-topbar-summary">
-                  <ShieldCheck />
-                  <span>
-                    <strong>Control plane</strong>
-                    <small>Customer content remains private</small>
-                  </span>
-                </div>
+              {view === "Platform" && data.platform ? (
+                <PlatformGlobalSearch
+                  platform={data.platform}
+                  onNavigate={onNavigate}
+                />
               ) : guides.length &&
                 !["Organization", "Settings", "Support"].includes(view) ? (
                 <GlobalGuideSearch guides={guides} onOpen={openGuide} />
@@ -8851,6 +9516,7 @@ export function KnowHowWorkspaceApp({
             data.viewer.platformAdministrator &&
             data.platform ? (
               <PlatformView
+                key={`${platformSection}:${platformAccountId ?? "all"}`}
                 platform={data.platform}
                 busy={busy}
                 section={platformSection}
