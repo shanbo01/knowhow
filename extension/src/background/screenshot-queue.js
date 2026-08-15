@@ -21,6 +21,8 @@ function wait(milliseconds) {
 export function createScreenshotQueue({
   minimumIntervalMs = CAPTURE_LIMITS.minimumScreenshotIntervalMs,
   now = () => Date.now(),
+  readLastCaptureStartedAt = async () => 0,
+  writeLastCaptureStartedAt = async () => undefined,
 } = {}) {
   let queue = Promise.resolve();
   let lastCaptureStartedAt = 0;
@@ -31,6 +33,8 @@ export function createScreenshotQueue({
       let reserved = false;
       const reserveSlot = async () => {
         if (reserved) return true;
+        const persisted = Number(await readLastCaptureStartedAt()) || 0;
+        lastCaptureStartedAt = Math.max(lastCaptureStartedAt, persisted);
         const remaining = minimumIntervalMs - (now() - lastCaptureStartedAt);
         if (remaining > 0) {
           if (deadlineMs !== null && remaining + now() - queuedAt > deadlineMs) {
@@ -39,6 +43,7 @@ export function createScreenshotQueue({
           await wait(remaining);
         }
         lastCaptureStartedAt = now();
+        await writeLastCaptureStartedAt(lastCaptureStartedAt);
         reserved = true;
         return true;
       };

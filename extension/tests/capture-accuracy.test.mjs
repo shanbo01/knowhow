@@ -29,6 +29,32 @@ test("click points normalize independently of screenshot pixel density", () => {
   );
 });
 
+test("click points project through the visual viewport when present", () => {
+  assert.deepEqual(
+    normalizedClickTarget(
+      { x: 200, y: 140 },
+      {
+        width: 1280,
+        height: 720,
+        visualViewport: {
+          offsetX: 80,
+          offsetY: 40,
+          width: 640,
+          height: 360,
+          scale: 2,
+        },
+      },
+      "#ef6f47",
+    ),
+    {
+      x: 120 / 640,
+      y: 100 / 360,
+      radius: 0.035,
+      color: "#ef6f47",
+    },
+  );
+});
+
 test("click targets clamp to the image boundary and reject invalid geometry", () => {
   assert.deepEqual(
     normalizedClickTarget(
@@ -77,19 +103,11 @@ test("clicked element bounds normalize into an editable focus region", () => {
 // geometry. Evaluating the shipped mask-merging block lets these rules be tested
 // as behaviour instead of as a regular expression over source text.
 async function maskGeometry(viewport = { width: 1280, height: 800 }) {
-  const source = await readFile(
-    new URL("../src/content/capture.js", import.meta.url),
-    "utf8",
-  );
-  const block = source.slice(
-    source.indexOf("  const MASK_PADDING"),
-    source.indexOf("  function collectMasks"),
-  );
-  return new Function(
-    "innerWidth",
-    "innerHeight",
-    block + "\nreturn { mergedMasks };",
-  )(viewport.width, viewport.height);
+  await import("../src/content/blur-geometry.js");
+  const geometry = globalThis.__KNOWHOW_BLUR_GEOMETRY__;
+  return {
+    mergedMasks: (masks) => geometry.normalizeAndMergeMasks(masks, viewport),
+  };
 }
 
 test("live blur covers the detected text and nothing else", async () => {
@@ -101,8 +119,8 @@ test("live blur covers the detected text and nothing else", async () => {
     { x: 164, y: 100, width: 40, height: 16, reason: "email" },
   ]);
   assert.equal(line.length, 1);
-  assert.equal(line[0].x, 97);
-  assert.equal(line[0].width, 110);
+  assert.equal(line[0].x, 99);
+  assert.equal(line[0].width, 106);
 
   // Two short lines in a tall container stay separate: merging them would cover
   // the blank space to the right of the shorter line.
@@ -111,7 +129,7 @@ test("live blur covers the detected text and nothing else", async () => {
     { x: 100, y: 122, width: 40, height: 15, reason: "common-name" },
   ]);
   assert.equal(stacked.length, 2);
-  assert.ok(stacked.every((mask) => mask.width <= 186));
+  assert.ok(stacked.every((mask) => mask.width <= 192));
 
   // Overlapping rectangles reported for the same control still collapse.
   const overlapping = mergedMasks([
@@ -119,9 +137,22 @@ test("live blur covers the detected text and nothing else", async () => {
     { x: 140, y: 104, width: 60, height: 22, reason: "form-field" },
   ]);
   assert.equal(overlapping.length, 1);
-  assert.equal(overlapping[0].width, 206);
+  assert.equal(overlapping[0].width, 202);
 
-  // Slivers and rectangles scrolled out of the viewport never paint.
+  const splitHosts = mergedMasks([
+    { x: 100, y: 100, width: 60, height: 16, reason: "email", host: "span-a" },
+    { x: 164, y: 100, width: 40, height: 16, reason: "email", host: "span-b" },
+  ]);
+  assert.equal(splitHosts.length, 2);
+
+  const sameHost = mergedMasks([
+    { x: 100, y: 100, width: 60, height: 16, reason: "email", host: "span-a" },
+    { x: 150, y: 100, width: 40, height: 16, reason: "email", host: "span-a" },
+  ]);
+  assert.equal(sameHost.length, 1);
+  assert.equal(sameHost[0].host, "span-a");
+
+  // Slivers and hostless rectangles scrolled out of the viewport never paint.
   assert.deepEqual(
     mergedMasks([
       { x: 10, y: 10, width: 0.5, height: 12, reason: "number" },
@@ -129,6 +160,20 @@ test("live blur covers the detected text and nothing else", async () => {
     ]),
     [],
   );
+
+  const belowFoldHost = mergedMasks([
+    {
+      x: 20,
+      y: 1200,
+      width: 180,
+      height: 16,
+      reason: "common-name",
+      host: "span-offscreen",
+    },
+  ]);
+  assert.equal(belowFoldHost.length, 1);
+  assert.equal(belowFoldHost[0].host, "span-offscreen");
+  assert.ok(belowFoldHost[0].y > 800);
 });
 
 test("the on-page panel labels workspace advice instead of acting on it", async () => {
@@ -160,7 +205,7 @@ test("the on-page panel labels workspace advice instead of acting on it", async 
   assert.match(contentSource, /suggestion\.textContent = "Suggested"/);
   assert.match(
     contentSource,
-    /input\.checked = state\.policy\[input\.dataset\.knowhowPolicy\] === true/,
+    /input\.checked = policySwitchIsOn\(input\.dataset\.knowhowPolicy\)/,
   );
 });
 
@@ -199,7 +244,7 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
     /addEventListener\("pointercancel", onPointerCancel, true\)/,
   );
   assert.match(contentSource, /addEventListener\("click", onClick, true\)/);
-  assert.match(contentSource, /event\.isPrimary === false \|\| event\.button !== 0/);
+  assert.match(contentSource, /event\.isPrimary === false \|\| !\[0, 2\]\.includes\(event\.button\)/);
   assert.match(contentSource, /x: event\.clientX/);
   assert.match(contentSource, /y: event\.clientY/);
   assert.match(contentSource, /Math\.hypot\(/);
@@ -207,7 +252,7 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(contentSource, /targetRect\.x \+ targetRect\.width \/ 2/);
   assert.match(
     contentSource,
-    /scheduleSingleClick\(staged\.element, staged\.context\)/,
+    /commitStagedInteraction\(staged\)/,
   );
   assert.match(contentSource, /addEventListener\("dblclick", onDoubleClick, true\)/);
   assert.match(contentSource, /sourceEvent: "dblclick"/);
@@ -223,7 +268,8 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
     backgroundSource,
     /function clickJobIsLatest\(request\)|clickJobMayProceed|rapidInteractionsSkipped/,
   );
-  assert.match(backgroundSource, /interactionSequencer\.confirm\(state\.sessionId/);
+  assert.match(backgroundSource, /reserveCaptureEntry\(current, \{/);
+  assert.match(backgroundSource, /case "UPGRADE_INTERACTION"/);
   assert.match(
     backgroundSource,
     /interactionViewport:\s*context\.interactionViewport \|\| request\.viewport \|\| context\.viewport/,
@@ -236,56 +282,80 @@ test("capture uses primary pointer geometry and keeps the marker editable", asyn
   assert.match(offscreenSource, /\{ clickTarget \}/);
 });
 
-test("capture photographs the page as it looked when the pointer went down", async () => {
+test("capture reserves a prepared pre-action frame without delaying the click", async () => {
   const [contentSource, backgroundSource] = await Promise.all([
     readFile(new URL("../src/content/capture.js", import.meta.url), "utf8"),
     readFile(new URL("../src/background/index.js", import.meta.url), "utf8"),
   ]);
 
-  // The screenshot is taken early, but the click itself is never intercepted,
-  // cancelled, or replayed: dropdowns and menus behave exactly as they would
-  // without KnowHow attached.
-  assert.doesNotMatch(contentSource, /event\.preventDefault\(\)/);
-  assert.doesNotMatch(contentSource, /event\.stopImmediatePropagation\(\)/);
+  // Ordinary recording never replays a click. Preventing page actions is scoped
+  // to the explicit element-picker branch.
   assert.doesNotMatch(contentSource, /\.element\.click\(\)/);
-  assert.match(contentSource, /type: "PREFLIGHT_CAPTURE"/);
-  assert.match(
-    contentSource,
-    /requestPreflightCapture\(element, context\);\s*\}/,
+  assert.match(contentSource, /function claimPreparedFrame\(\)/);
+  assert.match(contentSource, /type: "STAGE_INTERACTION"/);
+  assert.match(contentSource, /frameId = claimPreparedFrame\(\)/);
+  assert.match(contentSource, /lastSerializableMasks/);
+  const stageSource = contentSource.slice(
+    contentSource.indexOf("function stageInteraction"),
+    contentSource.indexOf("function commitStagedInteraction"),
   );
-  assert.match(contentSource, /function claimPreflight\(element\)/);
-  assert.match(
-    contentSource,
-    /function emitInteraction\(element, context, options = \{\}\) \{\s+if \(claimPreflight\(element\)\)/,
+  assert.doesNotMatch(stageSource, /collectMasks\(\)/);
+  assert.match(stageSource, /lastSerializableMasks/);
+  assert.ok(
+    stageSource.indexOf("hideCaptureChrome()") <
+      stageSource.indexOf("STAGE_INTERACTION"),
+    "live overlays hide before STAGE, but STAGE must not wait on collectMasks",
   );
+  assert.match(contentSource, /type: "COMMIT_INTERACTION"/);
+  const commitSource = contentSource.slice(
+    contentSource.indexOf("function commitStagedInteraction"),
+    contentSource.indexOf("function cancelStagedInteraction"),
+  );
+  assert.ok(
+    commitSource.indexOf("void send(commit)") <
+      commitSource.indexOf("staged.stagePromise.then"),
+    "COMMIT must leave the trusted click handler before STAGE acknowledgement",
+  );
+  assert.match(commitSource, /return send\(commit\)/);
   // Anything that turns out not to be a click releases the reserved frame.
   const drag = contentSource.slice(
     contentSource.indexOf("function onPointerMove"),
     contentSource.indexOf("function onContextMenu"),
   );
-  assert.match(drag, /discardPreflight\(\)/);
-  assert.match(contentSource, /type: "PREFLIGHT_DISCARD"/);
-  assert.match(backgroundSource, /if \(request\.preflight === true\)/);
-  assert.match(backgroundSource, /stash\.generation === generation/);
-  // Without a usable pre-click frame the step still lands, photographed after
-  // the page paints instead of being dropped.
-  assert.match(contentSource, /function emitAfterPaint\(context, options = \{\}\)/);
-  assert.match(contentSource, /waitForPagePaint\(\)\.then/);
-  assert.match(contentSource, /DOUBLE_CLICK_WINDOW_MS = 260/);
-  assert.match(contentSource, /function scheduleSingleClick\(element, context\)/);
-  assert.match(contentSource, /function flushPendingSingleClick/);
+  assert.match(drag, /cancelStagedInteraction\(active\)/);
+  assert.match(contentSource, /type: "CANCEL_INTERACTION"/);
+  assert.match(backgroundSource, /deadlineRequired: true/);
+  assert.doesNotMatch(backgroundSource, /verified\.visualEpoch !== visualEpoch/);
+  assert.match(backgroundSource, /verified\.viewportKey !== viewportKey/);
+  assert.match(backgroundSource, /ignoreVisualEpoch: Boolean\(message\.frameId\)/);
+  assert.match(backgroundSource, /if \(entry\.frameId\) return/);
+  assert.match(backgroundSource, /markCaptureEntryFailed/);
+  assert.match(contentSource, /function refreshLiveBlur\(\)/);
+  assert.match(contentSource, /function frameIsClaimable\(/);
   assert.match(
     contentSource,
-    /pendingSingleClick && pendingSingleClick\.element !== element[\s\S]*flushPendingSingleClick\(\)/,
+    /find\(\(candidate\) => frameIsEligible\(candidate\)\)/,
   );
+  assert.match(
+    contentSource,
+    /else if \(pageChanged\) \{\s*scheduleBlurPreview\(liveOverlayScrolling \? 80 : 48\);/,
+  );
+  assert.match(contentSource, /redactIds: false/);
+  assert.match(contentSource, /redactAllNumbers: false/);
+  assert.match(contentSource, /redactCommonNames: false/);
+  assert.match(contentSource, /DOUBLE_CLICK_WINDOW_MS = 420/);
+  assert.doesNotMatch(contentSource, /scheduleSingleClick|flushPendingSingleClick/);
   assert.match(contentSource, /function onDoubleClick\(event\)/);
   assert.match(contentSource, /title: "Double-click " \+ name/);
   assert.match(contentSource, /function targetName\(element\)/);
   assert.match(contentSource, /const quoted = '"' \+ label\.replace/);
+  assert.match(contentSource, /return "this button"/);
+  assert.match(contentSource, /Select the " \+ quoted \+ " option/);
   assert.match(
     backgroundSource,
-    /sourceEvent: \["contextmenu", "dblclick"\]\.includes\(message\.sourceEvent\)/,
+    /case "UPGRADE_INTERACTION"/,
   );
+  assert.doesNotMatch(contentSource, /PREFLIGHT_CAPTURE|PREFLIGHT_DISCARD/);
 });
 
 test("the recording flash never leaks into a screenshot and can be turned off", async () => {
@@ -300,10 +370,7 @@ test("the recording flash never leaks into a screenshot and can be turned off", 
     /if \(state\.policy\.showRecordingIndicator === false\) return;/,
   );
   assert.match(source, /pointer-events:none/);
-  assert.match(
-    source,
-    /function waitForPagePaint\(\) \{\s+return new Promise\(\(resolve\) =>\s+requestAnimationFrame\(\(\) => requestAnimationFrame\(resolve\)\)/,
-  );
+  assert.match(source, /requestAnimationFrame\(\(\) => requestAnimationFrame\(finish\)\)/);
   // The flash is force-removed at every point that immediately precedes a
   // real screenshot, so it can never appear in captured pixels.
   const prepareSlice = source.slice(
@@ -317,6 +384,14 @@ test("the recording flash never leaks into a screenshot and can be turned off", 
   );
   assert.match(pageContextSlice, /removeRecordingFlash\(\)/);
   assert.match(prepareSlice, /hideBlurPreviewForCapture\(\)/);
+  const preparePrivateSlice = source.slice(
+    source.indexOf("async function preparePrivateFrame()"),
+    source.indexOf("function startBlurPreviewTracking()"),
+  );
+  assert.match(preparePrivateSlice, /removeRecordingFlash\(\)/);
+  assert.doesNotMatch(preparePrivateSlice, /hideBlurPreviewForCapture\(\)/);
+  assert.match(preparePrivateSlice, /waitForPagePaint\(\)/);
+  assert.doesNotMatch(preparePrivateSlice, /restoreBlurPreviewAfterCapture\(\)/);
   assert.match(source, /message\?\.type === "KNOWHOW_RESTORE_PRIVACY_PREVIEW"/);
   assert.match(source, /restoreBlurPreviewAfterCapture\(\)/);
   assert.match(source, /let blurPreviewSuspended = false/);

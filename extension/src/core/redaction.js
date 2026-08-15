@@ -5,7 +5,7 @@ const PHONE_PATTERN =
 const FINANCIAL_PATTERN =
   /(?:\b\d[ -]*?){13,19}\b/g;
 const LONG_ID_PATTERN =
-  /\b(?=[A-Z0-9-]{8,}\b)(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{7,}\b/gi;
+  /\b(?=[A-Z0-9-]{8,}\b)(?=(?:[A-Z0-9-]*\d){2,})[A-Z0-9][A-Z0-9-]{7,}\b/gi;
 const ANY_NUMBER_PATTERN = /\d+/g;
 const COMMON_NAME_PATTERN =
   /\b[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\b/g;
@@ -196,6 +196,21 @@ export function detectSensitiveRanges(text, options = {}) {
   }
 
   return findings.sort((left, right) => left.start - right.start);
+}
+
+export function isSensitivePathSegment(segment, policy = {}) {
+  const input = String(segment || "");
+  if (!input) return false;
+  if (
+    detectSensitiveRanges(input, {
+      redactEmails: policy.redactEmails === true,
+      redactPhoneNumbers: policy.redactPhoneNumbers === true,
+      redactFinancialNumbers: policy.redactFinancialNumbers === true,
+    }).length
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function sanitizeCapturedText(text, options = {}, maxLength = 500) {

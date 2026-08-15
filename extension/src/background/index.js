@@ -1,23 +1,32 @@
 import {
   CAPTURE_LIMITS,
+  CONTENT_GEOMETRY_PATH,
   CONTENT_SCRIPT_PATH,
+  CONTENT_SETTLED_PATH,
+  CONTENT_STYLE_PATH,
   OFFSCREEN_DOCUMENT_PATH,
   KNOWHOW_ORIGIN,
   STORAGE_KEYS,
 } from "../core/config.js";
 import {
   clearAllCapturedSteps,
+  deleteCaptureFrame,
   deleteCapturedStep,
-  deleteCapturedStepAndCompact,
   deleteCaptureSession,
+  getCaptureFrame,
+  getCaptureFrameForInteraction,
   getCapturedSteps,
   listCapturedSteps,
+  putCapturedStep,
+  pruneCaptureFrames,
+  updateCapturedStep,
 } from "../core/capture-store.js";
 import {
   beginRemoteCapture,
   beginKnowHowPairing,
   discardRemoteCapture,
   fetchGuideMedia,
+  fetchCompanionLibrary,
   getConnectionState,
   getKnowHowContext,
   pauseRemoteCapture,
@@ -33,6 +42,11 @@ import {
 } from "../core/policy.js";
 import { sanitizeCapturedText } from "../core/redaction.js";
 import {
+  newestEligiblePreparedFrame,
+  preparedFrameEligible,
+  retainPreparedFrameMetadata,
+} from "../core/prepared-frame.js";
+import {
   CaptureEvent,
   CaptureStatus,
   createWindowActivationEpochs,
@@ -41,20 +55,53 @@ import {
   jobIsCurrent,
   snapshotCaptureJob,
   transitionCapture,
-  withCapturedStep,
-  withoutCapturedStep,
 } from "../core/state-machine.js";
-import { createInteractionSequencer } from "../core/interaction-sequence.js";
-import { enqueueScreenshot } from "./screenshot-queue.js";
+import {
+  CaptureEntryStatus,
+  captureEntry,
+  clickEntryNeedsSettledFrame,
+  initializeCaptureCoordinator,
+  lastClickCaptureEntry,
+  markCaptureEntryFailed,
+  markCaptureEntryReady,
+  navigationKey,
+  noteClickInteraction,
+  recentHandoffMatches,
+  rememberNavigationKey,
+  rememberRecordedDestination,
+  removeCaptureEntry,
+  resetCaptureEntryForRetry,
+  reserveCaptureEntry,
+  shouldDropTrailingTabSwitch,
+  shouldMintNavigationStep,
+  switchNavigationCopy,
+  unresolvedCaptureEntries,
+  updateCaptureEntry,
+} from "../core/capture-coordinator.js";
+import { createScreenshotQueue } from "./screenshot-queue.js";
 
 let offscreenCreation;
 let stateMutationQueue = Promise.resolve();
 let capturePolicyMutationQueue = Promise.resolve();
 let remoteLifecycleQueue = Promise.resolve();
 let reviewTabQueue = Promise.resolve();
-const interactionSequencer = createInteractionSequencer();
 const windowActivationEpochs = createWindowActivationEpochs();
-const recentInteractionByTab = new Map();
+const interactionFinalizations = new Map();
+const recaptureInFlight = new Map();
+const settledFrameJobs = new Map();
+const navigationTransitionQueueByTab = new Map();
+const SCREENSHOT_RATE_STORAGE_KEY = "knowhow.capture.last-screenshot-at";
+const enqueueScreenshot = createScreenshotQueue({
+  readLastCaptureStartedAt: async () => {
+    const stored = await chrome.storage.session.get(SCREENSHOT_RATE_STORAGE_KEY);
+    return Number(stored[SCREENSHOT_RATE_STORAGE_KEY]) || 0;
+  },
+  writeLastCaptureStartedAt: async (startedAt) => {
+    await chrome.storage.session.set({
+      [SCREENSHOT_RATE_STORAGE_KEY]: startedAt,
+    });
+  },
+});
 const captureHostAccess = Object.freeze({ origins: ["<all_urls>"] });
 const connectableCaptureStatuses = new Set([
   CaptureStatus.IDLE,
@@ -99,31 +146,16 @@ function enqueueRemoteLifecycle(operation) {
   return result;
 }
 
-const PREFLIGHT_STORAGE_KEY = "knowhow-pending-preflight";
-const PREFLIGHT_TTL_MS = 10_000;
-// A pre-click screenshot that cannot start within this window is skipped: the
-// click has already landed by then, so the step falls back to photographing
-// the painted result instead of storing a frame from the wrong moment.
-const PREFLIGHT_DEADLINE_MS = 320;
-
-async function getPendingPreflight(sessionId) {
-  if (typeof sessionId !== "string" || !sessionId) return null;
-  const stored = await chrome.storage.session.get(PREFLIGHT_STORAGE_KEY);
-  const stash = stored[PREFLIGHT_STORAGE_KEY];
-  if (!stash || stash.sessionId !== sessionId) return null;
-  if (Date.now() - Number(stash.capturedAt || 0) > PREFLIGHT_TTL_MS) {
-    await chrome.storage.session.remove(PREFLIGHT_STORAGE_KEY);
-    return null;
-  }
-  return stash;
-}
-
-async function setPendingPreflight(stash) {
-  await chrome.storage.session.set({ [PREFLIGHT_STORAGE_KEY]: stash });
-}
-
-async function clearPendingPreflight() {
-  await chrome.storage.session.remove(PREFLIGHT_STORAGE_KEY);
+function enqueueNavigationTransition(tabId, operation) {
+  const previous = navigationTransitionQueueByTab.get(tabId) || Promise.resolve();
+  const result = previous.then(operation, operation);
+  const tail = result.catch(() => undefined);
+  navigationTransitionQueueByTab.set(tabId, tail);
+  return result.finally(() => {
+    if (navigationTransitionQueueByTab.get(tabId) === tail) {
+      navigationTransitionQueueByTab.delete(tabId);
+    }
+  });
 }
 
 async function pendingRemoteDiscards() {
@@ -222,7 +254,15 @@ function syncRemoteTransition(state, transition) {
 
 async function getCaptureState() {
   const stored = await chrome.storage.session.get(STORAGE_KEYS.captureState);
-  return stored[STORAGE_KEYS.captureState] || createIdleState();
+  const state = stored[STORAGE_KEYS.captureState] || createIdleState();
+  if (
+    state.sessionId &&
+    (!Array.isArray(state.captureEntries) ||
+      !Number.isInteger(state.nextEventSequence))
+  ) {
+    return initializeCaptureCoordinator(state);
+  }
+  return state;
 }
 
 async function setCaptureState(state) {
@@ -401,6 +441,31 @@ async function setCompanion(value) {
 async function getCompanion() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.companion);
   return stored[STORAGE_KEYS.companion] || null;
+}
+
+async function dropCompanionGuideByMedia(mediaId) {
+  const id = String(mediaId || "").trim();
+  if (!id) return;
+  const companion = await getCompanion();
+  if (!Array.isArray(companion?.guides) || !companion.guides.length) return;
+  const guides = companion.guides.filter(
+    (guide) =>
+      !(guide.steps || []).some((step) => step.media?.mediaId === id),
+  );
+  if (guides.length === companion.guides.length) return;
+  await setCompanion({ ...companion, guides });
+}
+
+async function refreshCompanionLibrary() {
+  const current = await getCompanion();
+  const library = await fetchCompanionLibrary();
+  return setCompanion({
+    ...library,
+    theme:
+      library?.theme === "dark" || library?.theme === "light"
+        ? library.theme
+        : current?.theme || "light",
+  });
 }
 
 async function refreshWorkspaceContext() {
@@ -655,19 +720,49 @@ async function sendToCapturedTab(state, message, options) {
   }
 }
 
-async function injectCaptureContent(state, capturePolicy) {
+async function sendToCaptureSessionTabs(state, message) {
+  const tabIds = new Set([
+    ...(Number.isInteger(state?.tabId) ? [state.tabId] : []),
+    ...Object.keys(state?.tabDocumentSessions || {})
+      .map(Number)
+      .filter(Number.isInteger),
+  ]);
+  await Promise.all(
+    [...tabIds].map((tabId) =>
+      chrome.tabs.sendMessage(tabId, message).catch(() => undefined),
+    ),
+  );
+}
+
+async function injectCaptureContent(state, capturePolicy, documentId) {
+  const target = {
+    tabId: state.tabId,
+    ...(typeof documentId === "string" ? { documentIds: [documentId] } : {}),
+  };
+  await chrome.scripting.insertCSS({
+    target,
+    files: [CONTENT_STYLE_PATH],
+  });
   await chrome.scripting.executeScript({
-    target: { tabId: state.tabId },
-    files: [CONTENT_SCRIPT_PATH],
+    target,
+    files: [CONTENT_GEOMETRY_PATH, CONTENT_SETTLED_PATH, CONTENT_SCRIPT_PATH],
+    injectImmediately: true,
   });
   const policy = capturePolicy || (await getCapturePolicy());
-  const configured = await chrome.tabs.sendMessage(state.tabId, {
-    type: "KNOWHOW_CONFIGURE",
-    sessionId: state.sessionId,
-    status: state.status,
-    scopeLabel: state.scopeLabel,
-    policy,
-  });
+  const configured = await chrome.tabs.sendMessage(
+    state.tabId,
+    {
+      type: "KNOWHOW_CONFIGURE",
+      sessionId: state.sessionId,
+      status: state.status,
+      scopeLabel: state.scopeLabel,
+      policy,
+      documentId: documentId || state.activeDocumentId || null,
+      navigationKey:
+        state.activeNavigationKey || state.sanitizedUrl || null,
+    },
+    typeof documentId === "string" ? { documentId } : undefined,
+  );
   if (!configured?.ok) {
     throw new Error("KnowHow could not safely configure capture on this page.");
   }
@@ -696,21 +791,100 @@ async function ensureOffscreenDocument() {
   await offscreenCreation;
 }
 
-async function pauseCapture(reason) {
-  const paused = await withStateMutation(async () => {
+function shortWait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function stopAcceptingCaptureEvents(reason) {
+  const stopped = await withStateMutation(async () => {
     const current = await getCaptureState();
-    if (current.status !== CaptureStatus.RECORDING) return current;
-    const next = transitionCapture(current, CaptureEvent.PAUSE, { reason });
+    if (
+      current.status !== CaptureStatus.RECORDING &&
+      current.status !== CaptureStatus.PAUSED
+    ) {
+      return current;
+    }
+    const next = {
+      ...current,
+      acceptingEvents: false,
+      pausedReason: reason || current.pausedReason,
+      updatedAt: new Date().toISOString(),
+    };
     await setCaptureState(next);
     return next;
   });
-  if (paused.status !== CaptureStatus.PAUSED) return paused;
-  syncRemoteTransition(paused, "pause");
-  await sendToCapturedTab(paused, {
-    type: "KNOWHOW_SET_STATUS",
-    status: CaptureStatus.PAUSED,
-    reason: paused.pausedReason,
+  if (
+    stopped.status === CaptureStatus.RECORDING ||
+    stopped.status === CaptureStatus.PAUSED
+  ) {
+    await sendToCapturedTab(stopped, {
+      type: "KNOWHOW_SET_STATUS",
+      status: CaptureStatus.PAUSED,
+      reason,
+    });
+  }
+  return stopped;
+}
+
+async function drainAcceptedCaptureWork(reason) {
+  const deadline = Date.now() + CAPTURE_LIMITS.interactionDrainTimeoutMs;
+  while (true) {
+    await reconcileCaptureEntries();
+    const current = await getCaptureState();
+    const capturing = (current.captureEntries || []).filter(
+      (entry) => entry.status === CaptureEntryStatus.CAPTURING,
+    );
+    if (!capturing.length) return current;
+    if (Date.now() >= deadline) {
+      return withStateMutation(async () => {
+        let latest = await getCaptureState();
+        for (const entry of latest.captureEntries || []) {
+          if (entry.status !== CaptureEntryStatus.CAPTURING) continue;
+          latest = entry.committed
+            ? markCaptureEntryFailed(
+                latest,
+                entry.id,
+                "The accepted screenshot did not finish within ten seconds. Retry it from the side panel.",
+              )
+            : removeCaptureEntry(latest, entry.id);
+        }
+        latest = {
+          ...latest,
+          acceptingEvents: false,
+          pausedReason: reason || latest.pausedReason,
+        };
+        await setCaptureState(latest);
+        return latest;
+      });
+    }
+    await shortWait(80);
+  }
+}
+
+async function pauseCapture(reason) {
+  const stopped = await stopAcceptingCaptureEvents(reason);
+  if (
+    stopped.status !== CaptureStatus.RECORDING &&
+    stopped.status !== CaptureStatus.PAUSED
+  ) {
+    return stopped;
+  }
+  await drainAcceptedCaptureWork(reason);
+  const paused = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (current.status === CaptureStatus.PAUSED) return current;
+    if (current.status !== CaptureStatus.RECORDING) return current;
+    const next = {
+      ...transitionCapture(current, CaptureEvent.PAUSE, { reason }),
+      preparedFrames: [],
+    };
+    await setCaptureState(next);
+    return next;
   });
+  if (paused.status === CaptureStatus.PAUSED) {
+    syncRemoteTransition(paused, "pause");
+    await retainCaptureFrames(paused);
+  }
   return paused;
 }
 
@@ -859,6 +1033,16 @@ async function startCapture(options = {}) {
       "attaching capture to this page",
     );
     await injectCaptureContent(prepared, policy);
+    // Arm live Smart Blur before the seed JPEG. The page stays paused so
+    // clicks are not recorded while that first screenshot slot is held.
+    const blurArmed = await chrome.tabs.sendMessage(prepared.tabId, {
+      type: "KNOWHOW_SET_STATUS",
+      status: CaptureStatus.PAUSED,
+    });
+    if (!blurArmed?.ok) {
+      throw new Error("KnowHow could not arm Smart Blur on this page.");
+    }
+    await sendToCapturedTab(prepared, { type: "KNOWHOW_WAIT_PAGE_SETTLED" });
     const beforeReady = await revalidateSelectedTab(
       refreshedSelection,
       policy,
@@ -972,18 +1156,57 @@ async function resumeCapture(options = {}) {
     "resuming capture",
   );
   const resumeSelection = selectionFromTab(validated.tab, validated.verdict);
+  let topFrame = null;
+  try {
+    topFrame = chrome.webNavigation.getFrame
+      ? await chrome.webNavigation.getFrame({
+          tabId: validated.tab.id,
+          frameId: 0,
+        })
+      : null;
+  } catch {
+    topFrame = null;
+  }
+  const documentId = topFrame?.documentId || current.activeDocumentId || null;
+  const pageChanged = Boolean(
+    current.sanitizedUrl !== validated.verdict.sanitizedUrl ||
+      (documentId &&
+        current.activeDocumentId &&
+        documentId !== current.activeDocumentId),
+  );
+  const resumeTransitionId = Math.max(
+    0,
+    Number(current.nextNavigationSequence) || 0,
+  );
+  const activeNavigationKey = pageChanged
+    ? navigationKey(
+        {
+          tabId: validated.tab.id,
+          documentId,
+          sanitizedUrl: validated.verdict.sanitizedUrl,
+          transitionId: resumeTransitionId,
+        },
+        "resume",
+      )
+    : current.activeNavigationKey || validated.verdict.sanitizedUrl;
   const pausedConfiguration = {
     ...current,
     windowId: validated.tab.windowId,
     origin: validated.verdict.origin,
     sanitizedUrl: validated.verdict.sanitizedUrl,
+    activeDocumentId: documentId,
+    activeNavigationKey,
     scopeLabel:
       (context.workspaceName || "Workspace") +
       " · " +
       validated.verdict.hostname,
     status: CaptureStatus.PAUSED,
   };
-  await injectCaptureContent(pausedConfiguration, policy);
+  await injectCaptureContent(
+    pausedConfiguration,
+    policy,
+    documentId || undefined,
+  );
   const beforeResume = await revalidateSelectedTab(
     resumeSelection,
     policy,
@@ -1002,6 +1225,24 @@ async function resumeCapture(options = {}) {
     });
     const next = {
       ...resumed,
+      activeDocumentId: documentId,
+      activeNavigationKey,
+      nextNavigationSequence: pageChanged
+        ? resumeTransitionId + 1
+        : resumed.nextNavigationSequence,
+      preparedFrames: [],
+      manualBlurCount: pageChanged ? 0 : resumed.manualBlurCount,
+      tabDocumentSessions: {
+        ...(resumed.tabDocumentSessions || {}),
+        [String(resumed.tabId)]: {
+          documentId,
+          navigationKey: activeNavigationKey,
+          sanitizedUrl: verdict.sanitizedUrl,
+          manualBlurCount: pageChanged
+            ? 0
+            : Number(resumed.manualBlurCount) || 0,
+        },
+      },
       scopeLabel:
         (context.workspaceName || "Workspace") + " · " + verdict.hostname,
     };
@@ -1019,7 +1260,15 @@ async function resumeCapture(options = {}) {
     throw error;
   }
   syncRemoteTransition(scoped, "resume");
-  return scoped;
+  if (pageChanged) {
+    await recordNavigationDestination({
+      tabId: scoped.tabId,
+      frameId: 0,
+      documentId,
+      url: beforeResume.tab.url,
+    });
+  }
+  return getCaptureState();
 }
 
 async function openOrFocusEditorTab(editUrl) {
@@ -1137,13 +1386,39 @@ async function performDraftUpload(reviewing) {
 }
 
 async function finishCapture() {
+  const stopped = await stopAcceptingCaptureEvents("Finishing capture");
+  if (
+    stopped.status !== CaptureStatus.RECORDING &&
+    stopped.status !== CaptureStatus.PAUSED
+  ) {
+    throw new Error("This capture is not ready to finish.");
+  }
+  const drained = await drainAcceptedCaptureWork("Finishing capture");
+  const failures = unresolvedCaptureEntries(drained).filter(
+    (entry) => entry.status === CaptureEntryStatus.NEEDS_ATTENTION,
+  );
+  if (failures.length) {
+    const paused = await withStateMutation(async () => {
+      const current = await getCaptureState();
+      if (current.status !== CaptureStatus.RECORDING) return current;
+      const next = transitionCapture(current, CaptureEvent.PAUSE, {
+        reason: "Resolve or delete screenshots that need attention before finishing.",
+      });
+      await setCaptureState(next);
+      return next;
+    });
+    if (paused.status === CaptureStatus.PAUSED) syncRemoteTransition(paused, "pause");
+    throw new Error(
+      "Resolve or delete the screenshots that need attention before finishing.",
+    );
+  }
   const reviewing = await withStateMutation(async () => {
     const current = await getCaptureState();
     const next = transitionCapture(current, CaptureEvent.FINISH);
     await setCaptureState(next);
     return next;
   });
-  await sendToCapturedTab(reviewing, {
+  await sendToCaptureSessionTabs(reviewing, {
     type: "KNOWHOW_SET_STATUS",
     status: CaptureStatus.REVIEWING,
   });
@@ -1173,7 +1448,7 @@ async function discardCapture() {
   });
   const sessionId = current.sessionId;
   const remoteCaptureId = current.remoteCaptureId || sessionId;
-  await sendToCapturedTab(current, {
+  await sendToCaptureSessionTabs(current, {
     type: "KNOWHOW_SET_STATUS",
     status: CaptureStatus.IDLE,
   });
@@ -1185,21 +1460,23 @@ async function discardCapture() {
 }
 
 async function removeCapturedStep(stepId) {
-  let sessionId;
+  let removedEntry;
   const next = await withStateMutation(async () => {
     const current = await getCaptureState();
     if (!livePolicyStatuses.has(current.status)) {
       throw new Error("Captured steps can be removed while recording or paused.");
     }
-    if (!Array.isArray(current.stepIds) || !current.stepIds.includes(stepId)) {
+    removedEntry = (current.captureEntries || []).find(
+      (entry) => entry.stepId === stepId,
+    );
+    if (!removedEntry || removedEntry.status !== CaptureEntryStatus.READY) {
       throw new Error("That captured step no longer exists.");
     }
-    sessionId = current.sessionId;
-    const updated = withoutCapturedStep(current, stepId);
+    const updated = removeCaptureEntry(current, removedEntry.id);
     await setCaptureState(updated);
     return updated;
   });
-  await deleteCapturedStepAndCompact(sessionId, stepId, next.stepIds);
+  await deleteCapturedStep(removedEntry.sessionId || next.sessionId, stepId);
   return next;
 }
 
@@ -1311,6 +1588,7 @@ async function captureVisiblePage(
   policy,
   expectedSanitizedUrl,
   reserveSlot,
+  { hideLiveBlur = true } = {},
 ) {
   await requireCaptureHostAccess();
   // The rate-limit wait happens before validation so the checks below describe
@@ -1318,6 +1596,14 @@ async function captureVisiblePage(
   if (!(await reserveSlot())) return null;
   const activationEpoch = windowActivationEpochs.current(state.windowId);
   await validateActiveCaptureTab(state, policy, expectedSanitizedUrl);
+  if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
+    throw new Error("The active tab changed before screenshot capture began.");
+  }
+  if (hideLiveBlur) {
+    await sendToCapturedTab(state, {
+      type: "KNOWHOW_PREPARE_SCREENSHOT",
+    });
+  }
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     throw new Error("The active tab changed before screenshot capture began.");
   }
@@ -1351,14 +1637,16 @@ async function captureVisiblePage(
       "The active tab changed during screenshot verification. KnowHow discarded the screenshot for privacy.",
     );
   }
-  await sendToCapturedTab(state, {
-    type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
-  });
+  if (hideLiveBlur) {
+    await sendToCapturedTab(state, {
+      type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
+    });
+  }
   return { dataUrl, ...verified };
 }
 
 async function captureStep(request, reserveSlot) {
-  const snapshot = await getCaptureState();
+  let snapshot = await getCaptureState();
   const generation = request.generation;
   if (!Number.isInteger(generation)) return false;
   if (!jobIsCurrent(snapshot, request.sessionId, generation)) return false;
@@ -1371,33 +1659,54 @@ async function captureStep(request, reserveSlot) {
     return false;
   }
   await requireCaptureHostAccess();
-
-  if (request.preflight === true) {
-    const stash = await getPendingPreflight(request.sessionId);
-    if (stash && stash.generation === generation) {
-      return commitPreflightStep(stash, request, snapshot);
-    }
-  }
+  const entryId =
+    request.entryId ||
+    `navigation:${request.navigationKey || request.documentId || crypto.randomUUID()}`;
+  const stepId = request.stepId || crypto.randomUUID();
+  snapshot = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (!jobIsCurrent(current, request.sessionId, generation)) return current;
+    const next = reserveCaptureEntry(current, {
+      id: entryId,
+      stepId,
+      kind: request.sourceEvent || "navigation",
+      sourceEvent: request.sourceEvent || "navigation",
+      tabId: current.tabId,
+      documentId: request.documentId || current.activeDocumentId || null,
+      navigationKey: request.navigationKey || current.activeNavigationKey || null,
+      context: {
+        title: request.title,
+        instructions: request.instructions,
+        sanitizedUrl: request.sanitizedUrl,
+      },
+      committed: true,
+    });
+    await setCaptureState(next);
+    return next;
+  });
+  const reserved = captureEntry(snapshot, entryId);
+  if (!reserved || reserved.status === CaptureEntryStatus.READY) return false;
+  let completed = false;
+  let failureMessage =
+    "KnowHow could not capture this screenshot. Retry it from the side panel.";
+  try {
 
   const [activeTab] = await chrome.tabs.query({
     active: true,
     windowId: snapshot.windowId,
   });
   if (!activeTab || activeTab.id !== snapshot.tabId) {
-    await pauseCapture("Return to the captured tab to continue.");
-    return false;
+    throw new Error("Return to the captured tab and retry this screenshot.");
   }
 
   const policy = await getCapturePolicy();
   const verdict = evaluateCaptureUrl(request.pageUrl || activeTab.url || "", policy);
   if (!verdict.allowed) {
-    await pauseCapture(verdict.reason);
-    return false;
+    throw new Error(verdict.reason);
   }
   const activeVerdict = evaluateCaptureUrl(activeTab.url || "", policy);
   if (!activeVerdict.allowed) {
-    await pauseCapture(activeVerdict.reason);
-    return false;
+    throw new Error(activeVerdict.reason);
   }
   // The session may legitimately have moved to another site since this job was
   // queued. That is the navigation's own step to record, so the stale job is
@@ -1450,8 +1759,7 @@ async function captureStep(request, reserveSlot) {
   }
 
   await ensureOffscreenDocument();
-  const stepId = crypto.randomUUID();
-  const order = afterCapture.stepCount;
+  const order = reserved.order;
   const processed = await chrome.runtime.sendMessage({
     target: "offscreen",
     type: "KNOWHOW_PROCESS_SCREENSHOT",
@@ -1495,87 +1803,914 @@ async function captureStep(request, reserveSlot) {
     throw new Error(processed?.error || "Local screenshot redaction failed.");
   }
 
-  const committed = await withStateMutation(async () => {
+    const committed = await withStateMutation(async () => {
     const latest = await getCaptureState();
     if (
       !jobIsCurrent(latest, snapshot.sessionId, generation)
     ) {
       return false;
     }
-    await setCaptureState(withCapturedStep(latest, stepId));
+    await setCaptureState(markCaptureEntryReady(latest, entryId));
     return true;
   });
   if (!committed) {
     await deleteCapturedStep(snapshot.sessionId, stepId);
+    return false;
+  }
+  completed = true;
+  return true;
+  } catch (error) {
+    failureMessage =
+      error instanceof Error && error.message
+        ? error.message
+        : failureMessage;
+    throw error;
+  } finally {
+    if (!completed) {
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const entry = captureEntry(latest, entryId);
+        if (!entry || entry.status !== CaptureEntryStatus.CAPTURING) return latest;
+        const failed = markCaptureEntryFailed(
+          latest,
+          entryId,
+          failureMessage,
+        );
+        await setCaptureState(failed);
+        return failed;
+      });
+    }
+  }
+}
+
+function preparedFrameMatches(frame, message, state, sender) {
+  return preparedFrameEligible(
+    frame,
+    {
+      sessionId: state.sessionId,
+      tabId: sender.tab?.id,
+      documentId: sender.documentId || null,
+      navigationKey: message.navigationKey,
+      visualEpoch: message.visualEpoch,
+      viewportKey: message.viewportKey,
+    },
+    {
+      maxAgeMs: CAPTURE_LIMITS.preparedFrameMaxAgeMs,
+      // A claimed pre-click frame stays valid if hover only changed class/style.
+      ignoreVisualEpoch: Boolean(message.frameId),
+    },
+  );
+}
+
+async function retainCaptureFrames(state) {
+  if (!state?.sessionId) return;
+  const retainIds = [
+    ...(state.preparedFrames || []).map((frame) => frame.id),
+    ...(state.captureEntries || []).flatMap((entry) => [
+      entry.frameId,
+      entry.additionalFrameId,
+    ]),
+  ].filter(Boolean);
+  await pruneCaptureFrames(state.sessionId, {
+    retainIds,
+    olderThan: Number.POSITIVE_INFINITY,
+  });
+}
+
+async function processPreparedFrame({
+  state,
+  context,
+  frameId,
+  interactionId = null,
+  navigationKey: frameNavigationKey,
+  visualEpoch,
+  viewportKey,
+  documentId,
+  reserveSlot,
+  deadlineRequired = false,
+  hideLiveBlur = true,
+}) {
+  const latest = await getCaptureState();
+  if (
+    latest.sessionId !== state.sessionId ||
+    !isCollecting(latest) ||
+    latest.acceptingEvents === false
+  ) {
+    return null;
+  }
+  const policy = await getCapturePolicy();
+  const captured = await captureVisiblePage(
+    latest,
+    policy,
+    latest.sanitizedUrl,
+    reserveSlot,
+    { hideLiveBlur },
+  );
+  if (!captured) return null;
+  let dataUrl = captured.dataUrl;
+  try {
+    await ensureOffscreenDocument();
+    const capturedAtMs = Date.now();
+    const processed = await chrome.runtime.sendMessage({
+      target: "offscreen",
+      type: "KNOWHOW_PROCESS_CAPTURE_FRAME",
+      dataUrl,
+      frame: {
+        sessionId: state.sessionId,
+        id: frameId,
+        interactionId,
+        tabId: state.tabId,
+        documentId: documentId || null,
+        navigationKey: frameNavigationKey,
+        visualEpoch,
+        viewportKey,
+        capturedAtMs,
+        createdAtMs: capturedAtMs,
+      },
+      masks: context.masks || [],
+      viewport: context.viewport,
+      limits: CAPTURE_LIMITS,
+    });
+    if (!processed?.ok) {
+      throw new Error(processed?.error || "Local screenshot redaction failed.");
+    }
+    if (deadlineRequired) {
+      const verified = await sendToCapturedTab(
+        state,
+        { type: "KNOWHOW_VERIFY_DOCUMENT" },
+        typeof documentId === "string" ? { documentId } : undefined,
+      );
+      if (
+        !verified?.ok ||
+        (viewportKey && verified.viewportKey !== viewportKey) ||
+        (frameNavigationKey && verified.navigationKey !== frameNavigationKey)
+      ) {
+        await deleteCaptureFrame(state.sessionId, frameId);
+        throw new Error(
+          "The page changed before KnowHow could preserve its pre-action screenshot.",
+        );
+      }
+    }
+    return { id: frameId, capturedAtMs };
+  } finally {
+    dataUrl = null;
+  }
+}
+
+async function prepareCaptureFrame(message, sender) {
+  const state = await getCaptureState();
+  if (
+    !sender.tab ||
+    sender.tab.id !== state.tabId ||
+    message.sessionId !== state.sessionId ||
+    !isCollecting(state) ||
+    state.acceptingEvents === false
+  ) {
+    return { ok: false, ignored: true };
+  }
+  const documentId = sender.documentId || null;
+  const existing = newestEligiblePreparedFrame(
+    state.preparedFrames,
+    {
+      sessionId: state.sessionId,
+      tabId: sender.tab?.id,
+      documentId,
+      navigationKey: message.navigationKey,
+      visualEpoch: message.visualEpoch,
+      viewportKey: message.viewportKey,
+    },
+    { maxAgeMs: CAPTURE_LIMITS.preparedFrameMaxAgeMs },
+  );
+  if (existing) {
+    return {
+      ok: true,
+      frameId: existing.id,
+      capturedAtMs: existing.capturedAtMs,
+      navigationKey: existing.navigationKey,
+      reused: true,
+    };
+  }
+  const frameId = crypto.randomUUID();
+  const result = await enqueueScreenshot(
+    (reserveSlot) =>
+      processPreparedFrame({
+        state,
+        context: message.context || {},
+        frameId,
+        navigationKey: message.navigationKey,
+        visualEpoch: message.visualEpoch,
+        viewportKey: message.viewportKey,
+        documentId,
+        reserveSlot,
+        deadlineRequired: true,
+        hideLiveBlur: false,
+      }),
+    { deadlineMs: 1_600 },
+  );
+  if (!result) return { ok: false, abandoned: true };
+  const next = await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      latest.sessionId !== state.sessionId ||
+      !isCollecting(latest) ||
+      latest.acceptingEvents === false
+    ) {
+      return latest;
+    }
+    const preparedFrames = [
+      ...(latest.preparedFrames || []).filter((frame) => frame.id !== frameId),
+      {
+        sessionId: latest.sessionId,
+        id: frameId,
+        tabId: latest.tabId,
+        documentId,
+        navigationKey: message.navigationKey,
+        visualEpoch: message.visualEpoch,
+        viewportKey: message.viewportKey,
+        capturedAtMs: result.capturedAtMs,
+      },
+    ].slice(-2);
+    const updated = {
+      ...latest,
+      preparedFrames,
+      diagnostics: {
+        ...(latest.diagnostics || {}),
+        prepared: Number(latest.diagnostics?.prepared || 0) + 1,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    await setCaptureState(updated);
+    return updated;
+  });
+  if (!(next.preparedFrames || []).some((frame) => frame.id === frameId)) {
+    await deleteCaptureFrame(state.sessionId, frameId);
+    return { ok: false, ignored: true };
+  }
+  await retainCaptureFrames(next);
+  return {
+    ok: true,
+    frameId,
+    capturedAtMs: result.capturedAtMs,
+    navigationKey: message.navigationKey,
+  };
+}
+
+async function captureFallbackFrame(
+  entryId,
+  { deadlineMs = 1_200, preparePage = false, hideLiveBlur = true } = {},
+) {
+  const state = await getCaptureState();
+  const entry = captureEntry(state, entryId);
+  if (!entry || entry.status !== CaptureEntryStatus.CAPTURING) return;
+  if (entry.frameId) return;
+  const frameId = `interaction-${entry.id}`;
+  try {
+    let captureContext = {
+      ...(entry.context || {}),
+      masks: entry.context?.masks || [],
+      viewport: entry.context?.viewport,
+    };
+    if (preparePage) {
+      const privacyReady = await sendToCapturedTab(state, {
+        type: "KNOWHOW_PREPARE_SCREENSHOT",
+      });
+      if (privacyReady?.ok) {
+        captureContext = {
+          ...captureContext,
+          masks: privacyReady.context?.masks || captureContext.masks || [],
+          viewport: privacyReady.context?.viewport || captureContext.viewport,
+        };
+      }
+    }
+    const result = await enqueueScreenshot(
+      async (reserveSlot) => {
+        const latest = await getCaptureState();
+        const current = captureEntry(latest, entryId);
+        if (
+          !current ||
+          current.frameId ||
+          current.status !== CaptureEntryStatus.CAPTURING
+        ) {
+          return null;
+        }
+        return processPreparedFrame({
+          state: latest,
+          context: captureContext,
+          frameId,
+          interactionId: current.id,
+          navigationKey: current.navigationKey,
+          visualEpoch: current.visualEpoch,
+          viewportKey: current.viewportKey,
+          documentId: current.documentId,
+          reserveSlot,
+          deadlineRequired: true,
+          hideLiveBlur,
+        });
+      },
+      { deadlineMs },
+    );
+    if (!result) {
+      throw new Error(
+        "KnowHow could not preserve the pre-action screenshot. Retry this step from the side panel.",
+      );
+    }
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const current = captureEntry(latest, entryId);
+      if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
+        await deleteCaptureFrame(state.sessionId, frameId).catch(() => undefined);
+        return latest;
+      }
+      const updated = updateCaptureEntry(latest, entryId, {
+        frameId,
+        capturePending: false,
+      });
+      await setCaptureState(updated);
+      return updated;
+    });
+    await finalizeInteractionEntry(entryId);
+    await sendToCapturedTab(state, {
+      type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
+    });
+  } catch (error) {
+    await sendToCapturedTab(state, {
+      type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
+    });
+    await deleteCaptureFrame(state.sessionId, frameId).catch(() => undefined);
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const failed = markCaptureEntryFailed(
+        latest,
+        entryId,
+        error instanceof Error ? error.message : "Screenshot capture failed.",
+      );
+      await setCaptureState(failed);
+      return failed;
+    });
+  }
+}
+
+async function finalizeInteractionEntry(entryId) {
+  if (interactionFinalizations.has(entryId)) {
+    return interactionFinalizations.get(entryId);
+  }
+  const operation = (async () => {
+    const state = await getCaptureState();
+    const entry = captureEntry(state, entryId);
+    if (
+      !entry ||
+      !entry.committed ||
+      entry.status !== CaptureEntryStatus.CAPTURING
+    ) {
+      return false;
+    }
+    let frame = entry.frameId
+      ? await getCaptureFrame(state.sessionId, entry.frameId)
+      : await getCaptureFrameForInteraction(state.sessionId, entry.id);
+    if (!frame) {
+      if (entry.capturePending === true) return false;
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const failed = markCaptureEntryFailed(
+          latest,
+          entryId,
+          "The pre-action screenshot was unavailable. Return to this control and retry.",
+        );
+        await setCaptureState(failed);
+        return failed;
+      });
+      return false;
+    }
+    const policy = await getCapturePolicy();
+    await ensureOffscreenDocument();
+    const processed = await chrome.runtime.sendMessage({
+      target: "offscreen",
+      type: "KNOWHOW_COMMIT_CAPTURE_FRAME",
+      sessionId: state.sessionId,
+      frameId: frame.id,
+      step: {
+        sessionId: state.sessionId,
+        id: entry.stepId,
+        order: entry.order,
+        title: safeCaptureText(
+          entry.context?.title || "Captured step",
+          policy,
+          200,
+          "Captured step",
+        ),
+        instructions: safeCaptureText(
+          entry.context?.instructions || "Follow the highlighted action.",
+          policy,
+          2_000,
+          "Follow the highlighted action.",
+        ),
+        sanitizedUrl: entry.context?.sanitizedUrl || state.sanitizedUrl || "",
+        sourceEvent: entry.sourceEvent || "click",
+        interactionId: entry.id,
+        capturedAt: new Date(frame.capturedAtMs || Date.now()).toISOString(),
+      },
+      targetRect: entry.context?.targetRect || null,
+      clickPoint: entry.context?.clickPoint || null,
+      viewport: entry.context?.viewport,
+      interactionViewport: entry.context?.viewport,
+      clickTargetColor: policy.clickTargetColor,
+    });
+    frame = null;
+    if (!processed?.ok) {
+      throw new Error(processed?.error || "Could not commit the prepared screenshot.");
+    }
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const current = captureEntry(latest, entryId);
+      if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
+        await deleteCapturedStep(state.sessionId, entry.stepId);
+        return latest;
+      }
+      const ready = markCaptureEntryReady(latest, entryId);
+      await setCaptureState(ready);
+      return ready;
+    });
+    return true;
+  })()
+    .catch(async (error) => {
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const failed = markCaptureEntryFailed(
+          latest,
+          entryId,
+          error instanceof Error ? error.message : "Screenshot capture failed.",
+        );
+        await setCaptureState(failed);
+        return failed;
+      });
+      return false;
+    })
+    .finally(() => interactionFinalizations.delete(entryId));
+  interactionFinalizations.set(entryId, operation);
+  return operation;
+}
+
+async function reconcileCaptureEntries({ workerRecovery = false } = {}) {
+  let state = await getCaptureState();
+  if (!state.sessionId) return state;
+  const retainedPrepared = retainPreparedFrameMetadata(state.preparedFrames, {
+    retentionMs: CAPTURE_LIMITS.preparedFrameRetentionMs,
+  });
+  if (retainedPrepared.length !== (state.preparedFrames || []).length) {
+    state = await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const next = {
+        ...latest,
+        preparedFrames: retainPreparedFrameMetadata(latest.preparedFrames, {
+          retentionMs: CAPTURE_LIMITS.preparedFrameRetentionMs,
+        }),
+      };
+      await setCaptureState(next);
+      return next;
+    });
+  }
+  for (const entry of state.captureEntries || []) {
+    if (entry.status !== CaptureEntryStatus.CAPTURING) continue;
+    if (!entry.committed && Date.now() - Number(entry.acceptedAtMs || 0) > 10_000) {
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const next = removeCaptureEntry(latest, entry.id);
+        await setCaptureState(next);
+        return next;
+      });
+      continue;
+    }
+    if (!entry.committed) continue;
+    const availableFrame = entry.frameId
+      ? await getCaptureFrame(state.sessionId, entry.frameId)
+      : await getCaptureFrameForInteraction(state.sessionId, entry.id);
+    if (availableFrame) {
+      await finalizeInteractionEntry(entry.id);
+      continue;
+    }
+    if (
+      !workerRecovery &&
+      entry.capturePending === true &&
+      Date.now() - Number(entry.acceptedAtMs || 0) <=
+        CAPTURE_LIMITS.preparedFrameMaxAgeMs + 500
+    ) {
+      continue;
+    }
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const failed = markCaptureEntryFailed(
+        latest,
+        entry.id,
+        "The pre-action screenshot was interrupted before it could be preserved. Retry this step from the side panel.",
+      );
+      await setCaptureState(failed);
+      return failed;
+    });
+  }
+  const latest = await getCaptureState();
+  await retainCaptureFrames(latest);
+  return latest;
+}
+
+function senderMatchesCapture(state, message, sender, { allowPaused = false } = {}) {
+  const activeStatus = allowPaused
+    ? livePolicyStatuses.has(state.status)
+    : isCollecting(state);
+  if (
+    !activeStatus ||
+    !sender.tab ||
+    sender.tab.id !== state.tabId ||
+    message.sessionId !== state.sessionId
+  ) {
+    return false;
+  }
+  if (
+    state.activeDocumentId &&
+    sender.documentId &&
+    state.activeDocumentId !== sender.documentId
+  ) {
     return false;
   }
   return true;
 }
 
-async function commitPreflightStep(stash, request, snapshot) {
-  await clearPendingPreflight();
-  const policy = await getCapturePolicy();
-  const context = stash.context || {};
-  const latest = await getCaptureState();
-  if (!jobIsCurrent(latest, snapshot.sessionId, request.generation)) {
-    return false;
+async function stageCaptureInteraction(message, sender) {
+  const snapshot = await getCaptureState();
+  if (
+    !senderMatchesCapture(snapshot, message, sender) ||
+    snapshot.acceptingEvents === false
+  ) {
+    return { ok: false, ignored: true };
   }
-  const stepId = crypto.randomUUID();
-  const order = latest.stepCount;
-  await ensureOffscreenDocument();
-  const processed = await chrome.runtime.sendMessage({
-    target: "offscreen",
-    type: "KNOWHOW_PROCESS_SCREENSHOT",
-    dataUrl: stash.dataUrl,
-    step: {
-      sessionId: snapshot.sessionId,
-      id: stepId,
-      order,
-      title: safeCaptureText(
-        context.title || request.title || "Captured step",
-        policy,
-        200,
-        "Captured step",
-      ),
+  if (typeof message.interactionId !== "string" || !message.interactionId) {
+    throw new Error("KnowHow received an invalid interaction identifier.");
+  }
+  const expectedNavigationKey =
+    snapshot.activeNavigationKey || snapshot.sanitizedUrl || null;
+  if (
+    expectedNavigationKey &&
+    message.navigationKey &&
+    expectedNavigationKey !== message.navigationKey
+  ) {
+    return { ok: false, ignored: true };
+  }
+
+  let stagedEntry = null;
+  let needsFallback = false;
+  const next = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (
+      !senderMatchesCapture(current, message, sender) ||
+      current.acceptingEvents === false
+    ) {
+      return current;
+    }
+    const existing = captureEntry(current, message.interactionId);
+    if (existing) {
+      stagedEntry = existing;
+      return current;
+    }
+    if ((current.captureEntries || []).length >= CAPTURE_LIMITS.maxSteps) {
+      throw new Error(
+        `This capture reached the ${CAPTURE_LIMITS.maxSteps}-step safety limit.`,
+      );
+    }
+    const prepared = message.frameId
+      ? (current.preparedFrames || []).find(
+          (frame) =>
+            frame.id === message.frameId &&
+            preparedFrameMatches(frame, message, current, sender),
+        )
+      : newestEligiblePreparedFrame(
+          current.preparedFrames,
+          {
+            sessionId: current.sessionId,
+            tabId: sender.tab?.id,
+            documentId: sender.documentId || null,
+            navigationKey: message.navigationKey,
+            visualEpoch: message.visualEpoch,
+            viewportKey: message.viewportKey,
+          },
+          { maxAgeMs: CAPTURE_LIMITS.preparedFrameMaxAgeMs },
+        );
+    const reserved = reserveCaptureEntry(current, {
+      id: message.interactionId,
+      stepId: crypto.randomUUID(),
+      kind: ["click", "contextmenu", "dblclick"].includes(message.sourceEvent)
+        ? message.sourceEvent
+        : "click",
+      sourceEvent: ["click", "contextmenu", "dblclick"].includes(
+        message.sourceEvent,
+      )
+        ? message.sourceEvent
+        : "click",
+      tabId: current.tabId,
+      windowId: current.windowId,
+      documentId: sender.documentId || null,
+      navigationKey: message.navigationKey || expectedNavigationKey,
+      visualEpoch: Number(message.visualEpoch) || 0,
+      viewportKey: String(message.viewportKey || ""),
+      frameId: prepared?.id || null,
+      capturePending: !prepared,
+      committed: false,
+      context: {
+        ...(message.context || {}),
+        pageUrl: sender.tab.url || message.context?.pageUrl,
+        masks: Array.isArray(message.context?.masks)
+          ? message.context.masks
+          : [],
+      },
+    });
+    const updated = {
+      ...reserved,
+      activeDocumentId: current.activeDocumentId || sender.documentId || null,
+      activeNavigationKey:
+        current.activeNavigationKey || message.navigationKey || null,
+      preparedFrames: prepared
+        ? (reserved.preparedFrames || []).filter(
+            (frame) => frame.id !== prepared.id,
+          )
+        : reserved.preparedFrames || [],
+    };
+    stagedEntry = captureEntry(updated, message.interactionId);
+    needsFallback = !prepared;
+    await setCaptureState(updated);
+    return updated;
+  });
+  if (!stagedEntry) return { ok: false, ignored: true };
+  await retainCaptureFrames(next);
+  if (needsFallback) {
+    void captureFallbackFrame(stagedEntry.id);
+  } else {
+    void sendToCapturedTab(next, {
+      type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
+    });
+  }
+  return {
+    ok: true,
+    interactionId: stagedEntry.id,
+    sequence: stagedEntry.order,
+    frameClaimed: Boolean(stagedEntry.frameId),
+  };
+}
+
+async function commitCaptureInteraction(message, sender) {
+  const state = await getCaptureState();
+  if (!senderMatchesCapture(state, message, sender, { allowPaused: true })) {
+    return { ok: false, ignored: true };
+  }
+  let committedEntry = null;
+  await withStateMutation(async () => {
+    const current = await getCaptureState();
+    const entry = captureEntry(current, message.interactionId);
+    if (!entry) return current;
+    if (entry.committed) {
+      committedEntry = entry;
+      return current;
+    }
+    const next = noteClickInteraction(
+      updateCaptureEntry(current, entry.id, { committed: true }),
+      { tabId: current.tabId },
+    );
+    committedEntry = captureEntry(next, entry.id);
+    await setCaptureState(next);
+    return next;
+  });
+  if (!committedEntry) return { ok: false, ignored: true };
+  if (committedEntry.status === CaptureEntryStatus.CAPTURING) {
+    void finalizeInteractionEntry(committedEntry.id);
+  }
+  return { ok: true, queued: true, sequence: committedEntry.order };
+}
+
+async function cancelCaptureInteraction(message, sender) {
+  const state = await getCaptureState();
+  if (!senderMatchesCapture(state, message, sender, { allowPaused: true })) {
+    return { ok: false, ignored: true };
+  }
+  let removed = null;
+  const next = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    const entry = captureEntry(current, message.interactionId);
+    if (!entry || entry.status === CaptureEntryStatus.READY || entry.committed) {
+      return current;
+    }
+    removed = entry;
+    const updated = removeCaptureEntry(current, entry.id);
+    await setCaptureState(updated);
+    return updated;
+  });
+  if (removed?.frameId) {
+    await deleteCaptureFrame(next.sessionId, removed.frameId).catch(() => undefined);
+  }
+  await retainCaptureFrames(next);
+  return { ok: true, cancelled: Boolean(removed) };
+}
+
+async function upgradeCaptureInteraction(message, sender) {
+  const state = await getCaptureState();
+  if (!senderMatchesCapture(state, message, sender, { allowPaused: true })) {
+    return { ok: false, ignored: true };
+  }
+  const policy = await getCapturePolicy();
+  let upgraded = null;
+  await withStateMutation(async () => {
+    const current = await getCaptureState();
+    const entry = captureEntry(current, message.interactionId);
+    if (!entry) return current;
+    const isSelect = message.sourceEvent === "select";
+    const sourceEvent = isSelect
+      ? entry.sourceEvent || "click"
+      : message.sourceEvent === "dblclick"
+        ? "dblclick"
+        : entry.sourceEvent || "click";
+    const fallbackTitle = isSelect
+      ? "Select the option"
+      : sourceEvent === "dblclick"
+        ? "Double-click this control"
+        : entry.context?.title || "Click here";
+    const context = {
+      ...(entry.context || {}),
+      title: safeCaptureText(message.title, policy, 200, fallbackTitle),
       instructions: safeCaptureText(
-        context.instructions ||
-          request.instructions ||
-          "Follow the highlighted action.",
+        message.instructions,
         policy,
         2_000,
-        "Follow the highlighted action.",
+        fallbackTitle + ".",
       ),
-      sanitizedUrl: stash.verdictUrl || context.sanitizedUrl || "",
-      sourceEvent: request.sourceEvent || "click",
-      ...(Number.isInteger(request.interactionSequence)
-        ? { interactionSequence: request.interactionSequence }
-        : {}),
-      capturedAt: new Date().toISOString(),
-    },
-    masks: Array.isArray(context.masks) ? context.masks : [],
-    targetRect: context.targetRect || request.targetRect || null,
-    clickPoint: context.clickPoint || request.clickPoint || null,
-    viewport: context.viewport || request.viewport,
-    interactionViewport: context.viewport || request.viewport,
-    clickTargetColor: policy.clickTargetColor,
-    limits: CAPTURE_LIMITS,
+    };
+    const next = updateCaptureEntry(current, entry.id, {
+      sourceEvent,
+      kind: sourceEvent,
+      context,
+    });
+    upgraded = captureEntry(next, entry.id);
+    await setCaptureState(next);
+    return next;
   });
-  if (!processed?.ok) {
-    throw new Error(processed?.error || "Local screenshot redaction failed.");
+  if (upgraded?.status === CaptureEntryStatus.READY) {
+    await updateCapturedStep(state.sessionId, upgraded.stepId, {
+      sourceEvent: upgraded.sourceEvent,
+      title: upgraded.context?.title || "Captured step",
+      instructions:
+        upgraded.context?.instructions || "Follow the highlighted action.",
+    }).catch(() => undefined);
   }
-  const committed = await withStateMutation(async () => {
-    const current = await getCaptureState();
-    if (!jobIsCurrent(current, snapshot.sessionId, request.generation)) {
-      return false;
+  return { ok: Boolean(upgraded), upgraded: Boolean(upgraded) };
+}
+
+async function retryCaptureEntry(entryId) {
+  const state = await getCaptureState();
+  if (!livePolicyStatuses.has(state.status)) {
+    throw new Error("Screenshots can be retried while recording or paused.");
+  }
+  const entry = captureEntry(state, entryId);
+  if (!entry || entry.status !== CaptureEntryStatus.NEEDS_ATTENTION) {
+    throw new Error("That failed screenshot is no longer available.");
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.get(entry.tabId);
+  } catch {
+    throw new Error(
+      "That tab was closed. Delete this step and capture the action again.",
+    );
+  }
+  if (!Number.isInteger(tab?.id)) {
+    throw new Error(
+      "That tab was closed. Delete this step and capture the action again.",
+    );
+  }
+  await chrome.tabs.update(entry.tabId, { active: true });
+  if (Number.isInteger(tab.windowId)) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => undefined);
+  }
+  await followActiveTabSwitch({
+    tabId: entry.tabId,
+    windowId: Number.isInteger(tab.windowId) ? tab.windowId : state.windowId,
+  });
+  return recaptureFailedEntry(entryId);
+}
+
+async function recaptureFailedEntry(entryId) {
+  const existing = recaptureInFlight.get(entryId);
+  if (existing) return existing;
+  const operation = (async () => {
+    const state = await getCaptureState();
+    if (!livePolicyStatuses.has(state.status)) {
+      throw new Error("Screenshots can be retried while recording or paused.");
     }
-    await setCaptureState(withCapturedStep(current, stepId));
-    return true;
+    const entry = captureEntry(state, entryId);
+    if (!entry) {
+      throw new Error("That failed screenshot is no longer available.");
+    }
+    if (entry.status !== CaptureEntryStatus.NEEDS_ATTENTION) {
+      return state;
+    }
+    if (state.tabId !== entry.tabId) {
+      throw new Error(
+        "KnowHow could not return to that tab. Delete this step and capture the action again.",
+      );
+    }
+    let page = await sendToCapturedTab(state, {
+      type: "KNOWHOW_GET_PAGE_CONTEXT",
+    });
+    if (!page?.ok) {
+      await injectCaptureContent(state, await getCapturePolicy());
+      page = await sendToCapturedTab(await getCaptureState(), {
+        type: "KNOWHOW_GET_PAGE_CONTEXT",
+      });
+    }
+    if (!page?.ok) {
+      throw new Error("KnowHow could not read this page for retry.");
+    }
+    await withStateMutation(async () => {
+      const current = await getCaptureState();
+      const latestEntry = captureEntry(current, entryId);
+      if (
+        !latestEntry ||
+        latestEntry.status !== CaptureEntryStatus.NEEDS_ATTENTION
+      ) {
+        return current;
+      }
+      const next = resetCaptureEntryForRetry(current, entryId, {
+        tabId: current.tabId,
+        documentId: current.activeDocumentId || latestEntry.documentId || null,
+        navigationKey:
+          page.context?.navigationKey ||
+          current.activeNavigationKey ||
+          latestEntry.navigationKey,
+        visualEpoch: Number(page.context?.visualEpoch) || latestEntry.visualEpoch,
+        viewportKey: page.context?.viewportKey || latestEntry.viewportKey || "",
+        context: {
+          ...(latestEntry.context || {}),
+          masks: page.context?.masks || [],
+          viewport: page.context?.viewport || latestEntry.context?.viewport,
+          sanitizedUrl:
+            page.context?.sanitizedUrl ||
+            current.sanitizedUrl ||
+            latestEntry.context?.sanitizedUrl,
+        },
+      });
+      await setCaptureState(next);
+      return next;
+    });
+    void captureFallbackFrame(entryId, {
+      deadlineMs: 1_600,
+      preparePage: true,
+      hideLiveBlur: false,
+    });
+    return getCaptureState();
+  })().finally(() => {
+    recaptureInFlight.delete(entryId);
   });
-  if (!committed) {
-    await deleteCapturedStep(snapshot.sessionId, stepId);
-    return false;
+  recaptureInFlight.set(entryId, operation);
+  return operation;
+}
+
+async function autoRetryNeedsAttentionOnTab(tabId) {
+  const state = await getCaptureState();
+  if (!livePolicyStatuses.has(state.status) || state.tabId !== tabId) return;
+  const pending = (state.captureEntries || []).filter(
+    (entry) =>
+      entry.status === CaptureEntryStatus.NEEDS_ATTENTION &&
+      entry.tabId === tabId,
+  );
+  for (const entry of pending) {
+    try {
+      await recaptureFailedEntry(entry.id);
+    } catch {
+      // Leave the card; the author can still retry or delete it.
+    }
   }
-  return true;
+}
+
+async function deleteCaptureEntryFromFeed(entryId) {
+  let removed = null;
+  const next = await withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (!livePolicyStatuses.has(current.status)) {
+      throw new Error("Capture entries can be deleted while recording or paused.");
+    }
+    removed = captureEntry(current, entryId);
+    if (!removed) throw new Error("That capture entry no longer exists.");
+    const updated = removeCaptureEntry(current, entryId);
+    await setCaptureState(updated);
+    return updated;
+  });
+  if (removed.frameId) {
+    await deleteCaptureFrame(next.sessionId, removed.frameId).catch(() => undefined);
+  }
+  if (removed.additionalFrameId) {
+    await deleteCaptureFrame(next.sessionId, removed.additionalFrameId).catch(
+      () => undefined,
+    );
+  }
+  if (removed.stepId) {
+    await deleteCapturedStep(next.sessionId, removed.stepId).catch(() => undefined);
+  }
+  await retainCaptureFrames(next);
+  return next;
 }
 
 // The side panel names the site being recorded, so following the author to
@@ -1619,86 +2754,32 @@ function waitForTabComplete(tabId, timeoutMs = 8_000) {
 async function followNewTabNavigation(details) {
   const state = await getCaptureState();
   if (!isCollecting(state) || state.tabId !== details.sourceTabId) return;
-  const policy = await getCapturePolicy();
-
-  // A new target can initially report about:blank even when it immediately
-  // navigates to a regular website. Wait for the final tab URL before applying
-  // capture policy so window.open() and target=_blank both continue reliably.
-  await waitForTabComplete(details.tabId);
-  let tab;
-  try {
-    tab = await chrome.tabs.get(details.tabId);
-  } catch {
-    return;
-  }
-  let verdict;
-  try {
-    verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
-  } catch {
-    return;
-  }
-  if (!verdict.allowed) return;
-
-  try {
-    await chrome.tabs.update(tab.id, { active: true });
-    if (Number.isInteger(tab.windowId)) {
-      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => undefined);
-    }
-  } catch {
-    return;
-  }
-
-  const switched = await withStateMutation(async () => {
+  await withStateMutation(async () => {
     const latest = await getCaptureState();
     if (
       !isCollecting(latest) ||
       latest.sessionId !== state.sessionId ||
-      latest.tabId !== details.sourceTabId ||
-      latest.tabId === tab.id
+      latest.tabId !== details.sourceTabId
     ) {
-      return null;
+      return latest;
     }
     const next = {
       ...latest,
-      tabId: tab.id,
-      windowId: tab.windowId,
-      origin: verdict.origin,
-      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
-      sanitizedUrl: verdict.sanitizedUrl,
-      lastNavigationUrl: verdict.sanitizedUrl,
-      lastNavigationAt: Date.now(),
-      generation: latest.generation + 1,
+      pendingNavigationTargets: [
+        ...(latest.pendingNavigationTargets || []).filter(
+          (target) => target.tabId !== details.tabId,
+        ),
+        {
+          tabId: details.tabId,
+          sourceTabId: details.sourceTabId,
+          createdAtMs: Date.now(),
+        },
+      ].slice(-20),
       updatedAt: new Date().toISOString(),
     };
     await setCaptureState(next);
     return next;
   });
-  if (!switched) return;
-
-  try {
-    await injectCaptureContent(switched, policy);
-    const context = await sendToCapturedTab(switched, {
-      type: "KNOWHOW_GET_PAGE_CONTEXT",
-    });
-    if (!context?.ok) return;
-    const job = snapshotCaptureJob(switched, {
-      ...context.context,
-      pageUrl: tab.url,
-      sourceEvent: "navigation",
-      title: context.context.title
-        ? "Open " + context.context.title + " in a new tab"
-        : "Open a new tab",
-      instructions: "Continue in the new tab.",
-      targetRect: null,
-      clickPoint: null,
-    });
-    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
-  } catch (error) {
-    await pauseCapture(
-      "KnowHow could not continue after opening a new tab: " +
-        (error instanceof Error ? error.message : "unknown error"),
-    );
-  }
 }
 
 /**
@@ -1713,7 +2794,11 @@ async function followActiveTabSwitch({ tabId, windowId }) {
   const state = await getCaptureState();
   if (!isCollecting(state) || state.tabId === tabId) return;
   const policy = await getCapturePolicy();
-  await waitForTabComplete(tabId);
+  // Wake an already-injected recorder before any load wait so Smart Blur
+  // covers the page on the same turn the author lands on it.
+  void chrome.tabs
+    .sendMessage(tabId, { type: "KNOWHOW_WAKE_SMART_BLUR" })
+    .catch(() => undefined);
   let tab;
   try {
     tab = await chrome.tabs.get(tabId);
@@ -1721,6 +2806,23 @@ async function followActiveTabSwitch({ tabId, windowId }) {
     return;
   }
   if (tab.incognito) return;
+  let verdict;
+  try {
+    verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
+  } catch {
+    await waitForTabComplete(tabId);
+    try {
+      tab = await chrome.tabs.get(tabId);
+    } catch {
+      return;
+    }
+    if (tab.incognito) return;
+    try {
+      verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
+    } catch {
+      return;
+    }
+  }
   // The tab may have been dragged into another window while it loaded, so the
   // window it lives in now decides whether it is the tab in front.
   const targetWindowId = Number.isInteger(tab.windowId) ? tab.windowId : windowId;
@@ -1729,13 +2831,24 @@ async function followActiveTabSwitch({ tabId, windowId }) {
     windowId: targetWindowId,
   });
   if (!activeTab || activeTab.id !== tabId) return;
-  let verdict;
-  try {
-    verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
-  } catch {
-    return;
-  }
   if (!verdict.allowed) return;
+
+  await sendToCapturedTab(state, {
+    type: "KNOWHOW_SET_STATUS",
+    status: CaptureStatus.PAUSED,
+    reason: "Capture moved to another tab.",
+  });
+  let topFrame = null;
+  try {
+    topFrame = chrome.webNavigation.getFrame
+      ? await chrome.webNavigation.getFrame({ tabId, frameId: 0 })
+      : null;
+  } catch {
+    topFrame = null;
+  }
+  const documentId = topFrame?.documentId || null;
+  let activationRecordKey = null;
+  let openedTarget = false;
 
   const switched = await withStateMutation(async () => {
     const latest = await getCaptureState();
@@ -1746,6 +2859,61 @@ async function followActiveTabSwitch({ tabId, windowId }) {
     ) {
       return null;
     }
+    const transitionId = Math.max(
+      0,
+      Number(latest.nextNavigationSequence) || 0,
+    );
+    const tabDocumentSessions = { ...(latest.tabDocumentSessions || {}) };
+    if (Number.isInteger(latest.tabId) && latest.activeNavigationKey) {
+      tabDocumentSessions[String(latest.tabId)] = {
+        documentId: latest.activeDocumentId || null,
+        navigationKey: latest.activeNavigationKey,
+        sanitizedUrl: latest.sanitizedUrl,
+        manualBlurCount: Number(latest.manualBlurCount) || 0,
+      };
+    }
+    const previousTargetSession = tabDocumentSessions[String(tabId)];
+    const canResumePageSession = Boolean(
+      previousTargetSession?.navigationKey &&
+        previousTargetSession.sanitizedUrl === verdict.sanitizedUrl &&
+        (!documentId ||
+          !previousTargetSession.documentId ||
+          previousTargetSession.documentId === documentId),
+    );
+    const activeDocumentId =
+      documentId ||
+      (canResumePageSession ? previousTargetSession.documentId : null);
+    const activeNavigationKey = canResumePageSession
+      ? previousTargetSession.navigationKey
+      : navigationKey(
+          {
+            tabId,
+            documentId: activeDocumentId,
+            sanitizedUrl: verdict.sanitizedUrl,
+            transitionId,
+          },
+          "document",
+        );
+    activationRecordKey = navigationKey(
+      {
+        tabId,
+        documentId: activeDocumentId,
+        sanitizedUrl: verdict.sanitizedUrl,
+        transitionId,
+      },
+      "activation",
+    );
+    openedTarget = (latest.pendingNavigationTargets || []).some(
+      (target) => target.tabId === tabId,
+    );
+    tabDocumentSessions[String(tabId)] = {
+      documentId: activeDocumentId,
+      navigationKey: activeNavigationKey,
+      sanitizedUrl: verdict.sanitizedUrl,
+      manualBlurCount: canResumePageSession
+        ? Number(previousTargetSession.manualBlurCount) || 0
+        : 0,
+    };
     const next = {
       ...latest,
       tabId,
@@ -1753,9 +2921,27 @@ async function followActiveTabSwitch({ tabId, windowId }) {
       origin: verdict.origin,
       scopeLabel: scopeLabelForHost(latest, verdict.hostname),
       sanitizedUrl: verdict.sanitizedUrl,
+      activeDocumentId,
+      activeNavigationKey,
+      tabDocumentSessions,
+      nextNavigationSequence: transitionId + 1,
+      preparedFrames: [],
+      manualBlurCount: canResumePageSession
+        ? Number(previousTargetSession.manualBlurCount) || 0
+        : 0,
+      pendingNavigationTargets: (latest.pendingNavigationTargets || []).filter(
+        (target) => target.tabId !== tabId,
+      ),
       lastNavigationUrl: verdict.sanitizedUrl,
       lastNavigationAt: Date.now(),
-      generation: latest.generation + 1,
+      lastNavigationHandoff: activeDocumentId
+        ? {
+            tabId,
+            documentId: activeDocumentId,
+            sanitizedUrl: verdict.sanitizedUrl,
+            recordedAtMs: Date.now(),
+          }
+        : null,
       updatedAt: new Date().toISOString(),
     };
     await setCaptureState(next);
@@ -1764,29 +2950,29 @@ async function followActiveTabSwitch({ tabId, windowId }) {
   if (!switched) return;
 
   try {
-    await injectCaptureContent(switched, policy);
-    const context = await sendToCapturedTab(switched, {
-      type: "KNOWHOW_GET_PAGE_CONTEXT",
-    });
-    if (!context?.ok) return;
-    const job = snapshotCaptureJob(switched, {
-      ...context.context,
-      pageUrl: tab.url,
-      sourceEvent: "navigation",
-      title: context.context.title
-        ? "Switch to " + context.context.title
-        : "Switch tabs",
-      instructions: "Continue on this tab.",
-      targetRect: null,
-      clickPoint: null,
-    });
-    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
-  } catch (error) {
-    await pauseCapture(
-      "KnowHow could not continue after switching tabs: " +
-        (error instanceof Error ? error.message : "unknown error"),
+    await injectCaptureContent(
+      switched,
+      policy,
+      switched.activeDocumentId || undefined,
     );
+  } catch {
+    return;
   }
+  await retainCaptureFrames(switched);
+  await recordNavigationDestination(
+    {
+      tabId,
+      frameId: 0,
+      documentId: switched.activeDocumentId || null,
+      url: tab.url,
+    },
+    {
+      titleMode: openedTarget ? "new-tab" : "switch",
+      policy,
+      recordKey: activationRecordKey,
+    },
+  );
+  await autoRetryNeedsAttentionOnTab(tabId);
 }
 
 /**
@@ -1806,6 +2992,509 @@ async function followOwnNewTab(tabId) {
   await followActiveTabSwitch({ tabId, windowId: tab.windowId });
 }
 
+async function commitNavigationTransition(details, kind = "document") {
+  if (details.frameId !== 0) return null;
+  const state = await getCaptureState();
+  if (!isCollecting(state) || state.tabId !== details.tabId) return null;
+  const policy = await getCapturePolicy();
+  let verdict;
+  try {
+    verdict = evaluateCaptureUrl(details.url, policy);
+  } catch {
+    return null;
+  }
+  if (!verdict.allowed) {
+    await pauseCapture(verdict.reason);
+    return null;
+  }
+  const transitioned = await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      !isCollecting(latest) ||
+      latest.acceptingEvents === false ||
+      latest.sessionId !== state.sessionId ||
+      latest.tabId !== details.tabId
+    ) {
+      return null;
+    }
+    const transitionId = Math.max(
+      0,
+      Number(latest.nextNavigationSequence) || 0,
+    );
+    const activeNavigationKey = navigationKey(
+      {
+        tabId: details.tabId,
+        documentId: details.documentId || latest.activeDocumentId,
+        sanitizedUrl: verdict.sanitizedUrl,
+        transitionId,
+      },
+      kind,
+    );
+    const tabDocumentSessions = {
+      ...(latest.tabDocumentSessions || {}),
+      [String(details.tabId)]: {
+        documentId: details.documentId || null,
+        navigationKey: activeNavigationKey,
+        sanitizedUrl: verdict.sanitizedUrl,
+      },
+    };
+    const next = {
+      ...latest,
+      origin: verdict.origin,
+      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
+      sanitizedUrl: verdict.sanitizedUrl,
+      activeDocumentId: details.documentId || null,
+      activeNavigationKey,
+      tabDocumentSessions,
+      nextNavigationSequence: transitionId + 1,
+      preparedFrames: [],
+      manualBlurCount: 0,
+      lastNavigationUrl: verdict.sanitizedUrl,
+      lastNavigationAt: Date.now(),
+      updatedAt: new Date().toISOString(),
+    };
+    await setCaptureState(next);
+    return next;
+  });
+  if (!transitioned) return null;
+  await retainCaptureFrames(transitioned);
+  try {
+    await injectCaptureContent(
+      transitioned,
+      policy,
+      details.documentId || undefined,
+    );
+    if (kind === "history") {
+      await sendToCapturedTab(
+        transitioned,
+        {
+          type: "KNOWHOW_RESET_PAGE_SESSION",
+          navigationKey: transitioned.activeNavigationKey,
+        },
+        details.documentId ? { documentId: details.documentId } : undefined,
+      );
+    }
+  } catch {
+    // onCompleted retries injection after the destination document is ready.
+  }
+  return transitioned;
+}
+
+async function recordNavigationAttention(
+  snapshot,
+  details,
+  verdict,
+  stableRecordKey,
+  error,
+) {
+  return withStateMutation(async () => {
+    const current = await getCaptureState();
+    if (
+      !isCollecting(current) ||
+      current.acceptingEvents === false ||
+      current.sessionId !== snapshot.sessionId ||
+      current.tabId !== details.tabId
+    ) {
+      return current;
+    }
+    const remembered = rememberNavigationKey(current, stableRecordKey);
+    if (remembered.duplicate) {
+      await setCaptureState(remembered.state);
+      return remembered.state;
+    }
+    const entryId = `navigation:${stableRecordKey}`;
+    const reserved = reserveCaptureEntry(remembered.state, {
+      id: entryId,
+      stepId: crypto.randomUUID(),
+      kind: "navigation",
+      sourceEvent: "navigation",
+      tabId: current.tabId,
+      windowId: current.windowId,
+      documentId: details.documentId || current.activeDocumentId || null,
+      navigationKey: current.activeNavigationKey || stableRecordKey,
+      committed: true,
+      capturePending: false,
+      context: {
+        title: `Open ${verdict.sanitizedUrl}`,
+        instructions: "Continue on the captured page.",
+        sanitizedUrl: verdict.sanitizedUrl,
+      },
+    });
+    const failed = markCaptureEntryFailed(reserved, entryId, error);
+    await setCaptureState(failed);
+    return failed;
+  });
+}
+
+async function attachSettledFrameToLastClick(details) {
+  const tabKey = `tab:${details.tabId}`;
+  if (settledFrameJobs.has(tabKey)) return false;
+  const operation = (async () => {
+    const snapshot = await getCaptureState();
+    if (!isCollecting(snapshot) || snapshot.tabId !== details.tabId) return false;
+    const response = await sendToCapturedTab(snapshot, {
+      type: "KNOWHOW_CAPTURE_SETTLED_FRAME",
+    });
+    if (!response?.ok) return false;
+    const latest = await getCaptureState();
+    if (!clickEntryNeedsSettledFrame(latest, details)) return false;
+    const entry = lastClickCaptureEntry(latest);
+    if (!entry) return false;
+    const frameId = `settled-${entry.id}`;
+    const result = await enqueueScreenshot(
+      (reserveSlot) =>
+        processPreparedFrame({
+          state: latest,
+          context: {
+            ...(entry.context || {}),
+            ...(response.context || {}),
+            masks: response.context?.masks || entry.context?.masks || [],
+            viewport: response.context?.viewport || entry.context?.viewport,
+          },
+          frameId,
+          interactionId: entry.id,
+          navigationKey: latest.activeNavigationKey,
+          visualEpoch: Number(response.context?.visualEpoch) || 0,
+          viewportKey: String(response.context?.viewportKey || ""),
+          documentId: latest.activeDocumentId || entry.documentId,
+          reserveSlot,
+          deadlineRequired: false,
+        }),
+      { deadlineMs: 1_600 },
+    );
+    if (!result) return false;
+    const attached = await withStateMutation(async () => {
+      const current = await getCaptureState();
+      const currentEntry = captureEntry(current, entry.id);
+      if (!currentEntry || currentEntry.additionalFrameId) {
+        await deleteCaptureFrame(current.sessionId, frameId).catch(() => undefined);
+        return current;
+      }
+      const updated = updateCaptureEntry(current, entry.id, {
+        additionalFrameId: frameId,
+      });
+      await setCaptureState(updated);
+      return updated;
+    });
+    const attachedEntry = captureEntry(attached, entry.id);
+    if (
+      attachedEntry?.status === CaptureEntryStatus.READY &&
+      attachedEntry.additionalFrameId === frameId
+    ) {
+      await updateCapturedStep(attached.sessionId, attachedEntry.stepId, {
+        additionalFrameId: frameId,
+      }).catch(() => undefined);
+    }
+    await retainCaptureFrames(attached);
+    return true;
+  })();
+  settledFrameJobs.set(tabKey, operation);
+  return operation.finally(() => {
+    if (settledFrameJobs.get(tabKey) === operation) {
+      settledFrameJobs.delete(tabKey);
+    }
+  });
+}
+
+async function persistTextNavigationStep({
+  state,
+  entryId,
+  stepId,
+  title,
+  instructions,
+  sanitizedUrl,
+}) {
+  const policy = await getCapturePolicy();
+  const reserved = captureEntry(state, entryId);
+  await putCapturedStep({
+    sessionId: state.sessionId,
+    id: stepId,
+    order: reserved?.order || 0,
+    title: safeCaptureText(title, policy, 200, "Switch to this tab"),
+    instructions: safeCaptureText(
+      instructions,
+      policy,
+      2_000,
+      "Continue on this tab.",
+    ),
+    sanitizedUrl: sanitizedUrl || "",
+    sourceEvent: "navigation",
+    capturedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    automaticMaskCount: 0,
+    manualMaskCount: 0,
+    pendingRedactions: [],
+  });
+  await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (!captureEntry(latest, entryId)) return latest;
+    const next = markCaptureEntryReady(latest, entryId);
+    await setCaptureState(next);
+    return next;
+  });
+}
+
+async function warmDestinationPreparedFrame(state, context, details) {
+  if (!context?.viewportKey) return;
+  await sendToCapturedTab(state, { type: "KNOWHOW_WAIT_PAGE_SETTLED" });
+  const frameId = crypto.randomUUID();
+  const documentId = details.documentId || state.activeDocumentId || null;
+  const frameNavigationKey =
+    state.activeNavigationKey || context.navigationKey || null;
+  try {
+    const result = await enqueueScreenshot(
+      (reserveSlot) =>
+        processPreparedFrame({
+          state,
+          context,
+          frameId,
+          navigationKey: frameNavigationKey,
+          visualEpoch: Number(context.visualEpoch) || 0,
+          viewportKey: String(context.viewportKey || ""),
+          documentId,
+          reserveSlot,
+          deadlineRequired: false,
+          hideLiveBlur: false,
+        }),
+      { deadlineMs: 1_600 },
+    );
+    if (!result) return;
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      if (
+        latest.sessionId !== state.sessionId ||
+        !isCollecting(latest) ||
+        latest.tabId !== details.tabId
+      ) {
+        return latest;
+      }
+      const preparedFrames = [
+        ...(latest.preparedFrames || []).filter((frame) => frame.id !== frameId),
+        {
+          sessionId: latest.sessionId,
+          id: frameId,
+          tabId: latest.tabId,
+          documentId,
+          navigationKey: frameNavigationKey,
+          visualEpoch: Number(context.visualEpoch) || 0,
+          viewportKey: String(context.viewportKey || ""),
+          capturedAtMs: result.capturedAtMs,
+        },
+      ].slice(-2);
+      const next = { ...latest, preparedFrames, updatedAt: new Date().toISOString() };
+      await setCaptureState(next);
+      return next;
+    });
+  } catch {
+    // The next click can still fall back to a queued tab screenshot.
+  }
+}
+
+async function recordNavigationDestination(
+  details,
+  { titleMode = "navigation", policy: providedPolicy, recordKey } = {},
+) {
+  let state = await getCaptureState();
+  if (
+    details.frameId !== 0 ||
+    !isCollecting(state) ||
+    state.acceptingEvents === false ||
+    state.tabId !== details.tabId
+  ) {
+    return false;
+  }
+  const policy = providedPolicy || (await getCapturePolicy());
+  const verdict = evaluateCaptureUrl(details.url, policy);
+  if (!verdict.allowed) return false;
+  if (state.sanitizedUrl !== verdict.sanitizedUrl) {
+    state = await commitNavigationTransition(details, "document");
+    if (!state) return false;
+  }
+  if (!shouldMintNavigationStep(titleMode)) {
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      if (
+        !isCollecting(latest) ||
+        latest.sessionId !== state.sessionId ||
+        latest.tabId !== details.tabId
+      ) {
+        return latest;
+      }
+      const remembered = rememberRecordedDestination(
+        latest,
+        verdict.sanitizedUrl,
+      );
+      await setCaptureState(remembered);
+      return remembered;
+    });
+    void attachSettledFrameToLastClick(details);
+    return false;
+  }
+  if (shouldDropTrailingTabSwitch(state, details, { titleMode })) {
+    return false;
+  }
+  if (
+    details.documentId &&
+    state.activeDocumentId &&
+    details.documentId !== state.activeDocumentId
+  ) {
+    return false;
+  }
+  const stableRecordKey =
+    recordKey || `destination:${state.activeNavigationKey || verdict.sanitizedUrl}`;
+  const [activeTab] = await chrome.tabs.query({
+    active: true,
+    windowId: state.windowId,
+  });
+  if (!activeTab || activeTab.id !== state.tabId) {
+    await recordNavigationAttention(
+      state,
+      details,
+      verdict,
+      stableRecordKey,
+      "The destination was no longer visible when its screenshot was due. Return to the page and retry, or delete this step.",
+    );
+    return false;
+  }
+  try {
+    await injectCaptureContent(
+      state,
+      policy,
+      details.documentId || state.activeDocumentId || undefined,
+    );
+  } catch {
+    await recordNavigationAttention(
+      state,
+      details,
+      verdict,
+      stableRecordKey,
+      "KnowHow could not attach to the destination document. Reload the page and retry, or delete this step.",
+    );
+    return false;
+  }
+  const response = await sendToCapturedTab(
+    state,
+    { type: "KNOWHOW_GET_PAGE_CONTEXT" },
+    details.documentId || state.activeDocumentId
+      ? { documentId: details.documentId || state.activeDocumentId }
+      : undefined,
+  );
+  let pageTitle = response?.ok ? response.context?.title : "";
+  if (!pageTitle) {
+    try {
+      const tab = await chrome.tabs.get(details.tabId);
+      pageTitle = tab?.title || "";
+    } catch {
+      pageTitle = "";
+    }
+  }
+  pageTitle = pageTitle || "the next page";
+  if (titleMode !== "switch" && !response?.ok) {
+    await recordNavigationAttention(
+      state,
+      details,
+      verdict,
+      stableRecordKey,
+      "KnowHow could not prepare the destination screenshot. Return to the page and retry, or delete this step.",
+    );
+    return false;
+  }
+  const switched = titleMode === "switch" ? switchNavigationCopy(pageTitle) : null;
+  const title = switched
+    ? switched.title
+    : titleMode === "new-tab"
+      ? `Open ${pageTitle} in a new tab`
+      : `Open ${pageTitle}`;
+  const instructions = switched
+    ? switched.instructions
+    : titleMode === "new-tab"
+      ? "Continue in the new tab."
+      : "Continue on the captured page.";
+  const entryId = `navigation:${stableRecordKey}`;
+  const stepId = crypto.randomUUID();
+  let duplicate = false;
+  let reservedState = null;
+  await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      !isCollecting(latest) ||
+      latest.acceptingEvents === false ||
+      latest.sessionId !== state.sessionId ||
+      latest.tabId !== details.tabId
+    ) {
+      return latest;
+    }
+    const remembered = rememberNavigationKey(latest, stableRecordKey);
+    duplicate = remembered.duplicate;
+    let next = remembered.state;
+    if (!duplicate) {
+      next = rememberRecordedDestination(
+        reserveCaptureEntry(next, {
+        id: entryId,
+        stepId,
+        kind: "navigation",
+        sourceEvent: "navigation",
+        tabId: latest.tabId,
+        windowId: latest.windowId,
+        documentId: details.documentId || latest.activeDocumentId || null,
+        navigationKey: latest.activeNavigationKey || stableRecordKey,
+        committed: true,
+        capturePending: false,
+        context: {
+          ...((response?.context && typeof response.context === "object"
+            ? response.context
+            : {})),
+          title,
+          instructions,
+          sanitizedUrl: verdict.sanitizedUrl,
+        },
+      }),
+        verdict.sanitizedUrl,
+      );
+      reservedState = next;
+    }
+    await setCaptureState(next);
+    return next;
+  });
+  if (duplicate || !reservedState) return false;
+  if (titleMode === "switch") {
+    await persistTextNavigationStep({
+      state: reservedState,
+      entryId,
+      stepId,
+      title,
+      instructions,
+      sanitizedUrl: verdict.sanitizedUrl,
+    });
+    if (response?.ok) {
+      void warmDestinationPreparedFrame(
+        reservedState,
+        response.context || {},
+        details,
+      );
+    }
+    return true;
+  }
+  const job = snapshotCaptureJob(reservedState, {
+    ...response.context,
+    pageUrl: details.url,
+    sourceEvent: "navigation",
+    title,
+    instructions,
+    targetRect: null,
+    clickPoint: null,
+    documentId: details.documentId || reservedState.activeDocumentId || undefined,
+    navigationKey: reservedState.activeNavigationKey || stableRecordKey,
+    entryId,
+    stepId,
+  });
+  try {
+    return await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
+  } catch {
+    return false;
+  }
+}
+
 async function captureNavigation(details) {
   const state = await getCaptureState();
   if (!isCollecting(state) || details.frameId !== 0) return;
@@ -1813,97 +3502,24 @@ async function captureNavigation(details) {
     await followOwnNewTab(details.tabId);
     return;
   }
-
-  const policy = await getCapturePolicy();
-  const verdict = evaluateCaptureUrl(details.url, policy);
-  if (!verdict.allowed) {
-    await pauseCapture(verdict.reason);
-    return;
-  }
-  // Following a link onto another site is an ordinary part of a real workflow
-  // (an app hands off to a payment provider, an identity provider, a docs site),
-  // so capture continues there and records the hand-off. Sites the workspace
-  // excludes, and anything that is not a regular page, still stop capture above.
-  const recentInteraction = recentInteractionByTab.get(details.tabId);
+  const verdict = evaluateCaptureUrl(details.url, await getCapturePolicy());
+  if (!verdict.allowed) return;
   if (
-    recentInteraction?.sessionId === state.sessionId &&
-    Date.now() - recentInteraction.at < 1_800
-  ) {
-    // Same-tab navigation immediately following a click is the result of that
-    // click, not a separate user step. The queued click adopts the destination
-    // screenshot, so only refresh routing state here and avoid noisy URL rows.
-    await withStateMutation(async () => {
-      const latest = await getCaptureState();
-      if (!isCollecting(latest) || latest.sessionId !== state.sessionId) {
-        return latest;
-      }
-      const next = {
-        ...latest,
-        origin: verdict.origin,
-        scopeLabel: scopeLabelForHost(latest, verdict.hostname),
-        sanitizedUrl: verdict.sanitizedUrl,
-        lastNavigationUrl: verdict.sanitizedUrl,
-        lastNavigationAt: Date.now(),
-        updatedAt: new Date().toISOString(),
-      };
-      await setCaptureState(next);
-      return next;
-    });
-    return;
-  }
-  if (
-    state.lastNavigationUrl === verdict.sanitizedUrl &&
-    Date.now() - Number(state.lastNavigationAt || 0) < 2_000
-  ) {
-    return;
-  }
-  const navigationState = await withStateMutation(async () => {
-    const latest = await getCaptureState();
-    if (
-      !jobIsCurrent(latest, state.sessionId, state.generation) ||
-      latest.tabId !== details.tabId
-    ) {
-      return null;
-    }
-    const next = {
-      ...latest,
-      origin: verdict.origin,
-      scopeLabel: scopeLabelForHost(latest, verdict.hostname),
+    recentHandoffMatches(state, {
+      tabId: details.tabId,
+      documentId: details.documentId,
       sanitizedUrl: verdict.sanitizedUrl,
-      lastNavigationUrl: verdict.sanitizedUrl,
-      lastNavigationAt: Date.now(),
-    };
-    await setCaptureState(next);
-    return next;
-  });
-  if (!navigationState) return;
-  try {
-    await injectCaptureContent(navigationState);
-    const context = await sendToCapturedTab(navigationState, {
-      type: "KNOWHOW_GET_PAGE_CONTEXT",
-    });
-    if (!context?.ok) return;
-    const job = snapshotCaptureJob(navigationState, {
-        ...context.context,
-        pageUrl: details.url,
-        sourceEvent: "navigation",
-        title: context.context.title
-          ? "Open " + context.context.title
-          : "Open the next page",
-        instructions: "Continue on the captured page.",
-        targetRect: null,
-        clickPoint: null,
-        ...(typeof details.documentId === "string"
-          ? { documentId: details.documentId }
-          : {}),
-      });
-    await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
-  } catch (error) {
-    await pauseCapture(
-      "KnowHow could not continue after navigation: " +
-        (error instanceof Error ? error.message : "unknown error"),
-    );
+    })
+  ) {
+    return;
   }
+  if (
+    state.sanitizedUrl !== verdict.sanitizedUrl ||
+    (details.documentId && state.activeDocumentId !== details.documentId)
+  ) {
+    await commitNavigationTransition(details, "document");
+  }
+  await recordNavigationDestination(details);
 }
 
 async function handleMessage(message, sender) {
@@ -1932,12 +3548,31 @@ async function handleMessage(message, sender) {
         ok: true,
         state: await removeCapturedStep(message.stepId),
       };
+    case "RETRY_CAPTURE_ENTRY":
+      return {
+        ok: true,
+        state: await retryCaptureEntry(message.entryId),
+      };
+    case "DELETE_CAPTURE_ENTRY":
+      return {
+        ok: true,
+        state: await deleteCaptureEntryFromFeed(message.entryId),
+      };
     case "EXCLUDE_CURRENT_SITE":
       return { ok: true, ...(await excludeCurrentSite(message.options)) };
     // Guide screenshots are private objects: the side panel asks the worker,
     // which is the only context holding the paired device credential.
     case "GET_GUIDE_MEDIA":
-      return { ok: true, ...(await fetchGuideMedia(message.mediaId)) };
+      try {
+        return { ok: true, ...(await fetchGuideMedia(message.mediaId)) };
+      } catch (error) {
+        if (error?.status === 404) {
+          await dropCompanionGuideByMedia(message.mediaId);
+        }
+        throw error;
+      }
+    case "REFRESH_LIBRARY":
+      return { ok: true, companion: await refreshCompanionLibrary() };
     case "CONNECT_KNOWHOW":
       return { ok: true, context: await connectKnowHow(message.code) };
     case "UPDATE_CAPTURE_POLICY":
@@ -1958,114 +3593,54 @@ async function handleMessage(message, sender) {
       }
       return { ok: true, open: response.open === true };
     }
-    case "PREFLIGHT_CAPTURE": {
+    case "CONTENT_READY": {
       const state = await getCaptureState();
       if (
         !sender.tab ||
         sender.tab.id !== state.tabId ||
-        message.sessionId !== state.sessionId ||
-        !isCollecting(state)
+        !livePolicyStatuses.has(state.status)
       ) {
         return { ok: false, ignored: true };
       }
-      const policy = await getCapturePolicy();
-      const verdict = evaluateCaptureUrl(
-        message.context?.pageUrl || sender.tab.url || "",
-        policy,
-      );
-      if (!verdict.allowed || verdict.origin !== state.origin) {
-        return { ok: false };
-      }
-      try {
-        const captured = await enqueueScreenshot(
-          (reserveSlot) =>
-            captureVisiblePage(
-              state,
-              policy,
-              verdict.sanitizedUrl,
-              reserveSlot,
-            ),
-          { deadlineMs: PREFLIGHT_DEADLINE_MS },
-        );
-        if (!captured) return { ok: false, abandoned: true };
-        await setPendingPreflight({
-          sessionId: state.sessionId,
-          generation: state.generation,
-          dataUrl: captured.dataUrl,
-          context: message.context || {},
-          verdictUrl: verdict.sanitizedUrl,
-          capturedAt: Date.now(),
+      if (!state.activeDocumentId && sender.documentId) {
+        await withStateMutation(async () => {
+          const current = await getCaptureState();
+          if (current.tabId !== sender.tab.id || current.activeDocumentId) {
+            return current;
+          }
+          const next = { ...current, activeDocumentId: sender.documentId };
+          await setCaptureState(next);
+          return next;
         });
-        return { ok: true };
-      } catch (error) {
-        return {
-          ok: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Screenshot preflight failed.",
-        };
-      }
-    }
-    case "PREFLIGHT_DISCARD": {
-      const state = await getCaptureState();
-      if (state.sessionId === message.sessionId) {
-        await clearPendingPreflight();
       }
       return { ok: true };
     }
-    case "CAPTURE_EVENT": {
-      const interactionSequence = interactionSequencer.reserve();
+    case "PREPARE_CAPTURE_FRAME":
+      return prepareCaptureFrame(message, sender);
+    case "STAGE_INTERACTION":
+      return stageCaptureInteraction(message, sender);
+    case "COMMIT_INTERACTION":
+      return commitCaptureInteraction(message, sender);
+    case "CANCEL_INTERACTION":
+      return cancelCaptureInteraction(message, sender);
+    case "UPGRADE_INTERACTION":
+      return upgradeCaptureInteraction(message, sender);
+    case "MANUAL_BLUR_CHANGED": {
       const state = await getCaptureState();
-      if (
-        !sender.tab ||
-        sender.tab.id !== state.tabId ||
-        message.sessionId !== state.sessionId ||
-        !isCollecting(state)
-      ) {
+      if (!senderMatchesCapture(state, message, sender, { allowPaused: true })) {
         return { ok: false, ignored: true };
       }
-      interactionSequencer.confirm(state.sessionId, interactionSequence);
-      if (Number.isInteger(sender.tab.id)) {
-        recentInteractionByTab.set(sender.tab.id, {
-          at: Date.now(),
-          sessionId: state.sessionId,
-          interactionSequence,
-        });
-        setTimeout(() => {
-          const recent = recentInteractionByTab.get(sender.tab.id);
-          if (recent?.interactionSequence === interactionSequence) {
-            recentInteractionByTab.delete(sender.tab.id);
-          }
-        }, 2_500);
-      }
-      const job = snapshotCaptureJob(state, {
-          ...message.context,
-          pageUrl: sender.tab.url || message.context?.pageUrl,
-          sourceEvent: ["contextmenu", "dblclick"].includes(message.sourceEvent)
-            ? message.sourceEvent
-            : "click",
-          interactionSequence,
-          preflight: message.preflight === true,
-          ...(Number.isInteger(message.interactionSequence)
-            ? { sourceInteractionSequence: message.interactionSequence }
-            : {}),
-          ...(typeof sender.documentId === "string"
-            ? { documentId: sender.documentId }
-            : {}),
-        });
-      void enqueueScreenshot((reserveSlot) =>
-        captureStep(job, reserveSlot),
-      ).catch(async (error) => {
-        const latest = await getCaptureState();
-        if (isCollecting(latest)) {
-          await pauseCapture(
-            "Screenshot capture paused: " +
-              (error instanceof Error ? error.message : "unknown error"),
-          );
+      const count = Math.max(0, Math.min(200, Number(message.count) || 0));
+      await withStateMutation(async () => {
+        const current = await getCaptureState();
+        if (!senderMatchesCapture(current, message, sender, { allowPaused: true })) {
+          return current;
         }
+        const next = { ...current, manualBlurCount: count };
+        await setCaptureState(next);
+        return next;
       });
-      return { ok: true, queued: true };
+      return { ok: true, count };
     }
     default:
       return { ok: false, error: "Unknown extension message." };
@@ -2140,7 +3715,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   windowActivationEpochs.note(activeInfo.windowId);
-  void followActiveTabSwitch(activeInfo);
+  void enqueueNavigationTransition(activeInfo.tabId, () =>
+    followActiveTabSwitch(activeInfo),
+  ).catch(() => undefined);
+});
+
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  void (async () => {
+    let closedActiveCapture = false;
+    await withStateMutation(async () => {
+      const current = await getCaptureState();
+      if (!current.sessionId) return current;
+      closedActiveCapture = current.tabId === tabId && isCollecting(current);
+      const tabDocumentSessions = { ...(current.tabDocumentSessions || {}) };
+      delete tabDocumentSessions[String(tabId)];
+      const next = {
+        ...current,
+        tabDocumentSessions,
+        pendingNavigationTargets: (current.pendingNavigationTargets || []).filter(
+          (target) => target.tabId !== tabId && target.sourceTabId !== tabId,
+        ),
+      };
+      await setCaptureState(next);
+      return next;
+    });
+    if (closedActiveCapture) {
+      const [replacement] = await chrome.tabs.query({
+        active: true,
+        windowId: removeInfo.windowId,
+      });
+      if (replacement && Number.isInteger(replacement.id)) {
+        await enqueueNavigationTransition(replacement.id, () =>
+          followActiveTabSwitch({
+            tabId: replacement.id,
+            windowId: replacement.windowId,
+          }),
+        );
+      } else {
+        await pauseCapture(
+          "The captured tab was closed. Discard this capture or open a page and resume.",
+        );
+      }
+    }
+  })().catch(() => undefined);
 });
 
 // Moving to another browser window does not activate a tab, so capture follows
@@ -2153,19 +3770,36 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
     .query({ active: true, windowId })
     .then(([tab]) => {
       if (!tab || !Number.isInteger(tab.id)) return;
-      return followActiveTabSwitch({ tabId: tab.id, windowId });
+      return enqueueNavigationTransition(tab.id, () =>
+        followActiveTabSwitch({ tabId: tab.id, windowId }),
+      );
     })
     .catch(() => undefined);
 });
 
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId !== 0) return;
+  void enqueueNavigationTransition(details.tabId, () =>
+    commitNavigationTransition(details, "document"),
+  ).catch(() => undefined);
+});
 chrome.webNavigation.onCompleted.addListener((details) => {
-  void captureNavigation(details);
+  if (details.frameId !== 0) return;
+  void enqueueNavigationTransition(details.tabId, () =>
+    captureNavigation(details),
+  ).catch(() => undefined);
 });
 chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
-  void captureNavigation(details);
+  if (details.frameId !== 0) return;
+  void enqueueNavigationTransition(details.tabId, async () => {
+    const transitioned = await commitNavigationTransition(details, "history");
+    if (transitioned) await recordNavigationDestination(details);
+  }).catch(() => undefined);
 });
 chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
-  void followNewTabNavigation(details);
+  void enqueueNavigationTransition(details.sourceTabId, () =>
+    followNewTabNavigation(details),
+  ).catch(() => undefined);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -2231,4 +3865,10 @@ chrome.runtime.onStartup.addListener(() => {
   })();
 });
 
-void getCaptureState().then(updateActionBadge);
+void (async () => {
+  const state = await getCaptureState();
+  const recovered = state.sessionId
+    ? await reconcileCaptureEntries({ workerRecovery: true })
+    : state;
+  await updateActionBadge(recovered);
+})().catch(() => undefined);

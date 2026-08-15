@@ -69,6 +69,38 @@ test("record-store transactions serialize concurrent counters and roll back fail
   assert.equal(await store.get(TABLES.idempotencyKeys, "temporary"), null);
 });
 
+test("fixed windows retry Appwrite transaction conflicts then consume", async () => {
+  process.env.KNOWHOW_RATE_LIMIT_PEPPER =
+    "test-rate-limit-pepper-with-more-than-thirty-two-bytes";
+  const inner = new InMemoryRecordStore();
+  let conflicts = 0;
+  const store = {
+    transaction(work: Parameters<InMemoryRecordStore["transaction"]>[0]) {
+      if (conflicts < 2) {
+        conflicts += 1;
+        return Promise.reject(new RecordConflictError());
+      }
+      return inner.transaction(work);
+    },
+  } as Pick<InMemoryRecordStore, "transaction"> as InMemoryRecordStore;
+  await consumeFixedWindows(
+    store,
+    [
+      {
+        scope: "test.retry-conflict",
+        subject: "member@example.com",
+        limit: 5,
+        windowSeconds: 60,
+      },
+    ],
+    new Date("2026-08-11T10:00:15.000Z"),
+  );
+  assert.equal(conflicts, 2);
+  const rows = await inner.list(TABLES.idempotencyKeys);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sequence, 1);
+});
+
 test("durable fixed windows enforce the limit atomically under concurrency", async () => {
   process.env.KNOWHOW_RATE_LIMIT_PEPPER =
     "test-rate-limit-pepper-with-more-than-thirty-two-bytes";

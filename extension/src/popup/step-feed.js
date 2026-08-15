@@ -117,7 +117,6 @@ export function createCapturedStepCache({
       const step = cache.steps.get(stepId);
       if (
         !step ||
-        step.sourceEvent === "navigation" ||
         !(step.imageBlob instanceof Blob)
       ) {
         continue;
@@ -333,11 +332,27 @@ export function createThumbnailUrlCache(
 }
 
 export function stepCopy(step) {
+  if (step?.captureStatus === "capturing") {
+    return {
+      title: "Saving screenshot…",
+      detail: String(step?.title || "Capturing the pre-action view.").trim(),
+    };
+  }
+  if (step?.captureStatus === "needs_attention") {
+    return {
+      title: "Screenshot needs attention",
+      detail: String(
+        step?.error || "Retry this screenshot, or delete this step.",
+      ).trim(),
+    };
+  }
   if (step?.sourceEvent === "navigation") {
     const url = String(step.sanitizedUrl || "").trim();
+    const title = String(step?.title || "").trim();
+    const instructions = String(step?.instructions || "").trim();
     return {
-      title: url ? "Navigate to " + url : "Navigate to the next page",
-      detail: "",
+      title: title || (url ? "Navigate to " + url : "Navigate to the next page"),
+      detail: instructions && instructions !== title ? instructions : "",
     };
   }
 
@@ -347,6 +362,39 @@ export function stepCopy(step) {
     title,
     detail: instructions && instructions !== title ? instructions : "",
   };
+}
+
+export function captureFeedSteps(state, storedSteps = []) {
+  const entries = Array.isArray(state?.captureEntries)
+    ? [...state.captureEntries].sort(
+        (left, right) => Number(left.order || 0) - Number(right.order || 0),
+      )
+    : [];
+  if (!entries.length) return orderedSteps(storedSteps);
+  const storedById = new Map(storedSteps.map((step) => [step.id, step]));
+  const announced = new Set(entries.map((entry) => entry.stepId));
+  const feed = entries.map((entry) => {
+    const stored = storedById.get(entry.stepId);
+    if (entry.status === "ready" && stored) {
+      return { ...stored, entryId: entry.id, captureStatus: "ready" };
+    }
+    return {
+      id: entry.stepId || `entry:${entry.id}`,
+      entryId: entry.id,
+      order: entry.order,
+      sourceEvent: entry.sourceEvent || entry.kind || "click",
+      captureStatus:
+        entry.status === "needs_attention" ? "needs_attention" : "capturing",
+      title: entry.context?.title || "Capturing the pre-action view",
+      instructions: entry.context?.instructions || "",
+      sanitizedUrl: entry.context?.sanitizedUrl || "",
+      error: entry.error || "",
+    };
+  });
+  for (const step of storedSteps) {
+    if (!announced.has(step.id)) feed.push(step);
+  }
+  return orderedSteps(feed);
 }
 
 export function feedRevision(sessionId, steps) {
@@ -360,6 +408,9 @@ export function feedRevision(sessionId, steps) {
         step.title,
         step.instructions,
         step.sanitizedUrl,
+        step.captureStatus,
+        step.entryId,
+        step.error,
         imageRevision(step),
       ].join(":"),
     ),

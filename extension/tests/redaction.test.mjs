@@ -11,6 +11,7 @@ import {
   sanitizeCapturedText,
   scaleRect,
   scaleNormalizedRegion,
+  isSensitivePathSegment,
 } from "../src/core/redaction.js";
 
 test("redaction rectangles are padded and clamped to the viewport", () => {
@@ -114,6 +115,28 @@ test("captured metadata redacts formatted numbers, IDs, and optional names", () 
   assert.equal(sanitized.includes("Alice Example"), false);
   assert.equal(sanitized.includes("AB-12345678"), false);
   assert.match(sanitized, /\[redacted\]/);
+});
+
+test("URL path segments keep route slugs, numeric IDs, and opaque tokens", () => {
+  assert.equal(
+    isSensitivePathSegment("helpdesk-ac3fe", { redactIds: true }),
+    false,
+  );
+  assert.equal(
+    isSensitivePathSegment("12345678", {
+      redactIds: true,
+      redactAllNumbers: true,
+    }),
+    false,
+  );
+  assert.equal(
+    isSensitivePathSegment("alice@example.com", { redactEmails: true }),
+    true,
+  );
+  assert.equal(
+    isSensitivePathSegment("0123456789abcdef0123456789abcdef"),
+    false,
+  );
 });
 
 test("a normalized manual region scales consistently across screenshots", () => {

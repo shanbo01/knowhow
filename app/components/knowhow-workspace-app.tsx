@@ -84,6 +84,7 @@ import { decryptSecretValue, encryptSecretValue } from "../../lib/crypto";
 import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
 import {
+  companionGuidesFromWorkspace,
   ensureKnowHowExtension,
   extensionStoreUrls,
   syncKnowHowExtension,
@@ -226,13 +227,13 @@ const PLATFORM_NAV: Array<{
   label: string;
   icon: typeof LayoutDashboard;
 }> = [
-  { section: "overview", label: "Overview", icon: LayoutDashboard },
-  { section: "leads", label: "Leads", icon: Mail },
-  { section: "accounts", label: "Accounts", icon: Building2 },
-  { section: "support", label: "Support", icon: LifeBuoy },
-  { section: "billing", label: "Billing", icon: CalendarDays },
-  { section: "ops", label: "Activity", icon: History },
-];
+    { section: "overview", label: "Overview", icon: LayoutDashboard },
+    { section: "leads", label: "Leads", icon: Mail },
+    { section: "accounts", label: "Accounts", icon: Building2 },
+    { section: "support", label: "Support", icon: LifeBuoy },
+    { section: "billing", label: "Billing", icon: CalendarDays },
+    { section: "ops", label: "Activity", icon: History },
+  ];
 
 const NAV_LABELS: Record<View, string> = {
   Overview: "Home",
@@ -988,19 +989,19 @@ function OverviewView({
             {guides.length === 0
               ? "Start with a capture, a written guide, or an invitation."
               : canManageAccess
-              ? "Monitor knowledge, reviews, engagement, and audience coverage."
-              : canCreate
-                ? "Continue your drafts, capture workflows, and follow reviews through publication."
-                : hasReviewWork
-                  ? "Review work waiting for you and move approved guidance toward publication."
-                  : "Find the published guidance available to you and continue where you left off."}
+                ? "Monitor knowledge, reviews, engagement, and audience coverage."
+                : canCreate
+                  ? "Continue your drafts, capture workflows, and follow reviews through publication."
+                  : hasReviewWork
+                    ? "Review work waiting for you and move approved guidance toward publication."
+                    : "Find the published guidance available to you and continue where you left off."}
           </p>
         </div>
       </section>
 
       {(canManageAccess || canCapture) &&
-      !data.onboarding.completedAt &&
-      !data.onboarding.dismissedAt ? (
+        !data.onboarding.completedAt &&
+        !data.onboarding.dismissedAt ? (
         <SetupWizard
           onboarding={data.onboarding}
           busy={busy}
@@ -1015,374 +1016,374 @@ function OverviewView({
 
       {guides.length === 0 ? (
         data.onboarding.completedAt || !(canManageAccess || canCapture) ? (
-        <section className="first-run-panel">
-          <div>
-            <p className="eyebrow">Get started</p>
-            <h2>Make this workspace useful in the next few minutes.</h2>
-            <p>
-              Capture a real workflow, write the first guide, or invite someone
-              to try it with you.
-            </p>
-          </div>
-          <div className="first-run-actions">
-            {canCapture ? (
-              <button type="button" onClick={() => onNavigate("Capture")}>
-                <Sparkles />
-                <strong>Capture a workflow</strong>
-                <span>Record the steps in Chrome or Edge.</span>
-              </button>
-            ) : null}
-            {canCreate ? (
-              <button type="button" onClick={onNewGuide}>
-                <Plus />
-                <strong>Write a guide</strong>
-                <span>Start a private draft from scratch.</span>
-              </button>
-            ) : null}
-            {canManageAccess ? (
-              <button type="button" onClick={() => onNavigate("Members")}>
-                <Users />
-                <strong>Invite a teammate</strong>
-                <span>Send a single-use invitation to their email.</span>
-              </button>
-            ) : null}
-          </div>
-        </section>
+          <section className="first-run-panel">
+            <div>
+              <p className="eyebrow">Get started</p>
+              <h2>Make this workspace useful in the next few minutes.</h2>
+              <p>
+                Capture a real workflow, write the first guide, or invite someone
+                to try it with you.
+              </p>
+            </div>
+            <div className="first-run-actions">
+              {canCapture ? (
+                <button type="button" onClick={() => onNavigate("Capture")}>
+                  <Sparkles />
+                  <strong>Capture a workflow</strong>
+                  <span>Record the steps in Chrome or Edge.</span>
+                </button>
+              ) : null}
+              {canCreate ? (
+                <button type="button" onClick={onNewGuide}>
+                  <Plus />
+                  <strong>Write a guide</strong>
+                  <span>Start a private draft from scratch.</span>
+                </button>
+              ) : null}
+              {canManageAccess ? (
+                <button type="button" onClick={() => onNavigate("Members")}>
+                  <Users />
+                  <strong>Invite a teammate</strong>
+                  <span>Send a single-use invitation to their email.</span>
+                </button>
+              ) : null}
+            </div>
+          </section>
         ) : null
       ) : (
         <>
-      <section className="metric-grid overview-metric-grid">
-        <GreetingCard name={viewerName} workspaceName={data.workspace.name} />
-        <MetricCard
-          label="Published guides"
-          value={metrics.published}
-          hint="Available to assigned audiences"
-          icon={Globe2}
-          tone="accent"
-        />
-        <MetricCard
-          label="Review queue"
-          value={metrics.reviews}
-          hint={`${metrics.drafts} private drafts in progress`}
-          icon={ClipboardCheck}
-          tone="warning"
-        />
-        <MetricCard
-          label="Total engagement"
-          value={metrics.views + metrics.completions}
-          hint={`${metrics.completions} guide completions`}
-          icon={BarChart3}
-        />
-      </section>
+          <section className="metric-grid overview-metric-grid">
+            <GreetingCard name={viewerName} workspaceName={data.workspace.name} />
+            <MetricCard
+              label="Published guides"
+              value={metrics.published}
+              hint="Available to assigned audiences"
+              icon={Globe2}
+              tone="accent"
+            />
+            <MetricCard
+              label="Review queue"
+              value={metrics.reviews}
+              hint={`${metrics.drafts} private drafts in progress`}
+              icon={ClipboardCheck}
+              tone="warning"
+            />
+            <MetricCard
+              label="Total engagement"
+              value={metrics.views + metrics.completions}
+              hint={`${metrics.completions} guide completions`}
+              icon={BarChart3}
+            />
+          </section>
 
-      <section className="dashboard-insight-grid">
-        <Card className="lifecycle-card">
-          <CardHeader className="dashboard-card-header">
-            <div>
-              <CardTitle>Knowledge lifecycle</CardTitle>
-              <CardDescription>
-                Current distribution across every release stage.
-              </CardDescription>
-            </div>
-            <Badge variant="outline">{lifecycleTotal} total</Badge>
-          </CardHeader>
-          <CardContent className="lifecycle-card-content">
-            <div
-              className="lifecycle-donut"
-              style={{ background: lifecycleBackground }}
-              aria-label={`${metrics.published} published, ${metrics.reviews} in review, ${metrics.drafts} drafts`}
-            >
-              <div>
-                <strong>{lifecycleTotal}</strong>
-                <span>guides</span>
-              </div>
-            </div>
-            <div className="lifecycle-legend">
-              <button type="button" onClick={() => onNavigate("Guides")}>
-                <i className="lifecycle-published" />
-                <span>
-                  Published<small>Ready for audiences</small>
-                </span>
-                <strong>{metrics.published}</strong>
-              </button>
-              <button type="button" onClick={() => onNavigate("Guides")}>
-                <i className="lifecycle-review" />
-                <span>
-                  In review<small>Waiting on a decision</small>
-                </span>
-                <strong>{metrics.reviews}</strong>
-              </button>
-              <button type="button" onClick={() => onNavigate("Guides")}>
-                <i className="lifecycle-draft" />
-                <span>
-                  Drafts<small>Work still in progress</small>
-                </span>
-                <strong>{metrics.drafts}</strong>
-              </button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="engagement-card">
-          <CardHeader className="dashboard-card-header">
-            <div>
-              <CardTitle>Workspace activity</CardTitle>
-              <CardDescription>
-                Real usage totals from capture through completion.
-              </CardDescription>
-            </div>
-            <div className="engagement-summary">
-              <strong>{metrics.views + metrics.completions}</strong>
-              <span>interactions</span>
-            </div>
-          </CardHeader>
-          <CardContent className="engagement-bars">
-            {activityValues.map(({ label, value, icon: Icon, tone }) => (
-              <div className="engagement-bar-row" key={label}>
-                <span className="engagement-bar-label">
-                  <Icon />
-                  <span>{label}</span>
-                </span>
-                <DashboardProgress
-                  value={(value / maxActivity) * 100}
-                  label={`${label}: ${value}`}
-                  tone={tone}
-                />
-                <strong>{value}</strong>
-              </div>
-            ))}
-            <div className="completion-rate">
-              <div>
-                <span>Completion rate</span>
-                <strong>{Math.round(completionRate)}%</strong>
-              </div>
-              <DashboardProgress
-                value={completionRate}
-                label="Guide completion rate"
-                tone="accent"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="review-queue-card">
-          <CardHeader className="dashboard-card-header">
-            <div>
-              <CardTitle>Review queue</CardTitle>
-              <CardDescription>
-                Items that need the next action.
-              </CardDescription>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              type="button"
-              onClick={() => onNavigate("Guides")}
-              aria-label="Open guide library"
-            >
-              <ArrowRight />
-            </Button>
-          </CardHeader>
-          <CardContent className="review-queue-content">
-            {attention.length ? (
-              attention.map((guide) => {
-                const revision =
-                  guide.workingRevision ?? guide.publishedRevision;
-                const isReview = guide.status === "review";
-                return (
-                  <button
-                    className="review-queue-row"
-                    type="button"
-                    key={guide.id}
-                    onClick={() => onOpenGuide(guide)}
-                  >
-                    <span
-                      className={cn(
-                        "review-state-icon",
-                        isReview && "is-review",
-                      )}
-                    >
-                      {isReview ? <ClipboardCheck /> : <FileText />}
-                    </span>
+          <section className="dashboard-insight-grid">
+            <Card className="lifecycle-card">
+              <CardHeader className="dashboard-card-header">
+                <div>
+                  <CardTitle>Knowledge lifecycle</CardTitle>
+                  <CardDescription>
+                    Current distribution across every release stage.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">{lifecycleTotal} total</Badge>
+              </CardHeader>
+              <CardContent className="lifecycle-card-content">
+                <div
+                  className="lifecycle-donut"
+                  style={{ background: lifecycleBackground }}
+                  aria-label={`${metrics.published} published, ${metrics.reviews} in review, ${metrics.drafts} drafts`}
+                >
+                  <div>
+                    <strong>{lifecycleTotal}</strong>
+                    <span>guides</span>
+                  </div>
+                </div>
+                <div className="lifecycle-legend">
+                  <button type="button" onClick={() => onNavigate("Guides")}>
+                    <i className="lifecycle-published" />
                     <span>
-                      <strong>{revision?.title ?? guide.title}</strong>
-                      <small>
-                        {isReview ? "Decision required" : "Draft in progress"}
-                      </small>
+                      Published<small>Ready for audiences</small>
                     </span>
-                    <ArrowRight />
+                    <strong>{metrics.published}</strong>
                   </button>
-                );
-              })
-            ) : (
-              <div className="queue-clear-state">
-                <CheckCircle2 />
-                <strong>Queue is clear</strong>
-                <span>No drafts or reviews need attention.</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
+                  <button type="button" onClick={() => onNavigate("Guides")}>
+                    <i className="lifecycle-review" />
+                    <span>
+                      In review<small>Waiting on a decision</small>
+                    </span>
+                    <strong>{metrics.reviews}</strong>
+                  </button>
+                  <button type="button" onClick={() => onNavigate("Guides")}>
+                    <i className="lifecycle-draft" />
+                    <span>
+                      Drafts<small>Work still in progress</small>
+                    </span>
+                    <strong>{metrics.drafts}</strong>
+                  </button>
+                </div>
+              </CardContent>
+            </Card>
 
-      <div className="dashboard-work-grid">
-        <Card className="dashboard-guide-queue">
-          <CardHeader className="dashboard-card-header">
-            <div>
-              <CardTitle>Recently changed guides</CardTitle>
-              <CardDescription>
-                Continue where the workspace last left off.
-              </CardDescription>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              onClick={() => onNavigate("Guides")}
-            >
-              View library <ArrowRight />
-            </Button>
-          </CardHeader>
-          <CardContent className="dashboard-queue-content">
-            {recent.length ? (
-              <div className="dashboard-queue-list">
-                {recent.map((guide) => {
-                  const revision =
-                    guide.workingRevision ?? guide.publishedRevision;
-                  return (
-                    <button
-                      className="dashboard-queue-row"
-                      type="button"
-                      key={guide.id}
-                      onClick={() => onOpenGuide(guide)}
-                    >
-                      <span className="queue-guide-icon">
-                        <BookOpen />
-                      </span>
-                      <span className="queue-guide-main">
-                        <strong>{revision?.title ?? guide.title}</strong>
-                        <small>
-                          {revision?.category || "Uncategorized"} · Updated{" "}
-                          {formatDate(guide.updatedAt)}
-                        </small>
-                      </span>
-                      <StatusBadge status={guide.status} />
-                      {guide.restricted ? (
-                        <LockKeyhole
-                          className="restricted-icon"
-                          aria-label="Restricted"
-                        />
-                      ) : null}
-                      <ArrowRight />
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <EmptyState
-                icon={BookOpen}
-                title="No guides yet"
-                description="Create the first private draft for this workspace."
-                action={
-                  canCreate ? (
-                    <Button onClick={onNewGuide}>
-                      <Plus /> Create guide
-                    </Button>
-                  ) : undefined
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="access-health-card">
-          <CardHeader className="dashboard-card-header">
-            <div>
-              <CardTitle>Audience coverage</CardTitle>
-              <CardDescription>
-                People, groups, and publishing boundaries.
-              </CardDescription>
-            </div>
-            <span className="access-shield">
-              <ShieldCheck />
-            </span>
-          </CardHeader>
-          <CardContent className="access-health-content">
-            <div className="audience-people-row">
-              <AvatarGroup>
-                {visibleMembers.map((member) => (
-                  <Avatar size="sm" key={member.id}>
-                    <AvatarFallback>
-                      {initials(member.name, member.email)}
-                    </AvatarFallback>
-                  </Avatar>
+            <Card className="engagement-card">
+              <CardHeader className="dashboard-card-header">
+                <div>
+                  <CardTitle>Workspace activity</CardTitle>
+                  <CardDescription>
+                    Real usage totals from capture through completion.
+                  </CardDescription>
+                </div>
+                <div className="engagement-summary">
+                  <strong>{metrics.views + metrics.completions}</strong>
+                  <span>interactions</span>
+                </div>
+              </CardHeader>
+              <CardContent className="engagement-bars">
+                {activityValues.map(({ label, value, icon: Icon, tone }) => (
+                  <div className="engagement-bar-row" key={label}>
+                    <span className="engagement-bar-label">
+                      <Icon />
+                      <span>{label}</span>
+                    </span>
+                    <DashboardProgress
+                      value={(value / maxActivity) * 100}
+                      label={`${label}: ${value}`}
+                      tone={tone}
+                    />
+                    <strong>{value}</strong>
+                  </div>
                 ))}
-                {activeMembers > visibleMembers.length ? (
-                  <AvatarGroupCount>
-                    +{activeMembers - visibleMembers.length}
-                  </AvatarGroupCount>
-                ) : null}
-              </AvatarGroup>
-              <div>
-                <strong>{activeMembers} active people</strong>
-                <span>across {groups.length} audience groups</span>
-              </div>
-            </div>
-            <div className="coverage-metric">
-              <div>
-                <span>Active membership</span>
-                <strong>{Math.round(activeMemberRate)}%</strong>
-              </div>
-              <DashboardProgress
-                value={activeMemberRate}
-                label="Active workspace membership"
-              />
-            </div>
-            <div className="coverage-metric">
-              <div>
-                <span>Audience assignment</span>
-                <strong>{Math.round(audienceCoverage)}%</strong>
-              </div>
-              <DashboardProgress
-                value={audienceCoverage}
-                label="Guides assigned to an audience"
-                tone="accent"
-              />
-            </div>
-            <div className="access-health-stats">
-              <button
-                type="button"
-                disabled={!canManageAccess}
-                onClick={() => onNavigate("Members")}
-              >
-                <span>
-                  <Users /> Members
+                <div className="completion-rate">
+                  <div>
+                    <span>Completion rate</span>
+                    <strong>{Math.round(completionRate)}%</strong>
+                  </div>
+                  <DashboardProgress
+                    value={completionRate}
+                    label="Guide completion rate"
+                    tone="accent"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="review-queue-card">
+              <CardHeader className="dashboard-card-header">
+                <div>
+                  <CardTitle>Review queue</CardTitle>
+                  <CardDescription>
+                    Items that need the next action.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  type="button"
+                  onClick={() => onNavigate("Guides")}
+                  aria-label="Open guide library"
+                >
+                  <ArrowRight />
+                </Button>
+              </CardHeader>
+              <CardContent className="review-queue-content">
+                {attention.length ? (
+                  attention.map((guide) => {
+                    const revision =
+                      guide.workingRevision ?? guide.publishedRevision;
+                    const isReview = guide.status === "review";
+                    return (
+                      <button
+                        className="review-queue-row"
+                        type="button"
+                        key={guide.id}
+                        onClick={() => onOpenGuide(guide)}
+                      >
+                        <span
+                          className={cn(
+                            "review-state-icon",
+                            isReview && "is-review",
+                          )}
+                        >
+                          {isReview ? <ClipboardCheck /> : <FileText />}
+                        </span>
+                        <span>
+                          <strong>{revision?.title ?? guide.title}</strong>
+                          <small>
+                            {isReview ? "Decision required" : "Draft in progress"}
+                          </small>
+                        </span>
+                        <ArrowRight />
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="queue-clear-state">
+                    <CheckCircle2 />
+                    <strong>Queue is clear</strong>
+                    <span>No drafts or reviews need attention.</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </section>
+
+          <div className="dashboard-work-grid">
+            <Card className="dashboard-guide-queue">
+              <CardHeader className="dashboard-card-header">
+                <div>
+                  <CardTitle>Recently changed guides</CardTitle>
+                  <CardDescription>
+                    Continue where the workspace last left off.
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => onNavigate("Guides")}
+                >
+                  View library <ArrowRight />
+                </Button>
+              </CardHeader>
+              <CardContent className="dashboard-queue-content">
+                {recent.length ? (
+                  <div className="dashboard-queue-list">
+                    {recent.map((guide) => {
+                      const revision =
+                        guide.workingRevision ?? guide.publishedRevision;
+                      return (
+                        <button
+                          className="dashboard-queue-row"
+                          type="button"
+                          key={guide.id}
+                          onClick={() => onOpenGuide(guide)}
+                        >
+                          <span className="queue-guide-icon">
+                            <BookOpen />
+                          </span>
+                          <span className="queue-guide-main">
+                            <strong>{revision?.title ?? guide.title}</strong>
+                            <small>
+                              {revision?.category || "Uncategorized"} · Updated{" "}
+                              {formatDate(guide.updatedAt)}
+                            </small>
+                          </span>
+                          <StatusBadge status={guide.status} />
+                          {guide.restricted ? (
+                            <LockKeyhole
+                              className="restricted-icon"
+                              aria-label="Restricted"
+                            />
+                          ) : null}
+                          <ArrowRight />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={BookOpen}
+                    title="No guides yet"
+                    description="Create the first private draft for this workspace."
+                    action={
+                      canCreate ? (
+                        <Button onClick={onNewGuide}>
+                          <Plus /> Create guide
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="access-health-card">
+              <CardHeader className="dashboard-card-header">
+                <div>
+                  <CardTitle>Audience coverage</CardTitle>
+                  <CardDescription>
+                    People, groups, and publishing boundaries.
+                  </CardDescription>
+                </div>
+                <span className="access-shield">
+                  <ShieldCheck />
                 </span>
-                <strong>{members.length}</strong>
-              </button>
-              <button
-                type="button"
-                disabled={!canManageAccess}
-                onClick={() => onNavigate("Groups")}
-              >
-                <span>
-                  <Group /> Groups
-                </span>
-                <strong>{groups.length}</strong>
-              </button>
-              <button type="button" onClick={() => onNavigate("Guides")}>
-                <span>
-                  <LockKeyhole /> Restricted
-                </span>
-                <strong>{restrictedGuides}</strong>
-              </button>
-            </div>
-            <p className="access-health-note">
-              <Shield /> Roles grant actions. Audiences control delivery.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+              </CardHeader>
+              <CardContent className="access-health-content">
+                <div className="audience-people-row">
+                  <AvatarGroup>
+                    {visibleMembers.map((member) => (
+                      <Avatar size="sm" key={member.id}>
+                        <AvatarFallback>
+                          {initials(member.name, member.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                    ))}
+                    {activeMembers > visibleMembers.length ? (
+                      <AvatarGroupCount>
+                        +{activeMembers - visibleMembers.length}
+                      </AvatarGroupCount>
+                    ) : null}
+                  </AvatarGroup>
+                  <div>
+                    <strong>{activeMembers} active people</strong>
+                    <span>across {groups.length} audience groups</span>
+                  </div>
+                </div>
+                <div className="coverage-metric">
+                  <div>
+                    <span>Active membership</span>
+                    <strong>{Math.round(activeMemberRate)}%</strong>
+                  </div>
+                  <DashboardProgress
+                    value={activeMemberRate}
+                    label="Active workspace membership"
+                  />
+                </div>
+                <div className="coverage-metric">
+                  <div>
+                    <span>Audience assignment</span>
+                    <strong>{Math.round(audienceCoverage)}%</strong>
+                  </div>
+                  <DashboardProgress
+                    value={audienceCoverage}
+                    label="Guides assigned to an audience"
+                    tone="accent"
+                  />
+                </div>
+                <div className="access-health-stats">
+                  <button
+                    type="button"
+                    disabled={!canManageAccess}
+                    onClick={() => onNavigate("Members")}
+                  >
+                    <span>
+                      <Users /> Members
+                    </span>
+                    <strong>{members.length}</strong>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canManageAccess}
+                    onClick={() => onNavigate("Groups")}
+                  >
+                    <span>
+                      <Group /> Groups
+                    </span>
+                    <strong>{groups.length}</strong>
+                  </button>
+                  <button type="button" onClick={() => onNavigate("Guides")}>
+                    <span>
+                      <LockKeyhole /> Restricted
+                    </span>
+                    <strong>{restrictedGuides}</strong>
+                  </button>
+                </div>
+                <p className="access-health-note">
+                  <Shield /> Roles grant actions. Audiences control delivery.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         </>
       )}
     </div>
@@ -1445,39 +1446,39 @@ function GuidesView({
       </div>
       <section className="card table-card">
         {guides.length ? (
-        <div className="filter-bar">
-          <label className="search-field">
-            <Search />
-            <input
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
+          <div className="filter-bar">
+            <label className="search-field">
+              <Search />
+              <input
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setPage(0);
+                }}
+                placeholder="Search guides"
+              />
+            </label>
+            <SelectMenu
+              className="filter-select"
+              leading={<Filter />}
+              value={status}
+              onChange={(value) => {
+                setStatus(value);
                 setPage(0);
               }}
-              placeholder="Search guides"
+              ariaLabel="Filter guides by lifecycle state"
+              options={[
+                { value: "all", label: "All lifecycle states" },
+                { value: "draft", label: "Draft" },
+                { value: "review", label: "In review" },
+                { value: "published", label: "Published" },
+                { value: "archived", label: "Archived" },
+              ]}
             />
-          </label>
-          <SelectMenu
-            className="filter-select"
-            leading={<Filter />}
-            value={status}
-            onChange={(value) => {
-              setStatus(value);
-              setPage(0);
-            }}
-            ariaLabel="Filter guides by lifecycle state"
-            options={[
-              { value: "all", label: "All lifecycle states" },
-              { value: "draft", label: "Draft" },
-              { value: "review", label: "In review" },
-              { value: "published", label: "Published" },
-              { value: "archived", label: "Archived" },
-            ]}
-          />
-          <span className="result-count">
-            {filtered.length} {filtered.length === 1 ? "guide" : "guides"}
-          </span>
-        </div>
+            <span className="result-count">
+              {filtered.length} {filtered.length === 1 ? "guide" : "guides"}
+            </span>
+          </div>
         ) : null}
         {filtered.length ? (
           <div className="guide-table">
@@ -3997,42 +3998,42 @@ export function PlatformView({
     icon: typeof Mail;
     section: PlatformSection;
   }> = [
-    {
-      label: "Failed notifications",
-      description: "Delivery retry queue",
-      value: platform.systemHealth.failedNotifications,
-      icon: Mail,
-      section: "ops",
-    },
-    {
-      label: "Overdue support",
-      description: "One-business-day target",
-      value: platform.systemHealth.overdueSupport,
-      icon: LifeBuoy,
-      section: "support",
-    },
-    {
-      label: "Expiring soon",
-      description: "Within seven days",
-      value: platform.systemHealth.expiringWithinSevenDays,
-      icon: CalendarDays,
-      section: "billing",
-    },
-    {
-      label: "Deletion approvals",
-      description: "Owner confirmation required",
-      value: platform.systemHealth.deletionApprovals,
-      icon: Trash2,
-      section: "ops",
-    },
-    {
-      label: "Failed operations",
-      description: "Content-free usage events",
-      value: platform.systemHealth.failedOperations,
-      icon: CircleAlert,
-      section: "ops",
-    },
-  ];
+      {
+        label: "Failed notifications",
+        description: "Delivery retry queue",
+        value: platform.systemHealth.failedNotifications,
+        icon: Mail,
+        section: "ops",
+      },
+      {
+        label: "Overdue support",
+        description: "One-business-day target",
+        value: platform.systemHealth.overdueSupport,
+        icon: LifeBuoy,
+        section: "support",
+      },
+      {
+        label: "Expiring soon",
+        description: "Within seven days",
+        value: platform.systemHealth.expiringWithinSevenDays,
+        icon: CalendarDays,
+        section: "billing",
+      },
+      {
+        label: "Deletion approvals",
+        description: "Owner confirmation required",
+        value: platform.systemHealth.deletionApprovals,
+        icon: Trash2,
+        section: "ops",
+      },
+      {
+        label: "Failed operations",
+        description: "Content-free usage events",
+        value: platform.systemHealth.failedOperations,
+        icon: CircleAlert,
+        section: "ops",
+      },
+    ];
   const openSupportCount = platform.support.filter(
     (ticket) => ticket.status !== "closed",
   ).length;
@@ -4131,67 +4132,67 @@ export function PlatformView({
       : null;
   const selectedSubscription = selectedWorkspace
     ? platform.subscriptions.find(
-        (item) => item.workspaceId === selectedWorkspace.id,
-      )
+      (item) => item.workspaceId === selectedWorkspace.id,
+    )
     : null;
   const selectedEntitlements = selectedWorkspace
     ? platform.entitlements.filter(
-        (item) => item.workspaceId === selectedWorkspace.id,
-      )
+      (item) => item.workspaceId === selectedWorkspace.id,
+    )
     : [];
   const selectedActivation = selectedWorkspace
     ? platform.activation.find(
-        (item) => item.workspaceId === selectedWorkspace.id,
-      )
+      (item) => item.workspaceId === selectedWorkspace.id,
+    )
     : null;
   const selectedSupport = selectedWorkspace
     ? platform.support.filter(
-        (item) => item.workspaceId === selectedWorkspace.id,
-      )
+      (item) => item.workspaceId === selectedWorkspace.id,
+    )
     : [];
   const selectedAudits = selectedWorkspace
     ? platform.platformAudits.filter(
-        (item) => item.workspaceId === selectedWorkspace.id,
-      )
+      (item) => item.workspaceId === selectedWorkspace.id,
+    )
     : [];
   const heading =
     section === "leads"
       ? {
-          eyebrow: "Inbound",
-          title: "Leads",
-          copy: "Contact requests from the public site. Customer document contents stay private.",
-        }
+        eyebrow: "Inbound",
+        title: "Leads",
+        copy: "Contact requests from the public site. Customer document contents stay private.",
+      }
       : section === "accounts"
         ? {
-            eyebrow: "Tenants",
-            title: selectedWorkspace ? selectedWorkspace.name : "Accounts",
-            copy: selectedWorkspace
-              ? "Subscription, people, support, and usage for this workspace."
-              : "Every workspace, with organization context where it exists.",
-          }
+          eyebrow: "Tenants",
+          title: selectedWorkspace ? selectedWorkspace.name : "Accounts",
+          copy: selectedWorkspace
+            ? "Subscription, people, support, and usage for this workspace."
+            : "Every workspace, with organization context where it exists.",
+        }
         : section === "support"
           ? {
-              eyebrow: "Support SLA",
-              title: "Support",
-              copy: "Open support work across tenants. One-business-day target.",
-            }
+            eyebrow: "Support SLA",
+            title: "Support",
+            copy: "Open support work across tenants. One-business-day target.",
+          }
           : section === "billing"
             ? {
-                eyebrow: "Commercial lifecycle",
-                title: "Billing",
-                copy: "Subscriptions, entitlements, and private pricing catalogs.",
-              }
+              eyebrow: "Commercial lifecycle",
+              title: "Billing",
+              copy: "Subscriptions, entitlements, and private pricing catalogs.",
+            }
             : section === "ops"
               ? {
-                  eyebrow: "Control plane",
-                  title: "Activity",
-                  copy: "Audit, delivery failures, deletion approvals, and appointments.",
-                }
+                eyebrow: "Control plane",
+                title: "Activity",
+                copy: "Audit, delivery failures, deletion approvals, and appointments.",
+              }
               : {
-                  eyebrow: "Product owner",
-                  title: "Platform administration",
-                  copy: "Manage tenant health and aggregate usage without opening customer document contents or secrets.",
-                };
+                eyebrow: "Product owner",
+                title: "Platform administration",
+                copy: "Manage tenant health and aggregate usage without opening customer document contents or secrets.",
+              };
 
   return (
     <div className="view-stack">
@@ -4652,7 +4653,7 @@ export function PlatformView({
                             <UserCog /> Assign administrator
                           </button>
                           {workspace.status === "active" &&
-                          !workspace.supportGrant ? (
+                            !workspace.supportGrant ? (
                             <button
                               disabled={busy}
                               onClick={() => onRequestSupport(workspace)}
@@ -4799,7 +4800,7 @@ export function PlatformView({
                   <UserCog /> Assign
                 </button>
                 {selectedWorkspace.status === "active" &&
-                !selectedWorkspace.supportGrant ? (
+                  !selectedWorkspace.supportGrant ? (
                   <button
                     className="button secondary small"
                     type="button"
@@ -4848,29 +4849,29 @@ export function PlatformView({
             </div>
           </section>
           <div className="settings-grid">
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Commercial lifecycle</p>
-                <h2>Subscription</h2>
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Commercial lifecycle</p>
+                  <h2>Subscription</h2>
+                </div>
               </div>
-            </div>
-            {selectedSubscription ? (
-              <div className="platform-ops-row">
-                <span className="invite-icon">
-                  <CalendarDays />
-                </span>
-                <span className="member-main">
-                  <strong>{titleCase(selectedSubscription.kind)}</strong>
-                  <small>
-                    access {titleCase(selectedSubscription.access)}
-                    {selectedSubscription.expiresAt
-                      ? ` · expires ${formatDate(selectedSubscription.expiresAt, true)}`
-                      : " · no fixed expiry"}
-                  </small>
-                  <small>
-                    {selectedEntitlements.length
-                      ? selectedEntitlements
+              {selectedSubscription ? (
+                <div className="platform-ops-row">
+                  <span className="invite-icon">
+                    <CalendarDays />
+                  </span>
+                  <span className="member-main">
+                    <strong>{titleCase(selectedSubscription.kind)}</strong>
+                    <small>
+                      access {titleCase(selectedSubscription.access)}
+                      {selectedSubscription.expiresAt
+                        ? ` · expires ${formatDate(selectedSubscription.expiresAt, true)}`
+                        : " · no fixed expiry"}
+                    </small>
+                    <small>
+                      {selectedEntitlements.length
+                        ? selectedEntitlements
                           .map((entitlement) =>
                             formatEntitlement(
                               entitlement.kind,
@@ -4879,53 +4880,142 @@ export function PlatformView({
                           )
                           .filter(Boolean)
                           .join(" · ")
-                      : "No explicit entitlement overrides"}
-                  </small>
-                </span>
-                <StatusBadge status={selectedSubscription.status} />
+                        : "No explicit entitlement overrides"}
+                    </small>
+                  </span>
+                  <StatusBadge status={selectedSubscription.status} />
+                </div>
+              ) : (
+                <p className="empty-copy">No subscription recorded.</p>
+              )}
+            </section>
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Activation</p>
+                  <h2>First-value progress</h2>
+                </div>
               </div>
-            ) : (
-              <p className="empty-copy">No subscription recorded.</p>
-            )}
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Activation</p>
-                <h2>First-value progress</h2>
+              {selectedActivation ? (
+                <div className="platform-compact-row">
+                  <span className="member-main">
+                    <small>
+                      {selectedActivation.firstPublishedAt
+                        ? `Published ${formatDate(selectedActivation.firstPublishedAt, true)}`
+                        : "Awaiting first publication"}
+                    </small>
+                    <small>
+                      {selectedActivation.firstTeammateViewAt
+                        ? `Teammate view ${formatDate(selectedActivation.firstTeammateViewAt, true)}`
+                        : "Awaiting teammate view"}
+                      {selectedActivation.firstTeammateCompletionAt
+                        ? ` · completion ${formatDate(selectedActivation.firstTeammateCompletionAt, true)}`
+                        : " · awaiting completion"}
+                    </small>
+                  </span>
+                  <strong>
+                    {
+                      [
+                        selectedActivation.firstPublishedAt,
+                        selectedActivation.firstTeammateViewAt,
+                        selectedActivation.firstTeammateCompletionAt,
+                      ].filter(Boolean).length
+                    }
+                    /3
+                  </strong>
+                </div>
+              ) : (
+                <p className="empty-copy">No activation events recorded.</p>
+              )}
+            </section>
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Support SLA</p>
+                  <h2>Open support work</h2>
+                </div>
               </div>
-            </div>
-            {selectedActivation ? (
-              <div className="platform-compact-row">
-                <span className="member-main">
-                  <small>
-                    {selectedActivation.firstPublishedAt
-                      ? `Published ${formatDate(selectedActivation.firstPublishedAt, true)}`
-                      : "Awaiting first publication"}
-                  </small>
-                  <small>
-                    {selectedActivation.firstTeammateViewAt
-                      ? `Teammate view ${formatDate(selectedActivation.firstTeammateViewAt, true)}`
-                      : "Awaiting teammate view"}
-                    {selectedActivation.firstTeammateCompletionAt
-                      ? ` · completion ${formatDate(selectedActivation.firstTeammateCompletionAt, true)}`
-                      : " · awaiting completion"}
-                  </small>
-                </span>
-                <strong>
-                  {
-                    [
-                      selectedActivation.firstPublishedAt,
-                      selectedActivation.firstTeammateViewAt,
-                      selectedActivation.firstTeammateCompletionAt,
-                    ].filter(Boolean).length
-                  }
-                  /3
-                </strong>
+              {selectedSupport.length ? (
+                selectedSupport.map((ticket) => (
+                  <div className="platform-compact-row" key={ticket.id}>
+                    <span className="member-main">
+                      <strong>{ticket.requesterName}</strong>
+                      <small>
+                        target {formatDate(ticket.responseTargetAt, true)}
+                      </small>
+                    </span>
+                    <StatusBadge status={ticket.status} />
+                  </div>
+                ))
+              ) : (
+                <p className="empty-copy">No support cases for this account.</p>
+              )}
+            </section>
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Platform audit</p>
+                  <h2>Recent control-plane changes</h2>
+                </div>
               </div>
-            ) : (
-              <p className="empty-copy">No activation events recorded.</p>
-            )}
+              {selectedAudits.length ? (
+                selectedAudits.slice(0, 8).map((audit) => (
+                  <div className="platform-compact-row" key={audit.id}>
+                    <span className="member-main">
+                      <strong>{titleCase(audit.action)}</strong>
+                    </span>
+                    <time dateTime={audit.occurredAt}>
+                      {formatDate(audit.occurredAt, true)}
+                    </time>
+                  </div>
+                ))
+              ) : (
+                <p className="empty-copy">No control-plane audit events recorded.</p>
+              )}
+            </section>
+          </div>
+        </>
+      ) : null}
+
+      {section === "support" ? (
+        <>
+          <section
+            className="metric-grid overview-metric-grid"
+            aria-label="Support summary"
+          >
+            <MetricCard
+              label="Open cases"
+              value={openSupportCount}
+              hint="Current cross-workspace queue"
+              icon={LifeBuoy}
+              tone="accent"
+            />
+            <MetricCard
+              label="Overdue"
+              value={platform.systemHealth.overdueSupport}
+              hint="Outside the one-business-day target"
+              icon={CircleAlert}
+              tone={platform.systemHealth.overdueSupport ? "warning" : "default"}
+            />
+            <MetricCard
+              label="Waiting on support"
+              value={
+                platform.support.filter(
+                  (ticket) => ticket.status === "waiting_support",
+                ).length
+              }
+              hint="Cases needing a support response"
+              icon={Mail}
+            />
+            <MetricCard
+              label="Closed"
+              value={
+                platform.support.filter((ticket) => ticket.status === "closed")
+                  .length
+              }
+              hint="Completed support cases"
+              icon={CheckCircle2}
+            />
           </section>
           <section className="card table-card">
             <div className="section-heading compact">
@@ -4933,176 +5023,87 @@ export function PlatformView({
                 <p className="eyebrow">Support SLA</p>
                 <h2>Open support work</h2>
               </div>
+              <LifeBuoy />
             </div>
-            {selectedSupport.length ? (
-              selectedSupport.map((ticket) => (
-                <div className="platform-compact-row" key={ticket.id}>
-                  <span className="member-main">
-                    <strong>{ticket.requesterName}</strong>
-                    <small>
-                      target {formatDate(ticket.responseTargetAt, true)}
-                    </small>
-                  </span>
-                  <StatusBadge status={ticket.status} />
-                </div>
-              ))
-            ) : (
-              <p className="empty-copy">No support cases for this account.</p>
-            )}
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Platform audit</p>
-                <h2>Recent control-plane changes</h2>
-              </div>
-            </div>
-            {selectedAudits.length ? (
-              selectedAudits.slice(0, 8).map((audit) => (
-                <div className="platform-compact-row" key={audit.id}>
-                  <span className="member-main">
-                    <strong>{titleCase(audit.action)}</strong>
-                  </span>
-                  <time dateTime={audit.occurredAt}>
-                    {formatDate(audit.occurredAt, true)}
-                  </time>
-                </div>
-              ))
-            ) : (
-              <p className="empty-copy">No control-plane audit events recorded.</p>
-            )}
-          </section>
-          </div>
-        </>
-      ) : null}
-
-      {section === "support" ? (
-        <>
-        <section
-          className="metric-grid overview-metric-grid"
-          aria-label="Support summary"
-        >
-          <MetricCard
-            label="Open cases"
-            value={openSupportCount}
-            hint="Current cross-workspace queue"
-            icon={LifeBuoy}
-            tone="accent"
-          />
-          <MetricCard
-            label="Overdue"
-            value={platform.systemHealth.overdueSupport}
-            hint="Outside the one-business-day target"
-            icon={CircleAlert}
-            tone={platform.systemHealth.overdueSupport ? "warning" : "default"}
-          />
-          <MetricCard
-            label="Waiting on support"
-            value={
-              platform.support.filter(
-                (ticket) => ticket.status === "waiting_support",
-              ).length
-            }
-            hint="Cases needing a support response"
-            icon={Mail}
-          />
-          <MetricCard
-            label="Closed"
-            value={
-              platform.support.filter((ticket) => ticket.status === "closed")
-                .length
-            }
-            hint="Completed support cases"
-            icon={CheckCircle2}
-          />
-        </section>
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Support SLA</p>
-              <h2>Open support work</h2>
-            </div>
-            <LifeBuoy />
-          </div>
-          <div className="filter-bar">
-            <label className="search-field">
-              <Search />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search support work"
+            <div className="filter-bar">
+              <label className="search-field">
+                <Search />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search support work"
+                />
+              </label>
+              <SelectMenu
+                className="filter-select"
+                leading={<Filter />}
+                value={pipelineStatus}
+                onChange={setPipelineStatus}
+                ariaLabel="Filter support by status"
+                options={[
+                  { value: "open", label: "Open cases" },
+                  { value: "all", label: "All statuses" },
+                  ...[
+                    ...new Set(platform.support.map((ticket) => ticket.status)),
+                  ].map((status) => ({
+                    value: status,
+                    label: titleCase(status.replaceAll("_", " ")),
+                  })),
+                ]}
               />
-            </label>
-            <SelectMenu
-              className="filter-select"
-              leading={<Filter />}
-              value={pipelineStatus}
-              onChange={setPipelineStatus}
-              ariaLabel="Filter support by status"
-              options={[
-                { value: "open", label: "Open cases" },
-                { value: "all", label: "All statuses" },
-                ...[
-                  ...new Set(platform.support.map((ticket) => ticket.status)),
-                ].map((status) => ({
-                  value: status,
-                  label: titleCase(status.replaceAll("_", " ")),
-                })),
-              ]}
-            />
-            <span className="result-count" aria-live="polite">
-              {supportRows.length}{" "}
-              {supportRows.length === 1 ? "case" : "cases"}
-            </span>
-          </div>
-          {supportRows.length ? (
-            <PlatformPagedList items={supportRows}>
-              {(visible) => (
-                <div className="member-table">
-                  {visible.map((ticket) => {
-                    const overdue =
-                      ticket.status === "waiting_support" &&
-                      Date.parse(ticket.responseTargetAt) < platformNow;
-                    return (
-                      <button
-                        className="member-row clickable"
-                        type="button"
-                        key={ticket.id}
-                        onClick={() =>
-                          openSection("accounts", ticket.workspaceId)
-                        }
-                      >
-                        <span className="invite-icon">
-                          <LifeBuoy />
-                        </span>
-                        <span className="member-main">
-                          <strong>{workspaceName(ticket.workspaceId)}</strong>
-                          <small>{ticket.requesterName}</small>
-                        </span>
-                        <StatusBadge
-                          status={overdue ? "overdue" : ticket.status}
-                        />
-                        <span className="role-list">
-                          <span>Support case</span>
-                        </span>
-                        <span className="group-list">
-                          Target {formatDate(ticket.responseTargetAt, true)}
-                        </span>
-                        <ArrowRight />
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </PlatformPagedList>
-          ) : (
-            <EmptyState
-              icon={CheckCircle2}
-              title="No support work in this view"
-              description="Change the filter to review completed cases."
-            />
-          )}
-        </section>
+              <span className="result-count" aria-live="polite">
+                {supportRows.length}{" "}
+                {supportRows.length === 1 ? "case" : "cases"}
+              </span>
+            </div>
+            {supportRows.length ? (
+              <PlatformPagedList items={supportRows}>
+                {(visible) => (
+                  <div className="member-table">
+                    {visible.map((ticket) => {
+                      const overdue =
+                        ticket.status === "waiting_support" &&
+                        Date.parse(ticket.responseTargetAt) < platformNow;
+                      return (
+                        <button
+                          className="member-row clickable"
+                          type="button"
+                          key={ticket.id}
+                          onClick={() =>
+                            openSection("accounts", ticket.workspaceId)
+                          }
+                        >
+                          <span className="invite-icon">
+                            <LifeBuoy />
+                          </span>
+                          <span className="member-main">
+                            <strong>{workspaceName(ticket.workspaceId)}</strong>
+                            <small>{ticket.requesterName}</small>
+                          </span>
+                          <StatusBadge
+                            status={overdue ? "overdue" : ticket.status}
+                          />
+                          <span className="role-list">
+                            <span>Support case</span>
+                          </span>
+                          <span className="group-list">
+                            Target {formatDate(ticket.responseTargetAt, true)}
+                          </span>
+                          <ArrowRight />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </PlatformPagedList>
+            ) : (
+              <EmptyState
+                icon={CheckCircle2}
+                title="No support work in this view"
+                description="Change the filter to review completed cases."
+              />
+            )}
+          </section>
         </>
       ) : null}
 
@@ -5230,14 +5231,14 @@ export function PlatformView({
                           <small>
                             {entitlements.length
                               ? entitlements
-                                  .map((entitlement) =>
-                                    formatEntitlement(
-                                      entitlement.kind,
-                                      entitlement.value,
-                                    ),
-                                  )
-                                  .filter(Boolean)
-                                  .join(" · ")
+                                .map((entitlement) =>
+                                  formatEntitlement(
+                                    entitlement.kind,
+                                    entitlement.value,
+                                  ),
+                                )
+                                .filter(Boolean)
+                                .join(" · ")
                               : "No explicit entitlement overrides"}
                           </small>
                         </button>
@@ -5402,8 +5403,8 @@ export function PlatformView({
                 </div>
               </summary>
               {platform.lifecycleSimulation.enabled &&
-              canManagePlatformControls &&
-              onPlatformControl ? (
+                canManagePlatformControls &&
+                onPlatformControl ? (
                 <button
                   className="button primary"
                   type="button"
@@ -5432,46 +5433,46 @@ export function PlatformView({
               </div>
               {platform.lifecycleSimulation.enabled
                 ? simulationWorkspaces.map((workspace) => {
-                    const subscription = platform.subscriptions.find(
-                      (item) => item.workspaceId === workspace.id,
-                    );
-                    const complete =
-                      workspace.simulation?.lastState === "pending_deletion";
-                    return (
-                      <div className="platform-ops-row" key={workspace.id}>
-                        <span className="invite-icon danger-icon">
-                          <RefreshCw />
-                        </span>
-                        <span className="member-main">
-                          <strong>{workspace.name}</strong>
-                          <small>
-                            Last state{" "}
-                            {workspace.simulation?.lastState
-                              ? titleCase(workspace.simulation.lastState)
-                              : "unset"}
-                            {subscription
-                              ? ` · ${titleCase(subscription.access)}`
-                              : ""}
-                          </small>
-                        </span>
-                        {complete || !onPlatformControl ? null : (
-                          <button
-                            className="button secondary small"
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              setSimulationDialog({
-                                mode: "advance",
-                                workspace,
-                              })
-                            }
-                          >
-                            Advance state
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })
+                  const subscription = platform.subscriptions.find(
+                    (item) => item.workspaceId === workspace.id,
+                  );
+                  const complete =
+                    workspace.simulation?.lastState === "pending_deletion";
+                  return (
+                    <div className="platform-ops-row" key={workspace.id}>
+                      <span className="invite-icon danger-icon">
+                        <RefreshCw />
+                      </span>
+                      <span className="member-main">
+                        <strong>{workspace.name}</strong>
+                        <small>
+                          Last state{" "}
+                          {workspace.simulation?.lastState
+                            ? titleCase(workspace.simulation.lastState)
+                            : "unset"}
+                          {subscription
+                            ? ` · ${titleCase(subscription.access)}`
+                            : ""}
+                        </small>
+                      </span>
+                      {complete || !onPlatformControl ? null : (
+                        <button
+                          className="button secondary small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            setSimulationDialog({
+                              mode: "advance",
+                              workspace,
+                            })
+                          }
+                        >
+                          Advance state
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
                 : null}
             </details>
           ) : null}
@@ -5513,194 +5514,194 @@ export function PlatformView({
             />
           </section>
           <div className="settings-grid">
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Delivery failures</p>
-                <h2>Notification retry queue</h2>
-              </div>
-              <CircleAlert />
-            </div>
-            {platform.notificationFailures.length ? (
-              <PlatformPagedList items={platform.notificationFailures}>
-                {(visible) =>
-                  visible.map((failure) => (
-                    <button
-                      className="platform-compact-row"
-                      type="button"
-                      key={failure.id}
-                      onClick={() =>
-                        openSection("accounts", failure.workspaceId)
-                      }
-                    >
-                      <span className="member-main">
-                        <strong>{workspaceName(failure.workspaceId)}</strong>
-                        <small>
-                          {titleCase(failure.kind)} · last failure{" "}
-                          {formatDate(failure.lastFailedAt, true)}
-                        </small>
-                      </span>
-                      <strong>{failure.attempts} attempts</strong>
-                    </button>
-                  ))
-                }
-              </PlatformPagedList>
-            ) : (
-              <EmptyState
-                icon={CheckCircle2}
-                title="Delivery queue is clear"
-                description="No failed notifications are waiting for retry."
-              />
-            )}
-          </section>
-          <section className="card table-card deletion-control-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Retention boundary</p>
-                <h2>Deletion approvals</h2>
-              </div>
-              <span className="privacy-caption">
-                <Trash2 /> Two-stage purge
-              </span>
-            </div>
-            {actionableDeletionCases.length ? (
-              actionableDeletionCases.map((item) => {
-                const eligible = Date.parse(item.eligibleAt) <= platformNow;
-                return (
-                  <div className="platform-ops-row" key={item.id}>
-                    <span className="invite-icon danger-icon">
-                      <Trash2 />
-                    </span>
-                    <span className="member-main">
-                      <strong>{workspaceName(item.workspaceId)}</strong>
-                      <small>
-                        Retention eligibility {formatDate(item.eligibleAt, true)}
-                      </small>
-                      <small>
-                        {item.confirmationText
-                          ? "Typed platform-owner confirmation is required."
-                          : "Only a platform owner can see the confirmation phrase."}
-                      </small>
-                    </span>
-                    <StatusBadge status={item.status} />
-                    {item.status === "awaiting_approval" &&
-                    item.confirmationText ? (
-                      <button
-                        className="button danger-button small"
-                        type="button"
-                        disabled={busy || !eligible}
-                        onClick={() => setDeletionCase(item)}
-                      >
-                        {eligible ? "Review deletion" : "Retention active"}
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })
-            ) : (
-              <div className="empty-inline">
-                <ShieldCheck />
-                <span>
-                  <strong>No deletion approvals pending</strong>
-                  <small>
-                    Expired tenants remain recoverable until retention ends and an
-                    owner explicitly approves purge.
-                  </small>
-                </span>
-              </div>
-            )}
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Platform audit</p>
-                <h2>Recent control-plane changes</h2>
-              </div>
-              <History />
-            </div>
-            <PlatformAuditList
-              audits={platform.platformAudits}
-              workspaceName={workspaceName}
-            />
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Activation milestones</p>
-                <h2>First-value progress</h2>
-              </div>
-              <Activity />
-            </div>
-            {platform.activation.length ? (
-              <PlatformPagedList items={platform.activation}>
-                {(visible) =>
-                  visible.map((activation) => {
-                    const achieved = [
-                      activation.firstPublishedAt,
-                      activation.firstTeammateViewAt,
-                      activation.firstTeammateCompletionAt,
-                    ].filter(Boolean).length;
-                    return (
-                      <button
-                        className="platform-compact-row"
-                        type="button"
-                        key={activation.workspaceId}
-                        onClick={() =>
-                          openSection("accounts", activation.workspaceId)
-                        }
-                      >
-                        <span className="member-main">
-                          <strong>{workspaceName(activation.workspaceId)}</strong>
-                          <small>
-                            {activation.firstPublishedAt
-                              ? `Published ${formatDate(activation.firstPublishedAt, true)}`
-                              : "Awaiting first publication"}
-                          </small>
-                        </span>
-                        <strong>{achieved}/3</strong>
-                      </button>
-                    );
-                  })
-                }
-              </PlatformPagedList>
-            ) : (
-              <p className="empty-copy">No activation events recorded.</p>
-            )}
-          </section>
-          {appointments.length ? (
             <section className="card table-card">
               <div className="section-heading compact">
                 <div>
-                  <p className="eyebrow">Client administrator appointments</p>
-                  <h2>Pending appointments</h2>
+                  <p className="eyebrow">Delivery failures</p>
+                  <h2>Notification retry queue</h2>
                 </div>
-                <LockKeyhole />
+                <CircleAlert />
               </div>
-              {appointments.map((appointment) => (
-                <div className="invite-row" key={appointment.id}>
-                  <span className="invite-icon">
-                    <UserCog />
-                  </span>
-                  <span className="member-main">
-                    <strong>{appointment.email}</strong>
+              {platform.notificationFailures.length ? (
+                <PlatformPagedList items={platform.notificationFailures}>
+                  {(visible) =>
+                    visible.map((failure) => (
+                      <button
+                        className="platform-compact-row"
+                        type="button"
+                        key={failure.id}
+                        onClick={() =>
+                          openSection("accounts", failure.workspaceId)
+                        }
+                      >
+                        <span className="member-main">
+                          <strong>{workspaceName(failure.workspaceId)}</strong>
+                          <small>
+                            {titleCase(failure.kind)} · last failure{" "}
+                            {formatDate(failure.lastFailedAt, true)}
+                          </small>
+                        </span>
+                        <strong>{failure.attempts} attempts</strong>
+                      </button>
+                    ))
+                  }
+                </PlatformPagedList>
+              ) : (
+                <EmptyState
+                  icon={CheckCircle2}
+                  title="Delivery queue is clear"
+                  description="No failed notifications are waiting for retry."
+                />
+              )}
+            </section>
+            <section className="card table-card deletion-control-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Retention boundary</p>
+                  <h2>Deletion approvals</h2>
+                </div>
+                <span className="privacy-caption">
+                  <Trash2 /> Two-stage purge
+                </span>
+              </div>
+              {actionableDeletionCases.length ? (
+                actionableDeletionCases.map((item) => {
+                  const eligible = Date.parse(item.eligibleAt) <= platformNow;
+                  return (
+                    <div className="platform-ops-row" key={item.id}>
+                      <span className="invite-icon danger-icon">
+                        <Trash2 />
+                      </span>
+                      <span className="member-main">
+                        <strong>{workspaceName(item.workspaceId)}</strong>
+                        <small>
+                          Retention eligibility {formatDate(item.eligibleAt, true)}
+                        </small>
+                        <small>
+                          {item.confirmationText
+                            ? "Typed platform-owner confirmation is required."
+                            : "Only a platform owner can see the confirmation phrase."}
+                        </small>
+                      </span>
+                      <StatusBadge status={item.status} />
+                      {item.status === "awaiting_approval" &&
+                        item.confirmationText ? (
+                        <button
+                          className="button danger-button small"
+                          type="button"
+                          disabled={busy || !eligible}
+                          onClick={() => setDeletionCase(item)}
+                        >
+                          {eligible ? "Review deletion" : "Retention active"}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="empty-inline">
+                  <ShieldCheck />
+                  <span>
+                    <strong>No deletion approvals pending</strong>
                     <small>
-                      Appointed administrator · expires{" "}
-                      {formatDate(appointment.expiresAt, true)} · the acceptance
-                      link was shown once at creation
+                      Expired tenants remain recoverable until retention ends and an
+                      owner explicitly approves purge.
                     </small>
                   </span>
-                  <StatusBadge status="active" />
-                  <button
-                    className="button ghost small"
-                    disabled={busy}
-                    onClick={() => onRevokeAppointment(appointment)}
-                  >
-                    Revoke
-                  </button>
                 </div>
-              ))}
+              )}
             </section>
-          ) : null}
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Platform audit</p>
+                  <h2>Recent control-plane changes</h2>
+                </div>
+                <History />
+              </div>
+              <PlatformAuditList
+                audits={platform.platformAudits}
+                workspaceName={workspaceName}
+              />
+            </section>
+            <section className="card table-card">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Activation milestones</p>
+                  <h2>First-value progress</h2>
+                </div>
+                <Activity />
+              </div>
+              {platform.activation.length ? (
+                <PlatformPagedList items={platform.activation}>
+                  {(visible) =>
+                    visible.map((activation) => {
+                      const achieved = [
+                        activation.firstPublishedAt,
+                        activation.firstTeammateViewAt,
+                        activation.firstTeammateCompletionAt,
+                      ].filter(Boolean).length;
+                      return (
+                        <button
+                          className="platform-compact-row"
+                          type="button"
+                          key={activation.workspaceId}
+                          onClick={() =>
+                            openSection("accounts", activation.workspaceId)
+                          }
+                        >
+                          <span className="member-main">
+                            <strong>{workspaceName(activation.workspaceId)}</strong>
+                            <small>
+                              {activation.firstPublishedAt
+                                ? `Published ${formatDate(activation.firstPublishedAt, true)}`
+                                : "Awaiting first publication"}
+                            </small>
+                          </span>
+                          <strong>{achieved}/3</strong>
+                        </button>
+                      );
+                    })
+                  }
+                </PlatformPagedList>
+              ) : (
+                <p className="empty-copy">No activation events recorded.</p>
+              )}
+            </section>
+            {appointments.length ? (
+              <section className="card table-card">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Client administrator appointments</p>
+                    <h2>Pending appointments</h2>
+                  </div>
+                  <LockKeyhole />
+                </div>
+                {appointments.map((appointment) => (
+                  <div className="invite-row" key={appointment.id}>
+                    <span className="invite-icon">
+                      <UserCog />
+                    </span>
+                    <span className="member-main">
+                      <strong>{appointment.email}</strong>
+                      <small>
+                        Appointed administrator · expires{" "}
+                        {formatDate(appointment.expiresAt, true)} · the acceptance
+                        link was shown once at creation
+                      </small>
+                    </span>
+                    <StatusBadge status="active" />
+                    <button
+                      className="button ghost small"
+                      disabled={busy}
+                      onClick={() => onRevokeAppointment(appointment)}
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </section>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -5735,8 +5736,8 @@ export function PlatformView({
         />
       ) : null}
       {simulationDialog &&
-      platform.lifecycleSimulation &&
-      onPlatformControl ? (
+        platform.lifecycleSimulation &&
+        onPlatformControl ? (
         <LifecycleSimulationDialog
           busy={busy}
           dialog={simulationDialog}
@@ -5814,7 +5815,7 @@ function PricingCatalogDialog({
   const [name, setName] = useState(catalog?.name ?? "KnowHow trial");
   const [description, setDescription] = useState(
     catalog?.description ??
-      "No-card trial with governed capture and support.",
+    "No-card trial with governed capture and support.",
   );
   const [status, setStatus] = useState<"draft" | "scheduled" | "active">(
     catalog?.status === "draft" ||
@@ -5843,7 +5844,7 @@ function PricingCatalogDialog({
   );
   const [storageGb, setStorageGb] = useState(
     (catalog?.baseWorkspace.includedStorageBytes ?? 5_000_000_000) /
-      1_000_000_000,
+    1_000_000_000,
   );
   const amountValue = (value: number | null | undefined) =>
     value === null || value === undefined ? "" : String(value / 100);
@@ -6252,8 +6253,8 @@ function LifecycleSimulationDialog({
 }: {
   busy: boolean;
   dialog:
-    | { mode: "create" }
-    | { mode: "advance"; workspace: PlatformWorkspace };
+  | { mode: "create" }
+  | { mode: "advance"; workspace: PlatformWorkspace };
   states: ReadonlyArray<PlatformLifecycleState>;
   createConfirmation: string;
   onClose: () => void;
@@ -6265,7 +6266,7 @@ function LifecycleSimulationDialog({
   const currentState =
     dialog.mode === "advance"
       ? (dialog.workspace.simulation?.lastState as PlatformLifecycleState) ??
-        "trial_active"
+      "trial_active"
       : "trial_active";
   const currentIndex = Math.max(0, states.indexOf(currentState));
   const availableStates = states.slice(currentIndex + 1);
@@ -6305,10 +6306,10 @@ function LifecycleSimulationDialog({
             dialog.mode === "create"
               ? { label: label.trim(), confirmation }
               : {
-                  targetWorkspaceId: dialog.workspace.id,
-                  state,
-                  confirmation,
-                };
+                targetWorkspaceId: dialog.workspace.id,
+                state,
+                confirmation,
+              };
           void onRun(action, payload)
             .catch((nextError) => setError(messageFromError(nextError)))
             .finally(() => setWorking(false));
@@ -6854,27 +6855,27 @@ const ORGANIZATION_ROLES: Array<{
   label: string;
   description: string;
 }> = [
-  {
-    value: "owner",
-    label: "Owner",
-    description: "Governance, owners, and all organization settings",
-  },
-  {
-    value: "administrator",
-    label: "Administrator",
-    description: "Organization identity and workspace directory",
-  },
-  {
-    value: "billing",
-    label: "Billing",
-    description: "Commercial terms and usage summaries",
-  },
-  {
-    value: "security_auditor",
-    label: "Security auditor",
-    description: "Membership and security metadata, without guide content",
-  },
-];
+    {
+      value: "owner",
+      label: "Owner",
+      description: "Governance, owners, and all organization settings",
+    },
+    {
+      value: "administrator",
+      label: "Administrator",
+      description: "Organization identity and workspace directory",
+    },
+    {
+      value: "billing",
+      label: "Billing",
+      description: "Commercial terms and usage summaries",
+    },
+    {
+      value: "security_auditor",
+      label: "Security auditor",
+      description: "Membership and security metadata, without guide content",
+    },
+  ];
 
 export function OrganizationView({
   organization,
@@ -8174,6 +8175,16 @@ function AccountSecurityDialog({
   );
 }
 
+function RouteOpening({ message }: { message: string }) {
+  return (
+    <main className="route-unavailable" role="status" aria-live="polite">
+      <span className="opening-mark">K</span>
+      <h1>{message}</h1>
+      <p>Checking the latest workspace copy.</p>
+    </main>
+  );
+}
+
 function RouteUnavailable({ onBack }: { onBack: () => void }) {
   const onBackRef = useRef(onBack);
   useEffect(() => {
@@ -8262,8 +8273,8 @@ export function KnowHowWorkspaceApp({
       : route.kind === "workspace-section"
         ? SECTION_TO_VIEW[route.section]
         : route.kind === "guide-new" ||
-            route.kind === "guide-view" ||
-            route.kind === "guide-edit"
+          route.kind === "guide-view" ||
+          route.kind === "guide-edit"
           ? "Guides"
           : "Overview";
   const platformSection =
@@ -8280,64 +8291,7 @@ export function KnowHowWorkspaceApp({
       workspaceName: workspace.name,
       userName: data.viewer.name || data.viewer.email,
       theme: resolvedTheme === "dark" ? "dark" : "light",
-      guides: guides.flatMap((guide) => {
-        const revision = guide.publishedRevision ?? guide.workingRevision;
-        if (!revision) return [];
-        const mode = guide.publishedRevision ? "published" : "working";
-        return [
-          {
-            id: guide.id,
-            title: revision.title || guide.title,
-            summary: revision.summary,
-            status: guide.status,
-            restricted: guide.restricted,
-            updatedAt: guide.updatedAt,
-            href: guideHref(workspace.slug, guide.id, mode),
-            steps: revision.steps.map((step) => {
-              const click = step.annotations?.find(
-                (annotation) => annotation.kind === "click",
-              );
-              const pendingRedactions = (step.redactions ?? []).filter(
-                (region) => !region.applied,
-              );
-              return {
-                id: step.id,
-                kind: step.kind,
-                title: step.title,
-                description: step.description,
-                ...(step.screenshotMediaId
-                  ? {
-                      media: {
-                        mediaId: step.screenshotMediaId,
-                        ...(step.crop ? { crop: step.crop } : {}),
-                        ...(click
-                          ? {
-                              click: {
-                                x: click.x,
-                                y: click.y,
-                                radius: click.width ?? 0.035,
-                                ...(click.color ? { color: click.color } : {}),
-                              },
-                            }
-                          : {}),
-                        ...(pendingRedactions.length
-                          ? {
-                              redactions: pendingRedactions.map((region) => ({
-                                x: region.x,
-                                y: region.y,
-                                width: region.width,
-                                height: region.height,
-                              })),
-                            }
-                          : {}),
-                      },
-                    }
-                  : {}),
-              };
-            }),
-          },
-        ];
-      }),
+      guides: companionGuidesFromWorkspace(guides, workspace.slug),
     }),
     [
       data.viewer.email,
@@ -8387,8 +8341,8 @@ export function KnowHowWorkspaceApp({
       const attempt = canCapture
         ? linkExtension()
         : syncKnowHowExtension(extensionCompanion).then(() =>
-            setExtensionLink("connected"),
-          );
+          setExtensionLink("connected"),
+        );
       void attempt.catch(() => {
         setExtensionLink((current) =>
           current === "checking" ? "missing" : current,
@@ -8493,8 +8447,8 @@ export function KnowHowWorkspaceApp({
   const canAccessCurrentView =
     view !== "Platform"
       ? !(view === "Vault" && !canUseVault) &&
-        !(["Groups", "Members", "Settings"].includes(view) && !isAdmin) &&
-        !(view === "Organization" && !organization)
+      !(["Groups", "Members", "Settings"].includes(view) && !isAdmin) &&
+      !(view === "Organization" && !organization)
       : data.viewer.platformAdministrator;
   const publishedRestricted = Boolean(
     routeGuide?.publishedRevision &&
@@ -8512,6 +8466,42 @@ export function KnowHowWorkspaceApp({
       (roles.includes("creator") && routeGuideAuthor === data.viewer.id)),
   );
   const publishedViewKey = useRef("");
+  const missingGuideRefreshKey = useRef("");
+  const [missingGuideRefresh, setMissingGuideRefresh] = useState<
+    "idle" | "loading" | "failed"
+  >("idle");
+
+  useEffect(() => {
+    if (!routeGuideId) {
+      missingGuideRefreshKey.current = "";
+      setMissingGuideRefresh("idle");
+      return;
+    }
+    if (routeGuide) {
+      setMissingGuideRefresh("idle");
+      return;
+    }
+    const key = `${workspace.id}:${routeGuideId}`;
+    if (missingGuideRefreshKey.current === key) {
+      setMissingGuideRefresh((current) =>
+        current === "loading" ? current : "failed",
+      );
+      return;
+    }
+    missingGuideRefreshKey.current = key;
+    setMissingGuideRefresh("loading");
+    void onRefresh()
+      .then(() => {
+        setMissingGuideRefresh((current) =>
+          current === "loading" ? "failed" : current,
+        );
+      })
+      .catch(() => {
+        setMissingGuideRefresh((current) =>
+          current === "loading" ? "failed" : current,
+        );
+      });
+  }, [onRefresh, routeGuide, routeGuideId, workspace.id]);
 
   useEffect(() => {
     if (
@@ -8570,19 +8560,19 @@ export function KnowHowWorkspaceApp({
   const platformNavCounts: Partial<Record<PlatformSection, number>> =
     data.platform
       ? {
-          leads: data.platform.leads.filter(
-            (lead) => !["closed", "converted", "rejected"].includes(lead.status),
-          ).length,
-          accounts: data.platform.workspaces.length,
-          support: data.platform.support.filter(
-            (ticket) => ticket.status !== "closed",
-          ).length,
-          billing: data.platform.systemHealth.expiringWithinSevenDays,
-          ops:
-            data.platform.systemHealth.failedNotifications +
-            data.platform.systemHealth.deletionApprovals +
-            data.platform.systemHealth.failedOperations,
-        }
+        leads: data.platform.leads.filter(
+          (lead) => !["closed", "converted", "rejected"].includes(lead.status),
+        ).length,
+        accounts: data.platform.workspaces.length,
+        support: data.platform.support.filter(
+          (ticket) => ticket.status !== "closed",
+        ).length,
+        billing: data.platform.systemHealth.expiringWithinSevenDays,
+        ops:
+          data.platform.systemHealth.failedNotifications +
+          data.platform.systemHealth.deletionApprovals +
+          data.platform.systemHealth.failedOperations,
+      }
       : {};
 
   let primaryAction: {
@@ -8655,6 +8645,9 @@ export function KnowHowWorkspaceApp({
     const editorGuide = route.kind === "guide-edit" ? routeGuide : null;
     const canEdit =
       workspaceMutable && (editorGuide ? editorGuide.canEdit : canCreate);
+    if (route.kind === "guide-edit" && !editorGuide && missingGuideRefresh === "loading") {
+      return <RouteOpening message="Opening the captured guide" />;
+    }
     if (!canEdit || (route.kind === "guide-edit" && !editorGuide)) {
       return (
         <RouteUnavailable
@@ -8702,15 +8695,15 @@ export function KnowHowWorkspaceApp({
           onDelete={
             editorGuide?.canDelete
               ? async () => {
-                  await command(
-                    "deleteGuide",
-                    { guideId: editorGuide.id },
-                    "Guide deleted",
-                  );
-                  onNavigate(workspaceHref(workspace.slug, "guides"), {
-                    replace: true,
-                  });
-                }
+                await command(
+                  "deleteGuide",
+                  { guideId: editorGuide.id },
+                  "Guide deleted",
+                );
+                onNavigate(workspaceHref(workspace.slug, "guides"), {
+                  replace: true,
+                });
+              }
               : undefined
           }
           onRegisterNavigationGuard={onRegisterNavigationGuard}
@@ -8725,6 +8718,9 @@ export function KnowHowWorkspaceApp({
   }
 
   if (isGuideReaderRoute) {
+    if (!routeGuide && missingGuideRefresh === "loading") {
+      return <RouteOpening message="Opening the guide" />;
+    }
     if (!routeGuide || route.kind !== "guide-view") {
       return (
         <RouteUnavailable
@@ -8768,15 +8764,15 @@ export function KnowHowWorkspaceApp({
           onDelete={
             routeGuide.canDelete
               ? async () => {
-                  await command(
-                    "deleteGuide",
-                    { guideId: routeGuide.id },
-                    "Guide deleted",
-                  );
-                  onNavigate(workspaceHref(workspace.slug, "guides"), {
-                    replace: true,
-                  });
-                }
+                await command(
+                  "deleteGuide",
+                  { guideId: routeGuide.id },
+                  "Guide deleted",
+                );
+                onNavigate(workspaceHref(workspace.slug, "guides"), {
+                  replace: true,
+                });
+              }
               : undefined
           }
           onRevisionChange={(revision) =>
@@ -8934,125 +8930,125 @@ export function KnowHowWorkspaceApp({
                     </SidebarMenu>
                   </nav>
                 </SidebarGroup>
-              <SidebarGroup className="workspace-nav-group">
-                <p className="sidebar-section-label">Platform</p>
-                <nav className="main-nav" aria-label="Platform navigation">
-                  <SidebarMenu>
-                    {PLATFORM_NAV.map((item) => {
-                      const Icon = item.icon;
-                      return (
-                        <SidebarMenuItem key={item.section}>
-                          <SidebarMenuButton
-                            isActive={platformSection === item.section}
-                            type="button"
-                            onClick={() => onNavigate(platformHref(item.section))}
-                          >
-                            <Icon />
-                            <span>{item.label}</span>
-                          </SidebarMenuButton>
-                          {platformNavCounts[item.section] ? (
-                            <SidebarMenuBadge>
-                              {platformNavCounts[item.section]}
-                            </SidebarMenuBadge>
-                          ) : null}
-                        </SidebarMenuItem>
-                      );
-                    })}
-                  </SidebarMenu>
-                </nav>
-              </SidebarGroup>
+                <SidebarGroup className="workspace-nav-group">
+                  <p className="sidebar-section-label">Platform</p>
+                  <nav className="main-nav" aria-label="Platform navigation">
+                    <SidebarMenu>
+                      {PLATFORM_NAV.map((item) => {
+                        const Icon = item.icon;
+                        return (
+                          <SidebarMenuItem key={item.section}>
+                            <SidebarMenuButton
+                              isActive={platformSection === item.section}
+                              type="button"
+                              onClick={() => onNavigate(platformHref(item.section))}
+                            >
+                              <Icon />
+                              <span>{item.label}</span>
+                            </SidebarMenuButton>
+                            {platformNavCounts[item.section] ? (
+                              <SidebarMenuBadge>
+                                {platformNavCounts[item.section]}
+                              </SidebarMenuBadge>
+                            ) : null}
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </nav>
+                </SidebarGroup>
               </>
             ) : (
               <>
-            <SidebarGroup className="workspace-nav-group">
-              <p className="sidebar-section-label">Workspace</p>
-              <nav className="main-nav" aria-label="Workspace navigation">
-                <SidebarMenu>
-                  {workspaceNavigation.map(({ view: item, icon: Icon }) => (
-                    <SidebarMenuItem key={item}>
-                      <SidebarMenuButton
-                        isActive={view === item}
-                        type="button"
-                        onClick={() => navigateToView(item)}
-                      >
-                        <Icon />
-                        <span>{NAV_LABELS[item]}</span>
-                      </SidebarMenuButton>
-                      {item === "Guides" && active.metrics.reviews ? (
-                        <SidebarMenuBadge>
-                          {active.metrics.reviews}
-                        </SidebarMenuBadge>
+                <SidebarGroup className="workspace-nav-group">
+                  <p className="sidebar-section-label">Workspace</p>
+                  <nav className="main-nav" aria-label="Workspace navigation">
+                    <SidebarMenu>
+                      {workspaceNavigation.map(({ view: item, icon: Icon }) => (
+                        <SidebarMenuItem key={item}>
+                          <SidebarMenuButton
+                            isActive={view === item}
+                            type="button"
+                            onClick={() => navigateToView(item)}
+                          >
+                            <Icon />
+                            <span>{NAV_LABELS[item]}</span>
+                          </SidebarMenuButton>
+                          {item === "Guides" && active.metrics.reviews ? (
+                            <SidebarMenuBadge>
+                              {active.metrics.reviews}
+                            </SidebarMenuBadge>
+                          ) : null}
+                        </SidebarMenuItem>
+                      ))}
+                      {showSetupNav ? (
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            isActive={dialog?.type === "setup-wizard"}
+                            type="button"
+                            onClick={() => setDialog({ type: "setup-wizard" })}
+                          >
+                            <ClipboardCheck />
+                            <span>Getting started</span>
+                          </SidebarMenuButton>
+                          {onboardingRemaining ? (
+                            <SidebarMenuBadge>{onboardingRemaining}</SidebarMenuBadge>
+                          ) : null}
+                        </SidebarMenuItem>
                       ) : null}
-                    </SidebarMenuItem>
-                  ))}
-                  {showSetupNav ? (
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        isActive={dialog?.type === "setup-wizard"}
-                        type="button"
-                        onClick={() => setDialog({ type: "setup-wizard" })}
-                      >
-                        <ClipboardCheck />
-                        <span>Getting started</span>
-                      </SidebarMenuButton>
-                      {onboardingRemaining ? (
-                        <SidebarMenuBadge>{onboardingRemaining}</SidebarMenuBadge>
-                      ) : null}
-                    </SidebarMenuItem>
-                  ) : null}
-                </SidebarMenu>
-              </nav>
-            </SidebarGroup>
-            {governanceNavigation.length ? (
-              <SidebarGroup className="workspace-nav-group governance-nav-group">
-                <p className="sidebar-section-label">Manage workspace</p>
-                <nav
-                  className="main-nav"
-                  aria-label="Workspace administration navigation"
-                >
-                  <SidebarMenu>
-                    {governanceNavigation.map(({ view: item, icon: Icon }) => (
-                      <SidebarMenuItem key={item}>
-                        <SidebarMenuButton
-                          isActive={view === item}
-                          type="button"
-                          onClick={() => navigateToView(item)}
-                        >
-                          <Icon />
-                          <span>{NAV_LABELS[item]}</span>
-                        </SidebarMenuButton>
-                        {item === "Members" && pendingSupportCount ? (
-                          <SidebarMenuBadge className="nav-badge">
-                            {pendingSupportCount}
-                          </SidebarMenuBadge>
-                        ) : null}
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </nav>
-              </SidebarGroup>
-            ) : null}
-            {platformNavigation.length ? (
-              <SidebarGroup className="workspace-nav-group admin-nav-group">
-                <p className="sidebar-section-label">Administration</p>
-                <nav className="main-nav" aria-label="Platform navigation">
-                  <SidebarMenu>
-                    {platformNavigation.map(({ view: item, icon: Icon }) => (
-                      <SidebarMenuItem key={item}>
-                        <SidebarMenuButton
-                          isActive={view === item}
-                          type="button"
-                          onClick={() => navigateToView(item)}
-                        >
-                          <Icon />
-                          <span>{NAV_LABELS[item]}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </nav>
-              </SidebarGroup>
-            ) : null}
+                    </SidebarMenu>
+                  </nav>
+                </SidebarGroup>
+                {governanceNavigation.length ? (
+                  <SidebarGroup className="workspace-nav-group governance-nav-group">
+                    <p className="sidebar-section-label">Manage workspace</p>
+                    <nav
+                      className="main-nav"
+                      aria-label="Workspace administration navigation"
+                    >
+                      <SidebarMenu>
+                        {governanceNavigation.map(({ view: item, icon: Icon }) => (
+                          <SidebarMenuItem key={item}>
+                            <SidebarMenuButton
+                              isActive={view === item}
+                              type="button"
+                              onClick={() => navigateToView(item)}
+                            >
+                              <Icon />
+                              <span>{NAV_LABELS[item]}</span>
+                            </SidebarMenuButton>
+                            {item === "Members" && pendingSupportCount ? (
+                              <SidebarMenuBadge className="nav-badge">
+                                {pendingSupportCount}
+                              </SidebarMenuBadge>
+                            ) : null}
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </nav>
+                  </SidebarGroup>
+                ) : null}
+                {platformNavigation.length ? (
+                  <SidebarGroup className="workspace-nav-group admin-nav-group">
+                    <p className="sidebar-section-label">Administration</p>
+                    <nav className="main-nav" aria-label="Platform navigation">
+                      <SidebarMenu>
+                        {platformNavigation.map(({ view: item, icon: Icon }) => (
+                          <SidebarMenuItem key={item}>
+                            <SidebarMenuButton
+                              isActive={view === item}
+                              type="button"
+                              onClick={() => navigateToView(item)}
+                            >
+                              <Icon />
+                              <span>{NAV_LABELS[item]}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </nav>
+                  </SidebarGroup>
+                ) : null}
               </>
             )}
           </SidebarContent>
@@ -9097,7 +9093,7 @@ export function KnowHowWorkspaceApp({
                   <small>
                     {view === "Platform"
                       ? (PLATFORM_NAV.find((item) => item.section === platformSection)
-                          ?.label ?? "Platform")
+                        ?.label ?? "Platform")
                       : NAV_LABELS[view]}
                   </small>
                   <strong>
@@ -9445,8 +9441,8 @@ export function KnowHowWorkspaceApp({
               />
             ) : null}
             {view === "Platform" &&
-            data.viewer.platformAdministrator &&
-            data.platform ? (
+              data.viewer.platformAdministrator &&
+              data.platform ? (
               <PlatformView
                 key={`${platformSection}:${platformAccountId ?? "all"}`}
                 platform={data.platform}
@@ -9706,7 +9702,7 @@ export function KnowHowWorkspaceApp({
           </Modal>
         ) : null}
         {dialog?.type === "platform-create" &&
-        data.viewer.platformAdministrator ? (
+          data.viewer.platformAdministrator ? (
           <PlatformProvisioningDialog
             busy={busy}
             initialRun={data.platform?.provisioningRuns[0]}
@@ -9728,7 +9724,7 @@ export function KnowHowWorkspaceApp({
           />
         ) : null}
         {dialog?.type === "assign-admin" &&
-        data.viewer.platformAdministrator ? (
+          data.viewer.platformAdministrator ? (
           <AssignAdminDialog
             workspace={dialog.workspace}
             busy={busy}
@@ -9744,7 +9740,7 @@ export function KnowHowWorkspaceApp({
           />
         ) : null}
         {dialog?.type === "support-request" &&
-        data.viewer.platformAdministrator ? (
+          data.viewer.platformAdministrator ? (
           <SupportRequestDialog
             workspace={dialog.workspace}
             busy={busy}
@@ -9969,19 +9965,19 @@ export function PlatformProvisioningDialog({
   const [workspaces, setWorkspaces] = useState<ProvisioningWorkspaceDraft[]>(
     rawWorkspaces.length
       ? rawWorkspaces.map((candidate) => {
-          const value =
-            candidate && typeof candidate === "object"
-              ? (candidate as Record<string, unknown>)
-              : {};
-          return {
-            name: provisioningText(value, "name"),
-            administratorEmails: Array.isArray(value.administratorEmails)
-              ? value.administratorEmails
-                  .filter((email): email is string => typeof email === "string")
-                  .join("\n")
-              : "",
-          };
-        })
+        const value =
+          candidate && typeof candidate === "object"
+            ? (candidate as Record<string, unknown>)
+            : {};
+        return {
+          name: provisioningText(value, "name"),
+          administratorEmails: Array.isArray(value.administratorEmails)
+            ? value.administratorEmails
+              .filter((email): email is string => typeof email === "string")
+              .join("\n")
+            : "",
+        };
+      })
       : [{ name: "", administratorEmails: "" }],
   );
   const [pilotStart, setPilotStart] = useState(
@@ -10001,15 +9997,15 @@ export function PlatformProvisioningDialog({
       1,
       Math.round(
         provisioningNumber(entitlements, "storageBytes", 5_000_000_000) /
-          1_000_000_000,
+        1_000_000_000,
       ),
     ),
   );
   const [ownerEmails, setOwnerEmails] = useState(
     Array.isArray(owners.initialOwnerEmails)
       ? owners.initialOwnerEmails
-          .filter((email): email is string => typeof email === "string")
-          .join("\n")
+        .filter((email): email is string => typeof email === "string")
+        .join("\n")
       : "",
   );
   const [invitations, setInvitations] = useState<ProvisioningInvitationDraft[]>(
@@ -10469,9 +10465,9 @@ export function PlatformProvisioningDialog({
                         items.map((item, itemIndex) =>
                           itemIndex === index
                             ? {
-                                ...item,
-                                administratorEmails: event.target.value,
-                              }
+                              ...item,
+                              administratorEmails: event.target.value,
+                            }
                             : item,
                         ),
                       )
@@ -10643,9 +10639,9 @@ export function PlatformProvisioningDialog({
                           items.map((item, itemIndex) =>
                             itemIndex === index
                               ? {
-                                  ...item,
-                                  role,
-                                }
+                                ...item,
+                                role,
+                              }
                               : item,
                           ),
                         )
@@ -10668,9 +10664,9 @@ export function PlatformProvisioningDialog({
                           items.map((item, itemIndex) =>
                             itemIndex === index
                               ? {
-                                  ...item,
-                                  workspaceIndex: Number(workspaceIndex),
-                                }
+                                ...item,
+                                workspaceIndex: Number(workspaceIndex),
+                              }
                               : item,
                           ),
                         )

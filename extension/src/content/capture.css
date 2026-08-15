@@ -1,0 +1,144 @@
+[data-knowhow-overlay="privacy-veil"] {
+  position: fixed;
+  z-index: 2147483644;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(18, 18, 22, 0.2);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+[data-knowhow-blurred]:not(.knowhow-blur-revealed) {
+  filter: blur(8px) !important;
+}
+
+[data-knowhow-blurred="image"]:not(.knowhow-blur-revealed),
+[data-knowhow-blurred="embedded-frame"]:not(.knowhow-blur-revealed),
+[data-knowhow-blurred="password-field"]:not(.knowhow-blur-revealed),
+[data-knowhow-blurred="form-field"]:not(.knowhow-blur-revealed),
+[data-knowhow-blurred="manual-element"]:not(.knowhow-blur-revealed) {
+  filter: blur(10px) !important;
+}
+
+[data-knowhow-blurred].knowhow-blur-revealed {
+  filter: none !important;
+}
+
+[data-knowhow-overlay="smart-blur-preview"] {
+  pointer-events: none;
+}
+
+[data-knowhow-overlay="smart-blur-preview"]:not([data-knowhow-scroller]) {
+  position: fixed;
+  z-index: 2147483645;
+  inset: 0;
+}
+
+[data-knowhow-overlay="smart-blur-preview"][data-knowhow-scroller] {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  z-index: 3;
+}
+
+::highlight(knowhow-blur) {
+  color: transparent;
+  background-color: transparent;
+}
+
+.knowhow-blur-region {
+  --knowhow-blur-halo: 0px;
+  --knowhow-blur-radius: 2px;
+  position: absolute;
+  left: var(--knowhow-blur-x);
+  top: var(--knowhow-blur-y);
+  width: var(--knowhow-blur-width);
+  height: var(--knowhow-blur-height);
+  display: block;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--knowhow-blur-radius);
+  pointer-events: none;
+  contain: layout style;
+}
+
+.knowhow-blur-region::after {
+  position: absolute;
+  inset: 0;
+  display: block;
+  content: "";
+  pointer-events: none;
+  border-radius: inherit;
+  /* Opacity is the privacy guarantee. Backdrop-filter is a cheap hint of
+     the underlying surface, not the thing that has to hide glyphs. */
+  background: rgba(72, 72, 78, 0.9);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: none;
+}
+
+.knowhow-blur-region.knowhow-blur-revealed::after {
+  opacity: 0;
+}
+
+[data-knowhow-overlay="element-picker"] {
+  position: fixed;
+  z-index: 2147483646;
+  inset: 0;
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.knowhow-picker-unblur .knowhow-picker-highlight {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18), 0 8px 28px rgba(56, 189, 248, 0.16);
+}
+
+
+.knowhow-picker-toolbar {
+  position: fixed;
+  z-index: 2147483647;
+  left: 50%;
+  bottom: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 13px;
+  background: #121215;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+  color: #f4f4f5;
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  transform: translateX(-50%);
+}
+
+.knowhow-picker-toolbar strong {
+  padding: 0 7px;
+  white-space: nowrap;
+}
+
+.knowhow-picker-toolbar button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #27272a;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.knowhow-picker-toolbar button[data-primary] {
+  background: #f97316;
+  color: #fff;
+}
+
+.knowhow-picker-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}

@@ -99,7 +99,7 @@ test("wildcard exclusions match a domain and its subdomains", () => {
   );
 });
 
-test("sanitized URLs remove queries and fragments; sensitive path segments redact when Smart Blur categories are enabled", () => {
+test("sanitized URLs remove queries and fragments; emails in the path redact while route slugs stay visible", () => {
   const url =
     "https://example.com/users/alice%40example.com/orders/12345678?token=secret#card";
   const withoutBlur = sanitizeCaptureUrl(url);
@@ -113,9 +113,30 @@ test("sanitized URLs remove queries and fragments; sensitive path segments redac
   });
   assert.equal(
     sanitized,
-    "https://example.com/users/[redacted]/orders/[redacted]",
+    "https://example.com/users/[redacted]/orders/12345678",
   );
   assert.equal(sanitized.includes("secret"), false);
+});
+
+test("route slugs, ports, and numeric IDs stay in URL labels even when on-page ID detectors are on", () => {
+  assert.equal(
+    sanitizeCaptureUrl("http://localhost:3001/w/helpdesk-ac3fe", {
+      redactIds: true,
+      redactAllNumbers: true,
+      redactCommonNames: true,
+    }),
+    "http://localhost:3001/w/helpdesk-ac3fe",
+  );
+  assert.equal(
+    sanitizeCaptureUrl(
+      "https://example.com/tokens/0123456789abcdef0123456789abcdef",
+    ),
+    "https://example.com/tokens/0123456789abcdef0123456789abcdef",
+  );
+  assert.equal(
+    sanitizeCaptureUrl("http://localhost:3001/w/helpdesk-ac3fe?x=1#y"),
+    "http://localhost:3001/w/helpdesk-ac3fe",
+  );
 });
 
 test("allowlists use a default-deny decision", () => {

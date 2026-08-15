@@ -1,4 +1,4 @@
-import { detectSensitiveRanges } from "./redaction.js";
+import { isSensitivePathSegment } from "./redaction.js";
 
 const DEFAULT_EXCLUDED_HOSTS = Object.freeze([
   "passwords.google.com",
@@ -103,7 +103,7 @@ export function hostnameMatchesPattern(hostname, pattern) {
 
 function redactPathSegment(segment, policy) {
   const decoded = safeDecode(segment);
-  if (detectSensitiveRanges(decoded, policy).length) {
+  if (isSensitivePathSegment(decoded, policy)) {
     return "[redacted]";
   }
   return decoded.slice(0, 100);

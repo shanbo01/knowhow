@@ -1,6 +1,6 @@
 import "server-only";
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -44,7 +44,9 @@ async function loadCapturePackageBuilder(): Promise<CapturePackageBuilder> {
   }
   const loadedModule = await importFromDisk<{
     buildKnowHowCapturePackage: CapturePackageBuilder;
-  }>(pathToFileURL(scriptPath).href);
+  }>(
+    `${pathToFileURL(scriptPath).href}?mtime=${statSync(scriptPath).mtimeMs}`,
+  );
   return loadedModule.buildKnowHowCapturePackage;
 }
 

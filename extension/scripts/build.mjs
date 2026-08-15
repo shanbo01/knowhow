@@ -261,7 +261,6 @@ export async function buildKnowHowCapturePackage({
     }
     for (const forbiddenContentPattern of [
       ["clipboard", /clipboard/i],
-      ["raw keyboard listener", /addEventListener\(\s*["']key(?:down|up|press)/],
       ["form value read", /\.value\b/],
     ]) {
       if (forbiddenContentPattern[1].test(contentSource)) {
@@ -271,6 +270,32 @@ export async function buildKnowHowCapturePackage({
             " operation.",
         );
       }
+    }
+    const keyboardListeners =
+      contentSource.match(/addEventListener\(\s*["']key(?:down|up|press)/g) || [];
+    const pickerEscapeListener =
+      'document.addEventListener("keydown", onPickerKeyDown, true)';
+    const pickerHandlerStart = contentSource.indexOf(
+      "function onPickerKeyDown(event)",
+    );
+    const pickerHandlerEnd = contentSource.indexOf(
+      "\n  function ",
+      pickerHandlerStart + 1,
+    );
+    const pickerHandler = contentSource.slice(
+      pickerHandlerStart,
+      pickerHandlerEnd < 0 ? undefined : pickerHandlerEnd,
+    );
+    if (
+      keyboardListeners.length !== 1 ||
+      !contentSource.includes(pickerEscapeListener) ||
+      pickerHandlerStart < 0 ||
+      !pickerHandler.includes('event.key !== "Escape"') ||
+      /send\s*\(|CAPTURE|record/i.test(pickerHandler)
+    ) {
+      throw new Error(
+        "Content capture may listen only for Escape while the element picker is active.",
+      );
     }
     if ((backgroundSource.match(/captureVisibleTab/g) || []).length !== 1) {
       throw new Error(

@@ -1,3 +1,6 @@
+import type { Guide } from "./knowhow-types";
+import { guideHref } from "./workspace-routes";
+
 export const KNOWHOW_EXTENSION_ID = "phbofjenfnnnnndghhinoldlfbpaedpo";
 
 export type ExtensionCompanionRegion = {
@@ -45,6 +48,70 @@ export type ExtensionCompanion = {
   theme: "light" | "dark";
   guides: ExtensionCompanionGuide[];
 };
+
+export function companionGuidesFromWorkspace(
+  guides: Guide[],
+  workspaceSlug: string,
+): ExtensionCompanionGuide[] {
+  return guides.flatMap((guide) => {
+    const revision = guide.publishedRevision ?? guide.workingRevision;
+    if (!revision) return [];
+    const mode = guide.publishedRevision ? "published" : "working";
+    return [
+      {
+        id: guide.id,
+        title: revision.title || guide.title,
+        summary: revision.summary,
+        status: guide.status,
+        restricted: guide.restricted,
+        updatedAt: guide.updatedAt,
+        href: guideHref(workspaceSlug, guide.id, mode),
+        steps: revision.steps.map((step) => {
+          const click = step.annotations?.find(
+            (annotation) => annotation.kind === "click",
+          );
+          const pendingRedactions = (step.redactions ?? []).filter(
+            (region) => !region.applied,
+          );
+          return {
+            id: step.id,
+            kind: step.kind,
+            title: step.title,
+            description: step.description,
+            ...(step.screenshotMediaId
+              ? {
+                  media: {
+                    mediaId: step.screenshotMediaId,
+                    ...(step.crop ? { crop: step.crop } : {}),
+                    ...(click
+                      ? {
+                          click: {
+                            x: click.x,
+                            y: click.y,
+                            radius: click.width ?? 0.035,
+                            ...(click.color ? { color: click.color } : {}),
+                          },
+                        }
+                      : {}),
+                    ...(pendingRedactions.length
+                      ? {
+                          redactions: pendingRedactions.map((region) => ({
+                            x: region.x,
+                            y: region.y,
+                            width: region.width,
+                            height: region.height,
+                          })),
+                        }
+                      : {}),
+                  },
+                }
+              : {}),
+          };
+        }),
+      },
+    ];
+  });
+}
 
 type ExternalResponse = {
   ok?: boolean;

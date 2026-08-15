@@ -1324,6 +1324,26 @@ export class BootstrapService {
     };
   }
 
+  async workspaceGuides(
+    identity: AuthenticatedIdentity,
+    workspaceId: string,
+  ): Promise<Guide[]> {
+    const access = await this.access.requireWorkspace(workspaceId, identity);
+    const filters = [{ field: "workspace_id", value: workspaceId }] as const;
+    const [memberRows, groupMembershipRows, guideRows] = await Promise.all([
+      this.store.list(TABLES.workspaceMembers, { filters }),
+      this.store.list(TABLES.groupMemberships, { filters }),
+      loadGuideRows(this.store, workspaceId),
+    ]);
+    const members = memberRows.map(memberView);
+    for (const member of members) {
+      member.groupIds = groupMembershipRows
+        .filter((row) => row.user_id === member.userId)
+        .map((row) => stringValue(row.subject_id));
+    }
+    return hydrateGuides(identity, access, guideRows, members);
+  }
+
   async bootstrap(
     identity: AuthenticatedIdentity,
     requestedWorkspaceId?: string,

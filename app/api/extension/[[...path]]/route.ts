@@ -84,6 +84,9 @@ async function dispatch(request: Request, context: RouteContext) {
   if (request.method === "GET" && path.join("/") === "context") {
     return captures.context(request);
   }
+  if (request.method === "GET" && path.join("/") === "library") {
+    return captures.library(request);
+  }
   if (request.method === "GET" && path.length === 2 && path[0] === "media") {
     return captures.media(request, safePathId(path[1], "Media"));
   }

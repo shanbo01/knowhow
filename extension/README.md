@@ -55,10 +55,12 @@ upload.
 4. Smart Blur appears only after recording starts, and both the feature and every
    detector category are off until you switch them on. Categories the workspace
    suggests are labelled Suggested in the panel and stay off. When a category is
-   on, frosted regions appear live over the detected text only — rectangles from
+   on, feathered frosted regions appear live over the detected text only — rectangles from
    one line merge into a single calm panel, and separate lines stay separate so a
    cover never spreads across blank page — and the pill reports how many areas
-   are covered before the screenshot is taken.
+   are covered before the screenshot is taken. Choose other elements opens a
+   multi-select picker with Undo, Clear all, and Done. Live covers reveal on hover;
+   stored screenshots never do.
 5. Keep KnowHow docked in Chrome's native side panel while the captured page
    remains usable beside it. Numbered step previews appear in the panel as you
    click, double-click, switch tabs, and navigate, each zoomed to the control you
@@ -73,23 +75,29 @@ upload.
 
 ## How a step is photographed
 
-The screenshot is taken when the pointer goes down, not after the click has been
-handled, so the image shows the interface the way it looked at the moment of the
-click and the marker lands on the control that was actually pressed — even when
-the click navigates, closes a menu, or replaces the page. The click itself is
-never intercepted, cancelled, or replayed.
+KnowHow continuously prepares a small rolling set of locally privacy-rasterized
+frames for the active document. Pointer-down reserves an exactly-once interaction
+and claims the newest frame whose document, route, viewport, scroll position,
+visual epoch, and age still match. The image therefore shows the interface before
+the action: a dropdown trigger is photographed closed, while choosing an option
+is photographed with the menu already open. The click itself is never delayed,
+cancelled, or replayed.
 
-A drag, a cancelled press, or a press that lands somewhere else releases the
-reserved screenshot. Chrome allows only two screenshots per second, so during
-very fast clicking a step falls back to photographing the painted result instead
-of waiting for a frame that would no longer be the right one. Step titles quote
-the control's own label, so a step reads `Click "Encrypted vault access"`.
+A drag, cancelled press, or mismatched release cancels its reserved interaction.
+If no eligible pre-action frame exists, KnowHow attempts an immediate capture and
+rejects it when the page mutates during that attempt. The side panel marks the
+entry as needing attention with Retry and Delete instead of saving a misleading
+post-action image. Rapid clicks remain independent; two clicks on the same control
+upgrade idempotently into one double-click step.
 
 Capture follows the regular, policy-allowed page you are working in, wherever it
 goes. Opening a link in a new tab, opening a tab yourself and typing a URL into
 it, switching to another capturable tab, moving to another browser window, and
-navigating to another site in the same tab all continue the same session and add
-a navigation step marking the hand-off. Excluded sites, browser-internal pages,
+    navigating to another site in the same tab all continue the same session. A
+  click-triggered navigation produces an ordered click step followed by a destination
+  step, and both have screenshots. Background-created tabs are never focused by
+  KnowHow; they join the capture only when the author activates them. Excluded sites,
+  browser-internal pages,
 and incognito windows still stop capture rather than following it.
 
 ## Privacy properties
@@ -108,16 +116,19 @@ and incognito windows still stop capture rather than following it.
   rewritten for categories the author enabled.
 - The extension does not request clipboard, tab-capture, desktop-capture, or
   raw keyboard access.
-- It records click events and navigation only; it never installs keyboard
-  listeners or reads form-field values.
-- The offscreen document rasterizes and compresses the screenshot locally.
-  IndexedDB receives that private raster plus normalized Smart Blur regions;
-  the live feed and guide viewer render those regions as blur immediately.
-- Smart Blur, manual blur, drawing, contextual crop, and click-target edits
-  remain layered and reversible while the capture is a private draft. The
-  first review submission flattens the reviewed layers into the private image.
-- Pause increments the capture generation before acknowledging the action.
-  Queued or in-flight work from an older generation is discarded.
+- It never records keystrokes and never reads form-field values. The only key
+  listener is a scoped Escape handler that exits the element picker.
+- The offscreen document permanently rasterizes Smart Blur with aggressive local
+  downsampling, smoothed upscaling, and feathering before a prepared frame becomes
+  eligible. Unredacted data URLs and canvases are destroyed after processing and
+  never enter IndexedDB, extension storage, uploads, logs, or thumbnails.
+- Automatic and manually chosen blur pixels are irreversible in every captured
+  screenshot. Authors may add more blur later, but cannot reveal pixels already
+  covered. Crop, drawing, additional blur, and click-target presentation remain
+  editable on top of that private raster.
+- Pause and Finish stop accepting events first, then drain accepted work for up
+  to ten seconds. Finish stays blocked until entries needing attention are retried
+  or deleted.
 - Discard removes every redacted screenshot for the local capture session.
 
 DOM-assisted Smart Blur cannot reliably detect text rendered into canvas,

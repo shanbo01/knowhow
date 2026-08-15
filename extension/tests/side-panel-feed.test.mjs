@@ -462,8 +462,11 @@ test("the native side panel wires the local live feed and bottom dock", async ()
   assert.doesNotMatch(source, /listCapturedSteps\(capture\.state\.sessionId\)/);
   assert.match(
     source,
-    /step\.sourceEvent === "navigation" \? null : thumbnailUrls\.get\(step\)/,
+    /const thumbnailUrl = thumbnailUrls\.get\(step\)/,
   );
+  assert.match(source, /type: "RETRY_CAPTURE_ENTRY"/);
+  assert.match(source, /type: "DELETE_CAPTURE_ENTRY"/);
+  assert.match(source, /captureFeedSteps\(state, rawSteps\)/);
   assert.match(source, /const preparing = state\.status === "preparing"/);
   assert.match(source, /STORAGE_KEYS\.captureState/);
   assert.match(source, /thumbnailUrls\.dispose\(\)/);
@@ -507,6 +510,15 @@ test("captured steps and guide steps share one illustrated presentation", async 
   assert.match(apiClient, /export async function fetchGuideMedia\(mediaId\)/);
   assert.match(apiClient, /\/media\/" \+ encodeURIComponent\(id\)/);
   assert.match(apiClient, /isAcceptedScreenshotType\(contentType\)/);
+  assert.match(apiClient, /export async function fetchCompanionLibrary\(\)/);
+  assert.match(apiClient, /authorizedFetch\("\/library"\)/);
+  assert.match(backgroundSource, /case "REFRESH_LIBRARY":/);
+  assert.match(backgroundSource, /dropCompanionGuideByMedia/);
+  assert.match(backgroundSource, /error\?\.status === 404/);
+  assert.match(source, /type: "REFRESH_LIBRARY"/);
+  assert.match(source, /refreshCompanion\(\{ pull: true \}\)/);
+  assert.match(source, /function applyStoredCompanion\(\)/);
+  assert.doesNotMatch(source, /Open KnowHow once to sync/);
 });
 
 test("the whole guide panel scrolls while the walkthrough action dock stays sticky", async () => {

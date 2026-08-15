@@ -1,8 +1,12 @@
 "use client";
 
 import { ImageOff, LoaderCircle, ShieldCheck } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { loadAuthorizedMediaUrl } from "../../lib/knowhow-client";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  acquireAuthorizedMediaUrl,
+  refreshAuthorizedMediaUrl,
+  releaseAuthorizedMediaUrl,
+} from "../../lib/knowhow-client";
 
 export function AuthorizedMedia({
   workspaceId,
@@ -22,15 +26,14 @@ export function AuthorizedMedia({
   const mediaKey = `${workspaceId}:${mediaId}`;
   const [media, setMedia] = useState({ key: "", url: "", error: "" });
   const [dimensions, setDimensions] = useState({ key: "", width: 0, height: 0 });
+  const decodeRetryRef = useRef("");
 
   useEffect(() => {
     let active = true;
-    let objectUrl = "";
-    void loadAuthorizedMediaUrl(workspaceId, mediaId)
+    decodeRetryRef.current = "";
+    void acquireAuthorizedMediaUrl(workspaceId, mediaId)
       .then((nextUrl) => {
-        objectUrl = nextUrl;
         if (active) setMedia({ key: mediaKey, url: nextUrl, error: "" });
-        else URL.revokeObjectURL(nextUrl);
       })
       .catch((nextError: unknown) => {
         if (active) {
@@ -46,7 +49,7 @@ export function AuthorizedMedia({
       });
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      releaseAuthorizedMediaUrl(workspaceId, mediaId);
     };
   }, [mediaId, mediaKey, workspaceId]);
 
@@ -115,6 +118,31 @@ export function AuthorizedMedia({
                 width: event.currentTarget.naturalWidth,
                 height: event.currentTarget.naturalHeight,
               });
+            }}
+            onError={() => {
+              if (decodeRetryRef.current === mediaKey) {
+                setMedia({
+                  key: mediaKey,
+                  url: "",
+                  error: "The protected screenshot could not be displayed.",
+                });
+                return;
+              }
+              decodeRetryRef.current = mediaKey;
+              void refreshAuthorizedMediaUrl(workspaceId, mediaId)
+                .then((nextUrl) => {
+                  setMedia({ key: mediaKey, url: nextUrl, error: "" });
+                })
+                .catch((nextError: unknown) => {
+                  setMedia({
+                    key: mediaKey,
+                    url: "",
+                    error:
+                      nextError instanceof Error
+                        ? nextError.message
+                        : "The protected screenshot could not be loaded.",
+                  });
+                });
             }}
           />
           {overlay ? <div className="authorized-media-overlay" aria-hidden="true">{overlay}</div> : null}

@@ -146,11 +146,13 @@ export async function fetchGuideMedia(mediaId) {
     headers: { Authorization: "Bearer " + auth.accessToken },
   });
   if (!response.ok) {
-    throw new Error(
+    const error = new Error(
       response.status === 404
         ? "This step screenshot is no longer available."
         : "KnowHow returned HTTP " + String(response.status) + " for a screenshot.",
     );
+    error.status = response.status;
+    throw error;
   }
   const contentType = (response.headers.get("content-type") || "").split(";")[0];
   if (!isAcceptedScreenshotType(contentType)) {
@@ -206,6 +208,10 @@ export async function getConnectionState() {
 
 export async function getKnowHowContext() {
   return authorizedFetch("/context");
+}
+
+export async function fetchCompanionLibrary() {
+  return authorizedFetch("/library");
 }
 
 export async function beginRemoteCapture(capture) {
@@ -282,6 +288,9 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
   }
 
   for (const step of preparedSteps) {
+    if (step.sourceEvent === "navigation" && !(step.imageBlob instanceof Blob)) {
+      continue;
+    }
     const imageType = step.imageBlob?.type || "";
     if (!isAcceptedScreenshotType(imageType)) {
       throw new Error("KnowHow accepts only locally rasterized JPEG or PNG screenshots.");

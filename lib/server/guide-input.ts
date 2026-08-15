@@ -25,15 +25,14 @@ function exactKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>,
 function crop(value: unknown, label: string): NonNullable<EditorBlock["crop"]> {
   const object = inputObject(value, label);
   exactKeys(object, new Set(["x", "y", "width", "height"]), label);
+  const x = coordinate(object.x, `${label} x`);
+  const y = coordinate(object.y, `${label} y`);
   const result = {
-    x: coordinate(object.x, `${label} x`),
-    y: coordinate(object.y, `${label} y`),
-    width: coordinate(object.width, `${label} width`, true),
-    height: coordinate(object.height, `${label} height`, true),
+    x,
+    y,
+    width: Math.min(coordinate(object.width, `${label} width`, true), Math.max(Number.EPSILON, 1 - x)),
+    height: Math.min(coordinate(object.height, `${label} height`, true), Math.max(Number.EPSILON, 1 - y)),
   };
-  if (result.x + result.width > 1 || result.y + result.height > 1) {
-    throw new HttpError(400, "GUIDE_STEPS_INVALID", `${label} must stay inside the screenshot.`);
-  }
   return result;
 }
 
@@ -59,7 +58,10 @@ function annotations(value: unknown, label: string): NonNullable<EditorBlock["an
     const y = coordinate(item.y, "Annotation y");
     const width = item.width === undefined ? undefined : coordinate(item.width, "Annotation width", true);
     const height = item.height === undefined ? undefined : coordinate(item.height, "Annotation height", true);
-    if ((width !== undefined && x + width > 1) || (height !== undefined && y + height > 1)) {
+    if (
+      item.kind !== "click" &&
+      ((width !== undefined && x + width > 1) || (height !== undefined && y + height > 1))
+    ) {
       throw new HttpError(400, "GUIDE_STEPS_INVALID", "An annotation is outside the screenshot.");
     }
     const x2 = item.x2 === undefined ? undefined : coordinate(item.x2, "Annotation x2");
@@ -85,9 +87,9 @@ function redactions(value: unknown, label: string): NonNullable<EditorBlock["red
     seen.add(id);
     const x = coordinate(item.x, "Redaction x");
     const y = coordinate(item.y, "Redaction y");
-    const width = coordinate(item.width, "Redaction width", true);
-    const height = coordinate(item.height, "Redaction height", true);
-    if (x + width > 1 || y + height > 1 || typeof item.applied !== "boolean") {
+    const width = Math.min(coordinate(item.width, "Redaction width", true), Math.max(Number.EPSILON, 1 - x));
+    const height = Math.min(coordinate(item.height, "Redaction height", true), Math.max(Number.EPSILON, 1 - y));
+    if (typeof item.applied !== "boolean") {
       throw new HttpError(400, "GUIDE_STEPS_INVALID", "A redaction is invalid.");
     }
     return { id, x, y, width, height, applied: item.applied };

@@ -1,4 +1,6 @@
+import { companionGuidesFromWorkspace } from "../extension-bridge";
 import type { Audience, EditorBlock, WorkspaceSettings } from "../knowhow-types";
+import { BootstrapService } from "./bootstrap-service";
 import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -67,16 +69,14 @@ function coordinate(input: unknown, label: string) {
 
 function region(input: unknown, label: string) {
   const item = inputObject(input, label);
-  const result = {
-    x: coordinate(item.x, `${label} x`),
-    y: coordinate(item.y, `${label} y`),
-    width: coordinate(item.width, `${label} width`),
-    height: coordinate(item.height, `${label} height`),
-  };
-  if (result.width <= 0 || result.height <= 0 || result.x + result.width > 1 || result.y + result.height > 1) {
+  const x = coordinate(item.x, `${label} x`);
+  const y = coordinate(item.y, `${label} y`);
+  const width = Math.min(coordinate(item.width, `${label} width`), Math.max(0, 1 - x));
+  const height = Math.min(coordinate(item.height, `${label} height`), Math.max(0, 1 - y));
+  if (width <= 0 || height <= 0) {
     throw new HttpError(400, "CAPTURE_STEPS_INVALID", `${label} is outside the screenshot.`);
   }
-  return result;
+  return { x, y, width, height };
 }
 
 function safeOrigin(input: unknown) {
@@ -189,6 +189,41 @@ export class ExtensionCaptureService {
         automatic: ["email", "phone-number", "financial-number", "identifier", "form-field"],
         assisted: ["common-name", "long-text"],
       },
+    };
+  }
+
+  async library(request: Request) {
+    const credential = await this.credential(request);
+    const workspaceId = String(credential.row.workspace_id);
+    const [guides, workspaceRow, preferenceRows] = await Promise.all([
+      new BootstrapService(this.store).workspaceGuides(
+        credential.identity,
+        workspaceId,
+      ),
+      this.store.get(TABLES.workspaces, workspaceId),
+      this.store.list(TABLES.userPreferences, {
+        filters: [{ field: "user_id", value: credential.identity.userId }],
+        limit: 1,
+      }),
+    ]);
+    const workspace = workspaceRow
+      ? decodePayload<WorkspaceRecord>(workspaceRow, null as never)
+      : null;
+    const preference = preferenceRows[0]
+      ? decodePayload<{ theme?: "light" | "dark" | "system" }>(
+          preferenceRows[0],
+          {},
+        )
+      : {};
+    return {
+      workspaceId,
+      workspaceName: workspace?.name ?? "KnowHow workspace",
+      userName: credential.identity.name || credential.identity.email,
+      theme: preference.theme === "dark" ? "dark" : "light",
+      guides: companionGuidesFromWorkspace(
+        guides,
+        workspace?.slug ?? workspaceId,
+      ),
     };
   }
 
@@ -484,25 +519,29 @@ export class ExtensionCaptureService {
       throw new HttpError(409, "CAPTURE_STEP_COUNT_MISMATCH", "The reviewed step count does not match this capture.");
     }
     const mediaRows = await this.captureMedia(current.capture);
-    if (mediaRows.length !== payload.steps.length) throw new HttpError(409, "CAPTURE_MEDIA_INCOMPLETE", "Every capture step needs one redacted screenshot.");
     const mediaByStep = new Map(mediaRows.map((row) => [decodePayload<PrivateMediaRecord>(row, null as never).stepId, row]));
     const editorSteps: EditorBlock[] = payload.steps.map((candidate, index) => {
       const step = inputObject(candidate, `Step ${index + 1}`);
       const id = clientId(step.id, `Step ${index + 1} ID`);
-      if (step.order !== index || !mediaByStep.has(id)) throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Capture step ordering is invalid.");
+      const sourceEvent = typeof step.sourceEvent === "string" ? step.sourceEvent : "";
+      const mediaRow = mediaByStep.get(id);
+      if (step.order !== index) throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Capture step ordering is invalid.");
+      if (!mediaRow && sourceEvent !== "navigation") {
+        throw new HttpError(409, "CAPTURE_MEDIA_INCOMPLETE", "Every illustrated capture step needs one redacted screenshot.");
+      }
       const click = step.clickTarget === undefined ? null : inputObject(step.clickTarget, "Click target");
       const redactions = step.redactions === undefined
         ? []
         : Array.isArray(step.redactions)
           ? step.redactions.map((item, redactionIndex) => ({ id: clientId(inputObject(item, "Redaction").id ?? `redaction_${redactionIndex}`, "Redaction ID"), ...region(item, "Redaction"), applied: true }))
           : (() => { throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Redactions are invalid."); })();
-      const mediaId = mediaByStep.get(id)!.$id;
+      const mediaId = mediaRow?.$id;
       return {
         id,
         kind: "action",
         title: inputText(step.title, "Step title", { min: 1, max: 500 }),
         description: inputText(step.instructions, "Step instructions", { min: 1, max: 2_000 }),
-        screenshotMediaId: mediaId,
+        ...(mediaId ? { screenshotMediaId: mediaId } : {}),
         ...(step.crop === undefined ? {} : { crop: region(step.crop, "Crop") }),
         ...(click
           ? {
@@ -531,7 +570,8 @@ export class ExtensionCaptureService {
       for (const old of await transaction.list(TABLES.guideSteps, { filters: [{ field: "subject_id", value: current.capture.revisionId }] })) await transaction.delete(TABLES.guideSteps, old.$id);
       for (const [sequence, step] of normalizedSteps.entries()) {
         await transaction.create(TABLES.guideSteps, resourceId("step"), rowData({ organization_id: current.capture.organizationId, workspace_id: current.capture.workspaceId, subject_id: current.capture.revisionId, status: "active", kind: "action", sequence, created_by: credential.identity.userId }, step));
-        const mediaRow = mediaByStep.get(step.id)!;
+        const mediaRow = mediaByStep.get(step.id);
+        if (!mediaRow) continue;
         const media = decodePayload<PrivateMediaRecord & { captureId?: string }>(mediaRow, null as never);
         await transaction.update(TABLES.privateMedia, mediaRow.$id, rowData({ updated_by: credential.identity.userId }, { ...media, stepId: step.id }));
       }

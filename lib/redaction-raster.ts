@@ -104,8 +104,8 @@ export function paintRasterRedaction(
 
   // This pass is cosmetic. If `filter` is unsupported, the resampled first
   // pass above still guarantees the selected pixels are not reproduced.
-  context.filter = `blur(${Math.max(2, Math.min(10, blockSize * 0.32))}px)`;
-  context.globalAlpha = 0.9;
+  context.filter = `blur(${Math.max(2, Math.min(14, blockSize * 0.44))}px) saturate(72%) contrast(95%)`;
+  context.globalAlpha = 0.96;
   context.drawImage(
     scratch,
     0,

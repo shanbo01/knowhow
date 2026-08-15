@@ -30,7 +30,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { loadAuthorizedMediaUrl } from "../../lib/knowhow-client";
+import {
+  acquireAuthorizedMediaUrl,
+  refreshAuthorizedMediaUrl,
+  releaseAuthorizedMediaUrl,
+} from "../../lib/knowhow-client";
 import type { EditorBlock } from "../../lib/knowhow-types";
 import { paintRasterRedaction } from "../../lib/redaction-raster";
 
@@ -313,6 +317,7 @@ export function ScreenshotEditor({
   const pendingCropRef = useRef<Crop | undefined>(undefined);
   const cropFrameRef = useRef<number | null>(null);
   const cropPendingRef = useRef(false);
+  const decodeRetryRef = useRef("");
   const dragRef = useRef<{
     kind: DragKind;
     startClientX: number;
@@ -339,12 +344,10 @@ export function ScreenshotEditor({
   useEffect(() => {
     if (!mediaId) return;
     let active = true;
-    let objectUrl = "";
-    void loadAuthorizedMediaUrl(workspaceId, mediaId)
+    decodeRetryRef.current = "";
+    void acquireAuthorizedMediaUrl(workspaceId, mediaId)
       .then((nextUrl) => {
-        objectUrl = nextUrl;
         if (active) setMedia({ key: mediaKey, url: nextUrl, error: "" });
-        else URL.revokeObjectURL(nextUrl);
       })
       .catch((nextError: unknown) => {
         if (active) {
@@ -357,7 +360,7 @@ export function ScreenshotEditor({
       });
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      releaseAuthorizedMediaUrl(workspaceId, mediaId);
     };
   }, [mediaId, mediaKey, workspaceId]);
 
@@ -1074,6 +1077,31 @@ export function ScreenshotEditor({
               draggable={false}
               onDragStart={(event) => event.preventDefault()}
               onLoad={(event) => setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+              onError={() => {
+                if (decodeRetryRef.current === mediaKey) {
+                  setMedia({
+                    key: mediaKey,
+                    url: "",
+                    error: "The protected screenshot could not be displayed.",
+                  });
+                  return;
+                }
+                decodeRetryRef.current = mediaKey;
+                void refreshAuthorizedMediaUrl(workspaceId, mediaId)
+                  .then((nextUrl) => {
+                    setMedia({ key: mediaKey, url: nextUrl, error: "" });
+                  })
+                  .catch((nextError: unknown) => {
+                    setMedia({
+                      key: mediaKey,
+                      url: "",
+                      error:
+                        nextError instanceof Error
+                          ? nextError.message
+                          : "The protected screenshot could not be loaded.",
+                    });
+                  });
+              }}
               style={{
                 position: "absolute",
                 width: `${zoom * 100}%`,

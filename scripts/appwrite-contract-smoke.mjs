@@ -402,6 +402,7 @@ try {
       { path: "/api/knowhow/export?jobId=smoke" },
       { path: "/api/knowhow/audit?workspaceId=smoke" },
       { path: "/api/extension/context" },
+      { path: "/api/extension/library" },
     ]) {
       const response = await fetch(`${siteOrigin}${check.path}`);
       assert.ok(

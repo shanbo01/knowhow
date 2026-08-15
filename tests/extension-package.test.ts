@@ -23,7 +23,7 @@ test("development extension zip is loadable without a repo build command", async
   const manifestName = Buffer.from("manifest.json");
   const configPath = Buffer.from("src/core/config.js");
   assert.equal(artifact.origin, "http://localhost:3001");
-  assert.match(artifact.filename, /^knowhow-capture-0\.1\.0-development\.zip$/);
+  assert.match(artifact.filename, /^knowhow-capture-0\.1\.1-development\.zip$/);
   assert.ok(zip.byteLength > 1000);
   assert.ok(zip.includes(manifestName));
   assert.ok(zip.includes(configPath));

@@ -234,18 +234,121 @@ async function authorizedBlob(path: string, init: RequestInit = {}) {
       error?: string;
     };
     if (response.status === 401) clearApiCredential();
-    throw new Error(payload.error ?? `Media request failed (${response.status})`);
+    throw new KnowHowApiError(
+      response.status,
+      payload.error ?? `Media request failed (${response.status})`,
+    );
   }
   return response.blob();
+}
+
+type MediaCacheEntry = {
+  url: string;
+  refs: number;
+  promise?: Promise<string>;
+};
+
+const mediaUrlCache = new Map<string, MediaCacheEntry>();
+
+function mediaCacheKey(workspaceId: string, mediaId: string) {
+  return `${workspaceId}:${mediaId}`;
+}
+
+async function fetchAuthorizedMediaUrl(
+  workspaceId: string,
+  mediaId: string,
+  retries = 3,
+) {
+  const params = new URLSearchParams({ workspaceId, mediaId });
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+      const blob = await authorizedBlob(`/api/knowhow/media?${params}`);
+      return URL.createObjectURL(blob);
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        error instanceof KnowHowApiError &&
+        (error.status === 404 || error.status === 409);
+      if (!retryable || attempt === retries) throw error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("The protected screenshot could not be loaded.");
+}
+
+export async function acquireAuthorizedMediaUrl(
+  workspaceId: string,
+  mediaId: string,
+) {
+  const key = mediaCacheKey(workspaceId, mediaId);
+  const existing = mediaUrlCache.get(key);
+  if (existing?.url) {
+    existing.refs += 1;
+    return existing.url;
+  }
+  if (existing?.promise) {
+    existing.refs += 1;
+    return existing.promise;
+  }
+  const entry: MediaCacheEntry = { url: "", refs: 1 };
+  const promise = fetchAuthorizedMediaUrl(workspaceId, mediaId)
+    .then((url) => {
+      entry.url = url;
+      entry.promise = undefined;
+      if (entry.refs <= 0) {
+        URL.revokeObjectURL(url);
+        mediaUrlCache.delete(key);
+        throw new Error("The protected screenshot is no longer in use.");
+      }
+      return url;
+    })
+    .catch((error) => {
+      entry.promise = undefined;
+      if (entry.refs <= 0 || !entry.url) mediaUrlCache.delete(key);
+      throw error;
+    });
+  entry.promise = promise;
+  mediaUrlCache.set(key, entry);
+  return promise;
+}
+
+export function releaseAuthorizedMediaUrl(workspaceId: string, mediaId: string) {
+  const key = mediaCacheKey(workspaceId, mediaId);
+  const entry = mediaUrlCache.get(key);
+  if (!entry) return;
+  entry.refs = Math.max(0, entry.refs - 1);
+  if (entry.refs === 0 && !entry.promise) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    mediaUrlCache.delete(key);
+  }
+}
+
+export async function refreshAuthorizedMediaUrl(
+  workspaceId: string,
+  mediaId: string,
+) {
+  const key = mediaCacheKey(workspaceId, mediaId);
+  const existing = mediaUrlCache.get(key);
+  const previousUrl = existing?.url || "";
+  const url = await fetchAuthorizedMediaUrl(workspaceId, mediaId);
+  const entry = mediaUrlCache.get(key) ?? { url: "", refs: 1 };
+  entry.url = url;
+  entry.promise = undefined;
+  mediaUrlCache.set(key, entry);
+  if (previousUrl && previousUrl !== url) URL.revokeObjectURL(previousUrl);
+  return url;
 }
 
 export async function loadAuthorizedMediaUrl(
   workspaceId: string,
   mediaId: string,
 ) {
-  const params = new URLSearchParams({ workspaceId, mediaId });
-  const blob = await authorizedBlob(`/api/knowhow/media?${params}`);
-  return URL.createObjectURL(blob);
+  return fetchAuthorizedMediaUrl(workspaceId, mediaId);
 }
 
 /** Loads the current workspace logo through the existing private media boundary. */

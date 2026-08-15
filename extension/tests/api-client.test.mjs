@@ -78,6 +78,12 @@ test("screenshots upload only after irreversible local redaction and preserve pr
   assert.match(apiSource, /\{ clickTarget: step\.clickTarget \}/);
   assert.match(apiSource, /\{ focusRegion: step\.focusRegion \}/);
   assert.match(apiSource, /\{ crop: step\.crop \}/);
+  assert.match(
+    apiSource,
+    /step\.sourceEvent === "navigation" && !\(step\.imageBlob instanceof Blob\)/,
+  );
   assert.match(apiSource, /redactions: Array\.isArray\(step\.pendingRedactions\)/);
+  assert.match(apiSource, /export async function fetchCompanionLibrary\(\)/);
+  assert.match(apiSource, /authorizedFetch\("\/library"\)/);
   assert.doesNotMatch(apiSource, /attestation/);
 });

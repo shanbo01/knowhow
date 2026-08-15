@@ -8,6 +8,7 @@ import {
   createCapturedStepCache,
   createRefreshGate,
   createThumbnailUrlCache,
+  captureFeedSteps,
   feedRevision,
   liveFeedVisible,
   stepCopy,
@@ -410,7 +411,7 @@ function renderStepFeed(state, rawSteps) {
     return;
   }
 
-  const steps = [...rawSteps];
+  const steps = captureFeedSteps(state, rawSteps);
   const revision = feedRevision(state.sessionId, steps);
   if (
     renderedFeedSessionId === state.sessionId &&
@@ -433,6 +434,7 @@ function renderStepFeed(state, rawSteps) {
     item.className = "step-card";
     item.dataset.sourceEvent =
       step.sourceEvent === "navigation" ? "navigation" : "interaction";
+    item.dataset.captureStatus = step.captureStatus || "ready";
 
     const copy = stepCopy(step);
     const copyRow = document.createElement("div");
@@ -469,7 +471,11 @@ function renderStepFeed(state, rawSteps) {
       remove.disabled = true;
       showError("");
       try {
-        await request({ type: "DELETE_CAPTURED_STEP", stepId: step.id });
+        await request(
+          step.entryId && step.captureStatus !== "ready"
+            ? { type: "DELETE_CAPTURE_ENTRY", entryId: step.entryId }
+            : { type: "DELETE_CAPTURED_STEP", stepId: step.id },
+        );
         renderedFeedRevision = "";
         await refreshCapture();
       } catch (error) {
@@ -477,16 +483,46 @@ function renderStepFeed(state, rawSteps) {
         showError(error instanceof Error ? error.message : "Could not delete this step.");
       }
     });
-    copyRow.append(number, text, remove);
+    const actions = document.createElement("span");
+    actions.className = "step-card-actions";
+    if (step.captureStatus === "needs_attention" && step.entryId) {
+      const retry = document.createElement("button");
+      retry.className = "step-retry";
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", async () => {
+        if (retry.disabled) return;
+        retry.disabled = true;
+        showError("");
+        try {
+          await request({ type: "RETRY_CAPTURE_ENTRY", entryId: step.entryId });
+          renderedFeedRevision = "";
+          await refreshCapture();
+        } catch (error) {
+          retry.disabled = false;
+          showError(
+            error instanceof Error ? error.message : "Could not retry this screenshot.",
+          );
+        }
+      });
+      actions.append(retry);
+    }
+    actions.append(remove);
+    copyRow.append(number, text, actions);
     item.append(copyRow);
 
-    const thumbnailUrl =
-      step.sourceEvent === "navigation" ? null : thumbnailUrls.get(step);
+    const thumbnailUrl = thumbnailUrls.get(step);
     if (thumbnailUrl) {
       const thumbnail = document.createElement("figure");
       thumbnail.className = "step-thumbnail";
       paintStepFigure(thumbnail, thumbnailGeometry(step), thumbnailUrl);
       item.append(thumbnail);
+    } else if (step.captureStatus === "capturing") {
+      const pending = document.createElement("div");
+      pending.className = "step-thumbnail step-thumbnail-pending";
+      pending.setAttribute("aria-label", "Screenshot is being privacy-processed");
+      pending.append(document.createElement("span"));
+      item.append(pending);
     }
     fragment.append(item);
   });
@@ -497,8 +533,7 @@ function renderStepFeed(state, rawSteps) {
   thumbnailUrls.prune(
     steps
       .filter(
-        (step) =>
-          step.sourceEvent !== "navigation" && step.imageBlob instanceof Blob,
+        (step) => step.imageBlob instanceof Blob,
       )
       .map((step) => step.id),
   );
@@ -637,7 +672,12 @@ function setActivePanel(panel) {
     tab.classList.toggle("active", selected);
     tab.setAttribute("aria-selected", selected ? "true" : "false");
   }
-  if (activePanel === "guides") renderGuideLibrary();
+  if (activePanel === "guides") {
+    renderGuideLibrary();
+    if (extensionRuntimeAvailable) {
+      void refreshCompanion({ pull: true }).catch(() => undefined);
+    }
+  }
 }
 
 function renderGuideFollow({ reveal = false } = {}) {
@@ -751,7 +791,9 @@ function renderGuideLibrary() {
   elements.guideLibraryEmpty.hidden = filtered.length > 0;
   elements.guideLibraryEmpty.textContent = guides.length
     ? `No guides match “${elements.guideSearch.value.trim()}”.`
-    : "Open KnowHow once to sync the guides you can access.";
+    : currentConnection?.connected
+      ? "No guides in this workspace yet."
+      : "Connect this browser to KnowHow to load your guides.";
   const fragment = document.createDocumentFragment();
   for (const guide of filtered) {
     const button = document.createElement("button");
@@ -823,6 +865,9 @@ function renderState(state, policy) {
 
 function syncCaptureActionControls() {
   const status = currentState?.status || "idle";
+  const unresolvedScreenshots = (currentState?.captureEntries || []).some(
+    (entry) => entry.status === "needs_attention",
+  );
   elements.startButton.disabled =
     !extensionRuntimeAvailable ||
     captureActionPending ||
@@ -834,7 +879,9 @@ function syncCaptureActionControls() {
   elements.pauseButton.disabled =
     captureActionPending || !["recording", "paused"].includes(status);
   elements.finishButton.disabled =
-    captureActionPending || !["recording", "paused"].includes(status);
+    captureActionPending ||
+    unresolvedScreenshots ||
+    !["recording", "paused"].includes(status);
   elements.discardButton.disabled =
     captureActionPending || !["preparing", "recording", "paused"].includes(status);
   elements.reviewDiscardButton.disabled =
@@ -916,12 +963,30 @@ function applySharedTheme() {
   document.documentElement.dataset.theme = resolved;
 }
 
-async function refreshCompanion() {
+async function applyStoredCompanion() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.companion);
   currentCompanion = stored[STORAGE_KEYS.companion] || null;
   applySharedTheme();
   renderGuideLibrary();
   renderConnection();
+}
+
+let libraryPull = null;
+
+async function refreshCompanion({ pull = false } = {}) {
+  if (pull && extensionRuntimeAvailable) {
+    if (!libraryPull) {
+      libraryPull = request({ type: "REFRESH_LIBRARY" }).finally(() => {
+        libraryPull = null;
+      });
+    }
+    try {
+      await libraryPull;
+    } catch {
+      // Keep the last stored companion if the live library is unreachable.
+    }
+  }
+  await applyStoredCompanion();
 }
 
 async function refreshConnection() {
@@ -936,7 +1001,7 @@ async function refresh() {
   const results = await Promise.allSettled([
     refreshCapture(),
     refreshConnection(),
-    refreshCompanion(),
+    refreshCompanion({ pull: true }),
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure?.status === "rejected") {
@@ -1246,7 +1311,7 @@ if (extensionRuntimeAvailable) {
       area === "local" &&
       Object.prototype.hasOwnProperty.call(changes, STORAGE_KEYS.companion)
     ) {
-      void refreshCompanion().catch(() => undefined);
+      void applyStoredCompanion().catch(() => undefined);
     }
   });
 }

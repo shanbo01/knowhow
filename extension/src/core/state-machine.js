@@ -96,6 +96,25 @@ export function transitionCapture(
         workspaceId: payload.workspaceId || null,
         scopeLabel: payload.scopeLabel || "Current tab",
         policyVersion: payload.policyVersion || "local-v1",
+        acceptingEvents: false,
+        nextEventSequence: 0,
+        nextNavigationSequence: 0,
+        captureEntries: [],
+        preparedFrames: [],
+        navigationKeys: [],
+        activeDocumentId: null,
+        activeNavigationKey: payload.sanitizedUrl || null,
+        tabDocumentSessions: {},
+        pendingNavigationTargets: [],
+        manualBlurCount: 0,
+        diagnostics: {
+          accepted: 0,
+          ready: 0,
+          failed: 0,
+          cancelled: 0,
+          deduplicated: 0,
+          prepared: 0,
+        },
         stepCount: 0,
         stepIds: [],
         startedAt: timestamp(now),
@@ -112,6 +131,7 @@ export function transitionCapture(
       return {
         ...bump(current, now),
         status: CaptureStatus.RECORDING,
+        acceptingEvents: true,
         readyAt: timestamp(now),
         pausedReason: null,
         lastError: null,
@@ -124,6 +144,7 @@ export function transitionCapture(
       return {
         ...bump(current, now),
         status: CaptureStatus.PAUSED,
+        acceptingEvents: false,
         pausedReason: payload.reason || "Paused by user",
       };
 
@@ -134,6 +155,7 @@ export function transitionCapture(
       return {
         ...bump(current, now),
         status: CaptureStatus.RECORDING,
+        acceptingEvents: true,
         windowId: Number.isInteger(payload.windowId)
           ? payload.windowId
           : current.windowId,
@@ -153,6 +175,7 @@ export function transitionCapture(
       return {
         ...bump(current, now),
         status: CaptureStatus.REVIEWING,
+        acceptingEvents: false,
         finishedAt: timestamp(now),
         pausedReason: null,
       };

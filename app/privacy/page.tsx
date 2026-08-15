@@ -26,6 +26,16 @@ export default function PrivacyPage() {
           national IDs, or other sensitive or special-category data must not be
           captured or uploaded.
         </p>
+        <h2>Browser capture privacy</h2>
+        <p>
+          Smart Blur covers enabled sensitive categories and elements you
+          choose on the page. KnowHow permanently rasterizes those regions on
+          your device before a screenshot is stored or uploaded, then destroys
+          the unredacted capture. Hover may reveal the live page while you work,
+          but it never reveals pixels in a captured screenshot. You can add
+          more blur during review; blur already applied during capture cannot
+          be removed.
+        </p>
         <h2>Purpose and access</h2>
         <p>
           Data is used to provide, secure, support, and measure the service.
