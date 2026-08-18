@@ -134,6 +134,7 @@ test("workspace invitations are exact-email, single-use, and idempotent", async 
   const delivery = decodePayload<Record<string, unknown>>(deliveries[0], {});
   assert.equal(delivery.credential, undefined);
   assert.equal(typeof delivery.credentialEnvelope, "object");
+  assert.equal(delivery.workspaceName, "Acme Operations");
   assert.doesNotMatch(
     String(deliveries[0].payload_json),
     new RegExp(first.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),

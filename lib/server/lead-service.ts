@@ -5,7 +5,7 @@ import { resourceId } from "./ids";
 import { inputBoolean, inputEmail, inputInteger, inputText } from "./input";
 import type { RecordStore } from "./record-store";
 
-export type LeadKind = "pilot" | "demo" | "pricing";
+export type LeadKind = "demo" | "pricing";
 
 export type LeadInput = {
   kind: LeadKind;
@@ -35,7 +35,7 @@ async function deterministicId(prefix: string, value: string) {
 }
 
 function leadKind(value: unknown): LeadKind {
-  if (value !== "pilot" && value !== "demo" && value !== "pricing") {
+  if (value !== "demo" && value !== "pricing") {
     throw new HttpError(400, "LEAD_KIND_INVALID", "Choose a valid request type.");
   }
   return value;
@@ -93,7 +93,7 @@ export class LeadService {
       throw new HttpError(
         400,
         "DATA_CLASSIFICATION_REQUIRED",
-        "Confirm that the proposed pilot will use ordinary business-process data only.",
+        "Confirm that the proposed use involves ordinary business-process data only.",
       );
     }
     // A hidden field is intentionally accepted but must remain empty.

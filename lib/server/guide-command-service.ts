@@ -28,6 +28,7 @@ import { HttpError } from "./http-security";
 import { deterministicResourceId, resourceId } from "./ids";
 import { inputBoolean, inputStringList, inputText, slugify } from "./input";
 import { TABLES } from "./appwrite-resources";
+import { EntitlementService } from "./entitlement-service";
 import { requireAuthorized, type AuthorizationContext, type GuideAuthorizationFacts } from "./policy";
 import type { PrivateObjectStore } from "./private-object-store";
 import type { RecordData, RecordStore, StoredRecord } from "./record-store";
@@ -149,7 +150,7 @@ function validateCanonicalRevision(input: {
           },
     branding: input.branding,
     exportPolicy: {
-      allowedFormats: ["live-link", "pdf", "html", "markdown"] as const,
+      allowedFormats: ["live-link", "pdf", "html", "markdown", "pptx"] as const,
       restrictedGuideExports: "allowed" as const,
       watermark: {
         mode: "optional" as const,
@@ -196,6 +197,9 @@ export class GuideCommandService {
     }
     if (action === "publishGuide") {
       return this.publish(identity, payload, workspaceAccess, context, options);
+    }
+    if (action === "shareGuide") {
+      return this.share(identity, payload, workspaceAccess, context, options);
     }
     if (action === "archiveGuide") {
       return this.archive(identity, payload, workspaceAccess, context);
@@ -269,6 +273,7 @@ export class GuideCommandService {
       reviewApproved:
         assignmentRows.some((row) => row.status === "approved") &&
         !assignmentRows.some((row) => row.status === "changes_requested"),
+      requireReviewBeforePublish: settings.requireReviewBeforePublish,
     };
   }
 
@@ -312,6 +317,56 @@ export class GuideCommandService {
       : DEFAULT_WORKSPACE_SETTINGS;
   }
 
+  private async replaceAudiences(
+    identity: AuthenticatedIdentity,
+    workspaceAccess: WorkspaceAccess,
+    revisionId: string,
+    audiences: Audience[],
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const oldAudiences = await this.store.list(TABLES.guideAudiences, {
+      filters: [{ field: "subject_id", value: revisionId }],
+    });
+    for (const row of oldAudiences) {
+      await this.store.delete(TABLES.guideAudiences, row.$id);
+    }
+    for (const audience of audiences) {
+      await this.store.create(
+        TABLES.guideAudiences,
+        resourceId("audience"),
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            subject_id: revisionId,
+            user_id: audience.subjectId ?? workspaceId,
+            kind: audience.kind,
+            status: "active",
+            created_by: identity.userId,
+          },
+          audience,
+        ),
+      );
+    }
+  }
+
+  private async assertPublishableDraft(revisionId: string) {
+    const steps = await this.store.list(TABLES.guideSteps, {
+      filters: [{ field: "subject_id", value: revisionId }],
+    });
+    const hasUnappliedRedaction = steps.some((row) => {
+      const step = decodePayload<EditorBlock>(row, null as never);
+      return (step?.redactions ?? []).some((redaction) => !redaction.applied);
+    });
+    if (hasUnappliedRedaction) {
+      throw new HttpError(
+        409,
+        "REDACTIONS_NOT_FLATTENED",
+        "Flatten every redaction before sharing.",
+      );
+    }
+  }
+
   private async save(
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
@@ -353,6 +408,9 @@ export class GuideCommandService {
     let createRevision = true;
     if (!existing) {
       requireAuthorized("guide.create", context);
+      await new EntitlementService(this.store, workspaceId).assertCreatorCapacity(
+        identity.userId,
+      );
       revisionId = resourceId("revision");
     } else if (existing.workingRevisionId) {
       working = await this.loadRevision(existing.workingRevisionId, guideId, workspaceId);
@@ -815,9 +873,12 @@ export class GuideCommandService {
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (!guide?.workingRevisionId || guide.deletedAt || guide.archivedAt) {
-      throw new HttpError(409, "PUBLISH_NOT_AVAILABLE", "This guide has no review revision.");
+      throw new HttpError(409, "PUBLISH_NOT_AVAILABLE", "This guide has no working revision to share.");
     }
     const revision = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
+    if (revision.value.status === "draft") {
+      await this.assertPublishableDraft(revision.row.$id);
+    }
     const facts = await this.guideFacts(identity, workspaceAccess, guide, revision);
     requireAuthorized("guide.publish", { ...context, guide: facts });
     // Check before staging the ordinary guide.published row. Appwrite's
@@ -840,7 +901,17 @@ export class GuideCommandService {
       revision.row.$id,
       rowData(
         { status: "published", updated_by: identity.userId },
-        { ...revision.value, status: "published", publishedBy: identity.userId, publishedAt, updatedAt: publishedAt },
+        {
+          ...revision.value,
+          status: "published",
+          submittedAt: revision.value.submittedAt ?? publishedAt,
+          submittedBy: revision.value.submittedBy ?? identity.userId,
+          reviewedAt: revision.value.reviewedAt ?? publishedAt,
+          reviewedBy: revision.value.reviewedBy ?? identity.userId,
+          publishedBy: identity.userId,
+          publishedAt,
+          updatedAt: publishedAt,
+        },
       ),
     );
     await this.store.update(
@@ -848,7 +919,7 @@ export class GuideCommandService {
       guideId,
       rowData(
         { status: "published", updated_by: identity.userId },
-        { ...guide, publishedRevisionId: revision.row.$id, workingRevisionId: null, updatedAt: publishedAt },
+        { ...guide, publishedRevisionId: revision.row.$id, workingRevisionId: null, screenshotsLockedAt: guide.screenshotsLockedAt ?? publishedAt, updatedAt: publishedAt },
       ),
     );
     await this.store.create(
@@ -908,6 +979,91 @@ export class GuideCommandService {
       metadata: { revisionId: revision.row.$id },
     });
     return { published: true };
+  }
+
+  private async share(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+    options: GuideCommandOptions,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (guide.deletedAt || guide.archivedAt) {
+      throw new HttpError(409, "SHARE_NOT_AVAILABLE", "This guide cannot be shared.");
+    }
+    const audiences = normalizeGuideAudiences(payload.audiences, workspaceId);
+    await this.validateAudiences(audiences, workspaceId);
+    const privacyReviewed = inputBoolean(payload.privacyReviewed ?? false, "Privacy review");
+    const settings = await this.settings(workspaceId);
+    const requireReview = settings.requireReviewBeforePublish;
+    const isAdmin = workspaceAccess.roles.includes("administrator");
+    const isPublisher = workspaceAccess.roles.includes("publisher");
+    const isAuthorCreator =
+      workspaceAccess.roles.includes("creator") && guide.authorUserId === identity.userId;
+    const mayUpdateLive = isAdmin || isPublisher || (isAuthorCreator && !requireReview);
+
+    if (guide.workingRevisionId) {
+      const working = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
+      if (working.value.status === "draft") {
+        const facts = await this.guideFacts(identity, workspaceAccess, guide, working);
+        requireAuthorized("guide.update", { ...context, guide: facts });
+        await this.replaceAudiences(identity, workspaceAccess, working.row.$id, audiences);
+        const updatedAt = nowIso();
+        if (privacyReviewed && working.value.source === "browser-capture") {
+          await this.store.update(
+            TABLES.guideRevisions,
+            working.row.$id,
+            rowData(
+              { updated_by: identity.userId },
+              {
+                ...working.value,
+                privacyReviewedAt: updatedAt,
+                privacyReviewedBy: identity.userId,
+                updatedAt,
+              },
+            ),
+          );
+        }
+      } else {
+        await this.replaceAudiences(identity, workspaceAccess, working.row.$id, audiences);
+      }
+      return this.publish(identity, payload, workspaceAccess, context, options);
+    }
+
+    if (!guide.publishedRevisionId) {
+      throw new HttpError(409, "SHARE_NOT_AVAILABLE", "This guide has no revision to share.");
+    }
+    if (!mayUpdateLive) {
+      throw new HttpError(
+        403,
+        "PUBLISHER_REQUIRED",
+        "Publisher access is required to change the live audience.",
+      );
+    }
+    const published = await this.loadRevision(guide.publishedRevisionId, guideId, workspaceId);
+    await this.replaceAudiences(identity, workspaceAccess, published.row.$id, audiences);
+    const changedAt = nowIso();
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData({ updated_by: identity.userId }, { ...guide, updatedAt: changedAt }),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.audience-changed",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} live audience updated`,
+      metadata: { revisionId: published.row.$id },
+    });
+    return { audienceChanged: true };
   }
 
   private async archive(

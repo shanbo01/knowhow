@@ -37,6 +37,7 @@ export interface GuideAuthorizationFacts {
   exportAllowed?: boolean;
   privacyReviewed?: boolean;
   reviewApproved?: boolean;
+  requireReviewBeforePublish?: boolean;
 }
 
 export interface SupportGrantFacts {
@@ -246,19 +247,40 @@ export function authorize(
 
   if (action === "guide.publish") {
     const guide = context.guide;
-    if (guide?.revisionStatus !== "review") {
-      return deny("GUIDE_REVIEW_STATE_REQUIRED", "Only a review revision may be published.");
-    }
-    if (guide.reviewApproved !== true) {
-      return deny("REVIEW_APPROVAL_REQUIRED", "An approved review is required before publishing.");
-    }
-    if (guide.sourceType === "capture" && guide.privacyReviewed !== true) {
+    if (guide?.sourceType === "capture" && guide.privacyReviewed !== true) {
       return deny(
         "PRIVACY_REVIEW_REQUIRED",
         "Captured guides require a privacy review before publishing.",
       );
     }
-    return hasAnyRole(roles, "administrator", "publisher")
+    const requireReview = guide?.requireReviewBeforePublish === true;
+    const isAdmin = roles.has("administrator");
+    const isPublisher = roles.has("publisher");
+    const isAuthorCreator = roles.has("creator") && guide?.isAuthor === true;
+    const mayShareDirect = isAdmin || isPublisher || isAuthorCreator;
+
+    if (guide?.revisionStatus === "draft") {
+      if ((!requireReview && mayShareDirect) || (requireReview && isAdmin)) {
+        return allow("The actor may share this draft with the selected audience.");
+      }
+      return deny(
+        requireReview ? "GUIDE_REVIEW_STATE_REQUIRED" : "PUBLISHER_REQUIRED",
+        requireReview
+          ? "Only a review revision may be published."
+          : "Publisher access is required.",
+      );
+    }
+
+    if (guide?.revisionStatus !== "review") {
+      return deny("GUIDE_REVIEW_STATE_REQUIRED", "Only a review revision may be published.");
+    }
+    if (isAdmin) {
+      return allow("Workspace administrators may publish a review revision.");
+    }
+    if (guide.reviewApproved !== true) {
+      return deny("REVIEW_APPROVAL_REQUIRED", "An approved review is required before publishing.");
+    }
+    return isPublisher
       ? allow("Publishers may publish an approved, privacy-safe review revision.")
       : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
   }

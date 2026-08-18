@@ -752,18 +752,66 @@ function normalizedSubscription(row) {
   };
 }
 
+function inferredCommercialPlan(subscription) {
+  if (
+    subscription.plan === "free" ||
+    subscription.plan === "pro_trial" ||
+    subscription.plan === "pro" ||
+    subscription.plan === "enterprise"
+  ) {
+    return subscription.plan;
+  }
+  if (subscription.kind === "paid") return "pro";
+  if (subscription.kind === "design_partner") return "enterprise";
+  if (subscription.kind === "trial" && subscription.manualContract) {
+    return "enterprise";
+  }
+  return "pro_trial";
+}
+
+function isRetainLifecycle(subscription) {
+  if (typeof subscription.simulationState === "string") return true;
+  return inferredCommercialPlan(subscription) === "enterprise";
+}
+
+function effectiveCommercialPlan(subscription, now) {
+  const stored = inferredCommercialPlan(subscription);
+  if (isRetainLifecycle(subscription) || stored === "enterprise") {
+    return stored === "free" ? "enterprise" : stored;
+  }
+  if (stored === "free") return "free";
+  const expiry = date(subscription.expiresAt);
+  if (stored === "pro_trial") {
+    if (expiry === null || now < expiry) return "pro_trial";
+    return "free";
+  }
+  if (stored === "pro") {
+    if (expiry === null || now < expiry) return "pro";
+    const graceDays = Math.max(0, Math.min(30, subscription.graceDays));
+    const graceEnd = expiry + graceDays * DAY;
+    if (now < graceEnd) return "pro";
+    return "free";
+  }
+  return stored;
+}
+
 function evaluate(subscription, now) {
   const expiry = date(subscription.expiresAt);
   const graceEnd =
     expiry === null ? null : expiry + subscription.graceDays * DAY;
   const eligible =
     expiry === null ? null : expiry + subscription.retentionDays * DAY;
+  const base = { expiry, graceEnd, eligible };
+  if (subscription.status === "deleted") return { access: "deleted", ...base };
+  if (subscription.status === "deleting") return { access: "deleting", ...base };
+  if (subscription.status === "deletion_pending") {
+    return { access: "deletion_pending", ...base };
+  }
+  if (!isRetainLifecycle(subscription)) {
+    return { access: "active", ...base, eligible: null };
+  }
   let access = "active";
-  if (subscription.status === "deleted") access = "deleted";
-  else if (subscription.status === "deleting") access = "deleting";
-  else if (subscription.status === "deletion_pending")
-    access = "deletion_pending";
-  else if (subscription.status === "cancelled") access = "suspended";
+  if (subscription.status === "cancelled") access = "suspended";
   else if (
     expiry !== null &&
     now >= expiry &&
@@ -775,38 +823,44 @@ function evaluate(subscription, now) {
     access = "deletion_pending";
   else if (expiry !== null && graceEnd !== null && now >= graceEnd)
     access = "suspended";
-  return { access, expiry, graceEnd, eligible };
+  return { access, ...base };
 }
 
 function lifecycleNotices(subscription) {
   const start = date(subscription.startsAt);
   const expiry = date(subscription.expiresAt);
   if (start === null || expiry === null) return [];
+  const stored = inferredCommercialPlan(subscription);
   const prefix =
-    subscription.kind === "trial"
+    stored === "pro_trial" || subscription.kind === "trial"
       ? "trial"
-      : subscription.kind === "design_partner"
+      : stored === "enterprise" || subscription.kind === "design_partner"
         ? "pilot"
         : "subscription";
   const graceEnd = expiry + subscription.graceDays * DAY;
   const eligible = expiry + subscription.retentionDays * DAY;
+  const retain = isRetainLifecycle(subscription);
   return [
     [`${prefix}.welcome`, start],
-    ...(subscription.kind === "trial"
+    ...(stored === "pro_trial" || subscription.kind === "trial"
       ? [["trial.activation_help", start + 7 * DAY]]
       : []),
     [`${prefix}.expiry_4d`, expiry - 4 * DAY],
     [`${prefix}.expiry_1d`, expiry - DAY],
     [`${prefix}.expired`, expiry],
-    [
-      `${prefix}.grace_midpoint`,
-      expiry + Math.floor(subscription.graceDays / 2) * DAY,
-    ],
-    [`${prefix}.grace_1d`, graceEnd - DAY],
-    [`${prefix}.suspended`, graceEnd],
-    ["retention.30d_after_expiry", expiry + 30 * DAY],
-    ["retention.eligibility_7d", eligible - 7 * DAY],
-    ["retention.eligibility_1d", eligible - DAY],
+    ...(retain
+      ? [
+          [
+            `${prefix}.grace_midpoint`,
+            expiry + Math.floor(subscription.graceDays / 2) * DAY,
+          ],
+          [`${prefix}.grace_1d`, graceEnd - DAY],
+          [`${prefix}.suspended`, graceEnd],
+          ["retention.30d_after_expiry", expiry + 30 * DAY],
+          ["retention.eligibility_7d", eligible - 7 * DAY],
+          ["retention.eligibility_1d", eligible - DAY],
+        ]
+      : []),
   ];
 }
 
@@ -820,6 +874,74 @@ async function runLifecycle({ tables }, now) {
     const subscription = normalizedSubscription(row);
     if (subscription.status === "deleted") {
       skippedDeleted += 1;
+      continue;
+    }
+    const retain = isRetainLifecycle(subscription);
+    const storedPlan = inferredCommercialPlan(subscription);
+    const effectivePlan = effectiveCommercialPlan(subscription, now.getTime());
+    if (!retain && effectivePlan === "free" && storedPlan !== "free") {
+      transitions += 1;
+      const next = {
+        ...subscription,
+        plan: "free",
+        kind: "trial",
+        status: "active",
+        expiresAt: null,
+        graceDays: 0,
+        publicTrial: false,
+        manualContract: false,
+        trialConsumed: true,
+        downgradedAt: now.toISOString(),
+        lastEvaluatedAt: now.toISOString(),
+      };
+      await tables.updateRow({
+        databaseId: DATABASE_ID,
+        tableId: "subscriptions",
+        rowId: row.$id,
+        data: fields(
+          { status: "active", kind: next.kind, updated_by: "knowhow_ops" },
+          next,
+        ),
+        permissions: [],
+      });
+      const entitlementRows = await listAll(tables, "entitlements", [
+        Query.equal("workspace_id", [row.workspace_id]),
+      ]);
+      const freeEntitlements = {
+        maximumUsers: 3,
+        maximumCreators: 1,
+        storageBytes: 1_000_000_000,
+        extensionEnabled: false,
+        supportEnabled: false,
+        removeBranding: false,
+        privacyToolsEnabled: false,
+        customSubdomainEnabled: false,
+        publicSignup: false,
+        payments: false,
+        ssoScim: false,
+      };
+      for (const [kind, value] of Object.entries(freeEntitlements)) {
+        const existing = entitlementRows.find((item) => item.kind === kind);
+        const data = fields(
+          {
+            organization_id: row.organization_id,
+            workspace_id: row.workspace_id,
+            kind,
+            status: "active",
+            updated_by: "knowhow_ops",
+          },
+          { value, source: "plan" },
+        );
+        if (existing) {
+          await tables.updateRow({
+            databaseId: DATABASE_ID,
+            tableId: "entitlements",
+            rowId: existing.$id,
+            data,
+            permissions: [],
+          });
+        }
+      }
       continue;
     }
     const result = evaluate(subscription, now.getTime());
@@ -851,12 +973,11 @@ async function runLifecycle({ tables }, now) {
       continue;
     }
     const workspaceData = payload(workspace);
-    const suspend = [
-      "suspended",
-      "deletion_pending",
-      "deleting",
-      "deleted",
-    ].includes(result.access);
+    const suspend =
+      retain &&
+      ["suspended", "deletion_pending", "deleting", "deleted"].includes(
+        result.access,
+      );
     if (
       suspend &&
       (workspace.status !== "suspended" ||
@@ -932,7 +1053,7 @@ async function runLifecycle({ tables }, now) {
           queued += 1;
       }
     }
-    if (result.access !== "deletion_pending" || result.eligible === null)
+    if (!retain || result.access !== "deletion_pending" || result.eligible === null)
       continue;
     const caseId = await stableId("delete", `${row.$id}:tenant-deletion`);
     const organization = await tables
@@ -1214,23 +1335,33 @@ function emailTemplate(kind, details) {
   } else if (kind.includes("expiry_4d")) {
     subject = `${workspace} expires in four days`;
     copy =
-      "The subscription will enter seven days of read-only grace at expiry unless it is extended or converted.";
+      details.retainLifecycle
+        ? "The subscription will enter seven days of read-only grace at expiry unless it is extended or converted."
+        : "Pro features stay until then. After expiry the workspace remains on Free, and guides, members, and files are kept.";
   } else if (kind.includes("expiry_1d")) {
     subject = `${workspace} expires tomorrow`;
     copy =
-      "The subscription will enter read-only grace tomorrow unless it is extended or converted.";
+      details.retainLifecycle
+        ? "The subscription will enter read-only grace tomorrow unless it is extended or converted."
+        : "Pro features end tomorrow. The workspace stays on Free, and guides, members, and files are kept.";
   } else if (kind.endsWith(".expired")) {
-    subject = `${workspace} is now read-only`;
-    copy =
-      "The subscription expired. Sign-in, viewing, export, and account/settings inspection remain available during grace; changes and capture are disabled.";
+    subject = details.retainLifecycle
+      ? `${workspace} has expired`
+      : `${workspace} Pro access ended`;
+    copy = details.retainLifecycle
+      ? "The subscription is now in read-only grace unless it is extended or converted."
+      : "Paid features are now off. Guides, members, and files were kept on the Free plan.";
   } else if (kind.includes("grace_midpoint")) {
     subject = `Read-only grace update for ${workspace}`;
     copy =
       "The grace period is halfway complete. Contact KnowHow to extend or convert the subscription.";
   } else if (kind.includes("grace_1d")) {
-    subject = `${workspace} will be suspended tomorrow`;
-    copy =
-      "Read-only grace ends in 24 hours. After suspension, only the recovery screen and extension revocation remain available.";
+    subject = details.retainLifecycle
+      ? `${workspace} leaves grace tomorrow`
+      : `${workspace} will move to Free tomorrow`;
+    copy = details.retainLifecycle
+      ? "The grace period ends tomorrow. Contact KnowHow to extend or convert the subscription."
+      : "If the invoice is not recorded, Pro features turn off tomorrow. Guides and members stay.";
   } else if (kind.endsWith(".suspended")) {
     subject = `${workspace} has been suspended`;
     copy =
@@ -1992,7 +2123,10 @@ export {
   deliverNotifications,
   decryptNotificationCredential,
   emailTemplate,
+  effectiveCommercialPlan,
   evaluate,
+  inferredCommercialPlan,
+  isRetainLifecycle,
   localWorkerEmulation,
   lifecycleNotices,
   purgeApproved,

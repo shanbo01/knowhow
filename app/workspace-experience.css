@@ -15,7 +15,7 @@
     var(--card)
   );
   --experience-shadow:
-    0 1px 2px rgb(15 23 42 / 0.035), 0 14px 36px rgb(15 23 42 / 0.055);
+    0 1px 2px rgb(17 17 15 / 0.035), 0 14px 36px rgb(17 17 15 / 0.055);
   --kh-card-pad-x: 1.25rem;
   --kh-card-pad-y: 0.9rem;
   --kh-stack-gap: 1.15rem;
@@ -42,7 +42,7 @@
 
 .experience-shell .sidebar [data-slot="sidebar-inner"] {
   border-right: 1px solid var(--experience-line) !important;
-  box-shadow: 8px 0 28px rgb(15 23 42 / 0.045) !important;
+  box-shadow: 8px 0 28px rgb(17 17 15 / 0.045) !important;
 }
 
 :root[data-theme="dark"] .experience-shell .sidebar [data-slot="sidebar-inner"],
@@ -87,7 +87,7 @@
   border: 1px solid var(--experience-line) !important;
   border-radius: 0.8rem !important;
   background: var(--card) !important;
-  box-shadow: 0 4px 18px rgb(15 23 42 / 0.04) !important;
+  box-shadow: 0 4px 18px rgb(17 17 15 / 0.04) !important;
 }
 
 .experience-shell .workspace-menu .kh-select-trigger:hover {
@@ -257,8 +257,8 @@
   min-width: 1.25rem;
   height: 1.25rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--experience-accent) 12%, var(--card));
-  color: var(--experience-accent);
+  background: var(--brand-fill, var(--experience-accent));
+  color: var(--brand-foreground);
   font-size: 0.58rem;
   font-weight: 750;
 }
@@ -378,7 +378,7 @@
 .experience-shell .topbar-search-slot .global-search-field {
   min-height: 2.4rem;
   border: 1px solid var(--experience-line) !important;
-  border-radius: 0.7rem;
+  border-radius: 999px !important;
   background: color-mix(in srgb, var(--card) 94%, transparent);
   box-shadow: none !important;
 }
@@ -449,23 +449,24 @@
 
 .experience-shell .topbar-primary-action {
   min-width: max-content;
-  padding-inline: 0.85rem;
-  background: var(--experience-accent);
-  color: var(--brand-foreground);
+  padding-inline: 0.95rem;
+  border-radius: 999px !important;
+  background: var(--brand-fill, var(--experience-accent)) !important;
+  color: var(--brand-foreground) !important;
   box-shadow:
-    0 1px 2px rgb(28 25 23 / 0.14),
-    0 6px 16px color-mix(in srgb, var(--experience-accent) 42%, transparent) !important;
+    0 1px 2px rgb(17 17 15 / 0.14),
+    0 6px 16px color-mix(in srgb, var(--brand-fill, var(--experience-accent)) 42%, transparent) !important;
 }
 
 .experience-shell .topbar-primary-action:hover:not(:disabled) {
   background: color-mix(
     in srgb,
-    var(--experience-accent) 88%,
+    var(--brand-fill, var(--experience-accent)) 88%,
     var(--foreground)
-  );
+  ) !important;
   box-shadow:
-    0 2px 4px rgb(28 25 23 / 0.16),
-    0 10px 22px color-mix(in srgb, var(--experience-accent) 48%, transparent) !important;
+    0 2px 4px rgb(17 17 15 / 0.16),
+    0 10px 22px color-mix(in srgb, var(--brand-fill, var(--experience-accent)) 48%, transparent) !important;
 }
 
 .experience-shell .profile-button {
@@ -763,6 +764,10 @@
   box-shadow: inset 0 0 0 1px var(--experience-line);
 }
 
+.experience-shell[data-view="guides"] .guide-card,
+.experience-shell[data-view="capture"] .card,
+.experience-shell[data-view="support"] .card,
+.experience-shell[data-view="vault"] .card,
 .experience-shell[data-view="members"] .members-directory,
 .experience-shell[data-view="groups"] .group-grid,
 .experience-shell[data-view="settings"] .settings-grid,
@@ -864,8 +869,8 @@
   height: 3.25rem;
   border-radius: 0.85rem;
   box-shadow:
-    0 1px 2px rgb(15 23 42 / 0.08),
-    0 8px 16px rgb(15 23 42 / 0.08);
+    0 1px 2px rgb(17 17 15 / 0.08),
+    0 8px 16px rgb(17 17 15 / 0.08);
 }
 
 .experience-shell .color-picker-grid {
@@ -897,7 +902,7 @@
   background: var(--swatch, var(--experience-accent));
   box-shadow:
     inset 0 0 0 1px rgb(255 255 255 / 0.38),
-    0 1px 2px rgb(15 23 42 / 0.14),
+    0 1px 2px rgb(17 17 15 / 0.14),
     0 10px 18px color-mix(in srgb, var(--swatch, var(--experience-accent)) 42%, transparent);
   appearance: none;
   cursor: pointer;
@@ -908,7 +913,7 @@
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--experience-accent) 22%, transparent),
     inset 0 0 0 1px rgb(255 255 255 / 0.38),
-    0 1px 2px rgb(15 23 42 / 0.14),
+    0 1px 2px rgb(17 17 15 / 0.14),
     0 10px 18px color-mix(in srgb, var(--swatch, var(--experience-accent)) 42%, transparent);
 }
 
@@ -953,19 +958,18 @@
 }
 
 .experience-shell .button.primary,
-.experience-shell [data-slot="button"][data-variant="default"] {
-  background: var(--experience-accent);
-  color: var(--brand-foreground);
+.experience-shell .top-create {
+  background: var(--brand-fill, var(--experience-accent)) !important;
+  color: var(--brand-foreground) !important;
 }
 
 .experience-shell .button.primary:hover:not(:disabled),
-.experience-shell
-  [data-slot="button"][data-variant="default"]:hover:not(:disabled) {
+.experience-shell .top-create:hover:not(:disabled) {
   background: color-mix(
     in srgb,
-    var(--experience-accent) 88%,
+    var(--brand-fill, var(--experience-accent)) 88%,
     var(--foreground)
-  );
+  ) !important;
 }
 
 /* Responsive shell */
@@ -1034,6 +1038,18 @@
     width: 100%;
   }
 
+  .experience-shell .first-run-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .experience-shell .members-directory,
+  .experience-shell .table-card,
+  .experience-shell .group-grid,
+  .experience-shell .settings-grid {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
   .experience-shell .color-picker-grid {
     grid-template-columns: 1fr;
   }
@@ -1046,9 +1062,12 @@
 
   .experience-shell .topbar-primary-action {
     width: 2.4rem;
+    min-width: 2.4rem;
+    padding-inline: 0;
+    justify-content: center;
     overflow: hidden;
+    font-size: 0;
     gap: 0;
-    color: transparent;
     white-space: nowrap;
   }
 
@@ -1254,8 +1273,10 @@
 
 .experience-shell .status-review,
 .experience-shell .status-pending,
-.experience-shell .status-draft {
-  color: var(--brand-hover);
+.experience-shell .status-draft,
+.experience-shell .restricted-label {
+  background: var(--brand-soft);
+  color: var(--brand-contrast, #8a2e08);
 }
 
 .experience-shell .trial-chip {
@@ -1264,8 +1285,8 @@
   margin-top: 0.15rem;
   padding: 0.12rem 0.45rem;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--experience-accent) 12%, var(--card));
-  color: var(--brand-hover);
+  background: var(--brand-soft);
+  color: var(--brand-contrast, #8a2e08);
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -1318,7 +1339,7 @@
   border-radius: 0.7rem;
   cursor: crosshair;
   touch-action: none;
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.14);
 }
 
 .color-picker-sv-white,
@@ -1345,8 +1366,8 @@
   border-radius: 999px;
   pointer-events: none;
   box-shadow:
-    0 0 0 1px rgb(15 23 42 / 0.28),
-    0 2px 6px rgb(15 23 42 / 0.28);
+    0 0 0 1px rgb(17 17 15 / 0.28),
+    0 2px 6px rgb(17 17 15 / 0.28);
   transform: translate(-50%, -50%);
 }
 
@@ -1366,7 +1387,7 @@
     #ff00ff,
     #ff0000
   );
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.12);
 }
 
 .color-picker-hue-knob {
@@ -1387,11 +1408,116 @@
   border: 0;
   border-radius: 999px;
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.18);
 }
 
-.color-picker-preset.is-active {
-  box-shadow:
-    0 0 0 2px var(--card),
-    0 0 0 3.5px var(--foreground);
+.experience-shell .guide-title-line {
+  flex-wrap: wrap;
 }
+
+.experience-shell .guide-card {
+  grid-template-columns: minmax(0, 1fr) minmax(5.5rem, auto) auto;
+}
+
+@media (max-width: 900px) {
+  .experience-shell .guide-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.experience-shell .platform-home,
+.experience-shell .platform-customer,
+.experience-shell .platform-leads,
+.experience-shell .platform-tools,
+.experience-shell .platform-support {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.experience-shell[data-view="platform"] .member-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.35rem;
+}
+
+.experience-shell[data-view="platform"] .member-row > .member-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.experience-shell[data-view="platform"] .member-row > [data-slot="button"] {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.experience-shell .platform-panel-form {
+  padding: 0 0 1.1rem;
+}
+
+@media (min-width: 561px) {
+  .experience-shell .platform-inline-provision {
+    display: none;
+  }
+}
+
+.experience-shell .platform-funnel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.65rem;
+}
+
+.experience-shell .platform-funnel > div,
+.experience-shell .platform-stat-grid > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.9rem;
+  background: var(--card);
+}
+
+.experience-shell .platform-funnel strong,
+.experience-shell .platform-stat-grid strong {
+  font-size: 1.15rem;
+}
+
+.experience-shell .platform-funnel small,
+.experience-shell .platform-stat-grid small {
+  color: var(--muted);
+}
+
+.experience-shell .platform-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.65rem;
+}
+
+.experience-shell .platform-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.experience-shell .platform-next-action {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--experience-accent) 28%, var(--border));
+  border-radius: 0.9rem;
+  background: var(--experience-soft);
+}
+
+.experience-shell .platform-customer-chips,
+.experience-shell .platform-tag-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.experience-shell .platform-tag-grid {
+  margin-top: 0.35rem;
+}
+

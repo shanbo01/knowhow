@@ -147,9 +147,8 @@ export async function buildPublishedExport(
   if (
     guide.publishedRevisionId !== revisionRow.$id ||
     revision.status !== "published" ||
-    !revision.publishedAt || !revision.publishedBy ||
-    !revision.submittedAt || !revision.submittedBy ||
-    !revision.reviewedAt || !revision.reviewedBy
+    !revision.publishedAt ||
+    !revision.publishedBy
   ) {
     throw new HttpError(404, "PUBLISHED_GUIDE_NOT_FOUND", "The published guide is unavailable.");
   }
@@ -176,11 +175,17 @@ export async function buildPublishedExport(
     store.list(TABLES.workspaceSettings, { filters: [{ field: "workspace_id", value: workspaceId }], limit: 1 }),
     displayNames(store, workspaceId),
   ]);
-  const review = reviewRows.find((row) => row.status === "approved");
-  if (!review) throw new HttpError(409, "REVIEW_APPROVAL_REQUIRED", "The published revision has no approved review receipt.");
   const settings = settingRows[0]
     ? { ...DEFAULT_WORKSPACE_SETTINGS, ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}) }
     : DEFAULT_WORKSPACE_SETTINGS;
+  const review = reviewRows.find((row) => row.status === "approved");
+  if (!review && settings.requireReviewBeforePublish) {
+    throw new HttpError(409, "REVIEW_APPROVAL_REQUIRED", "The published revision has no approved review receipt.");
+  }
+  const submittedAt = revision.submittedAt ?? revision.publishedAt;
+  const submittedBy = revision.submittedBy ?? revision.publishedBy;
+  const reviewedAt = revision.reviewedAt ?? revision.publishedAt;
+  const reviewedBy = revision.reviewedBy ?? revision.publishedBy;
   const media = new Map(
     mediaRows.map((row) => [row.$id, decodePayload<PrivateMediaRecord>(row, null as never)]),
   );
@@ -242,7 +247,7 @@ export async function buildPublishedExport(
       showKnowHowBranding: !settings.removeBranding,
     },
     exportPolicy: {
-      allowedFormats: ["live-link", "pdf", "html", "markdown"],
+      allowedFormats: ["live-link", "pdf", "html", "markdown", "pptx"],
       restrictedGuideExports: !restricted || settings.allowRestrictedExports ? "allowed" : "disabled",
       watermark: {
         mode: restricted && settings.watermarkExports ? "required" : "optional",
@@ -252,10 +257,10 @@ export async function buildPublishedExport(
       },
     },
     lifecycle: "published",
-    submittedAt: revision.submittedAt,
-    submittedBy: actor(revision.submittedBy),
-    reviewedAt: revision.reviewedAt,
-    reviewedBy: actor(revision.reviewedBy),
+    submittedAt,
+    submittedBy: actor(submittedBy),
+    reviewedAt,
+    reviewedBy: actor(reviewedBy),
     publishedAt: revision.publishedAt,
     publishedBy: actor(revision.publishedBy),
   };

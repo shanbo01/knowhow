@@ -189,6 +189,7 @@ export const GUIDE_EXPORT_FORMATS = [
   "pdf",
   "html",
   "markdown",
+  "pptx",
 ] as const;
 
 export type GuideExportFormat = (typeof GUIDE_EXPORT_FORMATS)[number];

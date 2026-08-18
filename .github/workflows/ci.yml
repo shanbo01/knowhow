@@ -1,4 +1,4 @@
-name: pilot-readiness
+name: ci
 
 on:
   pull_request:

@@ -3,12 +3,12 @@
    is not affected by the historical workspace cascade. */
 
 .auth-shell {
-  --auth-ink: #1d1b19;
-  --auth-muted: #6d6861;
-  --auth-paper: #f4f1ea;
-  --auth-card: #fffdf9;
-  --auth-line: #ddd7cd;
-  --auth-orange: #c65321;
+  --auth-ink: #11110f;
+  --auth-muted: #6e6c66;
+  --auth-paper: #f5f4f0;
+  --auth-card: #ffffff;
+  --auth-line: #deddd7;
+  --auth-orange: #ff5a12;
   min-height: 100svh;
   display: grid;
   grid-template-columns: minmax(22rem, 0.88fr) minmax(30rem, 1.12fr);
@@ -20,12 +20,12 @@
 /* Admitted-user tenant setup. Kept in the account layer so it remains
    independent from the legacy workspace shell while setup is incomplete. */
 .self-service-shell {
-  --setup-ink: #1d1b19;
-  --setup-muted: #6d6861;
-  --setup-paper: #f4f1ea;
-  --setup-card: #fffdf9;
-  --setup-line: #ddd7cd;
-  --setup-orange: #c65321;
+  --setup-ink: #11110f;
+  --setup-muted: #6e6c66;
+  --setup-paper: #f5f4f0;
+  --setup-card: #ffffff;
+  --setup-line: #deddd7;
+  --setup-orange: #ff5a12;
   min-height: 100svh;
   padding: clamp(1.25rem, 3vw, 2.5rem);
   color: var(--setup-ink);
@@ -831,7 +831,7 @@
 }
 
 .auth-forgot-link:hover {
-  color: #c65321;
+  color: var(--auth-orange);
 }
 
 .auth-terms-row {
@@ -846,11 +846,11 @@
 
 .auth-terms-row input {
   margin-top: 0.2rem;
-  accent-color: #c65321;
+  accent-color: var(--auth-orange);
 }
 
 .auth-terms-row a {
-  color: #c65321;
+  color: var(--auth-orange);
   font-weight: 700;
 }
 

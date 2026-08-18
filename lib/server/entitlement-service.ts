@@ -1,41 +1,217 @@
 import { TABLES } from "./appwrite-resources";
-import { decodePayload, type PrivateMediaRecord, type WorkspaceMemberRecord } from "./domain-records";
+import {
+  effectiveCommercialPlan,
+  entitlementsForPlan,
+  type PlanEntitlements,
+} from "./commercial-plan";
+import {
+  decodePayload,
+  rowData,
+  type PrivateMediaRecord,
+  type SubscriptionRecord,
+  type WorkspaceMemberRecord,
+} from "./domain-records";
 import { HttpError } from "./http-security";
+import { deterministicResourceId, resourceId } from "./ids";
 import type { RecordStore } from "./record-store";
 
-type EntitlementValue = string | number | boolean;
+export class EntitlementDeniedError extends HttpError {
+  readonly entitlementKind: string;
+
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    entitlementKind: string,
+  ) {
+    super(status, code, message);
+    this.name = "EntitlementDeniedError";
+    this.entitlementKind = entitlementKind;
+  }
+}
+
+export async function recordEntitlementBlocked(
+  store: RecordStore,
+  workspaceId: string,
+  entitlementKind: string,
+) {
+  try {
+    const workspace = await store.get(TABLES.workspaces, workspaceId);
+    await store.create(
+      TABLES.usageEvents,
+      resourceId("usage"),
+      rowData(
+        {
+          organization_id: String(workspace?.organization_id ?? ""),
+          workspace_id: workspaceId,
+          kind: "entitlement.blocked",
+          status: "recorded",
+          occurred_at: new Date().toISOString(),
+          created_by: "knowhow",
+        },
+        { entitlementKind },
+      ),
+    );
+  } catch {
+    // Never mask the entitlement denial if telemetry write fails.
+  }
+}
+
+export type EntitlementValue = string | number | boolean;
+
+export type EntitlementOverridePayload = {
+  value: EntitlementValue;
+  source?: "plan" | "override";
+  reason?: string;
+  expiresAt?: string | null;
+  grantedBy?: string;
+  grantedAt?: string;
+};
 
 const DEFAULTS: Record<string, EntitlementValue> = {
-  maximumUsers: 100,
-  maximumCreators: 25,
-  storageBytes: 5_000_000_000,
+  maximumUsers: 3,
+  maximumCreators: 1,
+  storageBytes: 1_000_000_000,
   extensionEnabled: false,
   supportEnabled: false,
   removeBranding: false,
+  privacyToolsEnabled: false,
+  customSubdomainEnabled: false,
   publicSignup: false,
   payments: false,
   ssoScim: false,
+  fileExportsEnabled: false,
 };
+
+export const OVERRIDABLE_ENTITLEMENTS = [
+  "maximumUsers",
+  "maximumCreators",
+  "storageBytes",
+  "extensionEnabled",
+  "supportEnabled",
+  "removeBranding",
+  "privacyToolsEnabled",
+  "customSubdomainEnabled",
+  "fileExportsEnabled",
+] as const;
+
+export type OverridableEntitlement = (typeof OVERRIDABLE_ENTITLEMENTS)[number];
+
+function isExpiredOverride(payload: EntitlementOverridePayload, now: number) {
+  if (payload.source !== "override") return false;
+  if (!payload.expiresAt) return false;
+  const expiry = Date.parse(payload.expiresAt);
+  return Number.isFinite(expiry) && expiry <= now;
+}
+
+export async function applyPlanEntitlements(
+  store: RecordStore,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    actorUserId: string;
+    entitlements: PlanEntitlements | Record<string, EntitlementValue>;
+  },
+) {
+  const existing = await store.list(TABLES.entitlements, {
+    filters: [{ field: "workspace_id", value: input.workspaceId }],
+    limit: 100,
+  });
+  const byKind = new Map(
+    existing.map((row) => [String(row.kind), row] as const),
+  );
+  for (const [kind, value] of Object.entries(input.entitlements)) {
+    const fields = rowData(
+      {
+        organization_id: input.organizationId,
+        workspace_id: input.workspaceId,
+        kind,
+        status: "active",
+        updated_by: input.actorUserId,
+      },
+      { value, source: "plan" } satisfies EntitlementOverridePayload,
+    );
+    const row = byKind.get(kind);
+    if (row) {
+      await store.update(TABLES.entitlements, row.$id, fields);
+    } else {
+      const id = await deterministicResourceId(
+        "entitle",
+        `${input.workspaceId}:${kind}`,
+      );
+      await store.create(TABLES.entitlements, id, {
+        ...fields,
+        created_by: input.actorUserId,
+      });
+    }
+  }
+}
 
 export class EntitlementService {
   constructor(private readonly store: RecordStore, private readonly workspaceId: string) {}
 
-  async value<T extends EntitlementValue>(kind: string, fallback?: T): Promise<T> {
-    const rows = await this.store.list(TABLES.entitlements, {
-      filters: [
-        { field: "workspace_id", value: this.workspaceId },
-        { field: "kind", value: kind },
-        { field: "status", value: "active" },
-      ],
-      limit: 1,
+  private async subscription() {
+    const rows = await this.store.list(TABLES.subscriptions, {
+      filters: [{ field: "workspace_id", value: this.workspaceId }],
+      order: "desc",
+      limit: 10,
     });
-    const value = rows[0] ? decodePayload<{ value?: EntitlementValue }>(rows[0], {}).value : undefined;
-    return (value ?? fallback ?? DEFAULTS[kind]) as T;
+    const row = rows.find((item) => item.status !== "cancelled") ?? rows[0];
+    if (!row) return null;
+    return decodePayload<SubscriptionRecord>(row, null as never);
   }
 
-  async requireFeature(kind: "extensionEnabled" | "supportEnabled" | "removeBranding") {
+  async snapshot(): Promise<PlanEntitlements> {
+    const subscription = await this.subscription();
+    const plan = effectiveCommercialPlan(subscription);
+    const catalog = entitlementsForPlan(plan);
+    const rows = await this.store.list(TABLES.entitlements, {
+      filters: [{ field: "workspace_id", value: this.workspaceId }],
+      limit: 100,
+    });
+    const stored: Record<string, EntitlementValue> = {};
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.status !== "active" || typeof row.kind !== "string") continue;
+      const payload = decodePayload<EntitlementOverridePayload>(row, {
+        value: false,
+      });
+      if (payload.value === undefined) continue;
+      if (isExpiredOverride(payload, now)) continue;
+      stored[row.kind] = payload.value;
+    }
+    const merged = { ...DEFAULTS, ...catalog, ...stored } as PlanEntitlements;
+    if (plan === "free") return { ...merged, ...catalog };
+    return merged;
+  }
+
+  async value<T extends EntitlementValue>(kind: string, fallback?: T): Promise<T> {
+    const snapshot = await this.snapshot();
+    const fromPlan = snapshot[kind as keyof PlanEntitlements];
+    return (fromPlan ?? fallback ?? DEFAULTS[kind]) as T;
+  }
+
+  private async deny(kind: string, status: number, code: string, message: string): Promise<never> {
+    await recordEntitlementBlocked(this.store, this.workspaceId, kind);
+    throw new EntitlementDeniedError(status, code, message, kind);
+  }
+
+  async requireFeature(
+    kind:
+      | "extensionEnabled"
+      | "supportEnabled"
+      | "removeBranding"
+      | "privacyToolsEnabled"
+      | "customSubdomainEnabled"
+      | "fileExportsEnabled",
+  ) {
     if (!(await this.value<boolean>(kind, false))) {
-      throw new HttpError(403, "ENTITLEMENT_REQUIRED", "This feature is not enabled for the workspace.");
+      await this.deny(
+        kind,
+        403,
+        "ENTITLEMENT_REQUIRED",
+        "This feature is not enabled for the workspace.",
+      );
     }
   }
 
@@ -45,7 +221,12 @@ export class EntitlementService {
       filters: [{ field: "workspace_id", value: this.workspaceId }, { field: "status", value: "active" }],
     })).length;
     if (active + additional > maximum) {
-      throw new HttpError(409, "USER_ENTITLEMENT_EXCEEDED", "The workspace has reached its active-user entitlement.");
+      await this.deny(
+        "maximumUsers",
+        409,
+        "USER_ENTITLEMENT_EXCEEDED",
+        "The workspace has reached its active-user entitlement.",
+      );
     }
   }
 
@@ -61,7 +242,12 @@ export class EntitlementService {
     );
     if (userId) creatorIds.add(userId);
     if (creatorIds.size > maximum) {
-      throw new HttpError(409, "CREATOR_ENTITLEMENT_EXCEEDED", "The workspace has reached its active-creator entitlement.");
+      await this.deny(
+        "maximumCreators",
+        409,
+        "CREATOR_ENTITLEMENT_EXCEEDED",
+        "The workspace has reached its active-creator entitlement.",
+      );
     }
   }
 
@@ -77,7 +263,12 @@ export class EntitlementService {
       used += decodePayload<PrivateMediaRecord>(row, null as never)?.byteSize ?? 0;
     }
     if (!Number.isSafeInteger(additionalBytes) || additionalBytes < 0 || used + additionalBytes > maximum) {
-      throw new HttpError(413, "STORAGE_ENTITLEMENT_EXCEEDED", "The workspace storage entitlement would be exceeded.");
+      await this.deny(
+        "storageBytes",
+        413,
+        "STORAGE_ENTITLEMENT_EXCEEDED",
+        "The workspace storage entitlement would be exceeded.",
+      );
     }
     return { used, maximum };
   }

@@ -1,5 +1,12 @@
 import { TABLES } from "./appwrite-resources";
 import {
+  effectiveCommercialPlan,
+  entitlementsForPlan,
+  inferredCommercialPlan,
+  isRetainLifecycle,
+  subscriptionKindForPlan,
+} from "./commercial-plan";
+import {
   decodePayload,
   rowData,
   type LifecycleAccess,
@@ -9,6 +16,7 @@ import {
   type WorkspaceMemberRecord,
   type WorkspaceRecord,
 } from "./domain-records";
+import { applyPlanEntitlements } from "./entitlement-service";
 import type { RecordStore, StoredRecord, RecordData } from "./record-store";
 
 const DAY = 86_400_000;
@@ -61,6 +69,9 @@ export function evaluateSubscription(
     return { access: "deleting", ...base };
   if (subscription.status === "deletion_pending")
     return { access: "deletion_pending", ...base };
+  if (!isRetainLifecycle(subscription)) {
+    return { access: "active", ...base, deletionEligibleAt: null };
+  }
   if (subscription.status === "cancelled")
     return { access: "suspended", ...base };
   if (subscription.kind === "paid" && expiry === null)
@@ -122,31 +133,42 @@ function notices(subscription: SubscriptionRecord): Notice[] {
   const start = validDate(subscription.startsAt);
   const expiry = validDate(subscription.expiresAt);
   if (start === null || expiry === null) return [];
+  const stored = inferredCommercialPlan(subscription);
   const prefix =
-    subscription.kind === "trial"
+    stored === "pro_trial" || subscription.kind === "trial"
       ? "trial"
-      : subscription.kind === "design_partner"
+      : stored === "enterprise" || subscription.kind === "design_partner"
         ? "pilot"
         : "subscription";
   const graceEnd = expiry + subscription.graceDays * DAY;
   const eligible = expiry + subscription.retentionDays * DAY;
+  const retain = isRetainLifecycle(subscription);
   return [
     { kind: `${prefix}.welcome`, at: start },
-    ...(subscription.kind === "trial"
+    ...(stored === "pro_trial" || subscription.kind === "trial"
       ? [{ kind: "trial.activation_help", at: start + 7 * DAY }]
       : []),
     { kind: `${prefix}.expiry_4d`, at: expiry - 4 * DAY },
     { kind: `${prefix}.expiry_1d`, at: expiry - DAY },
     { kind: `${prefix}.expired`, at: expiry },
-    {
-      kind: `${prefix}.grace_midpoint`,
-      at: expiry + Math.floor(subscription.graceDays / 2) * DAY,
-    },
-    { kind: `${prefix}.grace_1d`, at: graceEnd - DAY },
-    { kind: `${prefix}.suspended`, at: graceEnd },
-    { kind: "retention.30d_after_expiry", at: expiry + 30 * DAY },
-    { kind: "retention.eligibility_7d", at: eligible - 7 * DAY },
-    { kind: "retention.eligibility_1d", at: eligible - DAY },
+    ...(retain
+      ? [
+          {
+            kind: `${prefix}.grace_midpoint`,
+            at: expiry + Math.floor(subscription.graceDays / 2) * DAY,
+          },
+          { kind: `${prefix}.grace_1d`, at: graceEnd - DAY },
+          { kind: `${prefix}.suspended`, at: graceEnd },
+          { kind: "retention.30d_after_expiry", at: expiry + 30 * DAY },
+          { kind: "retention.eligibility_7d", at: eligible - 7 * DAY },
+          { kind: "retention.eligibility_1d", at: eligible - DAY },
+        ]
+      : [
+          {
+            kind: `${prefix}.grace_1d`,
+            at: graceEnd - DAY,
+          },
+        ]),
   ];
 }
 
@@ -227,9 +249,52 @@ export class LifecycleService {
         ? decodePayload<OrganizationRecord>(organizationRow, null as never)
         : null;
 
-      const status = desiredStatus(evaluation.access);
+      const retain = isRetainLifecycle(subscription);
+      const storedPlan = inferredCommercialPlan(subscription);
+      const effectivePlan = effectiveCommercialPlan(subscription, now);
+      let nextSubscription = subscription;
+      if (!retain && effectivePlan === "free" && storedPlan !== "free") {
+        nextSubscription = {
+          ...subscription,
+          plan: "free",
+          kind: subscriptionKindForPlan("free"),
+          status: "active",
+          expiresAt: null,
+          graceDays: 0,
+          publicTrial: false,
+          manualContract: false,
+          trialConsumed: true,
+          downgradedAt: now.toISOString(),
+          lastEvaluatedAt: now.toISOString(),
+        };
+        await applyPlanEntitlements(transaction, {
+          organizationId: workspace.organizationId,
+          workspaceId,
+          actorUserId: "knowhow_ops",
+          entitlements: entitlementsForPlan("free"),
+        });
+      } else if (
+        !retain &&
+        storedPlan === "pro" &&
+        effectivePlan === "pro" &&
+        evaluation.expiresAt &&
+        now.getTime() >= Date.parse(evaluation.expiresAt)
+      ) {
+        nextSubscription = {
+          ...subscription,
+          plan: "pro",
+          status: "grace",
+          lastEvaluatedAt: now.toISOString(),
+        };
+      }
+
+      const status = retain
+        ? desiredStatus(evaluation.access)
+        : nextSubscription.status;
       if (
         subscription.status !== status ||
+        subscription.plan !== nextSubscription.plan ||
+        subscription.expiresAt !== nextSubscription.expiresAt ||
         subscription.lastEvaluatedAt !== now.toISOString()
       ) {
         await transaction.update(
@@ -240,20 +305,22 @@ export class LifecycleService {
               organization_id: row.organization_id,
               workspace_id: workspaceId,
               status,
-              kind: subscription.kind,
+              kind: nextSubscription.kind,
               updated_by: "knowhow_ops",
             },
-            { ...subscription, status, lastEvaluatedAt: now.toISOString() },
+            { ...nextSubscription, status, lastEvaluatedAt: now.toISOString() },
           ),
         );
       }
 
-      const shouldSuspend = [
-        "suspended",
-        "deletion_pending",
-        "deleting",
-        "deleted",
-      ].includes(evaluation.access);
+      const shouldSuspend =
+        retain &&
+        [
+          "suspended",
+          "deletion_pending",
+          "deleting",
+          "deleted",
+        ].includes(evaluation.access);
       if (
         shouldSuspend &&
         (workspace.status !== "suspended" ||
@@ -344,6 +411,7 @@ export class LifecycleService {
                 expiresAt: evaluation.expiresAt,
                 graceEndsAt: evaluation.graceEndsAt,
                 deletionEligibleAt: evaluation.deletionEligibleAt,
+                retainLifecycle: retain,
               },
             ),
           );
@@ -352,6 +420,7 @@ export class LifecycleService {
       }
 
       if (
+        retain &&
         evaluation.access === "deletion_pending" &&
         evaluation.deletionEligibleAt
       ) {

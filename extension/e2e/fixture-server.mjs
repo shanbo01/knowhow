@@ -4,7 +4,8 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const origin = "http://127.0.0.1:43117";
+const port = Number(process.env.KNOWHOW_E2E_PORT || 43117);
+const origin = `http://127.0.0.1:${port}`;
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -32,7 +33,7 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(43117, "127.0.0.1");
+server.listen(port, "127.0.0.1");
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => server.close(() => process.exit(0)));

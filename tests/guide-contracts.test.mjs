@@ -45,7 +45,7 @@ function publishedRevision() {
       showKnowHowBranding: true,
     },
     exportPolicy: {
-      allowedFormats: ["live-link", "pdf", "html", "markdown"],
+      allowedFormats: ["live-link", "pdf", "html", "markdown", "pptx"],
       restrictedGuideExports: "allowed",
       watermark: {
         mode: "optional",
@@ -324,6 +324,10 @@ test("renders cropped screenshots and escaped visual annotations", async () => {
   const pdf = await guide.renderGuideToPdf(revision, options);
   const document = await PDFDocument.load(pdf);
   assert.ok(document.getPageCount() >= 1);
+
+  const pptx = await guide.renderGuideToPptx(revision, options);
+  assert.equal(pptx[0], 0x50);
+  assert.equal(pptx[1], 0x4b);
 });
 
 test("renders a deterministic, parseable, paginated PDF", async () => {

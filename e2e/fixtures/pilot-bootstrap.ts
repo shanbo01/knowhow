@@ -49,6 +49,8 @@ const publishedGuide: Guide = {
   canEdit: true,
   canReview: true,
   canPublish: true,
+  canShare: true,
+  canArchive: true,
   canDelete: true,
   createdAt: "2026-08-01T08:00:00.000Z",
   updatedAt: NOW,
@@ -86,6 +88,8 @@ const reviewGuide: Guide = {
   canEdit: true,
   canReview: true,
   canPublish: true,
+  canShare: true,
+  canArchive: true,
   canDelete: true,
   createdAt: "2026-08-08T08:00:00.000Z",
   updatedAt: NOW,
@@ -126,10 +130,17 @@ const activeSummary: WorkspaceSummary = {
   draftCount: 1,
   createdAt: "2026-08-01T07:00:00.000Z",
   subscription: {
+    plan: "pro_trial",
+    billedPlan: "pro_trial",
+    kind: "trial",
+    status: "active",
     access: "active",
     expiresAt: "2026-10-31T23:59:59.000Z",
     graceEndsAt: null,
     deletionEligibleAt: null,
+    renewsAt: "2026-10-31T23:59:59.000Z",
+    trialConsumed: true,
+    pastDue: false,
   },
 };
 
@@ -145,10 +156,17 @@ const suspendedSummary: WorkspaceSummary = {
   draftCount: 0,
   createdAt: "2026-01-01T07:00:00.000Z",
   subscription: {
+    plan: "enterprise",
+    billedPlan: "enterprise",
+    kind: "design_partner",
+    status: "deletion_pending",
     access: "deletion_pending",
     expiresAt: "2026-03-01T00:00:00.000Z",
     graceEndsAt: "2026-03-15T00:00:00.000Z",
     deletionEligibleAt: "2026-06-15T00:00:00.000Z",
+    renewsAt: "2026-03-01T00:00:00.000Z",
+    trialConsumed: true,
+    pastDue: false,
   },
 };
 
@@ -175,7 +193,19 @@ export function pilotBootstrap(): BootstrapResponse {
           removeBranding: false,
           allowRestrictedExports: false,
           watermarkExports: true,
+          requireReviewBeforePublish: false,
         },
+      },
+      entitlements: {
+        maximumUsers: 100,
+        maximumCreators: 25,
+        storageBytes: 50_000_000_000,
+        extensionEnabled: true,
+        supportEnabled: true,
+        removeBranding: true,
+        privacyToolsEnabled: true,
+        customSubdomainEnabled: true,
+        fileExportsEnabled: true,
       },
       metrics: {
         members: 2,
@@ -312,12 +342,15 @@ export function pilotBootstrap(): BootstrapResponse {
             "workspace_readiness",
             "teammate_invitation",
             "extension_installation",
+            "extension_pin",
             "first_capture",
-            "first_edit",
             "first_publication",
-            "teammate_completion",
           ] as const
-        ).map((id) => ({ id, completed: false, completedAt: null })),
+        ).map((id) => ({
+          id,
+          completed: id === "workspace_readiness",
+          completedAt: id === "workspace_readiness" ? NOW : null,
+        })),
       },
     },
     organizations: [
@@ -352,142 +385,17 @@ export function pilotBootstrap(): BootstrapResponse {
     ],
     platform: {
       generatedAt: NOW,
-      metrics: {
-        users: 5,
-        activeWorkspaces: 1,
-        suspendedWorkspaces: 1,
-        archivedWorkspaces: 0,
-        drafts: 1,
-        published: 3,
-        captures: 2,
-        views: 10,
-        completions: 4,
-        exports: 2,
-        storageBytes: 8192,
-        failedOperations: 0,
-      },
-      workspaces: [
-        {
-          ...activeSummary,
-          administrators: [
-            {
-              userId: "user_owner",
-              name: "Pilot Owner",
-              email: "owner@alpha.example",
-            },
-          ],
-          captures: 1,
-          views: 4,
-          completions: 1,
-          exports: 1,
-          storageBytes: 4096,
-          failedOperations: 0,
-          supportRequest: null,
-          supportGrant: null,
-        },
-        {
-          ...suspendedSummary,
-          administrators: [
-            {
-              userId: "user_beta_owner",
-              name: "Beta Owner",
-              email: "owner@beta.example",
-            },
-          ],
-          captures: 1,
-          views: 6,
-          completions: 3,
-          exports: 1,
-          storageBytes: 4096,
-          failedOperations: 0,
-          supportRequest: null,
-          supportGrant: null,
-        },
-      ],
       settings: { selfServiceWorkspaceLimit: 0 },
+      queueCounts: {
+        newLeads: 0,
+        openTickets: 1,
+        overdueSupport: 0,
+        expiringSoon: 0,
+        neverActivated: 0,
+        deletionApprovals: 1,
+        failedNotifications: 0,
+      },
       appointments: [],
-      organizations: [
-        {
-          id: "organization_alpha",
-          displayName: "Alpha Operations",
-          legalName: "Alpha Operations W.L.L.",
-          country: "QA",
-          status: "active",
-          workspaceCount: 1,
-          createdAt: "2026-08-01T07:00:00.000Z",
-        },
-        {
-          id: "organization_beta",
-          displayName: "Beta Archive",
-          legalName: "Beta Archive W.L.L.",
-          country: "QA",
-          status: "active",
-          workspaceCount: 1,
-          createdAt: "2026-01-01T07:00:00.000Z",
-        },
-      ],
-      subscriptions: [
-        {
-          id: "subscription_alpha",
-          workspaceId: PILOT_WORKSPACE_ID,
-          kind: "pilot",
-          status: "active",
-          access: "active",
-          startsAt: "2026-08-01T00:00:00.000Z",
-          expiresAt: "2026-10-31T23:59:59.000Z",
-          graceEndsAt: null,
-          deletionEligibleAt: null,
-        },
-        {
-          id: "subscription_beta",
-          workspaceId: suspendedSummary.id,
-          kind: "pilot",
-          status: "expired",
-          access: "deletion_pending",
-          startsAt: "2026-01-01T00:00:00.000Z",
-          expiresAt: "2026-03-01T00:00:00.000Z",
-          graceEndsAt: "2026-03-15T00:00:00.000Z",
-          deletionEligibleAt: "2026-06-15T00:00:00.000Z",
-        },
-      ],
-      entitlements: [
-        {
-          id: "entitlement_members",
-          workspaceId: PILOT_WORKSPACE_ID,
-          kind: "member_limit",
-          value: 25,
-        },
-      ],
-      leads: [],
-      activation: [
-        {
-          workspaceId: PILOT_WORKSPACE_ID,
-          firstPublishedAt: "2026-08-09T11:00:00.000Z",
-          firstTeammateViewAt: "2026-08-09T12:00:00.000Z",
-          firstTeammateCompletionAt: "2026-08-09T12:30:00.000Z",
-        },
-      ],
-      support: [
-        {
-          id: "ticket_synthetic",
-          workspaceId: PILOT_WORKSPACE_ID,
-          status: "waiting_support",
-          requesterName: "Pilot Owner",
-          responseTargetAt: "2026-08-11T12:00:00.000Z",
-          updatedAt: NOW,
-        },
-      ],
-      notificationFailures: [],
-      deletionCases: [
-        {
-          id: "deletion_case_beta",
-          organizationId: "organization_beta",
-          workspaceId: suspendedSummary.id,
-          status: "awaiting_approval",
-          eligibleAt: "2026-06-15T00:00:00.000Z",
-          confirmationText: DELETION_CONFIRMATION,
-        },
-      ],
       provisioningRuns: [
         {
           id: "provisioning_synthetic",
@@ -497,24 +405,217 @@ export function pilotBootstrap(): BootstrapResponse {
           steps: {},
         },
       ],
-      betaAccess: { grants: [], events: [] },
-      systemHealth: {
-        failedNotifications: 0,
-        overdueSupport: 0,
-        expiringWithinSevenDays: 0,
-        deletionApprovals: 1,
-        failedOperations: 0,
-      },
-      platformAudits: [
-        {
-          id: "platform_audit_synthetic",
-          workspaceId: suspendedSummary.id,
-          action: "deletion.awaiting_approval",
-          occurredAt: NOW,
-        },
-      ],
+      pricingCatalogs: [],
     },
   } satisfies BootstrapResponse);
+}
+
+export function pilotPlatformQuery(
+  resource: string | null,
+  params: URLSearchParams = new URLSearchParams(),
+) {
+  const counts = {
+    newLeads: 0,
+    openTickets: 1,
+    overdueSupport: 0,
+    expiringSoon: 0,
+    neverActivated: 0,
+    deletionApprovals: 1,
+    failedNotifications: 0,
+  };
+  const alphaAccount = {
+    id: PILOT_WORKSPACE_ID,
+    organizationId: "organization_alpha",
+    organizationName: "Alpha Operations",
+    name: "Alpha Operations",
+    slug: PILOT_WORKSPACE_SLUG,
+    status: "active",
+    createdAt: "2026-08-01T07:00:00.000Z",
+    subscription: {
+      id: "subscription_alpha",
+      workspaceId: PILOT_WORKSPACE_ID,
+      kind: "trial",
+      plan: "pro_trial",
+      status: "active",
+      access: "active",
+      startsAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2026-10-31T23:59:59.000Z",
+      graceEndsAt: null,
+      deletionEligibleAt: null,
+    },
+    seatLimit: 25,
+    memberCount: 4,
+    health: "trial" as const,
+  };
+  const betaAccount = {
+    id: suspendedSummary.id,
+    organizationId: "organization_beta",
+    organizationName: "Beta Archive",
+    name: "Beta Archive",
+    slug: "beta-archive",
+    status: "suspended",
+    createdAt: "2026-01-01T07:00:00.000Z",
+    subscription: {
+      id: "subscription_beta",
+      workspaceId: suspendedSummary.id,
+      kind: "design_partner",
+      plan: "enterprise",
+      status: "expired",
+      access: "deletion_pending",
+      startsAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-03-01T00:00:00.000Z",
+      graceEndsAt: "2026-03-15T00:00:00.000Z",
+      deletionEligibleAt: "2026-06-15T00:00:00.000Z",
+    },
+    seatLimit: null,
+    memberCount: 3,
+    health: "churning" as const,
+  };
+  const tools = {
+    audits: { items: [], nextCursor: null },
+    notificationFailures: [],
+    deletionCases: [
+      {
+        id: "deletion_case_beta",
+        organizationId: "organization_beta",
+        workspaceId: suspendedSummary.id,
+        workspaceName: "Beta Archive",
+        status: "awaiting_approval",
+        eligibleAt: "2026-06-15T00:00:00.000Z",
+        confirmationText: DELETION_CONFIRMATION,
+      },
+    ],
+    appointments: [],
+  };
+  const toRecord = (summary: typeof alphaAccount | typeof betaAccount) => ({
+    ...summary,
+    organization: {
+      id: summary.organizationId,
+      displayName: summary.organizationName,
+      legalName: summary.organizationName,
+      country: "QA",
+      status: "active",
+      primaryContactName: "Pilot Owner",
+      primaryContactEmail: "owner@alpha.example",
+      internalNotes: "",
+      ownerLabel: "",
+      accountTags: [],
+    },
+    administrators: [
+      {
+        userId: "user_owner",
+        name: "Pilot Owner",
+        email: "owner@alpha.example",
+        roles: ["administrator"],
+      },
+    ],
+    billingContacts: [],
+    publishedCount: 1,
+    draftCount: 0,
+    activation: {
+      firstPublishedAt: NOW,
+      firstTeammateViewAt: null,
+      firstTeammateCompletionAt: null,
+    },
+    activationChecklist: [
+      {
+        id: "published",
+        label: "Published a guide",
+        completed: true,
+        completedAt: NOW,
+      },
+    ],
+    tickets: [],
+    originatingLead: null,
+    entitlements: [],
+    usage: {
+      captures: 2,
+      publishes: 1,
+      views: 4,
+      exportRequests: 1,
+      paywallHits: 0,
+      storageBytes: 1_200_000,
+      storageLimit: 50_000_000_000,
+      creatorCount: 1,
+      creatorLimit: 25,
+    },
+    extension: { version: "0.4.0", lastUsedAt: NOW, deviceCount: 1 },
+    lastActivityAt: NOW,
+    timeline: [],
+    domainSiblings: [],
+    audits: [],
+    supportRequest: null,
+    supportGrant: null,
+  });
+  if (resource === "home") {
+    return {
+      queues: [
+        {
+          id: "talk-today",
+          title: "People worth talking to",
+          description: "Trials, upgrade intent, and second-trial candidates.",
+          items: [
+            {
+              workspaceId: PILOT_WORKSPACE_ID,
+              name: "Alpha Operations",
+              organizationName: "Alpha Operations",
+              plan: "pro_trial",
+              reason: "Trial still active with recent captures.",
+              nextAction: "none",
+              href: `/platform/customers/${PILOT_WORKSPACE_ID}`,
+            },
+          ],
+        },
+      ],
+      funnel: [
+        { id: "signed_up", label: "Signed up", count: 2 },
+        { id: "captured", label: "Captured", count: 1 },
+        { id: "published", label: "Published", count: 1 },
+      ],
+      counts: { ...counts, customers: 2, trials: 1 },
+      settings: { selfServiceWorkspaceLimit: 0 },
+    };
+  }
+  if (resource === "queues") {
+    return {
+      counts,
+      settings: { selfServiceWorkspaceLimit: 0 },
+      attention: {
+        leads: [],
+        tickets: [],
+        expiring: [],
+        neverActivated: [],
+        deletions: [],
+      },
+      recentAudits: [],
+    };
+  }
+  if (resource === "accounts" || resource === "customers") {
+    return { items: [alphaAccount, betaAccount], nextCursor: null };
+  }
+  if (resource === "account" || resource === "customer") {
+    const workspaceId = params.get("workspaceId");
+    const summary =
+      workspaceId === suspendedSummary.id ? betaAccount : alphaAccount;
+    return { account: toRecord(summary) };
+  }
+  if (resource === "activity" || resource === "tools") {
+    return tools;
+  }
+  if (resource === "billing") {
+    return {
+      items: [
+        { ...alphaAccount.subscription, workspaceName: "Alpha Operations" },
+        { ...betaAccount.subscription, workspaceName: "Beta Archive" },
+      ],
+      nextCursor: null,
+      catalogs: [],
+    };
+  }
+  if (resource === "search") {
+    return { results: [] };
+  }
+  return { items: [], nextCursor: null };
 }
 
 export function recoveryBootstrap(): BootstrapResponse {

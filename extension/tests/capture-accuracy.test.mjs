@@ -324,9 +324,10 @@ test("capture reserves a prepared pre-action frame without delaying the click", 
   );
   assert.match(drag, /cancelStagedInteraction\(active\)/);
   assert.match(contentSource, /type: "CANCEL_INTERACTION"/);
-  assert.match(backgroundSource, /deadlineRequired: true/);
+  assert.match(backgroundSource, /deadlineRequired: false/);
+  assert.doesNotMatch(backgroundSource, /deadlineRequired: true/);
   assert.doesNotMatch(backgroundSource, /verified\.visualEpoch !== visualEpoch/);
-  assert.match(backgroundSource, /verified\.viewportKey !== viewportKey/);
+  assert.match(backgroundSource, /keepOnNavigation: true/);
   assert.match(backgroundSource, /ignoreVisualEpoch: Boolean\(message\.frameId\)/);
   assert.match(backgroundSource, /if \(entry\.frameId\) return/);
   assert.match(backgroundSource, /markCaptureEntryFailed/);
@@ -335,6 +336,10 @@ test("capture reserves a prepared pre-action frame without delaying the click", 
   assert.match(
     contentSource,
     /find\(\(candidate\) => frameIsEligible\(candidate\)\)/,
+  );
+  assert.match(
+    contentSource,
+    /find\(\(candidate\) => frameIsClaimable\(candidate\)\)/,
   );
   assert.match(
     contentSource,

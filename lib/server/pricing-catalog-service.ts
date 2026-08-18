@@ -26,10 +26,28 @@ const DEFAULT_FEATURES: CatalogEntitlementItem[] = [
     note: "Capture, redact, review, and pair managed devices.",
   },
   {
+    key: "privacy_tools",
+    label: "Smart Blur, redact, and annotate",
+    included: true,
+    note: "Local screenshot privacy tools before anything is uploaded.",
+  },
+  {
+    key: "custom_subdomain",
+    label: "Custom subdomain",
+    included: true,
+    note: "team.knowhow.app preview. DNS is provisioned separately.",
+  },
+  {
+    key: "remove_branding",
+    label: "Remove KnowHow branding",
+    included: true,
+    note: "Use workspace identity on the app and exports.",
+  },
+  {
     key: "governed_exports",
     label: "Governed exports",
     included: true,
-    note: "Policy-controlled PDF, HTML, and Markdown exports.",
+    note: "Policy-controlled PDF, PowerPoint, and HTML exports.",
   },
 ];
 
@@ -46,9 +64,9 @@ export const BUILT_IN_PRIVATE_BETA_TRIAL_CATALOG: Readonly<PricingCatalogRecord>
   Object.freeze({
     schemaVersion: 1,
     catalogVersion: "trial-v1",
-    name: "KnowHow trial",
+    name: "KnowHow Pro trial",
     description:
-      "Deterministic no-card trial defaults used when no effective platform catalog exists.",
+      "Deterministic no-card Pro trial defaults used when no effective platform catalog exists.",
     status: "active",
     currency: "USD",
     effectiveFrom: "2026-01-01T00:00:00.000Z",
@@ -444,6 +462,8 @@ export function catalogEntitlements(catalog: PricingCatalogRecord) {
     extensionEnabled: included(catalog.features, "browser_extension"),
     supportEnabled: included(catalog.services, "in_app_support"),
     removeBranding: included(catalog.features, "remove_branding"),
+    privacyToolsEnabled: included(catalog.features, "privacy_tools"),
+    customSubdomainEnabled: included(catalog.features, "custom_subdomain"),
     publicSignup: false,
     payments: false,
     ssoScim: catalog.futureOptions.ssoScim.included,

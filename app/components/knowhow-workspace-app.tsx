@@ -1,14 +1,12 @@
 "use client";
 
 import {
-  Activity,
   Archive,
   ArrowLeft,
   ArrowRight,
   BarChart3,
   BookOpen,
   Building2,
-  CalendarDays,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -24,7 +22,6 @@ import {
   Filter,
   Globe2,
   Group,
-  History,
   ImagePlus,
   KeyRound,
   LayoutDashboard,
@@ -35,11 +32,8 @@ import {
   LogOut,
   Mail,
   Moon,
-  MoreHorizontal,
   Paintbrush,
-  Pause,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Settings,
@@ -52,13 +46,12 @@ import {
   UserCog,
   UserPlus,
   Users,
+  Pin,
   X,
 } from "lucide-react";
 import {
-  Children,
   useEffect,
   useCallback,
-  isValidElement,
   useMemo,
   useRef,
   useState,
@@ -91,8 +84,7 @@ import {
   type ExtensionCompanion,
 } from "../../lib/extension-bridge";
 import type {
-  AdminAppointment,
-  BetaAccessGrant,
+  Audience,
   BootstrapResponse,
   Guide,
   GuideSearchResult,
@@ -102,7 +94,6 @@ import type {
   PlatformPricingCatalog,
   PlatformProvisioningResult,
   PlatformProvisioningRun,
-  PlatformWorkspace,
   SupportAccessGrant,
   SupportAccessRequest,
   SupportTicket,
@@ -121,18 +112,19 @@ import {
   workspaceHref,
   type AppRoute,
   type GuideRevisionMode,
-  type PlatformSection,
   type WorkspaceSection,
 } from "../../lib/workspace-routes";
 import { useTheme } from "./theme-provider";
 import {
   GuideEditor,
-  ScreenshotAnnotationPreview,
   type GuideEditorPayload,
   type GuideSaveResult,
 } from "./guide-editor";
-import { AuthorizedMedia } from "./authorized-media";
+import { GuideShareDialog } from "./guide-share-dialog";
+import { workspaceAudience } from "./guide-audience-picker";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
+import { GuideReaderView } from "./guide-reader-view";
+import { useConfirmDialog } from "./confirm-dialog";
 import { HexColorPicker } from "./hex-color-picker";
 import { SelectMenu } from "./select-menu";
 import { ProductBrand } from "./product-brand";
@@ -199,13 +191,11 @@ type DialogState =
   | null
   | { type: "group"; group: WorkspaceGroup | null }
   | { type: "invite" }
+  | { type: "plan" }
   | { type: "member"; member: WorkspaceMember }
   | { type: "extension" }
-  | { type: "setup-wizard" }
+  | { type: "share-guide"; guide: Guide }
   | { type: "account-security" }
-  | { type: "platform-create" }
-  | { type: "assign-admin"; workspace: PlatformWorkspace }
-  | { type: "support-request"; workspace: PlatformWorkspace }
   | { type: "support-decision"; request: SupportAccessRequest }
   | { type: "vault-editor"; item: VaultItem | null }
   | { type: "vault-reveal"; item: VaultItem };
@@ -221,19 +211,6 @@ const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
   { view: "Vault", icon: KeyRound },
   { view: "Settings", icon: Settings },
 ];
-
-const PLATFORM_NAV: Array<{
-  section: PlatformSection;
-  label: string;
-  icon: typeof LayoutDashboard;
-}> = [
-    { section: "overview", label: "Overview", icon: LayoutDashboard },
-    { section: "leads", label: "Leads", icon: Mail },
-    { section: "accounts", label: "Accounts", icon: Building2 },
-    { section: "support", label: "Support", icon: LifeBuoy },
-    { section: "billing", label: "Billing", icon: CalendarDays },
-    { section: "ops", label: "Activity", icon: History },
-  ];
 
 const NAV_LABELS: Record<View, string> = {
   Overview: "Home",
@@ -274,23 +251,34 @@ const SECTION_TO_VIEW: Record<WorkspaceSection, Exclude<View, "Platform">> = {
 
 const ROLE_COPY: Record<WorkspaceRole, string> = {
   administrator: "Workspace settings, people, permissions, and all guides",
-  creator: "Create and edit their own draft guides",
+  creator: "Create, edit, and share their own guides",
   reviewer: "Inspect private drafts and record reviews",
   publisher: "Publish reviewed revisions and archive guides",
-  viewer: "Read published guides shared with their audiences",
+  viewer: "Read published guides shared with them",
 };
 
+function workspaceRoleLabel(role: WorkspaceRole) {
+  if (role === "administrator") return "Workspace admin";
+  return titleCase(role);
+}
+
+function organizationRoleLabel(role: OrganizationRole) {
+  if (role === "owner") return "Admin";
+  if (role === "administrator") return "Organization admin";
+  return titleCase(role);
+}
+
 function workspaceAccessLabel(roles: WorkspaceRole[]) {
-  if (roles.includes("administrator")) return "Workspace administrator";
+  if (roles.includes("administrator")) return "Workspace admin";
 
   const operationalRoles = (
     ["creator", "reviewer", "publisher"] as WorkspaceRole[]
   ).filter((role) => roles.includes(role));
   if (operationalRoles.length) {
-    return operationalRoles.map(titleCase).join(" · ");
+    return operationalRoles.map(workspaceRoleLabel).join(" · ");
   }
 
-  return "Workspace member";
+  return "Viewer";
 }
 
 function messageFromError(error: unknown) {
@@ -315,14 +303,6 @@ function formatBytes(value: number) {
   if (value < 1024 * 1024 * 1024)
     return `${(value / 1024 / 1024).toFixed(1)} MB`;
   return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-function formatMinorAmount(value: number | null, currency: string) {
-  if (value === null) return "Price not published";
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency,
-  }).format(value / 100);
 }
 
 function initials(name: string, email = "") {
@@ -384,43 +364,131 @@ function workspaceOptionLabel(workspace: {
   return slug || workspace.id;
 }
 
-function formatEntitlement(kind: string, value: string | number | boolean) {
-  const labels: Record<string, string> = {
-    maximumUsers: "People",
-    maximumCreators: "Creators",
-    storageBytes: "Storage",
-    extensionEnabled: "Capture",
-    supportEnabled: "Support",
-    removeBranding: "Custom branding",
-    publicSignup: "Public signup",
-    payments: "Payments",
-    ssoScim: "SSO / SCIM",
-  };
-  const label = labels[kind] ?? titleCase(kind);
-  if (typeof value === "boolean") return value ? label : null;
-  if (kind === "storageBytes") return `${label} ${formatBytes(Number(value))}`;
-  return `${label}: ${value}`;
+function daysUntil(value: string | null | undefined) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.ceil((timestamp - Date.now()) / 86_400_000);
 }
 
 function TrialChip({
   subscription,
+  onOpen,
 }: {
-  subscription?: {
-    access: string;
-    expiresAt: string | null;
-    graceEndsAt: string | null;
-  };
+  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"];
+  onOpen?: () => void;
 }) {
   if (!subscription) return null;
+  const plan = subscription.plan ?? "free";
+  if (plan === "free" && !onOpen) return null;
+  const name =
+    plan === "pro_trial"
+      ? "Pro trial"
+      : plan === "enterprise"
+        ? "Enterprise"
+        : plan === "pro"
+          ? "Pro"
+          : "Free";
+  let label = name;
   if (subscription.access === "read_only") {
+    label = `Read-only until ${formatDate(subscription.graceEndsAt ?? subscription.expiresAt ?? undefined)}`;
+  } else if (subscription.pastDue && subscription.graceEndsAt) {
+    label = `${name} past due · Free features after ${formatDate(subscription.graceEndsAt)}`;
+  } else if (plan === "pro_trial" && subscription.expiresAt) {
+    label = `${name} · Ends ${formatDate(subscription.expiresAt)}`;
+  } else if (
+    (plan === "pro" || plan === "enterprise") &&
+    subscription.expiresAt &&
+    (daysUntil(subscription.expiresAt) ?? 99) <= 14
+  ) {
+    label = `${name} · Ends ${formatDate(subscription.expiresAt)}`;
+  }
+  if (onOpen) {
     return (
-      <span className="trial-chip">
-        Read-only until {formatDate(subscription.graceEndsAt ?? subscription.expiresAt ?? undefined)}
-      </span>
+      <button type="button" className="trial-chip" onClick={onOpen}>
+        {label}
+      </button>
     );
   }
-  if (subscription.access !== "active" || !subscription.expiresAt) return null;
-  return <span className="trial-chip">Ends {formatDate(subscription.expiresAt)}</span>;
+  return <span className="trial-chip">{label}</span>;
+}
+
+function PlanDialog({
+  subscription,
+  entitlements,
+  busy,
+  onClose,
+  onStartTrial,
+  onSelectPro,
+  onRequestEnterprise,
+}: {
+  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"];
+  entitlements: NonNullable<BootstrapResponse["activeWorkspace"]>["entitlements"];
+  busy: boolean;
+  onClose: () => void;
+  onStartTrial: () => Promise<void>;
+  onSelectPro: () => Promise<void>;
+  onRequestEnterprise: () => Promise<void>;
+}) {
+  const plan = subscription?.plan ?? "free";
+  const trialAvailable = plan === "free" && subscription?.trialConsumed !== true;
+  return (
+    <Modal title="Workspace plan" eyebrow="Billing" onClose={onClose}>
+      <div className="modal-form">
+        <p>
+          You are on <strong>{plan === "pro_trial" ? "Pro trial" : plan === "pro" ? "Pro" : plan === "enterprise" ? "Enterprise" : "Free"}</strong>
+          {subscription?.expiresAt && plan !== "free"
+            ? ` until ${formatDate(subscription.expiresAt)}`
+            : null}
+          . Pro and Enterprise share the same product. Enterprise is for higher usage.
+        </p>
+        <ul className="privacy-caption">
+          <li>Capture, Smart Blur, redact, and annotate: {entitlements.privacyToolsEnabled ? "included" : "Pro"}</li>
+          <li>Custom subdomain: {entitlements.customSubdomainEnabled ? "included (preview)" : "Pro"}</li>
+          <li>In-app support: {entitlements.supportEnabled ? "included" : "contact form on Free"}</li>
+          <li>
+            Limits: {entitlements.maximumCreators} creator
+            {entitlements.maximumCreators === 1 ? "" : "s"}, {entitlements.maximumUsers} people
+          </li>
+        </ul>
+        <footer className="modal-footer">
+          <button className="button secondary" type="button" onClick={onClose}>
+            Close
+          </button>
+          {trialAvailable ? (
+            <button
+              className="button primary"
+              type="button"
+              disabled={busy}
+              onClick={() => void onStartTrial()}
+            >
+              Start 14-day Pro trial
+            </button>
+          ) : null}
+          {plan === "free" || plan === "pro_trial" ? (
+            <button
+              className="button primary"
+              type="button"
+              disabled={busy}
+              onClick={() => void onSelectPro()}
+            >
+              Choose Pro
+            </button>
+          ) : null}
+          {plan !== "enterprise" ? (
+            <button
+              className="button secondary"
+              type="button"
+              disabled={busy}
+              onClick={() => void onRequestEnterprise()}
+            >
+              Request Enterprise
+            </button>
+          ) : null}
+        </footer>
+      </div>
+    </Modal>
+  );
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -665,28 +733,28 @@ const ONBOARDING_STEP_COPY: Record<
     description: "Agree to keep ordinary business-process data in this workspace.",
   },
   teammate_invitation: {
-    title: "Invite a teammate",
-    description: "Send an invitation to the person who will try a guide with you.",
+    title: "Invite teammates",
+    description: "Send an invitation to someone who will use this workspace with you.",
   },
   extension_installation: {
     title: "Install the capture extension",
-    description: "Connect Chrome or Edge so you can record a real workflow.",
+    description: "Add KnowHow to Chrome or Edge so you can record a real workflow.",
+  },
+  extension_pin: {
+    title: "Pin the extension",
+    description: "Keep KnowHow on the browser toolbar so capture is one click away.",
   },
   first_capture: {
-    title: "Capture the first workflow",
+    title: "Capture a guide",
     description: "Record one ordinary process and review the screenshots.",
   },
-  first_edit: {
-    title: "Edit the draft",
-    description: "Make the captured steps clear, owned, and ready for review.",
+  first_guide: {
+    title: "Write a guide",
+    description: "Create the first guide so your team has something to follow.",
   },
   first_publication: {
-    title: "Publish the first guide",
-    description: "Review it and publish it to the people who need it.",
-  },
-  teammate_completion: {
-    title: "Have a teammate complete it",
-    description: "Ask them to open the published guide and mark it complete.",
+    title: "Share a guide",
+    description: "Choose who can view it and copy the live link.",
   },
 };
 
@@ -694,47 +762,64 @@ function SetupWizard({
   onboarding,
   busy,
   canCapture,
+  captureLockedByPlan,
   canManageAccess,
   chrome = "card",
   onConfirmReadiness,
   onNavigate,
   onOpenExtension,
+  onPinExtension,
   onDismiss,
 }: {
   onboarding: NonNullable<BootstrapResponse["activeWorkspace"]>["onboarding"];
   busy: boolean;
   canCapture: boolean;
+  captureLockedByPlan?: boolean;
   canManageAccess: boolean;
   chrome?: "card" | "plain";
   onConfirmReadiness: () => Promise<void>;
   onNavigate: (view: View) => void;
   onOpenExtension: () => void;
+  onPinExtension: () => Promise<void>;
   onDismiss: () => Promise<void>;
 }) {
   const [ordinaryDataOnly, setOrdinaryDataOnly] = useState(false);
   const [policiesReviewed, setPoliciesReviewed] = useState(false);
   if (onboarding.completedAt) return null;
-  const current = onboarding.steps.find((step) => !step.completed);
-  const completed = onboarding.steps.filter((step) => step.completed).length;
-  if (!current) return null;
-  const copy = ONBOARDING_STEP_COPY[current.id];
+  const readiness = onboarding.steps.find((step) => step.id === "workspace_readiness");
+  const checklist = onboarding.steps.filter((step) => step.id !== "workspace_readiness");
+  const completed = checklist.filter((step) => step.completed).length;
+  const percent = checklist.length
+    ? Math.round((completed / checklist.length) * 100)
+    : 0;
+  const current = checklist.find((step) => !step.completed);
+  const readinessPending = Boolean(readiness && !readiness.completed);
+  if (!current && !readinessPending) return null;
   const continueBlocked =
     busy ||
+    !current ||
     (current.id === "teammate_invitation" && !canManageAccess) ||
-    (["extension_installation", "first_capture"].includes(current.id) &&
-      !canCapture);
+    (["extension_installation", "first_capture", "extension_pin"].includes(current.id) &&
+      !canCapture &&
+      !captureLockedByPlan);
 
   const nextAction = () => {
+    if (!current) {
+      onNavigate("Guides");
+      return;
+    }
     if (current.id === "teammate_invitation") {
       if (canManageAccess) onNavigate("Members");
       return;
     }
-    if (current.id === "extension_installation") {
+    if (current.id === "extension_installation" || current.id === "extension_pin") {
       if (canCapture) onOpenExtension();
+      else if (captureLockedByPlan) onNavigate("Guides");
       return;
     }
     if (current.id === "first_capture") {
       if (canCapture) onNavigate("Capture");
+      else if (captureLockedByPlan) onNavigate("Guides");
       return;
     }
     onNavigate("Guides");
@@ -742,72 +827,26 @@ function SetupWizard({
 
   const body = (
     <>
-      {chrome === "card" ? (
-        <div className="onboarding-wizard-header">
-          <div className="onboarding-checklist-copy">
-            <CardTitle>Getting started</CardTitle>
-            <Badge variant="outline">
-              {completed} of {onboarding.steps.length}
-            </Badge>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            type="button"
-            aria-label="Dismiss getting started"
-            disabled={busy}
-            onClick={() => void onDismiss()}
-          >
-            <X />
-          </Button>
+      <div className="onboarding-wizard-header">
+        <div className="onboarding-checklist-copy">
+          <CardTitle>Getting started</CardTitle>
+          <span className="onboarding-percent">{percent}%</span>
         </div>
-      ) : (
-        <div className="onboarding-wizard-header">
-          <Badge variant="outline">
-            {completed} of {onboarding.steps.length}
-          </Badge>
-        </div>
-      )}
-      <ol aria-label="Getting started steps">
-        {onboarding.steps.map((step, index) => (
-          <li
-            key={step.id}
-            className={
-              step.completed
-                ? "complete"
-                : current.id === step.id
-                  ? "current"
-                  : ""
-            }
-            title={ONBOARDING_STEP_COPY[step.id].title}
-          >
-            <span>{step.completed ? <Check /> : index + 1}</span>
-            <strong className="visually-hidden">
-              {ONBOARDING_STEP_COPY[step.id].title}
-            </strong>
-          </li>
-        ))}
-      </ol>
-      <div className="onboarding-wizard-step">
-        <strong>Next: {copy.title}</strong>
-        <p>{copy.description}</p>
-        {current.id === "teammate_invitation" && !canManageAccess ? (
-          <small>
-            Ask a workspace administrator to invite the first teammate.
-          </small>
-        ) : current.id === "first_capture" && !canCapture ? (
-          <small>
-            Ask a creator or workspace administrator to complete the first
-            capture.
-          </small>
-        ) : current.id === "extension_installation" && !canCapture ? (
-          <small>
-            Ask a creator or workspace administrator to install Capture.
-          </small>
-        ) : null}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          type="button"
+          aria-label="Dismiss getting started"
+          disabled={busy}
+          onClick={() => void onDismiss()}
+        >
+          <X />
+        </Button>
       </div>
-      {current.id === "workspace_readiness" ? (
+      <DashboardProgress value={percent} label="Getting started progress" tone="accent" />
+      {readinessPending ? (
         <div className="onboarding-readiness">
+          <strong>Confirm workspace readiness</strong>
           <label className="choice-row">
             <input
               type="checkbox"
@@ -845,22 +884,61 @@ function SetupWizard({
             <ShieldCheck /> Confirm readiness
           </Button>
         </div>
-      ) : (
-        <div className="onboarding-wizard-actions">
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            disabled={continueBlocked}
-            onClick={nextAction}
-          >
-            {current.id === "extension_installation"
-              ? "Install and pair"
-              : "Continue"}{" "}
-            <ArrowRight />
-          </Button>
-        </div>
-      )}
+      ) : null}
+      {current ? (
+        <>
+          <ul className="onboarding-task-list" aria-label="Getting started">
+            {checklist.map((step) => {
+              const item = ONBOARDING_STEP_COPY[step.id];
+              return (
+                <li key={step.id} className={step.completed ? "complete" : current.id === step.id ? "current" : ""}>
+                  <button
+                    type="button"
+                    disabled={busy || step.completed || continueBlocked}
+                    onClick={nextAction}
+                  >
+                    <span>{step.completed ? <Check /> : null}</span>
+                    <strong>{item.title}</strong>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="onboarding-wizard-actions">
+            {current.id === "extension_pin" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={busy}
+                onClick={() => void onPinExtension()}
+              >
+                <Pin /> Mark as pinned
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              type="button"
+              disabled={continueBlocked}
+              onClick={nextAction}
+            >
+              {current.id === "extension_installation" && canCapture
+                ? "Install and pair"
+                : current.id === "teammate_invitation"
+                  ? "Invite teammates"
+                  : current.id === "first_publication"
+                    ? "Open guides"
+                    : captureLockedByPlan &&
+                        ["extension_installation", "first_capture", "extension_pin"].includes(
+                          current.id,
+                        )
+                      ? "Write a guide instead"
+                      : "Continue"}{" "}
+              <ArrowRight />
+            </Button>
+          </div>
+        </>
+      ) : null}
       <div className="onboarding-wizard-footer">
         <Button
           variant="ghost"
@@ -869,7 +947,7 @@ function SetupWizard({
           disabled={busy}
           onClick={() => void onDismiss()}
         >
-          I’ll do this later
+          Dismiss
         </Button>
       </div>
     </>
@@ -891,6 +969,7 @@ function OverviewView({
   viewerName,
   canCreate,
   canCapture,
+  captureLockedByPlan,
   canManageAccess,
   busy,
   onNewGuide,
@@ -898,12 +977,14 @@ function OverviewView({
   onNavigate,
   onConfirmReadiness,
   onOpenExtension,
+  onPinExtension,
   onDismiss,
 }: {
   data: NonNullable<BootstrapResponse["activeWorkspace"]>;
   viewerName: string;
   canCreate: boolean;
   canCapture: boolean;
+  captureLockedByPlan?: boolean;
   canManageAccess: boolean;
   busy: boolean;
   onNewGuide: () => void;
@@ -911,6 +992,7 @@ function OverviewView({
   onNavigate: (view: View) => void;
   onConfirmReadiness: () => Promise<void>;
   onOpenExtension: () => void;
+  onPinExtension: () => Promise<void>;
   onDismiss: () => Promise<void>;
 }) {
   const { metrics, guides, groups, members } = data;
@@ -991,9 +1073,9 @@ function OverviewView({
               : canManageAccess
                 ? "Monitor knowledge, reviews, engagement, and audience coverage."
                 : canCreate
-                  ? "Continue your drafts, capture workflows, and follow reviews through publication."
+                  ? "Continue your drafts, capture workflows, and share them with the people who need them."
                   : hasReviewWork
-                    ? "Review work waiting for you and move approved guidance toward publication."
+                    ? "Review work waiting for you, then share approved guidance with its audience."
                     : "Find the published guidance available to you and continue where you left off."}
           </p>
         </div>
@@ -1006,10 +1088,12 @@ function OverviewView({
           onboarding={data.onboarding}
           busy={busy}
           canCapture={canCapture}
+          captureLockedByPlan={captureLockedByPlan}
           canManageAccess={canManageAccess}
           onConfirmReadiness={onConfirmReadiness}
           onNavigate={onNavigate}
           onOpenExtension={onOpenExtension}
+          onPinExtension={onPinExtension}
           onDismiss={onDismiss}
         />
       ) : null}
@@ -1021,8 +1105,9 @@ function OverviewView({
               <p className="eyebrow">Get started</p>
               <h2>Make this workspace useful in the next few minutes.</h2>
               <p>
-                Capture a real workflow, write the first guide, or invite someone
-                to try it with you.
+                {canCapture
+                  ? "Capture a real workflow, write the first guide, or invite someone to try it with you."
+                  : "Write the first guide, then share it with the people who need it."}
               </p>
             </div>
             <div className="first-run-actions">
@@ -1395,6 +1480,7 @@ function GuidesView({
   onNew,
   onOpen,
   onEdit,
+  onShare,
   onAction,
   busy,
   canCreate,
@@ -1403,6 +1489,7 @@ function GuidesView({
   onNew: () => void;
   onOpen: (guide: Guide) => void;
   onEdit: (guide: Guide) => void;
+  onShare: (guide: Guide) => void;
   onAction: (
     action: string,
     payload: unknown,
@@ -1416,6 +1503,7 @@ function GuidesView({
   const [pageSize, setPageSize] = useState(5);
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const filtered = guides.filter((guide) => {
     const revision = guide.workingRevision ?? guide.publishedRevision;
     const text =
@@ -1439,8 +1527,8 @@ function GuidesView({
           <p className="eyebrow">Knowledge library</p>
           <h1>Guides</h1>
           <p>
-            Draft privately, review with context, and publish without
-            interrupting the live revision.
+            Draft privately, then share with the people who need the current
+            procedure. Review stays available when your workspace requires it.
           </p>
         </div>
       </div>
@@ -1513,8 +1601,11 @@ function GuidesView({
                       </span>
                       <span className="guide-meta">
                         {revision?.category || "Uncategorized"} ·{" "}
-                        {revision?.steps.length ?? 0} blocks · Updated{" "}
-                        {formatDate(guide.updatedAt)}
+                        {revision?.steps.length ?? 0} blocks
+                        {guide.publishedRevision
+                          ? ` · ${guide.viewCount ?? 0} ${(guide.viewCount ?? 0) === 1 ? "view" : "views"}`
+                          : ""}{" "}
+                        · Updated {formatDate(guide.updatedAt)}
                       </span>
                     </span>
                   </button>
@@ -1527,6 +1618,15 @@ function GuidesView({
                     ) : null}
                   </div>
                   <div className="guide-actions">
+                    {guide.canShare && guide.status !== "archived" ? (
+                      <button
+                        className="button ghost small"
+                        type="button"
+                        onClick={() => onShare(guide)}
+                      >
+                        Share
+                      </button>
+                    ) : null}
                     {guide.canEdit && guide.status !== "archived" ? (
                       <button
                         className="button ghost small"
@@ -1543,31 +1643,55 @@ function GuidesView({
                           disabled={busy}
                           type="button"
                           onClick={() => {
-                            if (
-                              window.confirm(
-                                "Approve this revision for publication?",
+                            void (async () => {
+                              const combined = guide.canPublish;
+                              if (
+                                !(await askToConfirm({
+                                  title: combined
+                                    ? "Approve and publish this revision?"
+                                    : "Approve this revision?",
+                                  description: combined
+                                    ? "Approve this revision and make it live for its audience."
+                                    : "Approve this revision for publication?",
+                                  confirmLabel: combined
+                                    ? "Approve and publish"
+                                    : "Approve",
+                                }))
                               )
-                            )
-                              void onAction(
+                                return;
+                              await onAction(
                                 "reviewGuide",
                                 { guideId: guide.id, decision: "approved" },
-                                "Review approved",
+                                combined ? "" : "Review approved",
                               ).catch(() => undefined);
+                              if (combined) {
+                                await onAction(
+                                  "publishGuide",
+                                  { guideId: guide.id },
+                                  "Guide shared",
+                                ).catch(() => undefined);
+                              }
+                            })();
                           }}
                         >
-                          Approve
+                          {guide.canPublish ? "Approve and publish" : "Approve"}
                         </button>
                         <button
                           className="button ghost small"
                           disabled={busy}
                           type="button"
                           onClick={() => {
-                            if (
-                              window.confirm(
-                                "Return this revision to its author for changes?",
+                            void (async () => {
+                              if (
+                                !(await askToConfirm({
+                                  title: "Request changes?",
+                                  description:
+                                    "Return this revision to its author for changes?",
+                                  confirmLabel: "Request changes",
+                                }))
                               )
-                            )
-                              void onAction(
+                                return;
+                              await onAction(
                                 "reviewGuide",
                                 {
                                   guideId: guide.id,
@@ -1575,13 +1699,16 @@ function GuidesView({
                                 },
                                 "Changes requested",
                               ).catch(() => undefined);
+                            })();
                           }}
                         >
                           Request changes
                         </button>
                       </>
                     ) : null}
-                    {guide.canPublish && guide.status === "review" ? (
+                    {guide.canPublish &&
+                    guide.status === "review" &&
+                    !guide.canReview ? (
                       <button
                         className="button primary small"
                         disabled={busy}
@@ -1590,14 +1717,14 @@ function GuidesView({
                           onAction(
                             "publishGuide",
                             { guideId: guide.id },
-                            "New revision published",
+                            "Guide shared",
                           )
                         }
                       >
                         Publish
                       </button>
                     ) : null}
-                    {guide.canPublish && guide.status !== "archived" ? (
+                    {guide.canArchive && guide.status !== "archived" ? (
                       <button
                         className="icon-button"
                         title="Archive guide"
@@ -1636,7 +1763,7 @@ function GuidesView({
             description={
               guides.length
                 ? "Try another search or lifecycle filter."
-                : "Create the first guide for this workspace."
+                : "Create the first guide, then share it with the people who need it."
             }
             action={
               !guides.length && canCreate ? (
@@ -1679,6 +1806,7 @@ function GuidesView({
           }}
         />
       ) : null}
+      {confirmDialog}
     </div>
   );
 }
@@ -1703,6 +1831,8 @@ function GuideViewer({
   onRestore,
   onPublishedViewed,
   onComplete,
+  onShare,
+  onReact,
 }: {
   guide: Guide;
   workspaceId: string;
@@ -1723,6 +1853,8 @@ function GuideViewer({
   onRestore: (revisionId: string) => void;
   onPublishedViewed: () => void;
   onComplete: () => void;
+  onShare?: () => void;
+  onReact?: (reaction: "like" | "dislike" | "clear") => void;
 }) {
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
   const preferredRevision: GuideRevisionMode =
@@ -1740,219 +1872,31 @@ function GuideViewer({
   if (!revision) return null;
 
   return (
-    <main className="guide-reader-page" aria-labelledby="guide-reader-title">
-      <header className="guide-reader-header">
-        <div className="guide-reader-header-inner">
-          <div className="reader-nav-context">
-            <button
-              className="button ghost small"
-              type="button"
-              onClick={onClose}
-            >
-              <ArrowLeft /> Guides
-            </button>
-            <span className="reader-header-divider" />
-            <span className="reader-workspace">
-              <WorkspaceLogo
-                workspaceId={workspaceId}
-                workspaceName={workspaceName}
-                logoKey={logoKey}
-                size="sm"
-              />
-              <span>
-                <strong>{workspaceName}</strong>
-                <small>Revision {revision.number}</small>
-              </span>
-            </span>
-          </div>
-          <div className="viewer-toolbar">
-            <div className="revision-toggle">
-              {guide.workingRevision ? (
-                <button
-                  type="button"
-                  className={revisionMode === "working" ? "active" : ""}
-                  onClick={() => onRevisionChange("working")}
-                >
-                  Working {guide.workingRevision.status}
-                </button>
-              ) : null}
-              {guide.publishedRevision ? (
-                <button
-                  type="button"
-                  className={revisionMode === "published" ? "active" : ""}
-                  onClick={() => {
-                    onRevisionChange("published");
-                    onPublishedViewed();
-                  }}
-                >
-                  Live v{guide.publishedRevision.number}
-                </button>
-              ) : null}
-            </div>
-            <div className="viewer-actions">
-              {guide.publishedRevision ? (
-                <button
-                  className="button ghost small"
-                  type="button"
-                  onClick={async () => navigator.clipboard.writeText(liveUrl)}
-                >
-                  <Link2 /> Copy live link
-                </button>
-              ) : null}
-              {canExport && guide.publishedRevision ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    className="button secondary small"
-                    type="button"
-                  >
-                    <Download /> Export
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="export-menu">
-                    <DropdownMenuItem onClick={() => onExport("pdf")}>
-                      PDF
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onExport("html")}>
-                      HTML
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onExport("markdown")}>
-                      Markdown
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
-              {revisionMode === "published" && guide.publishedRevision ? (
-                <button
-                  className="button secondary small"
-                  type="button"
-                  disabled={busy}
-                  onClick={onComplete}
-                >
-                  <CheckCircle2 /> Mark complete
-                </button>
-              ) : null}
-              {guide.canEdit ? (
-                <button
-                  className="button primary small"
-                  type="button"
-                  onClick={onEdit}
-                >
-                  Edit draft
-                </button>
-              ) : null}
-              {guide.canDelete && onDelete ? (
-                <button
-                  className="button ghost small danger-button"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setDeletePromptOpen(true)}
-                >
-                  <Trash2 /> Delete
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </header>
-      <div className="guide-viewer">
-        <header className="document-header card">
-          <div className="document-meta">
-            <StatusBadge status={revision.status} />
-            {guide.restricted ? (
-              <span>
-                <LockKeyhole /> Restricted audience
-              </span>
-            ) : (
-              <span>
-                <Globe2 /> Entire workspace
-              </span>
-            )}
-          </div>
-          <h1 id="guide-reader-title">{revision.title}</h1>
-          <p>{revision.summary}</p>
-          <div className="document-facts">
-            <span>{revision.category || "Uncategorized"}</span>
-            <span>{revision.steps.length} blocks</span>
-            <span>By {revision.authorName}</span>
-            {revision.publishedAt ? (
-              <span>Published {formatDate(revision.publishedAt)}</span>
-            ) : null}
-          </div>
-        </header>
-        <div className="document-steps">
-          {revision.steps.map((step, index) => (
-            <section
-              className={`document-step document-${step.kind}`}
-              key={step.id}
-            >
-              {step.kind === "action" ? (
-                <span className="document-step-number">{index + 1}</span>
-              ) : null}
-              <div>
-                <h2>{step.title}</h2>
-                {step.screenshotMediaId ? (
-                  <AuthorizedMedia
-                    workspaceId={workspaceId}
-                    mediaId={step.screenshotMediaId}
-                    alt={`Redacted screenshot for ${step.title}`}
-                    crop={step.crop}
-                    overlay={
-                      <ScreenshotAnnotationPreview
-                        step={step}
-                        accentColor={accentColor}
-                        clickTargetColor={clickTargetColor}
-                        showCropOutline={false}
-                      />
-                    }
-                  />
-                ) : null}
-              </div>
-            </section>
-          ))}
-        </div>
-        {guide.revisionHistory?.length ? (
-          <section className="revision-history">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Governance trail</p>
-                <h2>Revision history</h2>
-              </div>
-              <History />
-            </div>
-            {guide.revisionHistory.map((item) => (
-              <div className="history-row" key={item.id}>
-                <span className="history-number">v{item.number}</span>
-                <span>
-                  <strong>{titleCase(item.status)}</strong>
-                  <small>
-                    Created by {item.authorName} ·{" "}
-                    {formatDate(item.createdAt, true)}
-                  </small>
-                </span>
-                {item.reviewedAt ? (
-                  <span className="history-check">
-                    <Check /> Reviewed
-                  </span>
-                ) : null}
-                {item.publishedAt ? (
-                  <span className="history-check">
-                    <Globe2 /> {formatDate(item.publishedAt)}
-                  </span>
-                ) : null}
-                {canRestore && !guide.workingRevision ? (
-                  <button
-                    className="button ghost small"
-                    disabled={busy}
-                    type="button"
-                    onClick={() => onRestore(item.id)}
-                  >
-                    <RotateCcw /> Restore as draft
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </section>
-        ) : null}
-      </div>
+    <>
+      <GuideReaderView
+        guide={guide}
+        revision={revision}
+        revisionMode={revisionMode}
+        workspaceId={workspaceId}
+        workspaceName={workspaceName}
+        logoKey={logoKey}
+        accentColor={accentColor}
+        clickTargetColor={clickTargetColor}
+        liveUrl={liveUrl}
+        canExport={canExport}
+        canRestore={canRestore}
+        busy={busy}
+        onClose={onClose}
+        onEdit={onEdit}
+        onDelete={onDelete ? () => setDeletePromptOpen(true) : undefined}
+        onRevisionChange={onRevisionChange}
+        onExport={onExport}
+        onRestore={onRestore}
+        onPublishedViewed={onPublishedViewed}
+        onComplete={onComplete}
+        onShare={onShare}
+        onReact={onReact}
+      />
       {deletePromptOpen && onDelete ? (
         <GuideDeleteDialog
           title={revision.title}
@@ -1961,14 +1905,18 @@ function GuideViewer({
           onConfirm={onDelete}
         />
       ) : null}
-    </main>
+    </>
   );
 }
 
 function CaptureView({
   canCapture,
+  planLocked,
+  onOpenPlan,
 }: {
   canCapture: boolean;
+  planLocked: boolean;
+  onOpenPlan?: () => void;
 }) {
   return (
     <div className="view-stack">
@@ -1976,17 +1924,40 @@ function CaptureView({
         <div>
           <p className="eyebrow">Chrome & Edge</p>
           <h1>Capture a workflow</h1>
-          <p>
-            Record clicks and navigation, redact locally, then send an editable
-            private draft to KnowHow.
-          </p>
-          {!canCapture ? (
-            <p className="privacy-caption">
-              Capture is not enabled for your role in this workspace.
-            </p>
-          ) : null}
+          {planLocked ? (
+            <>
+              <p>
+                Capture, Smart Blur, redact, and annotate are included on Pro.
+                Free workspaces stay on typed guides so unblurred screenshots
+                are never uploaded.
+              </p>
+              <p className="privacy-caption">
+                Capture is on Pro. Start a 14-day Pro trial to install the
+                extension and redact locally before upload.
+              </p>
+              {onOpenPlan ? (
+                <button className="button primary" type="button" onClick={onOpenPlan}>
+                  View plans
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <p>
+                Record clicks and navigation, redact locally, then send an editable
+                private draft to KnowHow.
+              </p>
+              {!canCapture ? (
+                <p className="privacy-caption">
+                  Capture is not enabled for your role in this workspace.
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
+      {planLocked ? null : (
+        <>
       <section className="capture-hero card">
         <div className="capture-copy">
           <p className="eyebrow">Browser extension</p>
@@ -2065,6 +2036,8 @@ function CaptureView({
           </article>
         ))}
       </section>
+        </>
+      )}
     </div>
   );
 }
@@ -2405,7 +2378,7 @@ function MembersView({
                 <StatusBadge status={member.status} />
                 <span className="role-list">
                   {member.roles.map((role) => (
-                    <span key={role}>{titleCase(role)}</span>
+                    <span key={role}>{workspaceRoleLabel(role)}</span>
                   ))}
                 </span>
                 <span className="group-list">
@@ -2439,7 +2412,7 @@ function MembersView({
               <span className="member-main">
                 <strong>{grant.displayName || grant.email}</strong>
                 <small>
-                  {grant.email} · {titleCase(grant.role)} access granted{" "}
+                  {grant.email} · {workspaceRoleLabel(grant.role)} access granted{" "}
                   {formatDate(grant.grantedAt)}
                 </small>
                 <small>
@@ -2485,7 +2458,7 @@ function MembersView({
                 </span>
                 <span className="member-main">
                   <strong>
-                    {invite.label || `${titleCase(invite.role)} invitation`}
+                    {invite.label || `${workspaceRoleLabel(invite.role)} invitation`}
                   </strong>
                   <small>
                     Expires {formatDate(invite.expiresAt, true)} ·{" "}
@@ -2570,7 +2543,7 @@ function SupportDecisionDialog({
             ariaLabel="Granted role"
             options={WORKSPACE_ROLES.map((item) => ({
               value: item,
-              label: titleCase(item),
+              label: workspaceRoleLabel(item),
             }))}
           />
         </div>
@@ -2638,12 +2611,14 @@ function SupportDecisionDialog({
 function MemberDialog({
   member,
   busy,
+  showGovernanceRoles = false,
   onClose,
   onSave,
   onSuspend,
 }: {
   member: WorkspaceMember;
   busy: boolean;
+  showGovernanceRoles?: boolean;
   onClose: () => void;
   onSave: (
     roles: WorkspaceRole[],
@@ -2671,7 +2646,15 @@ function MemberDialog({
         </div>
         <div className="role-picker">
           <span className="field-label">Workspace roles</span>
-          {WORKSPACE_ROLES.map((role) => (
+          {WORKSPACE_ROLES.filter(
+            (role) =>
+              showGovernanceRoles ||
+              role === "administrator" ||
+              role === "creator" ||
+              role === "viewer" ||
+              roles.includes(role) ||
+              member.roles.includes(role),
+          ).map((role) => (
             <label className="choice-row" key={role}>
               <input
                 type="checkbox"
@@ -2685,7 +2668,7 @@ function MemberDialog({
                 }
               />
               <span>
-                <strong>{titleCase(role)}</strong>
+                <strong>{workspaceRoleLabel(role)}</strong>
                 <small>{ROLE_COPY[role]}</small>
               </span>
             </label>
@@ -2729,11 +2712,13 @@ function MemberDialog({
 function InviteDialog({
   busy,
   origin,
+  showGovernanceRoles = false,
   onClose,
   onCreate,
 }: {
   busy: boolean;
   origin: string;
+  showGovernanceRoles?: boolean;
   onClose: () => void;
   onCreate: (payload: {
     emails: string[];
@@ -2785,10 +2770,13 @@ function InviteDialog({
             <div>
               <strong>
                 {created.length === 1
-                  ? "Invitation ready"
-                  : `${created.length} invitations ready`}
+                  ? "Invitation sent"
+                  : `${created.length} invitations sent`}
               </strong>
-              <p>Each token is shown once. Copy the links now.</p>
+              <p>
+                We emailed each person. The link below is a one-time backup if
+                the email is delayed.
+              </p>
             </div>
             <div className="created-invite-list">
               {created.map((item) => {
@@ -2871,19 +2859,29 @@ function InviteDialog({
                 />
               </label>
               <div className="field">
-                <span>Preassigned basic role</span>
+                <span>Access</span>
                 <SelectMenu
                   className="form-select"
                   value={role}
-                  onChange={setRole}
-                  ariaLabel="Preassigned basic role"
-                  options={WORKSPACE_ROLES.filter(
-                    (item) => item !== "administrator",
-                  ).map((item) => ({ value: item, label: titleCase(item) }))}
+                  onChange={(value) => setRole(value as WorkspaceRole)}
+                  ariaLabel="Invitation access"
+                  options={[
+                    { value: "viewer", label: "Viewer — can view shared guides" },
+                    { value: "creator", label: "Creator — can create and share guides" },
+                    ...(showGovernanceRoles
+                      ? [
+                          { value: "reviewer", label: "Reviewer — governance" },
+                          { value: "publisher", label: "Publisher — governance" },
+                        ]
+                      : []),
+                  ]}
                 />
                 <small>
-                  Administrator access must be assigned after membership is
-                  verified.
+                  Start with Viewer or Creator. Workspace admin is assigned after
+                  membership.
+                  {showGovernanceRoles
+                    ? " Reviewer and Publisher are for this workspace’s review workflow."
+                    : ""}
                 </small>
               </div>
               <div className="field">
@@ -2924,10 +2922,10 @@ function InviteDialog({
                 overLimit
               }
             >
-              {busy ? <LoaderCircle className="spin" /> : <Link2 />}{" "}
+              {busy ? <LoaderCircle className="spin" /> : <Mail />}{" "}
               {parsed.emails.length > 1
-                ? `Create ${parsed.emails.length} invitations`
-                : "Create invitation"}
+                ? `Send ${parsed.emails.length} invitations`
+                : "Send invitation"}
             </button>
           ) : null}
         </footer>
@@ -2939,12 +2937,14 @@ function InviteDialog({
 function SupportView({
   tickets,
   busy,
+  canCreate,
   onCreate,
   onReply,
   onClose,
 }: {
   tickets: SupportTicket[];
   busy: boolean;
+  canCreate: boolean;
   onCreate: (subject: string, message: string) => Promise<void>;
   onReply: (ticketId: string, message: string) => Promise<void>;
   onClose: (ticketId: string) => Promise<void>;
@@ -2966,14 +2966,16 @@ function SupportView({
             target. Email notices never include message content.
           </p>
         </div>
-        <button
-          className="button primary"
-          type="button"
-          disabled={busy}
-          onClick={() => setCreating(true)}
-        >
-          <Plus /> New ticket
-        </button>
+        {canCreate ? (
+          <button
+            className="button primary"
+            type="button"
+            disabled={busy}
+            onClick={() => setCreating(true)}
+          >
+            <Plus /> New ticket
+          </button>
+        ) : null}
       </div>
       <div className="support-layout">
         <aside className="card support-list" aria-label="Support tickets">
@@ -3158,6 +3160,7 @@ function SettingsView({
   workspaceName,
   initial,
   busy,
+  removeBrandingEnabled,
   onSave,
   onRefresh,
 }: {
@@ -3165,6 +3168,7 @@ function SettingsView({
   workspaceName: string;
   initial: WorkspaceSettings;
   busy: boolean;
+  removeBrandingEnabled: boolean;
   onSave: (settings: WorkspaceSettings) => Promise<void>;
   onRefresh: () => Promise<BootstrapResponse>;
 }) {
@@ -3188,7 +3192,7 @@ function SettingsView({
           <p className="eyebrow">Workspace administration</p>
           <h1>Settings & policies</h1>
           <p>
-            Control branding and restricted exports for this workspace.
+            Control branding, sharing, and restricted exports for this workspace.
           </p>
         </div>
         <button
@@ -3307,11 +3311,11 @@ function SettingsView({
               hint="Marks the next click in recorded guide steps."
             />
           </div>
-          <label className={`choice-row emphasized${settings.removeBranding ? "" : " locked-choice"}`}>
+          <label className={`choice-row emphasized${removeBrandingEnabled ? "" : " locked-choice"}`}>
             <input
               type="checkbox"
               checked={settings.removeBranding}
-              disabled={!settings.removeBranding}
+              disabled={!removeBrandingEnabled}
               onChange={(event) =>
                 update("removeBranding", event.target.checked)
               }
@@ -3319,9 +3323,9 @@ function SettingsView({
             <span>
               <strong>Remove KnowHow branding</strong>
               <small>
-                {settings.removeBranding
+                {removeBrandingEnabled
                   ? "KnowHow branding is hidden on exports for this workspace."
-                  : "Locked on this plan. Included on company and on-prem plans."}
+                  : "Locked on Free. Included on Pro trial, Pro, and Enterprise."}
               </small>
             </span>
           </label>
@@ -3336,6 +3340,22 @@ function SettingsView({
               <p>Live links always retain audience checks.</p>
             </div>
           </div>
+          <label className="choice-row emphasized">
+            <input
+              type="checkbox"
+              checked={settings.requireReviewBeforePublish}
+              onChange={(event) =>
+                update("requireReviewBeforePublish", event.target.checked)
+              }
+            />
+            <span>
+              <strong>Require review before sharing</strong>
+              <small>
+                Creators send drafts for review. Administrators can still share
+                immediately.
+              </small>
+            </span>
+          </label>
           <label className="choice-row emphasized">
             <input
               type="checkbox"
@@ -3736,2063 +3756,7 @@ function VaultRevealDialog({
   );
 }
 
-// The platform table can scroll horizontally, so its row actions use the
-// portaled shadcn menu rather than a locally positioned overlay.
-function RowMenu({ children }: { children: ReactNode }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className="icon-button"
-        type="button"
-        aria-label="Workspace actions"
-      >
-        <MoreHorizontal />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="row-menu-pop">
-        {Children.map(children, (child) => {
-          if (
-            !isValidElement<{
-              disabled?: boolean;
-              onClick?: () => void;
-              children?: ReactNode;
-            }>(child)
-          )
-            return null;
-          return (
-            <DropdownMenuItem
-              disabled={child.props.disabled}
-              onClick={child.props.onClick}
-            >
-              {child.props.children}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function PlatformPagedList<T>({
-  items,
-  initialPageSize = 10,
-  alwaysShowControls = false,
-  children,
-}: {
-  items: T[];
-  initialPageSize?: number;
-  alwaysShowControls?: boolean;
-  children: (visible: T[]) => ReactNode;
-}) {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(initialPageSize);
-  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
-  const safePage = Math.min(page, pageCount - 1);
-  const visible = items.slice(safePage * pageSize, safePage * pageSize + pageSize);
-  return (
-    <>
-      {children(visible)}
-      {alwaysShowControls || items.length > 5 ? (
-        <ListPagination
-          total={items.length}
-          page={safePage}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={(next) => {
-            setPageSize(next);
-            setPage(0);
-          }}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function PlatformAuditList({
-  audits,
-  workspaceName,
-}: {
-  audits: NonNullable<BootstrapResponse["platform"]>["platformAudits"];
-  workspaceName: (workspaceId: string) => string;
-}) {
-  const [query, setQuery] = useState("");
-  const [action, setAction] = useState("all");
-  const actionOptions = [...new Set(audits.map((audit) => audit.action))].sort();
-  const rows = audits.filter((audit) => {
-    const term = query.trim().toLowerCase();
-    const haystack = [
-      audit.action,
-      titleCase(audit.action),
-      workspaceName(audit.workspaceId),
-    ]
-      .join(" ")
-      .toLowerCase();
-    const matchesQuery = !term || haystack.includes(term);
-    const matchesAction = action === "all" || audit.action === action;
-    return matchesQuery && matchesAction;
-  });
-
-  if (!audits.length) {
-    return (
-      <p className="empty-copy">No control-plane audit events recorded.</p>
-    );
-  }
-
-  return (
-    <>
-      <div className="filter-bar">
-        <label className="search-field">
-          <Search />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search actions or workspaces"
-          />
-        </label>
-        <SelectMenu
-          className="filter-select"
-          leading={<Filter />}
-          value={action}
-          onChange={setAction}
-          ariaLabel="Filter audit events by action"
-          options={[
-            { value: "all", label: "All actions" },
-            ...actionOptions.map((value) => ({
-              value,
-              label: titleCase(value),
-            })),
-          ]}
-        />
-        <span className="result-count">
-          {rows.length} {rows.length === 1 ? "event" : "events"}
-        </span>
-      </div>
-      {rows.length ? (
-        <PlatformPagedList
-          key={`${query}:${action}`}
-          items={rows}
-          initialPageSize={5}
-          alwaysShowControls
-        >
-          {(visible) =>
-            visible.map((audit) => (
-              <div className="platform-compact-row" key={audit.id}>
-                <span className="member-main">
-                  <strong>{titleCase(audit.action)}</strong>
-                  <small>{workspaceName(audit.workspaceId)}</small>
-                </span>
-                <time dateTime={audit.occurredAt}>
-                  {formatDate(audit.occurredAt, true)}
-                </time>
-              </div>
-            ))
-          }
-        </PlatformPagedList>
-      ) : (
-        <p className="empty-copy">No matching control-plane changes.</p>
-      )}
-    </>
-  );
-}
-
-export function PlatformView({
-  platform,
-  busy,
-  section = "overview",
-  workspaceId,
-  onNavigate,
-  onProvision,
-  onStatus,
-  onAssign,
-  onRequestSupport,
-  onExtendSubscription,
-  onConvertSubscription,
-  onApproveDeletion,
-  onRevokeAppointment,
-  canManageBetaAccess = false,
-  onCreateBetaAccess,
-  onRevokeBetaAccess,
-  canManagePlatformControls = false,
-  onPlatformControl,
-}: {
-  platform: NonNullable<BootstrapResponse["platform"]>;
-  busy: boolean;
-  section?: PlatformSection;
-  workspaceId?: string;
-  onNavigate?: (href: string) => void;
-  onProvision: () => void;
-  onStatus: (
-    workspaceId: string,
-    status: "active" | "suspended" | "archived",
-  ) => void;
-  onAssign: (workspace: PlatformWorkspace) => void;
-  onRequestSupport: (workspace: PlatformWorkspace) => void;
-  onExtendSubscription: (
-    workspaceId: string,
-    expiresAt: string,
-    graceDays: number,
-    retentionDays: number,
-  ) => Promise<unknown>;
-  onConvertSubscription: (
-    workspaceId: string,
-    manualReference: string,
-    expiresAt: string | null,
-  ) => Promise<unknown>;
-  onApproveDeletion: (caseId: string, confirmation: string) => Promise<unknown>;
-  onRevokeAppointment: (appointment: AdminAppointment) => void;
-  canManageBetaAccess?: boolean;
-  onCreateBetaAccess?: (input: {
-    label?: string;
-    email?: string;
-    expiresAt: string;
-    maxUses: number;
-  }) => Promise<{ grant: BetaAccessGrant; code: string }>;
-  onRevokeBetaAccess?: (grantId: string) => Promise<unknown>;
-  canManagePlatformControls?: boolean;
-  onPlatformControl?: (
-    action:
-      | "createPricingCatalog"
-      | "updatePricingCatalog"
-      | "retirePricingCatalog"
-      | "createLifecycleSimulationTenant"
-      | "simulateLifecycleState",
-    payload: Record<string, unknown>,
-    successMessage: string,
-  ) => Promise<unknown>;
-}) {
-  const { metrics, workspaces, settings, appointments } = platform;
-  const [query, setQuery] = useState("");
-  const [pipelineStatus, setPipelineStatus] = useState(
-    section === "support" ? "open" : "all",
-  );
-  const [lifecycleAction, setLifecycleAction] = useState<{
-    mode: "extend" | "convert";
-    openedAt: number;
-    subscription: NonNullable<
-      BootstrapResponse["platform"]
-    >["subscriptions"][number];
-  } | null>(null);
-  const [deletionCase, setDeletionCase] = useState<
-    NonNullable<BootstrapResponse["platform"]>["deletionCases"][number] | null
-  >(null);
-  const [betaAccessOpen, setBetaAccessOpen] = useState(false);
-  const [pricingCatalogOpen, setPricingCatalogOpen] = useState<
-    PlatformPricingCatalog | "create" | null
-  >(null);
-  const [simulationDialog, setSimulationDialog] = useState<
-    | { mode: "create" }
-    | { mode: "advance"; workspace: PlatformWorkspace }
-    | null
-  >(null);
-  const platformNow = Date.parse(platform.generatedAt);
-  const pricingCatalogs = platform.pricingCatalogs ?? [];
-  const attentionTotal =
-    platform.systemHealth.failedNotifications +
-    platform.systemHealth.overdueSupport +
-    platform.systemHealth.expiringWithinSevenDays +
-    platform.systemHealth.deletionApprovals +
-    platform.systemHealth.failedOperations;
-  const healthQueues: Array<{
-    label: string;
-    description: string;
-    value: number;
-    icon: typeof Mail;
-    section: PlatformSection;
-  }> = [
-      {
-        label: "Failed notifications",
-        description: "Delivery retry queue",
-        value: platform.systemHealth.failedNotifications,
-        icon: Mail,
-        section: "ops",
-      },
-      {
-        label: "Overdue support",
-        description: "One-business-day target",
-        value: platform.systemHealth.overdueSupport,
-        icon: LifeBuoy,
-        section: "support",
-      },
-      {
-        label: "Expiring soon",
-        description: "Within seven days",
-        value: platform.systemHealth.expiringWithinSevenDays,
-        icon: CalendarDays,
-        section: "billing",
-      },
-      {
-        label: "Deletion approvals",
-        description: "Owner confirmation required",
-        value: platform.systemHealth.deletionApprovals,
-        icon: Trash2,
-        section: "ops",
-      },
-      {
-        label: "Failed operations",
-        description: "Content-free usage events",
-        value: platform.systemHealth.failedOperations,
-        icon: CircleAlert,
-        section: "ops",
-      },
-    ];
-  const openSupportCount = platform.support.filter(
-    (ticket) => ticket.status !== "closed",
-  ).length;
-  const activeBetaGrants = platform.betaAccess.grants.filter(
-    (grant) => grant.status === "active",
-  );
-  const platformAdministratorCount = new Set(
-    workspaces.flatMap((workspace) =>
-      workspace.administrators.map((admin) => admin.userId),
-    ),
-  ).size;
-  const actionableDeletionCases = platform.deletionCases.filter(
-    (item) => item.status !== "completed",
-  );
-  const simulationWorkspaces = workspaces.filter(
-    (workspace) => workspace.simulation?.synthetic,
-  );
-  const workspaceName = (workspaceId: string) =>
-    workspaces.find((workspace) => workspace.id === workspaceId)?.name ??
-    "Unknown workspace";
-  const filtered = workspaces.filter((workspace) => {
-    const term = query.trim().toLowerCase();
-    if (!term) return true;
-    return (
-      workspace.name.toLowerCase().includes(term) ||
-      workspace.slug.toLowerCase().includes(term) ||
-      workspace.administrators.some(
-        (admin) =>
-          admin.name.toLowerCase().includes(term) ||
-          admin.email.toLowerCase().includes(term),
-      )
-    );
-  });
-  const accountRows = filtered.filter(
-    (workspace) =>
-      pipelineStatus === "all" || workspace.status === pipelineStatus,
-  );
-  const leadRows = platform.leads.filter((lead) => {
-    const term = query.trim().toLowerCase();
-    const haystack = [
-      lead.organization,
-      lead.contactName,
-      lead.email,
-      lead.kind,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    const matchesQuery = !term || haystack.includes(term);
-    const matchesStatus =
-      pipelineStatus === "all" || lead.status === pipelineStatus;
-    return matchesQuery && matchesStatus;
-  });
-  const supportRows = platform.support.filter((ticket) => {
-    const term = query.trim().toLowerCase();
-    const haystack = [
-      workspaceName(ticket.workspaceId),
-      ticket.requesterName,
-      ticket.status,
-    ]
-      .join(" ")
-      .toLowerCase();
-    const matchesQuery = !term || haystack.includes(term);
-    const matchesStatus =
-      pipelineStatus === "all" ||
-      (pipelineStatus === "open"
-        ? ticket.status !== "closed"
-        : ticket.status === pipelineStatus);
-    return matchesQuery && matchesStatus;
-  });
-  const subscriptionRows = platform.subscriptions
-    .filter((subscription) => {
-      const term = query.trim().toLowerCase();
-      const matchesQuery =
-        !term ||
-        `${workspaceName(subscription.workspaceId)} ${subscription.kind} ${subscription.status} ${subscription.access}`
-          .toLowerCase()
-          .includes(term);
-      const matchesStatus =
-        pipelineStatus === "all" || subscription.status === pipelineStatus;
-      return matchesQuery && matchesStatus;
-    })
-    .sort((left, right) => {
-      if (!left.expiresAt && !right.expiresAt) return 0;
-      if (!left.expiresAt) return 1;
-      if (!right.expiresAt) return -1;
-      return left.expiresAt.localeCompare(right.expiresAt);
-    });
-
-  const openSection = (next: PlatformSection, id?: string) => {
-    onNavigate?.(platformHref(next, id));
-  };
-  const selectedWorkspace =
-    section === "accounts" && workspaceId
-      ? (workspaces.find((item) => item.id === workspaceId) ?? null)
-      : null;
-  const selectedSubscription = selectedWorkspace
-    ? platform.subscriptions.find(
-      (item) => item.workspaceId === selectedWorkspace.id,
-    )
-    : null;
-  const selectedEntitlements = selectedWorkspace
-    ? platform.entitlements.filter(
-      (item) => item.workspaceId === selectedWorkspace.id,
-    )
-    : [];
-  const selectedActivation = selectedWorkspace
-    ? platform.activation.find(
-      (item) => item.workspaceId === selectedWorkspace.id,
-    )
-    : null;
-  const selectedSupport = selectedWorkspace
-    ? platform.support.filter(
-      (item) => item.workspaceId === selectedWorkspace.id,
-    )
-    : [];
-  const selectedAudits = selectedWorkspace
-    ? platform.platformAudits.filter(
-      (item) => item.workspaceId === selectedWorkspace.id,
-    )
-    : [];
-  const heading =
-    section === "leads"
-      ? {
-        eyebrow: "Inbound",
-        title: "Leads",
-        copy: "Contact requests from the public site. Customer document contents stay private.",
-      }
-      : section === "accounts"
-        ? {
-          eyebrow: "Tenants",
-          title: selectedWorkspace ? selectedWorkspace.name : "Accounts",
-          copy: selectedWorkspace
-            ? "Subscription, people, support, and usage for this workspace."
-            : "Every workspace, with organization context where it exists.",
-        }
-        : section === "support"
-          ? {
-            eyebrow: "Support SLA",
-            title: "Support",
-            copy: "Open support work across tenants. One-business-day target.",
-          }
-          : section === "billing"
-            ? {
-              eyebrow: "Commercial lifecycle",
-              title: "Billing",
-              copy: "Subscriptions, entitlements, and private pricing catalogs.",
-            }
-            : section === "ops"
-              ? {
-                eyebrow: "Control plane",
-                title: "Activity",
-                copy: "Audit, delivery failures, deletion approvals, and appointments.",
-              }
-              : {
-                eyebrow: "Product owner",
-                title: "Platform administration",
-                copy: "Manage tenant health and aggregate usage without opening customer document contents or secrets.",
-              };
-
-  return (
-    <div className="view-stack">
-      <div className="page-heading">
-        <div>
-          {selectedWorkspace ? (
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => openSection("accounts")}
-            >
-              <ArrowLeft /> Accounts
-            </button>
-          ) : null}
-          <p className="eyebrow">{heading.eyebrow}</p>
-          <h1>{heading.title}</h1>
-          <p>{heading.copy}</p>
-        </div>
-        <div className="modal-actions">
-          <Badge variant="outline" role="note">
-            <ShieldCheck />
-            Metadata and aggregate usage only
-          </Badge>
-          {section === "overview" ? (
-            <Button
-              className="sm:hidden"
-              size="sm"
-              type="button"
-              disabled={busy}
-              onClick={onProvision}
-            >
-              <Plus /> Provision organization
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
-      {section === "overview" ? (
-        <>
-          <section className="metric-grid overview-metric-grid">
-            <MetricCard
-              label="Workspaces"
-              value={workspaces.length}
-              hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
-              icon={Building2}
-              tone="accent"
-            />
-            <MetricCard
-              label="People"
-              value={metrics.users}
-              hint="Across every tenant"
-              icon={Users}
-            />
-            <MetricCard
-              label="Knowledge"
-              value={metrics.published + metrics.drafts}
-              hint={`${metrics.published} published · ${metrics.drafts} drafts`}
-              icon={BookOpen}
-            />
-            <MetricCard
-              label="Total activity"
-              value={
-                metrics.views +
-                metrics.completions +
-                metrics.captures +
-                metrics.exports
-              }
-              hint={`${metrics.views} views · ${metrics.captures} captures · ${metrics.exports} exports`}
-              icon={Activity}
-            />
-          </section>
-
-          <div className="dashboard-work-grid">
-            <Card className="dashboard-guide-queue">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Live queues</CardTitle>
-                  <CardDescription>
-                    Delivery, support, retention, and account health.
-                  </CardDescription>
-                </div>
-                <Badge variant="outline">
-                  {attentionTotal
-                    ? `${attentionTotal} need attention`
-                    : "All clear"}
-                </Badge>
-              </CardHeader>
-              <CardContent className="dashboard-queue-content">
-                <div className="dashboard-queue-list">
-                  {healthQueues.map((queue) => {
-                    const Icon = queue.icon;
-                    return (
-                      <button
-                        className="dashboard-queue-row"
-                        type="button"
-                        key={queue.label}
-                        onClick={() => openSection(queue.section)}
-                      >
-                        <span className="queue-guide-icon">
-                          <Icon />
-                        </span>
-                        <span className="queue-guide-main">
-                          <strong>{queue.label}</strong>
-                          <small>{queue.description}</small>
-                        </span>
-                        <StatusBadge
-                          status={queue.value ? "attention" : "clear"}
-                        />
-                        <strong>{queue.value}</strong>
-                        <ArrowRight />
-                      </button>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="access-health-card">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Recent changes</CardTitle>
-                  <CardDescription>
-                    Content-free platform audit events.
-                  </CardDescription>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  type="button"
-                  aria-label="View all platform activity"
-                  onClick={() => openSection("ops")}
-                >
-                  <ArrowRight />
-                </Button>
-              </CardHeader>
-              <CardContent className="review-queue-content">
-                {platform.platformAudits.length ? (
-                  <div>
-                    {platform.platformAudits.slice(0, 5).map((audit) => (
-                      <button
-                        className="review-queue-row"
-                        type="button"
-                        key={audit.id}
-                        onClick={() =>
-                          audit.workspaceId
-                            ? openSection("accounts", audit.workspaceId)
-                            : openSection("ops")
-                        }
-                      >
-                        <span className="review-state-icon">
-                          <History />
-                        </span>
-                        <span>
-                          <strong>{titleCase(audit.action)}</strong>
-                          <small>
-                            {workspaceName(audit.workspaceId)} ·{" "}
-                            {formatDate(audit.occurredAt, true)}
-                          </small>
-                        </span>
-                        <ArrowRight />
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={History}
-                    title="No recent changes"
-                    description="Control-plane audit events will appear here."
-                  />
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <section className="policy-lock-row">
-            <LockKeyhole />
-            <span>
-              <strong>Isolated workspaces, explicit membership</strong>
-              <small>
-                Self-service limit: {settings.selfServiceWorkspaceLimit}{" "}
-                trial workspace
-                {settings.selfServiceWorkspaceLimit === 1 ? "" : "s"} per owner;
-                every other membership is exact-email and invitation-only.
-              </small>
-            </span>
-          </section>
-        </>
-      ) : null}
-
-      {section === "leads" ? (
-        <>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Inbound requests</p>
-                <h2>Contact leads</h2>
-              </div>
-              <Mail />
-            </div>
-            <div className="filter-bar">
-              <label className="search-field">
-                <Search />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search leads"
-                />
-              </label>
-              <SelectMenu
-                className="filter-select"
-                leading={<Filter />}
-                value={pipelineStatus}
-                onChange={setPipelineStatus}
-                ariaLabel="Filter leads by status"
-                options={[
-                  { value: "all", label: "All statuses" },
-                  ...[...new Set(platform.leads.map((lead) => lead.status))].map(
-                    (status) => ({
-                      value: status,
-                      label: titleCase(status.replaceAll("_", " ")),
-                    }),
-                  ),
-                ]}
-              />
-              <span className="result-count" aria-live="polite">
-                {leadRows.length} {leadRows.length === 1 ? "lead" : "leads"}
-              </span>
-            </div>
-            {leadRows.length ? (
-              <PlatformPagedList items={leadRows}>
-                {(visible) =>
-                  visible.map((lead) => (
-                    <div className="platform-compact-row" key={lead.id}>
-                      <span className="member-main">
-                        <strong>
-                          {lead.organization || lead.contactName || lead.email}
-                        </strong>
-                        <small>
-                          {lead.contactName || "Unnamed contact"} · {lead.email}
-                        </small>
-                        <small>
-                          {titleCase(lead.kind)} ·{" "}
-                          {formatDate(lead.occurredAt, true)}
-                        </small>
-                      </span>
-                      <StatusBadge status={lead.status} />
-                    </div>
-                  ))
-                }
-              </PlatformPagedList>
-            ) : (
-              <EmptyState
-                icon={Mail}
-                title="No inbound requests"
-                description="New contact and demo requests will appear here with their current pipeline status."
-              />
-            )}
-          </section>
-
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Private beta</p>
-                <h2>Access grants</h2>
-              </div>
-              {canManageBetaAccess && onCreateBetaAccess ? (
-                <button
-                  className="button primary small"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setBetaAccessOpen(true)}
-                >
-                  <Plus /> Create access
-                </button>
-              ) : (
-                <span className="privacy-caption">
-                  <LockKeyhole /> Owner or operations only
-                </span>
-              )}
-            </div>
-            <p className="empty-copy">
-              {countPhrase(activeBetaGrants.length, "active grant")} ·{" "}
-              {countPhrase(platform.betaAccess.events.length, "recorded event")}.
-              Issue time-limited, usage-capped admission without exposing the
-              underlying code after creation.
-            </p>
-            {platform.betaAccess.grants.length ? (
-              <PlatformPagedList items={platform.betaAccess.grants}>
-                {(visible) =>
-                  visible.map((grant) => (
-                    <div className="platform-ops-row" key={grant.id}>
-                      <span className="invite-icon">
-                        <KeyRound />
-                      </span>
-                      <span className="member-main">
-                        <strong>{grant.label || "Private beta access"}</strong>
-                        <small>
-                          {grant.exactEmail || "Any approved email"} · expires{" "}
-                          {formatDate(grant.expiresAt, true)}
-                        </small>
-                        <small>
-                          {grant.usedCount} used · {grant.reservedCount} reserved ·{" "}
-                          {Math.max(
-                            0,
-                            grant.maxUses - grant.usedCount - grant.reservedCount,
-                          )}{" "}
-                          remaining
-                        </small>
-                      </span>
-                      <StatusBadge status={grant.status} />
-                      {grant.status === "active" && onRevokeBetaAccess ? (
-                        <button
-                          className="button ghost small"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            if (window.confirm(`Revoke ${grant.label}?`)) {
-                              void onRevokeBetaAccess(grant.id).catch(
-                                () => undefined,
-                              );
-                            }
-                          }}
-                        >
-                          Revoke
-                        </button>
-                      ) : null}
-                    </div>
-                  ))
-                }
-              </PlatformPagedList>
-            ) : (
-              <EmptyState
-                icon={KeyRound}
-                title="No beta access grants yet"
-                description="Create a scoped grant when a private-beta user is ready."
-              />
-            )}
-          </section>
-        </>
-      ) : null}
-
-      {section === "accounts" && !selectedWorkspace ? (
-        <>
-          <section
-            className="metric-grid overview-metric-grid"
-            aria-label="Account summary"
-          >
-            <MetricCard
-              label="Workspaces"
-              value={workspaces.length}
-              hint={`${metrics.suspendedWorkspaces} suspended · ${metrics.archivedWorkspaces} archived`}
-              icon={Building2}
-              tone="accent"
-            />
-            <MetricCard
-              label="Active"
-              value={metrics.activeWorkspaces}
-              hint="Currently available to members"
-              icon={CheckCircle2}
-            />
-            <MetricCard
-              label="Administrators"
-              value={platformAdministratorCount}
-              hint="Unique workspace administrators"
-              icon={Users}
-            />
-            <MetricCard
-              label="Organizations"
-              value={platform.organizations.length}
-              hint="Companies in the tenant directory"
-              icon={Building2}
-            />
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Tenant directory</p>
-                <h2>Every workspace</h2>
-              </div>
-              <span className="privacy-caption">
-                <LockKeyhole /> Metadata only
-              </span>
-            </div>
-            <div className="filter-bar">
-              <label className="search-field">
-                <Search />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search workspaces, slugs, or administrators"
-                />
-              </label>
-              <SelectMenu
-                className="filter-select"
-                leading={<Filter />}
-                value={pipelineStatus}
-                onChange={setPipelineStatus}
-                ariaLabel="Filter workspaces by status"
-                options={[
-                  { value: "all", label: "All statuses" },
-                  { value: "active", label: "Active" },
-                  { value: "suspended", label: "Suspended" },
-                  { value: "archived", label: "Archived" },
-                ]}
-              />
-              <span className="result-count" aria-live="polite">
-                {accountRows.length}{" "}
-                {accountRows.length === 1 ? "workspace" : "workspaces"}
-              </span>
-            </div>
-            <div className="member-table">
-              <PlatformPagedList items={accountRows}>
-                {(visible) =>
-                  visible.map((workspace) => (
-                    <div className="member-row" key={workspace.id}>
-                      <span className="avatar">
-                        {workspace.name.slice(0, 1)}
-                      </span>
-                      <button
-                        className="member-main text-button"
-                        type="button"
-                        onClick={() => openSection("accounts", workspace.id)}
-                      >
-                        <strong>{workspace.name}</strong>
-                        <small>
-                          {workspace.slug} ·{" "}
-                          {countPhrase(workspace.memberCount, "member")} · created{" "}
-                          {formatDate(workspace.createdAt)}
-                          {workspace.supportGrant
-                            ? ` · support ${titleCase(workspace.supportGrant.role)} until ${formatDate(workspace.supportGrant.expiresAt, true)}`
-                            : workspace.supportRequest?.status === "pending"
-                              ? " · support request pending"
-                              : ""}
-                        </small>
-                      </button>
-                      <span className="role-list">
-                        {workspace.administrators.length ? (
-                          workspace.administrators.map((admin) => (
-                            <span key={admin.userId}>
-                              {admin.name || admin.email}
-                            </span>
-                          ))
-                        ) : (
-                          <span>None assigned</span>
-                        )}
-                      </span>
-                      <span className="group-list">
-                        {workspace.publishedCount + workspace.draftCount} guides ·{" "}
-                        {workspace.views} views ·{" "}
-                        {formatBytes(workspace.storageBytes)}
-                      </span>
-                      <div className="modal-actions compact-actions">
-                        <StatusBadge status={workspace.status} />
-                        <RowMenu>
-                          <button
-                            disabled={busy}
-                            onClick={() => onAssign(workspace)}
-                          >
-                            <UserCog /> Assign administrator
-                          </button>
-                          {workspace.status === "active" &&
-                            !workspace.supportGrant ? (
-                            <button
-                              disabled={busy}
-                              onClick={() => onRequestSupport(workspace)}
-                            >
-                              <ShieldCheck /> Request support access
-                            </button>
-                          ) : null}
-                          {workspace.status !== "active" ? (
-                            <button
-                              disabled={busy}
-                              onClick={() => onStatus(workspace.id, "active")}
-                            >
-                              <RefreshCw /> Restore
-                            </button>
-                          ) : null}
-                          {workspace.status === "active" ? (
-                            <button
-                              disabled={busy}
-                              onClick={() => onStatus(workspace.id, "suspended")}
-                            >
-                              <Pause /> Suspend
-                            </button>
-                          ) : null}
-                          {workspace.status !== "archived" ? (
-                            <button
-                              disabled={busy}
-                              onClick={() => onStatus(workspace.id, "archived")}
-                            >
-                              <Archive /> Archive
-                            </button>
-                          ) : null}
-                        </RowMenu>
-                      </div>
-                    </div>
-                  ))
-                }
-              </PlatformPagedList>
-            </div>
-          </section>
-          {platform.organizations.length ? (
-            <details className="card table-card developer-tools">
-              <summary className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Organizations</p>
-                  <h2>Company directory</h2>
-                </div>
-                <span className="privacy-caption">
-                  {countPhrase(platform.organizations.length, "organization")}
-                  <ChevronDown />
-                </span>
-              </summary>
-              <div className="member-table">
-                {platform.organizations.map((organization) => (
-                  <div className="platform-ops-row" key={organization.id}>
-                    <span className="invite-icon">
-                      <Building2 />
-                    </span>
-                    <span className="member-main">
-                      <strong>{organization.displayName}</strong>
-                      <small>
-                        {organization.legalName} · {organization.country}
-                      </small>
-                      <small>
-                        {countPhrase(
-                          organization.workspaceCount,
-                          "workspace",
-                        )}
-                      </small>
-                    </span>
-                    <StatusBadge status={organization.status} />
-                  </div>
-                ))}
-              </div>
-            </details>
-          ) : null}
-        </>
-      ) : null}
-
-      {selectedWorkspace ? (
-        <>
-          <section
-            className="metric-grid overview-metric-grid"
-            aria-label={`${selectedWorkspace.name} account summary`}
-          >
-            <MetricCard
-              label="Members"
-              value={selectedWorkspace.memberCount}
-              hint="People with workspace access"
-              icon={Users}
-              tone="accent"
-            />
-            <MetricCard
-              label="Guides"
-              value={
-                selectedWorkspace.publishedCount + selectedWorkspace.draftCount
-              }
-              hint={`${selectedWorkspace.publishedCount} published · ${selectedWorkspace.draftCount} drafts`}
-              icon={BookOpen}
-            />
-            <MetricCard
-              label="Views"
-              value={selectedWorkspace.views}
-              hint="Aggregate workspace engagement"
-              icon={Eye}
-            />
-            <MetricCard
-              label="Storage"
-              value={formatBytes(selectedWorkspace.storageBytes)}
-              hint="Files and captured media"
-              icon={FileDown}
-            />
-          </section>
-          <section className="card table-card">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Account</p>
-                <h2>{selectedWorkspace.slug}</h2>
-              </div>
-              <StatusBadge status={selectedWorkspace.status} />
-            </div>
-            <div className="platform-ops-row">
-              <span className="invite-icon">
-                <Building2 />
-              </span>
-              <span className="member-main">
-                <strong>
-                  Workspace administration
-                </strong>
-                <small>
-                  Created {formatDate(selectedWorkspace.createdAt)} ·{" "}
-                  {countPhrase(
-                    selectedWorkspace.administrators.length,
-                    "administrator",
-                  )}
-                </small>
-              </span>
-              <div className="modal-actions compact-actions">
-                <button
-                  className="button secondary small"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onAssign(selectedWorkspace)}
-                >
-                  <UserCog /> Assign
-                </button>
-                {selectedWorkspace.status === "active" &&
-                  !selectedWorkspace.supportGrant ? (
-                  <button
-                    className="button secondary small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onRequestSupport(selectedWorkspace)}
-                  >
-                    Support
-                  </button>
-                ) : null}
-                {selectedWorkspace.status === "active" ? (
-                  <button
-                    className="button ghost small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onStatus(selectedWorkspace.id, "suspended")}
-                  >
-                    Suspend
-                  </button>
-                ) : (
-                  <button
-                    className="button ghost small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onStatus(selectedWorkspace.id, "active")}
-                  >
-                    Restore
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="member-table">
-              {selectedWorkspace.administrators.map((admin) => (
-                <div className="member-row" key={admin.userId}>
-                  <span className="avatar">
-                    {initials(admin.name, admin.email)}
-                  </span>
-                  <span className="member-main">
-                    <strong>{admin.name || admin.email}</strong>
-                    <small>{admin.email}</small>
-                  </span>
-                  <span className="role-list">
-                    <span>Administrator</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-          <div className="settings-grid">
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Commercial lifecycle</p>
-                  <h2>Subscription</h2>
-                </div>
-              </div>
-              {selectedSubscription ? (
-                <div className="platform-ops-row">
-                  <span className="invite-icon">
-                    <CalendarDays />
-                  </span>
-                  <span className="member-main">
-                    <strong>{titleCase(selectedSubscription.kind)}</strong>
-                    <small>
-                      access {titleCase(selectedSubscription.access)}
-                      {selectedSubscription.expiresAt
-                        ? ` · expires ${formatDate(selectedSubscription.expiresAt, true)}`
-                        : " · no fixed expiry"}
-                    </small>
-                    <small>
-                      {selectedEntitlements.length
-                        ? selectedEntitlements
-                          .map((entitlement) =>
-                            formatEntitlement(
-                              entitlement.kind,
-                              entitlement.value,
-                            ),
-                          )
-                          .filter(Boolean)
-                          .join(" · ")
-                        : "No explicit entitlement overrides"}
-                    </small>
-                  </span>
-                  <StatusBadge status={selectedSubscription.status} />
-                </div>
-              ) : (
-                <p className="empty-copy">No subscription recorded.</p>
-              )}
-            </section>
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Activation</p>
-                  <h2>First-value progress</h2>
-                </div>
-              </div>
-              {selectedActivation ? (
-                <div className="platform-compact-row">
-                  <span className="member-main">
-                    <small>
-                      {selectedActivation.firstPublishedAt
-                        ? `Published ${formatDate(selectedActivation.firstPublishedAt, true)}`
-                        : "Awaiting first publication"}
-                    </small>
-                    <small>
-                      {selectedActivation.firstTeammateViewAt
-                        ? `Teammate view ${formatDate(selectedActivation.firstTeammateViewAt, true)}`
-                        : "Awaiting teammate view"}
-                      {selectedActivation.firstTeammateCompletionAt
-                        ? ` · completion ${formatDate(selectedActivation.firstTeammateCompletionAt, true)}`
-                        : " · awaiting completion"}
-                    </small>
-                  </span>
-                  <strong>
-                    {
-                      [
-                        selectedActivation.firstPublishedAt,
-                        selectedActivation.firstTeammateViewAt,
-                        selectedActivation.firstTeammateCompletionAt,
-                      ].filter(Boolean).length
-                    }
-                    /3
-                  </strong>
-                </div>
-              ) : (
-                <p className="empty-copy">No activation events recorded.</p>
-              )}
-            </section>
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Support SLA</p>
-                  <h2>Open support work</h2>
-                </div>
-              </div>
-              {selectedSupport.length ? (
-                selectedSupport.map((ticket) => (
-                  <div className="platform-compact-row" key={ticket.id}>
-                    <span className="member-main">
-                      <strong>{ticket.requesterName}</strong>
-                      <small>
-                        target {formatDate(ticket.responseTargetAt, true)}
-                      </small>
-                    </span>
-                    <StatusBadge status={ticket.status} />
-                  </div>
-                ))
-              ) : (
-                <p className="empty-copy">No support cases for this account.</p>
-              )}
-            </section>
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Platform audit</p>
-                  <h2>Recent control-plane changes</h2>
-                </div>
-              </div>
-              {selectedAudits.length ? (
-                selectedAudits.slice(0, 8).map((audit) => (
-                  <div className="platform-compact-row" key={audit.id}>
-                    <span className="member-main">
-                      <strong>{titleCase(audit.action)}</strong>
-                    </span>
-                    <time dateTime={audit.occurredAt}>
-                      {formatDate(audit.occurredAt, true)}
-                    </time>
-                  </div>
-                ))
-              ) : (
-                <p className="empty-copy">No control-plane audit events recorded.</p>
-              )}
-            </section>
-          </div>
-        </>
-      ) : null}
-
-      {section === "support" ? (
-        <>
-          <section
-            className="metric-grid overview-metric-grid"
-            aria-label="Support summary"
-          >
-            <MetricCard
-              label="Open cases"
-              value={openSupportCount}
-              hint="Current cross-workspace queue"
-              icon={LifeBuoy}
-              tone="accent"
-            />
-            <MetricCard
-              label="Overdue"
-              value={platform.systemHealth.overdueSupport}
-              hint="Outside the one-business-day target"
-              icon={CircleAlert}
-              tone={platform.systemHealth.overdueSupport ? "warning" : "default"}
-            />
-            <MetricCard
-              label="Waiting on support"
-              value={
-                platform.support.filter(
-                  (ticket) => ticket.status === "waiting_support",
-                ).length
-              }
-              hint="Cases needing a support response"
-              icon={Mail}
-            />
-            <MetricCard
-              label="Closed"
-              value={
-                platform.support.filter((ticket) => ticket.status === "closed")
-                  .length
-              }
-              hint="Completed support cases"
-              icon={CheckCircle2}
-            />
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Support SLA</p>
-                <h2>Open support work</h2>
-              </div>
-              <LifeBuoy />
-            </div>
-            <div className="filter-bar">
-              <label className="search-field">
-                <Search />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search support work"
-                />
-              </label>
-              <SelectMenu
-                className="filter-select"
-                leading={<Filter />}
-                value={pipelineStatus}
-                onChange={setPipelineStatus}
-                ariaLabel="Filter support by status"
-                options={[
-                  { value: "open", label: "Open cases" },
-                  { value: "all", label: "All statuses" },
-                  ...[
-                    ...new Set(platform.support.map((ticket) => ticket.status)),
-                  ].map((status) => ({
-                    value: status,
-                    label: titleCase(status.replaceAll("_", " ")),
-                  })),
-                ]}
-              />
-              <span className="result-count" aria-live="polite">
-                {supportRows.length}{" "}
-                {supportRows.length === 1 ? "case" : "cases"}
-              </span>
-            </div>
-            {supportRows.length ? (
-              <PlatformPagedList items={supportRows}>
-                {(visible) => (
-                  <div className="member-table">
-                    {visible.map((ticket) => {
-                      const overdue =
-                        ticket.status === "waiting_support" &&
-                        Date.parse(ticket.responseTargetAt) < platformNow;
-                      return (
-                        <button
-                          className="member-row clickable"
-                          type="button"
-                          key={ticket.id}
-                          onClick={() =>
-                            openSection("accounts", ticket.workspaceId)
-                          }
-                        >
-                          <span className="invite-icon">
-                            <LifeBuoy />
-                          </span>
-                          <span className="member-main">
-                            <strong>{workspaceName(ticket.workspaceId)}</strong>
-                            <small>{ticket.requesterName}</small>
-                          </span>
-                          <StatusBadge
-                            status={overdue ? "overdue" : ticket.status}
-                          />
-                          <span className="role-list">
-                            <span>Support case</span>
-                          </span>
-                          <span className="group-list">
-                            Target {formatDate(ticket.responseTargetAt, true)}
-                          </span>
-                          <ArrowRight />
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </PlatformPagedList>
-            ) : (
-              <EmptyState
-                icon={CheckCircle2}
-                title="No support work in this view"
-                description="Change the filter to review completed cases."
-              />
-            )}
-          </section>
-        </>
-      ) : null}
-
-      {section === "billing" ? (
-        <>
-          <section
-            className="metric-grid overview-metric-grid"
-            aria-label="Subscription summary"
-          >
-            <MetricCard
-              label="Subscriptions"
-              value={platform.subscriptions.length}
-              hint="Across all workspaces"
-              icon={CalendarDays}
-              tone="accent"
-            />
-            <MetricCard
-              label="Trials"
-              value={
-                platform.subscriptions.filter(
-                  (subscription) => subscription.kind === "trial",
-                ).length
-              }
-              hint="Time-limited workspace access"
-              icon={Sparkles}
-            />
-            <MetricCard
-              label="Contracts"
-              value={
-                platform.subscriptions.filter(
-                  (subscription) => subscription.kind === "paid",
-                ).length
-              }
-              hint="Manually recorded agreements"
-              icon={CheckCircle2}
-            />
-            <MetricCard
-              label="Expiring soon"
-              value={platform.systemHealth.expiringWithinSevenDays}
-              hint="Within the next seven days"
-              icon={CircleAlert}
-              tone={
-                platform.systemHealth.expiringWithinSevenDays
-                  ? "warning"
-                  : "default"
-              }
-            />
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Commercial lifecycle</p>
-                <h2>Subscriptions and entitlements</h2>
-              </div>
-              <span className="privacy-caption">
-                <ShieldCheck /> Manual contracts only
-              </span>
-            </div>
-            <div className="filter-bar">
-              <label className="search-field">
-                <Search />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search accounts or subscription types"
-                />
-              </label>
-              <SelectMenu
-                className="filter-select"
-                leading={<Filter />}
-                value={pipelineStatus}
-                onChange={setPipelineStatus}
-                ariaLabel="Filter subscriptions by status"
-                options={[
-                  { value: "all", label: "All statuses" },
-                  ...[
-                    ...new Set(
-                      platform.subscriptions.map(
-                        (subscription) => subscription.status,
-                      ),
-                    ),
-                  ].map((status) => ({
-                    value: status,
-                    label: titleCase(status.replaceAll("_", " ")),
-                  })),
-                ]}
-              />
-              <span className="result-count" aria-live="polite">
-                {subscriptionRows.length}{" "}
-                {subscriptionRows.length === 1
-                  ? "subscription"
-                  : "subscriptions"}
-              </span>
-            </div>
-            {subscriptionRows.length ? (
-              <PlatformPagedList items={subscriptionRows}>
-                {(visible) =>
-                  visible.map((subscription) => {
-                    const entitlements = platform.entitlements.filter(
-                      (entitlement) =>
-                        entitlement.workspaceId === subscription.workspaceId,
-                    );
-                    return (
-                      <div className="platform-ops-row" key={subscription.id}>
-                        <span className="invite-icon">
-                          <CalendarDays />
-                        </span>
-                        <button
-                          className="member-main text-button"
-                          type="button"
-                          onClick={() =>
-                            openSection("accounts", subscription.workspaceId)
-                          }
-                        >
-                          <strong>
-                            {workspaceName(subscription.workspaceId)}
-                          </strong>
-                          <small>
-                            {titleCase(subscription.kind)} · access{" "}
-                            {titleCase(subscription.access)} ·
-                            {subscription.expiresAt
-                              ? ` expires ${formatDate(subscription.expiresAt, true)}`
-                              : " no fixed expiry"}
-                          </small>
-                          <small>
-                            {entitlements.length
-                              ? entitlements
-                                .map((entitlement) =>
-                                  formatEntitlement(
-                                    entitlement.kind,
-                                    entitlement.value,
-                                  ),
-                                )
-                                .filter(Boolean)
-                                .join(" · ")
-                              : "No explicit entitlement overrides"}
-                          </small>
-                        </button>
-                        <StatusBadge status={subscription.status} />
-                        <div className="modal-actions compact-actions">
-                          {subscription.expiresAt ? (
-                            <button
-                              className="button secondary small"
-                              type="button"
-                              disabled={busy}
-                              onClick={() =>
-                                setLifecycleAction({
-                                  mode: "extend",
-                                  subscription,
-                                  openedAt: Date.now(),
-                                })
-                              }
-                            >
-                              Extend
-                            </button>
-                          ) : null}
-                          {subscription.kind !== "paid" ? (
-                            <button
-                              className="button secondary small"
-                              type="button"
-                              disabled={busy}
-                              onClick={() =>
-                                setLifecycleAction({
-                                  mode: "convert",
-                                  subscription,
-                                  openedAt: Date.now(),
-                                })
-                              }
-                            >
-                              Record contract
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })
-                }
-              </PlatformPagedList>
-            ) : (
-              <EmptyState
-                icon={CalendarDays}
-                title="No matching subscriptions"
-                description="Try another filter, or provision an organization to create a trial subscription."
-              />
-            )}
-          </section>
-          <section className="card table-card">
-            <div className="section-heading compact">
-              <div>
-                <p className="eyebrow">Commercial configuration</p>
-                <h2>Private pricing catalog</h2>
-              </div>
-              {canManagePlatformControls && onPlatformControl ? (
-                <button
-                  className="button primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setPricingCatalogOpen("create")}
-                >
-                  <Plus /> New catalog
-                </button>
-              ) : (
-                <span className="privacy-caption">
-                  <ShieldCheck /> Owner or operations only
-                </span>
-              )}
-            </div>
-            <p className="empty-copy">
-              Version trial timing, capacity, internal prices, and included
-              services without publishing numeric pricing. Security fundamentals
-              remain included and payment collection stays off until you enable
-              it.
-            </p>
-            {pricingCatalogs.length ? (
-              pricingCatalogs.map((catalog) => (
-                <div className="platform-ops-row" key={catalog.id}>
-                  <span className="invite-icon">
-                    <BarChart3 />
-                  </span>
-                  <span className="member-main">
-                    <strong>{catalog.name}</strong>
-                    <small>
-                      {catalog.catalogVersion} · {catalog.trial.days}-day trial ·{" "}
-                      {catalog.trial.graceDays}-day grace ·{" "}
-                      {catalog.trial.retentionDays}-day retention
-                    </small>
-                    <small>
-                      {formatMinorAmount(
-                        catalog.baseWorkspace.amountMinor,
-                        catalog.currency,
-                      )}{" "}
-                      per workspace · {catalog.baseWorkspace.includedActiveCreators}{" "}
-                      creators · {catalog.baseWorkspace.includedActiveUsers} users ·{" "}
-                      {formatBytes(catalog.baseWorkspace.includedStorageBytes)}
-                    </small>
-                  </span>
-                  <StatusBadge status={catalog.status} />
-                  {canManagePlatformControls && onPlatformControl ? (
-                    <div className="modal-actions compact-actions">
-                      {catalog.status !== "retired" ? (
-                        <button
-                          className="button secondary small"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setPricingCatalogOpen(catalog)}
-                        >
-                          Edit
-                        </button>
-                      ) : null}
-                      {catalog.status !== "retired" ? (
-                        <button
-                          className="button ghost small"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Retire ${catalog.name}? Existing subscriptions keep their recorded terms.`,
-                              )
-                            )
-                              void onPlatformControl(
-                                "retirePricingCatalog",
-                                {
-                                  catalogId: catalog.id,
-                                  expectedRevision: catalog.revision,
-                                },
-                                "Pricing catalog retired",
-                              ).catch(() => undefined);
-                          }}
-                        >
-                          Retire
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ))
-            ) : (
-              <div className="empty-inline">
-                <ShieldCheck />
-                <span>
-                  <strong>Secure trial defaults are active</strong>
-                  <small>
-                    Until a dated catalog is created, self-service uses the
-                    built-in 14-day trial with 7-day grace and 90-day retention.
-                  </small>
-                </span>
-              </div>
-            )}
-          </section>
-          {platform.lifecycleSimulation ? (
-            <details className="card table-card developer-tools">
-              <summary className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Tools</p>
-                  <h2>Developer tools</h2>
-                </div>
-              </summary>
-              {platform.lifecycleSimulation.enabled &&
-                canManagePlatformControls &&
-                onPlatformControl ? (
-                <button
-                  className="button primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setSimulationDialog({ mode: "create" })}
-                >
-                  <Sparkles /> Create synthetic tenant
-                </button>
-              ) : (
-                <StatusBadge
-                  status={
-                    platform.lifecycleSimulation.enabled ? "ready" : "disabled"
-                  }
-                />
-              )}
-              <div className="empty-inline">
-                <ShieldCheck />
-                <span>
-                  <strong>Production is permanently excluded.</strong>
-                  <small>
-                    The simulator only advances disposable tenants it creates and
-                    invokes the same lifecycle sweep, notices, retention case, and
-                    deletion-approval boundary used by operations.
-                  </small>
-                </span>
-              </div>
-              {platform.lifecycleSimulation.enabled
-                ? simulationWorkspaces.map((workspace) => {
-                  const subscription = platform.subscriptions.find(
-                    (item) => item.workspaceId === workspace.id,
-                  );
-                  const complete =
-                    workspace.simulation?.lastState === "pending_deletion";
-                  return (
-                    <div className="platform-ops-row" key={workspace.id}>
-                      <span className="invite-icon danger-icon">
-                        <RefreshCw />
-                      </span>
-                      <span className="member-main">
-                        <strong>{workspace.name}</strong>
-                        <small>
-                          Last state{" "}
-                          {workspace.simulation?.lastState
-                            ? titleCase(workspace.simulation.lastState)
-                            : "unset"}
-                          {subscription
-                            ? ` · ${titleCase(subscription.access)}`
-                            : ""}
-                        </small>
-                      </span>
-                      {complete || !onPlatformControl ? null : (
-                        <button
-                          className="button secondary small"
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            setSimulationDialog({
-                              mode: "advance",
-                              workspace,
-                            })
-                          }
-                        >
-                          Advance state
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
-                : null}
-            </details>
-          ) : null}
-        </>
-      ) : null}
-
-      {section === "ops" ? (
-        <>
-          <section
-            className="metric-grid overview-metric-grid"
-            aria-label="Control-plane summary"
-          >
-            <MetricCard
-              label="Delivery failures"
-              value={platform.notificationFailures.length}
-              hint="Notifications waiting for retry"
-              icon={Mail}
-              tone={
-                platform.notificationFailures.length ? "warning" : "default"
-              }
-            />
-            <MetricCard
-              label="Deletion reviews"
-              value={actionableDeletionCases.length}
-              hint="Cases requiring owner action"
-              icon={Trash2}
-            />
-            <MetricCard
-              label="Audit events"
-              value={platform.platformAudits.length}
-              hint="Recent control-plane changes"
-              icon={History}
-            />
-            <MetricCard
-              label="Activation journeys"
-              value={platform.activation.length}
-              hint="Workspaces tracked to first value"
-              icon={Activity}
-            />
-          </section>
-          <div className="settings-grid">
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Delivery failures</p>
-                  <h2>Notification retry queue</h2>
-                </div>
-                <CircleAlert />
-              </div>
-              {platform.notificationFailures.length ? (
-                <PlatformPagedList items={platform.notificationFailures}>
-                  {(visible) =>
-                    visible.map((failure) => (
-                      <button
-                        className="platform-compact-row"
-                        type="button"
-                        key={failure.id}
-                        onClick={() =>
-                          openSection("accounts", failure.workspaceId)
-                        }
-                      >
-                        <span className="member-main">
-                          <strong>{workspaceName(failure.workspaceId)}</strong>
-                          <small>
-                            {titleCase(failure.kind)} · last failure{" "}
-                            {formatDate(failure.lastFailedAt, true)}
-                          </small>
-                        </span>
-                        <strong>{failure.attempts} attempts</strong>
-                      </button>
-                    ))
-                  }
-                </PlatformPagedList>
-              ) : (
-                <EmptyState
-                  icon={CheckCircle2}
-                  title="Delivery queue is clear"
-                  description="No failed notifications are waiting for retry."
-                />
-              )}
-            </section>
-            <section className="card table-card deletion-control-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Retention boundary</p>
-                  <h2>Deletion approvals</h2>
-                </div>
-                <span className="privacy-caption">
-                  <Trash2 /> Two-stage purge
-                </span>
-              </div>
-              {actionableDeletionCases.length ? (
-                actionableDeletionCases.map((item) => {
-                  const eligible = Date.parse(item.eligibleAt) <= platformNow;
-                  return (
-                    <div className="platform-ops-row" key={item.id}>
-                      <span className="invite-icon danger-icon">
-                        <Trash2 />
-                      </span>
-                      <span className="member-main">
-                        <strong>{workspaceName(item.workspaceId)}</strong>
-                        <small>
-                          Retention eligibility {formatDate(item.eligibleAt, true)}
-                        </small>
-                        <small>
-                          {item.confirmationText
-                            ? "Typed platform-owner confirmation is required."
-                            : "Only a platform owner can see the confirmation phrase."}
-                        </small>
-                      </span>
-                      <StatusBadge status={item.status} />
-                      {item.status === "awaiting_approval" &&
-                        item.confirmationText ? (
-                        <button
-                          className="button danger-button small"
-                          type="button"
-                          disabled={busy || !eligible}
-                          onClick={() => setDeletionCase(item)}
-                        >
-                          {eligible ? "Review deletion" : "Retention active"}
-                        </button>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="empty-inline">
-                  <ShieldCheck />
-                  <span>
-                    <strong>No deletion approvals pending</strong>
-                    <small>
-                      Expired tenants remain recoverable until retention ends and an
-                      owner explicitly approves purge.
-                    </small>
-                  </span>
-                </div>
-              )}
-            </section>
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Platform audit</p>
-                  <h2>Recent control-plane changes</h2>
-                </div>
-                <History />
-              </div>
-              <PlatformAuditList
-                audits={platform.platformAudits}
-                workspaceName={workspaceName}
-              />
-            </section>
-            <section className="card table-card">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Activation milestones</p>
-                  <h2>First-value progress</h2>
-                </div>
-                <Activity />
-              </div>
-              {platform.activation.length ? (
-                <PlatformPagedList items={platform.activation}>
-                  {(visible) =>
-                    visible.map((activation) => {
-                      const achieved = [
-                        activation.firstPublishedAt,
-                        activation.firstTeammateViewAt,
-                        activation.firstTeammateCompletionAt,
-                      ].filter(Boolean).length;
-                      return (
-                        <button
-                          className="platform-compact-row"
-                          type="button"
-                          key={activation.workspaceId}
-                          onClick={() =>
-                            openSection("accounts", activation.workspaceId)
-                          }
-                        >
-                          <span className="member-main">
-                            <strong>{workspaceName(activation.workspaceId)}</strong>
-                            <small>
-                              {activation.firstPublishedAt
-                                ? `Published ${formatDate(activation.firstPublishedAt, true)}`
-                                : "Awaiting first publication"}
-                            </small>
-                          </span>
-                          <strong>{achieved}/3</strong>
-                        </button>
-                      );
-                    })
-                  }
-                </PlatformPagedList>
-              ) : (
-                <p className="empty-copy">No activation events recorded.</p>
-              )}
-            </section>
-            {appointments.length ? (
-              <section className="card table-card">
-                <div className="section-heading compact">
-                  <div>
-                    <p className="eyebrow">Client administrator appointments</p>
-                    <h2>Pending appointments</h2>
-                  </div>
-                  <LockKeyhole />
-                </div>
-                {appointments.map((appointment) => (
-                  <div className="invite-row" key={appointment.id}>
-                    <span className="invite-icon">
-                      <UserCog />
-                    </span>
-                    <span className="member-main">
-                      <strong>{appointment.email}</strong>
-                      <small>
-                        Appointed administrator · expires{" "}
-                        {formatDate(appointment.expiresAt, true)} · the acceptance
-                        link was shown once at creation
-                      </small>
-                    </span>
-                    <StatusBadge status="active" />
-                    <button
-                      className="button ghost small"
-                      disabled={busy}
-                      onClick={() => onRevokeAppointment(appointment)}
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                ))}
-              </section>
-            ) : null}
-          </div>
-        </>
-      ) : null}
-      {pricingCatalogOpen && onPlatformControl ? (
-        <PricingCatalogDialog
-          busy={busy}
-          catalog={
-            pricingCatalogOpen === "create" ? null : pricingCatalogOpen
-          }
-          generatedAt={platform.generatedAt}
-          onClose={() => setPricingCatalogOpen(null)}
-          onSave={async (catalog, input) => {
-            if (catalog) {
-              await onPlatformControl(
-                "updatePricingCatalog",
-                {
-                  catalogId: catalog.id,
-                  expectedRevision: catalog.revision,
-                  catalog: input,
-                },
-                "Pricing catalog updated",
-              );
-            } else {
-              await onPlatformControl(
-                "createPricingCatalog",
-                { catalog: input },
-                "Pricing catalog created",
-              );
-            }
-            setPricingCatalogOpen(null);
-          }}
-        />
-      ) : null}
-      {simulationDialog &&
-        platform.lifecycleSimulation &&
-        onPlatformControl ? (
-        <LifecycleSimulationDialog
-          busy={busy}
-          dialog={simulationDialog}
-          states={platform.lifecycleSimulation.states}
-          createConfirmation={platform.lifecycleSimulation.createConfirmation}
-          onClose={() => setSimulationDialog(null)}
-          onRun={async (action, payload) => {
-            await onPlatformControl(
-              action,
-              payload,
-              action === "createLifecycleSimulationTenant"
-                ? "Synthetic lifecycle tenant created"
-                : "Synthetic lifecycle state advanced",
-            );
-            setSimulationDialog(null);
-          }}
-        />
-      ) : null}
-      {betaAccessOpen && onCreateBetaAccess ? (
-        <BetaAccessDialog
-          busy={busy}
-          initialExpiresAt={new Date(platformNow + 14 * 86_400_000)
-            .toISOString()
-            .slice(0, 10)}
-          onClose={() => setBetaAccessOpen(false)}
-          onCreate={onCreateBetaAccess}
-        />
-      ) : null}
-      {lifecycleAction ? (
-        <SubscriptionLifecycleDialog
-          action={lifecycleAction}
-          busy={busy}
-          workspaceName={workspaceName(
-            lifecycleAction.subscription.workspaceId,
-          )}
-          onClose={() => setLifecycleAction(null)}
-          onExtend={onExtendSubscription}
-          onConvert={onConvertSubscription}
-        />
-      ) : null}
-      {deletionCase?.confirmationText ? (
-        <DeletionApprovalDialog
-          item={deletionCase}
-          confirmationText={deletionCase.confirmationText}
-          workspaceName={workspaceName(deletionCase.workspaceId)}
-          busy={busy}
-          onClose={() => setDeletionCase(null)}
-          onApprove={onApproveDeletion}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function PricingCatalogDialog({
+export function PricingCatalogDialog({
   busy,
   catalog,
   generatedAt,
@@ -6207,7 +4171,7 @@ function PricingCatalogDialog({
             <strong>Security is never an add-on.</strong>
             <small>
               Tenant isolation, MFA, encryption, audit, backup, and retention
-              controls stay included. Payment collection remains off.
+              controls stay included. Clients are invoiced offline.
             </small>
           </span>
         </div>
@@ -6234,622 +4198,6 @@ function PricingCatalogDialog({
   );
 }
 
-type PlatformLifecycleState =
-  | "trial_active"
-  | "near_expiry"
-  | "read_only"
-  | "suspended"
-  | "retention"
-  | "deletion_eligible"
-  | "pending_deletion";
-
-function LifecycleSimulationDialog({
-  busy,
-  dialog,
-  states,
-  createConfirmation,
-  onClose,
-  onRun,
-}: {
-  busy: boolean;
-  dialog:
-  | { mode: "create" }
-  | { mode: "advance"; workspace: PlatformWorkspace };
-  states: ReadonlyArray<PlatformLifecycleState>;
-  createConfirmation: string;
-  onClose: () => void;
-  onRun: (
-    action: "createLifecycleSimulationTenant" | "simulateLifecycleState",
-    payload: Record<string, unknown>,
-  ) => Promise<void>;
-}) {
-  const currentState =
-    dialog.mode === "advance"
-      ? (dialog.workspace.simulation?.lastState as PlatformLifecycleState) ??
-      "trial_active"
-      : "trial_active";
-  const currentIndex = Math.max(0, states.indexOf(currentState));
-  const availableStates = states.slice(currentIndex + 1);
-  const [state, setState] = useState<PlatformLifecycleState>(
-    availableStates[0] ?? "pending_deletion",
-  );
-  const [label, setLabel] = useState("Lifecycle QA");
-  const [confirmation, setConfirmation] = useState("");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const expected =
-    dialog.mode === "create"
-      ? createConfirmation
-      : `SIMULATE ${dialog.workspace.slug} AS ${state.toUpperCase()}`;
-
-  return (
-    <Modal
-      title={
-        dialog.mode === "create"
-          ? "Create synthetic lifecycle tenant"
-          : "Advance synthetic lifecycle"
-      }
-      eyebrow="Non-production only"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form lifecycle-simulation-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setWorking(true);
-          setError("");
-          const action =
-            dialog.mode === "create"
-              ? "createLifecycleSimulationTenant"
-              : "simulateLifecycleState";
-          const payload =
-            dialog.mode === "create"
-              ? { label: label.trim(), confirmation }
-              : {
-                targetWorkspaceId: dialog.workspace.id,
-                state,
-                confirmation,
-              };
-          void onRun(action, payload)
-            .catch((nextError) => setError(messageFromError(nextError)))
-            .finally(() => setWorking(false));
-        }}
-      >
-        <div className="empty-inline">
-          <CircleAlert />
-          <span>
-            <strong>Only disposable synthetic records are eligible.</strong>
-            <small>
-              State changes cannot be rewound. Deletion still requires the
-              separate platform-owner approval and purge workflow.
-            </small>
-          </span>
-        </div>
-        {dialog.mode === "create" ? (
-          <label className="field">
-            <span>Simulation label</span>
-            <input
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              minLength={2}
-              maxLength={64}
-              required
-            />
-          </label>
-        ) : (
-          <label className="field">
-            <span>Target state</span>
-            <SelectMenu
-              className="form-select"
-              value={state}
-              onChange={(value) => {
-                setState(value as PlatformLifecycleState);
-                setConfirmation("");
-              }}
-              ariaLabel="Target lifecycle state"
-              options={availableStates.map((candidate) => ({
-                value: candidate,
-                label: titleCase(candidate),
-              }))}
-            />
-          </label>
-        )}
-        <label className="field">
-          <span>Type this exact confirmation</span>
-          <code>{expected}</code>
-          <input
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            required
-          />
-        </label>
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <div className="modal-actions">
-          <button className="button ghost" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={
-              busy ||
-              working ||
-              confirmation !== expected ||
-              (dialog.mode === "create" && label.trim().length < 2)
-            }
-          >
-            {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
-            {dialog.mode === "create" ? "Create tenant" : "Advance state"}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function BetaAccessDialog({
-  busy,
-  initialExpiresAt,
-  onClose,
-  onCreate,
-}: {
-  busy: boolean;
-  initialExpiresAt: string;
-  onClose: () => void;
-  onCreate: (input: {
-    label?: string;
-    email?: string;
-    expiresAt: string;
-    maxUses: number;
-  }) => Promise<{ grant: BetaAccessGrant; code: string }>;
-}) {
-  const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
-  const [expiryDate, setExpiryDate] = useState(initialExpiresAt);
-  const [maxUses, setMaxUses] = useState(1);
-  const [result, setResult] = useState<{
-    grant: BetaAccessGrant;
-    code: string;
-  } | null>(null);
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-
-  const registrationLink = result
-    ? `${typeof window === "undefined" ? "" : window.location.origin}/register?beta=${encodeURIComponent(result.code)}`
-    : "";
-
-  async function copy(value: string, message: string) {
-    await navigator.clipboard.writeText(value);
-    toast.success(message);
-  }
-
-  return (
-    <Modal
-      title={result ? "Beta access is ready" : "Generate beta access"}
-      eyebrow="MFA-protected admission"
-      onClose={onClose}
-    >
-      {result ? (
-        <div className="beta-access-result">
-          <div className="self-service-ready">
-            <CheckCircle2 />
-            <span>
-              <strong>Copy this credential now.</strong>
-              <small>
-                Only its hash is stored. Closing this dialog permanently hides
-                the code.
-              </small>
-            </span>
-          </div>
-          <label className="auth-field">
-            <span>Registration link</span>
-            <div className="auth-input-wrap beta-access-output">
-              <Link2 />
-              <input readOnly value={registrationLink} />
-              <button
-                type="button"
-                aria-label="Copy registration link"
-                onClick={() =>
-                  void copy(registrationLink, "Registration link copied")
-                }
-              >
-                <Copy />
-              </button>
-            </div>
-          </label>
-          <label className="auth-field">
-            <span>Access code</span>
-            <div className="auth-input-wrap beta-access-output">
-              <KeyRound />
-              <input readOnly value={result.code} />
-              <button
-                type="button"
-                aria-label="Copy beta access code"
-                onClick={() =>
-                  void copy(result.code, "Beta access code copied")
-                }
-              >
-                <Copy />
-              </button>
-            </div>
-          </label>
-          <div className="modal-actions">
-            <button className="button primary" type="button" onClick={onClose}>
-              Done
-            </button>
-          </div>
-        </div>
-      ) : (
-        <form
-          className="settings-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setWorking(true);
-            setError("");
-            void onCreate({
-              ...(label.trim() ? { label: label.trim() } : {}),
-              ...(email.trim() ? { email: email.trim().toLowerCase() } : {}),
-              expiresAt: new Date(`${expiryDate}T23:59:59.000Z`).toISOString(),
-              maxUses,
-            })
-              .then(setResult)
-              .catch((nextError) =>
-                setError(
-                  nextError instanceof Error
-                    ? nextError.message
-                    : "Beta access could not be created.",
-                ),
-              )
-              .finally(() => setWorking(false));
-          }}
-        >
-          <label className="auth-field">
-            <span>
-              Label <small>Optional internal context</small>
-            </span>
-            <div className="auth-input-wrap">
-              <KeyRound />
-              <input
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="August design partners"
-              />
-            </div>
-          </label>
-          <label className="auth-field">
-            <span>
-              Approved email <small>Blank allows any recipient</small>
-            </span>
-            <div className="auth-input-wrap">
-              <Mail />
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="tester@company.com"
-              />
-            </div>
-          </label>
-          <div className="settings-grid compact-settings-grid">
-            <label>
-              <span>Expires</span>
-              <input
-                type="date"
-                min={new Date().toISOString().slice(0, 10)}
-                value={expiryDate}
-                onChange={(event) => setExpiryDate(event.target.value)}
-                required
-              />
-            </label>
-            <label>
-              <span>Maximum uses</span>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={maxUses}
-                onChange={(event) => setMaxUses(Number(event.target.value))}
-                required
-              />
-            </label>
-          </div>
-          {error ? (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <div className="modal-actions">
-            <button className="button ghost" type="button" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              className="button primary"
-              type="submit"
-              disabled={busy || working || !expiryDate || maxUses < 1}
-            >
-              {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
-              Generate one-time code
-            </button>
-          </div>
-        </form>
-      )}
-    </Modal>
-  );
-}
-
-function SubscriptionLifecycleDialog({
-  action,
-  workspaceName,
-  busy,
-  onClose,
-  onExtend,
-  onConvert,
-}: {
-  action: {
-    mode: "extend" | "convert";
-    openedAt: number;
-    subscription: NonNullable<
-      BootstrapResponse["platform"]
-    >["subscriptions"][number];
-  };
-  workspaceName: string;
-  busy: boolean;
-  onClose: () => void;
-  onExtend: (
-    workspaceId: string,
-    expiresAt: string,
-    graceDays: number,
-    retentionDays: number,
-  ) => Promise<unknown>;
-  onConvert: (
-    workspaceId: string,
-    manualReference: string,
-    expiresAt: string | null,
-  ) => Promise<unknown>;
-}) {
-  const extensionBase = Math.max(
-    action.openedAt,
-    action.subscription.expiresAt
-      ? Date.parse(action.subscription.expiresAt)
-      : action.openedAt,
-  );
-  const [expiryDate, setExpiryDate] = useState(
-    action.mode === "extend"
-      ? new Date(extensionBase + 7 * 86_400_000).toISOString().slice(0, 10)
-      : "",
-  );
-  const [graceDays, setGraceDays] = useState(7);
-  const [retentionDays, setRetentionDays] = useState(30);
-  const [manualReference, setManualReference] = useState("");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const toEndOfDayIso = (value: string) =>
-    new Date(`${value}T23:59:59.000Z`).toISOString();
-
-  return (
-    <Modal
-      title={
-        action.mode === "extend"
-          ? `Extend ${workspaceName}`
-          : `Record contract · ${workspaceName}`
-      }
-      eyebrow="MFA-protected lifecycle change"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setWorking(true);
-          setError("");
-          try {
-            if (action.mode === "extend") {
-              await onExtend(
-                action.subscription.workspaceId,
-                toEndOfDayIso(expiryDate),
-                graceDays,
-                retentionDays,
-              );
-            } else {
-              await onConvert(
-                action.subscription.workspaceId,
-                manualReference.trim(),
-                expiryDate ? toEndOfDayIso(expiryDate) : null,
-              );
-            }
-            onClose();
-          } catch (nextError) {
-            setError(messageFromError(nextError));
-          } finally {
-            setWorking(false);
-          }
-        }}
-      >
-        <p className="modal-copy">
-          {action.mode === "extend"
-            ? "Restores lifecycle access, moves the expiry forward, and cancels any pending deletion approval for this workspace."
-            : "Records an externally executed contract or invoice. KnowHow does not collect payment in this pilot."}
-        </p>
-        {action.mode === "convert" ? (
-          <label className="field">
-            <span>Contract or invoice reference</span>
-            <input
-              required
-              minLength={3}
-              maxLength={128}
-              value={manualReference}
-              onChange={(event) => setManualReference(event.target.value)}
-              placeholder="Contract 2026-014"
-              autoComplete="off"
-            />
-          </label>
-        ) : null}
-        <label className="field">
-          <span>
-            {action.mode === "extend"
-              ? "New expiry date"
-              : "Contract expiry (optional)"}
-          </span>
-          <input
-            type="date"
-            required={action.mode === "extend"}
-            value={expiryDate}
-            onChange={(event) => setExpiryDate(event.target.value)}
-          />
-        </label>
-        {action.mode === "extend" ? (
-          <div className="form-grid two">
-            <label className="field">
-              <span>Grace period (days)</span>
-              <input
-                type="number"
-                min={0}
-                max={30}
-                value={graceDays}
-                onChange={(event) => setGraceDays(Number(event.target.value))}
-              />
-            </label>
-            <label className="field">
-              <span>Retention after suspension (days)</span>
-              <input
-                type="number"
-                min={30}
-                max={365}
-                value={retentionDays}
-                onChange={(event) =>
-                  setRetentionDays(Number(event.target.value))
-                }
-              />
-            </label>
-          </div>
-        ) : null}
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <footer className="modal-footer">
-          <span />
-          <button className="button secondary" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={
-              busy ||
-              working ||
-              (action.mode === "extend" && !expiryDate) ||
-              (action.mode === "convert" && manualReference.trim().length < 3)
-            }
-          >
-            {working || busy ? (
-              <LoaderCircle className="spin" />
-            ) : (
-              <ShieldCheck />
-            )}
-            {action.mode === "extend"
-              ? "Extend subscription"
-              : "Record conversion"}
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-
-function DeletionApprovalDialog({
-  item,
-  confirmationText,
-  workspaceName,
-  busy,
-  onClose,
-  onApprove,
-}: {
-  item: NonNullable<BootstrapResponse["platform"]>["deletionCases"][number];
-  confirmationText: string;
-  workspaceName: string;
-  busy: boolean;
-  onClose: () => void;
-  onApprove: (caseId: string, confirmation: string) => Promise<unknown>;
-}) {
-  const [confirmation, setConfirmation] = useState("");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  return (
-    <Modal
-      title={`Approve deletion · ${workspaceName}`}
-      eyebrow="Irreversible platform-owner control"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setWorking(true);
-          setError("");
-          try {
-            await onApprove(item.id, confirmation);
-            onClose();
-          } catch (nextError) {
-            setError(messageFromError(nextError));
-          } finally {
-            setWorking(false);
-          }
-        }}
-      >
-        <div className="destructive-warning" role="alert">
-          <CircleAlert />
-          <span>
-            <strong>This queues permanent tenant purge.</strong>
-            <small>
-              The retention period ended {formatDate(item.eligibleAt, true)}.
-              Verify recovery or conversion is no longer required before
-              continuing.
-            </small>
-          </span>
-        </div>
-        <label className="field">
-          <span>Type this exact confirmation phrase</span>
-          <code className="confirmation-phrase">{confirmationText}</code>
-          <input
-            required
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <footer className="modal-footer">
-          <span />
-          <button className="button secondary" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button danger-button"
-            type="submit"
-            disabled={busy || working || confirmation !== confirmationText}
-          >
-            {working || busy ? <LoaderCircle className="spin" /> : <Trash2 />}
-            Approve permanent purge
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-
 const ORGANIZATION_ROLES: Array<{
   value: OrganizationRole;
   label: string;
@@ -6857,12 +4205,12 @@ const ORGANIZATION_ROLES: Array<{
 }> = [
     {
       value: "owner",
-      label: "Owner",
-      description: "Governance, owners, and all organization settings",
+      label: "Admin",
+      description: "Organization-wide administration, owners, and settings",
     },
     {
       value: "administrator",
-      label: "Administrator",
+      label: "Organization admin",
       description: "Organization identity and workspace directory",
     },
     {
@@ -6906,6 +4254,7 @@ export function OrganizationView({
 }) {
   const [appointing, setAppointing] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const canManage = organization.roles.includes("owner");
   const editingMember = organization.members.find(
     (member) => member.id === editingMemberId,
@@ -6942,7 +4291,7 @@ export function OrganizationView({
             <p>
               Legal name · {organization.country} ·{" "}
               {titleCase(organization.status)} · your roles:{" "}
-              {organization.roles.map(titleCase).join(", ")}
+              {organization.roles.map(organizationRoleLabel).join(", ")}
             </p>
           </div>
         </div>
@@ -6999,7 +4348,7 @@ export function OrganizationView({
                 <small>{member.email}</small>
                 <span className="role-chips">
                   {member.roles.map((role) => (
-                    <span key={role}>{titleCase(role)}</span>
+                    <span key={role}>{organizationRoleLabel(role)}</span>
                   ))}
                 </span>
               </span>
@@ -7041,12 +4390,17 @@ export function OrganizationView({
                 type="button"
                 disabled={busy || !canManage}
                 onClick={() => {
-                  if (
-                    window.confirm(
-                      `Revoke the appointment for ${appointment.email}?`,
+                  void (async () => {
+                    if (
+                      !(await askToConfirm({
+                        title: "Revoke appointment?",
+                        description: `Revoke the appointment for ${appointment.email}?`,
+                        confirmLabel: "Revoke",
+                      }))
                     )
-                  )
-                    void onRevokeAppointment(appointment.id);
+                      return;
+                    await onRevokeAppointment(appointment.id);
+                  })();
                 }}
               >
                 Revoke
@@ -7074,6 +4428,7 @@ export function OrganizationView({
           }}
         />
       ) : null}
+      {confirmDialog}
     </div>
   );
 }
@@ -7596,156 +4951,6 @@ function GlobalGuideSearch({
   );
 }
 
-function PlatformGlobalSearch({
-  platform,
-  onNavigate,
-}: {
-  platform: NonNullable<BootstrapResponse["platform"]>;
-  onNavigate: (href: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement | null>(null);
-  const input = useRef<HTMLInputElement | null>(null);
-  const results = useMemo(() => {
-    const phrase = query.trim().toLowerCase();
-    const navigation = PLATFORM_NAV.filter(
-      (item) =>
-        !phrase ||
-        item.label.toLowerCase().includes(phrase) ||
-        item.section.toLowerCase().includes(phrase),
-    ).map((item) => ({
-      key: `section:${item.section}`,
-      label: item.label,
-      description:
-        item.section === "overview"
-          ? "Platform command center"
-          : `Open platform ${item.label.toLowerCase()}`,
-      href: platformHref(item.section),
-      icon: item.icon,
-      kind: "Section",
-    }));
-    const workspaces = platform.workspaces
-      .filter((workspace) => {
-        if (!phrase) return false;
-        const administrators = workspace.administrators
-          .map((admin) => `${admin.name} ${admin.email}`)
-          .join(" ");
-        return `${workspace.name} ${workspace.slug} ${administrators}`
-          .toLowerCase()
-          .includes(phrase);
-      })
-      .map((workspace) => ({
-        key: `workspace:${workspace.id}`,
-        label: workspace.name,
-        description: `${workspace.slug} · ${countPhrase(workspace.memberCount, "member")}`,
-        href: platformHref("accounts", workspace.id),
-        icon: Building2,
-        kind: "Account",
-      }));
-
-    return [...workspaces, ...navigation].slice(0, 8);
-  }, [platform.workspaces, query]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        input.current?.focus();
-        setOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (box.current && !box.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [open]);
-
-  function openResult(href: string) {
-    setOpen(false);
-    setQuery("");
-    onNavigate(href);
-  }
-
-  return (
-    <div className="global-search" ref={box}>
-      <label className="search-field global-search-field">
-        <Search />
-        <input
-          ref={input}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setOpen(false);
-              setQuery("");
-            }
-            if (event.key === "Enter" && results[0]) {
-              event.preventDefault();
-              openResult(results[0].href);
-            }
-          }}
-          placeholder="Search accounts, admins, or platform sections"
-          aria-label="Search the platform console"
-        />
-      </label>
-      {open ? (
-        <div
-          className="search-results"
-          role="listbox"
-          aria-label="Platform search results"
-        >
-          <p className="search-result-count">
-            {query.trim() ? "Best matches" : "Jump to a platform section"}
-          </p>
-          {results.length ? (
-            results.map((result) => {
-              const Icon = result.icon;
-              return (
-                <button
-                  className="search-result"
-                  type="button"
-                  key={result.key}
-                  onClick={() => openResult(result.href)}
-                >
-                  <span className="guide-icon">
-                    <Icon />
-                  </span>
-                  <span className="search-result-main">
-                    <span className="guide-title-line">
-                      <strong>{result.label}</strong>
-                      <span className="workspace-label">{result.kind}</span>
-                    </span>
-                    <small>{result.description}</small>
-                  </span>
-                  <ArrowRight />
-                </button>
-              );
-            })
-          ) : (
-            <p className="search-empty">
-              No accounts or sections match &ldquo;{query.trim()}&rdquo;.
-            </p>
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function ExtensionDialog({
   busy,
   companion,
@@ -7763,6 +4968,7 @@ function ExtensionDialog({
 }) {
   const [connectionError, setConnectionError] = useState("");
   const stores = extensionStoreUrls();
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
 
   async function relink() {
     setConnectionError("");
@@ -7778,9 +4984,13 @@ function ExtensionDialog({
 
   async function revokeDevices() {
     if (
-      !window.confirm(
-        "Revoke every browser paired by your account in this workspace?",
-      )
+      !(await askToConfirm({
+        title: "Disconnect capture browsers?",
+        description:
+          "Revoke every browser paired by your account in this workspace?",
+        confirmLabel: "Disconnect",
+        tone: "danger",
+      }))
     )
       return;
     await onRevoke();
@@ -7788,6 +4998,7 @@ function ExtensionDialog({
   }
 
   return (
+    <>
     <Modal
       title="The capture extension"
       eyebrow="Chrome & Edge"
@@ -7900,6 +5111,8 @@ function ExtensionDialog({
         </footer>
       </div>
     </Modal>
+    {confirmDialog}
+    </>
   );
 }
 
@@ -7923,6 +5136,7 @@ function AccountSecurityDialog({
   const [currentPassword, setCurrentPassword] = useState("");
   const [nextPassword, setNextPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
 
   async function regenerate() {
     setWorking(true);
@@ -7942,9 +5156,13 @@ function AccountSecurityDialog({
 
   async function turnOff() {
     if (
-      !window.confirm(
-        "Turn off authenticator protection? You will only need your password to sign in.",
-      )
+      !(await askToConfirm({
+        title: "Turn off authenticator?",
+        description:
+          "Turn off authenticator protection? You will only need your password to sign in.",
+        confirmLabel: "Turn off",
+        tone: "danger",
+      }))
     ) {
       return;
     }
@@ -8000,9 +5218,12 @@ function AccountSecurityDialog({
 
   async function signOutOtherDevices() {
     if (
-      !window.confirm(
-        "Sign out every other browser and device? This session will stay signed in.",
-      )
+      !(await askToConfirm({
+        title: "Sign out other devices?",
+        description:
+          "Sign out every other browser and device? This session will stay signed in.",
+        confirmLabel: "Sign out",
+      }))
     ) {
       return;
     }
@@ -8019,6 +5240,7 @@ function AccountSecurityDialog({
   }
 
   return (
+    <>
     <Modal
       title="Account settings"
       eyebrow={email}
@@ -8172,6 +5394,8 @@ function AccountSecurityDialog({
         </footer>
       </div>
     </Modal>
+    {confirmDialog}
+    </>
   );
 }
 
@@ -8252,14 +5476,36 @@ export function KnowHowWorkspaceApp({
     (item) => item.status === "pending",
   ).length;
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [shareDraft, setShareDraft] = useState<{
+    audiences: Audience[];
+    privacyReviewed: boolean;
+  } | null>(null);
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const { resolvedTheme, setPreference } = useTheme();
   const roles = workspace.roles;
   const isAdmin = roles.includes("administrator");
   const canCreate = isAdmin || roles.includes("creator");
+  const entitlements = active.entitlements ?? {
+    maximumUsers: 3,
+    maximumCreators: 1,
+    storageBytes: 1_000_000_000,
+    extensionEnabled: false,
+    supportEnabled: false,
+    removeBranding: false,
+    privacyToolsEnabled: false,
+    customSubdomainEnabled: false,
+    fileExportsEnabled: false,
+  };
   const workspaceMutable =
     workspace.status === "active" &&
     workspace.subscription?.access !== "read_only";
-  const canCapture = canCreate && workspaceMutable;
+  const canCapture =
+    canCreate && workspaceMutable && entitlements.extensionEnabled;
+  const canOpenSupport = entitlements.supportEnabled;
+  const canCreateSupportTicket =
+    canOpenSupport &&
+    !busy &&
+    (isAdmin || roles.includes("creator"));
   const currentMember = members.find(
     (member) => member.userId === data.viewer.id,
   );
@@ -8268,19 +5514,13 @@ export function KnowHowWorkspaceApp({
     (item) => item.id === workspace.organizationId,
   );
   const view: View =
-    route.kind === "platform"
-      ? "Platform"
-      : route.kind === "workspace-section"
-        ? SECTION_TO_VIEW[route.section]
-        : route.kind === "guide-new" ||
-          route.kind === "guide-view" ||
-          route.kind === "guide-edit"
-          ? "Guides"
-          : "Overview";
-  const platformSection =
-    route.kind === "platform" ? route.section : "overview";
-  const platformAccountId =
-    route.kind === "platform" ? route.workspaceId : undefined;
+    route.kind === "workspace-section"
+      ? SECTION_TO_VIEW[route.section]
+      : route.kind === "guide-new" ||
+        route.kind === "guide-view" ||
+        route.kind === "guide-edit"
+        ? "Guides"
+        : "Overview";
 
   const [extensionLink, setExtensionLink] = useState<
     "checking" | "missing" | "error" | "unavailable" | "connected"
@@ -8416,14 +5656,47 @@ export function KnowHowWorkspaceApp({
     }
   }
 
-  async function saveGuide(payload: GuideEditorPayload) {
+  async function saveGuide(payload: GuideEditorPayload, silent = false) {
     return command<GuideSaveResult>(
       "saveGuide",
       payload,
-      payload.transition === "review"
-        ? "Draft sent for review"
-        : "Private draft saved",
+      silent
+        ? ""
+        : payload.transition === "review"
+          ? "Draft sent for review"
+          : "Private draft saved",
     );
+  }
+
+  async function shareGuideFromEditor(payload: GuideEditorPayload) {
+    const saved = await saveGuide({ ...payload, transition: "draft" }, true);
+    await command(
+      "shareGuide",
+      {
+        guideId: saved.guideId,
+        audiences: payload.audiences,
+        privacyReviewed: payload.privacyReviewed,
+      },
+      "Guide shared",
+    );
+    return saved;
+  }
+
+  function openShareGuide(guide: Guide) {
+    const revision = guide.workingRevision ?? guide.publishedRevision;
+    const current = revision?.audiences ?? [];
+    const authorOnlyDraft =
+      !guide.publishedRevision &&
+      current.length === 1 &&
+      current[0]?.kind === "user";
+    setShareDraft({
+      audiences:
+        !current.length || authorOnlyDraft
+          ? [workspaceAudience()]
+          : current,
+      privacyReviewed: Boolean(revision?.privacyReviewedAt),
+    });
+    setDialog({ type: "share-guide", guide });
   }
 
   function navigateToView(nextView: View) {
@@ -8445,11 +5718,9 @@ export function KnowHowWorkspaceApp({
     route.kind === "guide-new" || route.kind === "guide-edit";
   const isGuideReaderRoute = route.kind === "guide-view";
   const canAccessCurrentView =
-    view !== "Platform"
-      ? !(view === "Vault" && !canUseVault) &&
-      !(["Groups", "Members", "Settings"].includes(view) && !isAdmin) &&
-      !(view === "Organization" && !organization)
-      : data.viewer.platformAdministrator;
+    !(view === "Vault" && !canUseVault) &&
+    !(["Groups", "Members", "Settings"].includes(view) && !isAdmin) &&
+    !(view === "Organization" && !organization);
   const publishedRestricted = Boolean(
     routeGuide?.publishedRevision &&
     !routeGuide.publishedRevision.audiences.some(
@@ -8471,6 +5742,7 @@ export function KnowHowWorkspaceApp({
     "idle" | "loading" | "failed"
   >("idle");
 
+  /* eslint-disable react-hooks/set-state-in-effect -- missing-guide recovery follows the current route */
   useEffect(() => {
     if (!routeGuideId) {
       missingGuideRefreshKey.current = "";
@@ -8502,6 +5774,7 @@ export function KnowHowWorkspaceApp({
         );
       });
   }, [onRefresh, routeGuide, routeGuideId, workspace.id]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (
@@ -8526,6 +5799,7 @@ export function KnowHowWorkspaceApp({
   const visibleNav = [
     ...NAV_ITEMS.filter((item) => {
       if (item.view === "Capture") return canCapture;
+      if (item.view === "Support") return canOpenSupport;
       if (item.view === "Vault") return canUseVault;
       if (item.view === "Organization") return Boolean(organization);
       if (["Groups", "Members", "Settings"].includes(item.view)) return isAdmin;
@@ -8549,31 +5823,14 @@ export function KnowHowWorkspaceApp({
   const onboardingRemaining = active.onboarding.steps.filter(
     (step) => !step.completed,
   ).length;
+  const onboardingPercent = Math.round(
+    ((active.onboarding.steps.length - onboardingRemaining) /
+      Math.max(1, active.onboarding.steps.length)) *
+      100,
+  );
   const showSetupNav =
-    onboardingAudience &&
-    !active.onboarding.completedAt &&
-    Boolean(active.onboarding.dismissedAt);
-  const accessLabel =
-    view === "Platform"
-      ? "Platform administrator"
-      : workspaceAccessLabel(roles);
-  const platformNavCounts: Partial<Record<PlatformSection, number>> =
-    data.platform
-      ? {
-        leads: data.platform.leads.filter(
-          (lead) => !["closed", "converted", "rejected"].includes(lead.status),
-        ).length,
-        accounts: data.platform.workspaces.length,
-        support: data.platform.support.filter(
-          (ticket) => ticket.status !== "closed",
-        ).length,
-        billing: data.platform.systemHealth.expiringWithinSevenDays,
-        ops:
-          data.platform.systemHealth.failedNotifications +
-          data.platform.systemHealth.deletionApprovals +
-          data.platform.systemHealth.failedOperations,
-      }
-      : {};
+    onboardingAudience && !active.onboarding.completedAt;
+  const accessLabel = workspaceAccessLabel(roles);
 
   let primaryAction: {
     label: string;
@@ -8582,14 +5839,7 @@ export function KnowHowWorkspaceApp({
     onClick: () => void;
   } | null = null;
 
-  if (view === "Platform" && data.viewer.platformAdministrator) {
-    primaryAction = {
-      label: "Provision organization",
-      icon: Building2,
-      disabled: busy,
-      onClick: () => setDialog({ type: "platform-create" }),
-    };
-  } else if (view === "Members" && isAdmin) {
+  if (view === "Members" && isAdmin) {
     primaryAction = {
       label: "Invite teammate",
       icon: UserPlus,
@@ -8630,6 +5880,112 @@ export function KnowHowWorkspaceApp({
     };
   }
   const PrimaryActionIcon = primaryAction?.icon;
+  const sharingGuide = dialog?.type === "share-guide" ? dialog.guide : null;
+  const shareDialog =
+    sharingGuide && shareDraft ? (
+      <GuideShareDialog
+        open
+        title={
+          sharingGuide.workingRevision?.title ??
+          sharingGuide.publishedRevision?.title ??
+          sharingGuide.title
+        }
+        workspaceName={workspace.name}
+        liveUrl={
+          sharingGuide.publishedRevision
+            ? `${window.location.origin}${guideHref(workspace.slug, sharingGuide.id, "published")}`
+            : ""
+        }
+        isLive={Boolean(sharingGuide.publishedRevision)}
+        audiences={shareDraft.audiences}
+        groups={groups}
+        members={members}
+        captured={
+          (sharingGuide.workingRevision ?? sharingGuide.publishedRevision)
+            ?.source === "browser-capture"
+        }
+        privacyReviewed={shareDraft.privacyReviewed}
+        canShare={sharingGuide.canShare}
+        canRequestReview={Boolean(
+          workspace.settings.requireReviewBeforePublish &&
+            sharingGuide.canEdit &&
+            sharingGuide.workingRevision &&
+            sharingGuide.workingRevision.status === "draft",
+        )}
+        busy={busy || !workspaceMutable}
+        fileExportsEnabled={entitlements.fileExportsEnabled}
+        canExport={
+          Boolean(sharingGuide.publishedRevision) &&
+          (sharingGuide.publishedRevision?.audiences.some(
+            (item) => item.kind === "workspace",
+          ) ||
+            workspace.settings.allowRestrictedExports)
+        }
+        onClose={() => {
+          setDialog(null);
+          setShareDraft(null);
+        }}
+        onAudiencesChange={(audiences) =>
+          setShareDraft((current) =>
+            current ? { ...current, audiences } : current,
+          )
+        }
+        onPrivacyReviewedChange={(privacyReviewed) =>
+          setShareDraft((current) =>
+            current ? { ...current, privacyReviewed } : current,
+          )
+        }
+        onShare={async () => {
+          await command(
+            "shareGuide",
+            {
+              guideId: sharingGuide.id,
+              audiences: shareDraft.audiences,
+              privacyReviewed: shareDraft.privacyReviewed,
+            },
+            "Guide shared",
+          );
+          setDialog(null);
+          setShareDraft(null);
+        }}
+        onRequestReview={
+          sharingGuide.workingRevision
+            ? async () => {
+                const revision = sharingGuide.workingRevision!;
+                await command(
+                  "saveGuide",
+                  {
+                    guideId: sharingGuide.id,
+                    revisionId: revision.id,
+                    title: revision.title,
+                    summary: revision.summary || revision.title,
+                    category: revision.category,
+                    tags: revision.tags,
+                    systemReferences: revision.systemReferences,
+                    steps: revision.steps,
+                    audiences: shareDraft.audiences,
+                    privacyReviewed: shareDraft.privacyReviewed,
+                    source: revision.source,
+                    transition: "review",
+                  },
+                  "Draft sent for review",
+                );
+                setDialog(null);
+                setShareDraft(null);
+              }
+            : undefined
+        }
+        onExport={async (format) => {
+          await downloadAuthorizedExport(
+            workspace.id,
+            sharingGuide.id,
+            format,
+          );
+          toast.success("Export ready");
+        }}
+        onStartTrial={isAdmin ? () => setDialog({ type: "plan" }) : undefined}
+      />
+    ) : null;
 
   if (!canAccessCurrentView) {
     return (
@@ -8676,8 +6032,40 @@ export function KnowHowWorkspaceApp({
           groups={groups}
           members={members}
           busy={busy || !workspaceMutable}
+          privacyToolsEnabled={entitlements.privacyToolsEnabled}
           onClose={() => onNavigate(workspaceHref(workspace.slug, "guides"))}
           onSave={saveGuide}
+          onShare={shareGuideFromEditor}
+          requireReviewBeforePublish={workspace.settings.requireReviewBeforePublish}
+          canShare={
+            editorGuide?.canShare ??
+            (isAdmin ||
+              roles.includes("publisher") ||
+              !workspace.settings.requireReviewBeforePublish)
+          }
+          liveUrl={
+            editorGuide?.publishedRevision
+              ? `${typeof window === "undefined" ? "" : window.location.origin}${guideHref(workspace.slug, editorGuide.id, "published")}`
+              : ""
+          }
+          fileExportsEnabled={entitlements.fileExportsEnabled}
+          canExport={
+            Boolean(editorGuide?.publishedRevision) &&
+            (!publishedRestricted || workspace.settings.allowRestrictedExports)
+          }
+          onExport={
+            editorGuide
+              ? async (format) => {
+                  await downloadAuthorizedExport(
+                    workspace.id,
+                    editorGuide.id,
+                    format,
+                  );
+                  toast.success("Export ready");
+                }
+              : undefined
+          }
+          onStartTrial={isAdmin ? () => setDialog({ type: "plan" }) : undefined}
           onSaved={(result, transition) => {
             if (!editorGuide) {
               onNavigate(guideEditorHref(workspace.slug, result.guideId), {
@@ -8686,9 +6074,15 @@ export function KnowHowWorkspaceApp({
               return;
             }
             if (transition === "review") {
-              onNavigate(guideHref(workspace.slug, result.guideId, "working"), {
+              onNavigate(workspaceHref(workspace.slug, "guides"), {
                 replace: true,
               });
+            }
+            if (transition === "share") {
+              onNavigate(
+                guideHref(workspace.slug, result.guideId, "published"),
+                { replace: true },
+              );
             }
           }}
           onMediaChanged={onRefresh}
@@ -8788,6 +6182,16 @@ export function KnowHowWorkspaceApp({
               "Guide marked complete",
             ).catch(() => undefined);
           }}
+          onShare={() => openShareGuide(routeGuide)}
+          onReact={(reaction) => {
+            void knowhowCommand("recordGuideReaction", {
+              workspaceId: workspace.id,
+              guideId: routeGuide.id,
+              reaction,
+            })
+              .then(() => onRefresh())
+              .catch(() => undefined);
+          }}
           onExport={async (format) => {
             onBusyChange(true);
             onError("");
@@ -8819,6 +6223,7 @@ export function KnowHowWorkspaceApp({
               .catch(() => undefined);
           }}
         />
+        {shareDialog}
         {busy ? (
           <div className="busy-indicator" role="status">
             <LoaderCircle className="spin" /> Working securely…
@@ -8834,13 +6239,11 @@ export function KnowHowWorkspaceApp({
         className="app-shell experience-shell"
         data-view={view.toLowerCase()}
         data-access={
-          view === "Platform"
-            ? "platform"
-            : isAdmin
-              ? "administrator"
-              : canCreate
-                ? "contributor"
-                : "member"
+          isAdmin
+            ? "administrator"
+            : canCreate
+              ? "contributor"
+              : "member"
         }
         style={
           {
@@ -8854,34 +6257,8 @@ export function KnowHowWorkspaceApp({
             <div className="sidebar-brand">
               <ProductBrand compact />
             </div>
-            {view === "Platform" ? (
-              <>
-                <p className="sidebar-section-label">Active scope</p>
-                <SelectMenu
-                  className="workspace-menu"
-                  value="all-workspaces"
-                  onChange={() => undefined}
-                  ariaLabel="Platform scope"
-                  options={[
-                    { value: "all-workspaces", label: "All workspaces" },
-                  ]}
-                  renderValue={() => (
-                    <>
-                      <span className="workspace-role-icon">
-                        <ShieldCheck />
-                      </span>
-                      <span className="workspace-menu-copy">
-                        <strong>All workspaces</strong>
-                        <small>Platform administration</small>
-                      </span>
-                    </>
-                  )}
-                />
-              </>
-            ) : (
-              <>
-                <p className="sidebar-section-label">Active workspace</p>
-                <SelectMenu
+            <p className="sidebar-section-label">Active workspace</p>
+            <SelectMenu
                   className="workspace-menu"
                   contentClassName="workspace-menu-options"
                   value={activeWorkspaceId}
@@ -8907,59 +6284,9 @@ export function KnowHowWorkspaceApp({
                     </>
                   )}
                 />
-              </>
-            )}
           </SidebarHeader>
           <SidebarContent>
-            {view === "Platform" ? (
-              <>
-                <SidebarGroup className="workspace-nav-group">
-                  <nav className="main-nav" aria-label="Leave platform console">
-                    <SidebarMenu>
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          type="button"
-                          onClick={() =>
-                            onNavigate(workspaceHref(workspace.slug))
-                          }
-                        >
-                          <ArrowLeft />
-                          <span>Back to {workspace.name}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    </SidebarMenu>
-                  </nav>
-                </SidebarGroup>
-                <SidebarGroup className="workspace-nav-group">
-                  <p className="sidebar-section-label">Platform</p>
-                  <nav className="main-nav" aria-label="Platform navigation">
-                    <SidebarMenu>
-                      {PLATFORM_NAV.map((item) => {
-                        const Icon = item.icon;
-                        return (
-                          <SidebarMenuItem key={item.section}>
-                            <SidebarMenuButton
-                              isActive={platformSection === item.section}
-                              type="button"
-                              onClick={() => onNavigate(platformHref(item.section))}
-                            >
-                              <Icon />
-                              <span>{item.label}</span>
-                            </SidebarMenuButton>
-                            {platformNavCounts[item.section] ? (
-                              <SidebarMenuBadge>
-                                {platformNavCounts[item.section]}
-                              </SidebarMenuBadge>
-                            ) : null}
-                          </SidebarMenuItem>
-                        );
-                      })}
-                    </SidebarMenu>
-                  </nav>
-                </SidebarGroup>
-              </>
-            ) : (
-              <>
+            <>
                 <SidebarGroup className="workspace-nav-group">
                   <p className="sidebar-section-label">Workspace</p>
                   <nav className="main-nav" aria-label="Workspace navigation">
@@ -8984,16 +6311,13 @@ export function KnowHowWorkspaceApp({
                       {showSetupNav ? (
                         <SidebarMenuItem>
                           <SidebarMenuButton
-                            isActive={dialog?.type === "setup-wizard"}
                             type="button"
-                            onClick={() => setDialog({ type: "setup-wizard" })}
+                            onClick={() => navigateToView("Overview")}
                           >
                             <ClipboardCheck />
                             <span>Getting started</span>
                           </SidebarMenuButton>
-                          {onboardingRemaining ? (
-                            <SidebarMenuBadge>{onboardingRemaining}</SidebarMenuBadge>
-                          ) : null}
+                          <SidebarMenuBadge>{onboardingPercent}%</SidebarMenuBadge>
                         </SidebarMenuItem>
                       ) : null}
                     </SidebarMenu>
@@ -9049,11 +6373,28 @@ export function KnowHowWorkspaceApp({
                     </nav>
                   </SidebarGroup>
                 ) : null}
-              </>
-            )}
+            </>
           </SidebarContent>
-          {canCapture && view !== "Platform" ? (
+          {canCapture || isAdmin ? (
             <SidebarFooter>
+              <div className="workspace-sidebar-cta">
+              {isAdmin ? (
+                <button
+                  className="capture-shortcut"
+                  type="button"
+                  onClick={() => setDialog({ type: "invite" })}
+                >
+                  <span>
+                    <UserPlus />
+                  </span>
+                  <span>
+                    <strong>Invite teammates</strong>
+                    <small>Viewer or Creator access</small>
+                  </span>
+                  <ArrowRight />
+                </button>
+              ) : null}
+              {canCapture ? (
               <button
                 className="capture-shortcut"
                 type="button"
@@ -9068,6 +6409,8 @@ export function KnowHowWorkspaceApp({
                 </span>
                 <ArrowRight />
               </button>
+              ) : null}
+              </div>
             </SidebarFooter>
           ) : null}
         </Sidebar>
@@ -9077,43 +6420,30 @@ export function KnowHowWorkspaceApp({
             <div className="topbar-start">
               <SidebarTrigger className="mobile-menu" />
               <div className="topbar-workspace">
-                {view === "Platform" ? (
-                  <span className="topbar-context-mark" aria-hidden="true">
-                    <Shield />
-                  </span>
-                ) : (
                   <WorkspaceLogo
                     workspaceId={workspace.id}
                     workspaceName={workspace.name}
                     logoKey={workspace.settings.logoUrl}
                     size="sm"
                   />
-                )}
                 <span className="topbar-context-copy">
                   <small>
-                    {view === "Platform"
-                      ? (PLATFORM_NAV.find((item) => item.section === platformSection)
-                        ?.label ?? "Platform")
-                      : NAV_LABELS[view]}
+                    {NAV_LABELS[view]}
                   </small>
                   <strong>
-                    {view === "Platform"
-                      ? "All workspaces"
-                      : workspace.name}
+                    {workspace.name}
                   </strong>
-                  {view !== "Platform" ? (
-                    <TrialChip subscription={workspace.subscription} />
-                  ) : null}
+                    <TrialChip
+                      subscription={workspace.subscription}
+                      onOpen={
+                        isAdmin ? () => setDialog({ type: "plan" }) : undefined
+                      }
+                    />
                 </span>
               </div>
             </div>
             <div className="topbar-search-slot">
-              {view === "Platform" && data.platform ? (
-                <PlatformGlobalSearch
-                  platform={data.platform}
-                  onNavigate={onNavigate}
-                />
-              ) : guides.length &&
+              {guides.length &&
                 !["Organization", "Settings", "Support"].includes(view) ? (
                 <GlobalGuideSearch guides={guides} onOpen={openGuide} />
               ) : null}
@@ -9227,6 +6557,7 @@ export function KnowHowWorkspaceApp({
                 viewerName={data.viewer.name}
                 canCreate={canCreate && workspaceMutable}
                 canCapture={canCapture}
+                captureLockedByPlan={!entitlements.extensionEnabled}
                 canManageAccess={isAdmin}
                 busy={busy}
                 onNewGuide={() => onNavigate(newGuideHref(workspace.slug))}
@@ -9243,6 +6574,9 @@ export function KnowHowWorkspaceApp({
                   ).then(() => undefined)
                 }
                 onOpenExtension={() => setDialog({ type: "extension" })}
+                onPinExtension={() =>
+                  command("confirmExtensionPinned", {}, "").then(() => undefined)
+                }
                 onDismiss={() =>
                   command("dismissOnboarding", {}, "").then(() => undefined)
                 }
@@ -9257,12 +6591,19 @@ export function KnowHowWorkspaceApp({
                 onEdit={(guide) =>
                   onNavigate(guideEditorHref(workspace.slug, guide.id))
                 }
+                onShare={openShareGuide}
                 onAction={command}
                 busy={busy || !workspaceMutable}
               />
             ) : null}
             {view === "Capture" ? (
-              <CaptureView canCapture={canCapture} />
+              <CaptureView
+                canCapture={canCapture}
+                planLocked={!entitlements.extensionEnabled}
+                onOpenPlan={
+                  isAdmin ? () => setDialog({ type: "plan" }) : undefined
+                }
+              />
             ) : null}
             {view === "Groups" && isAdmin ? (
               <GroupsView
@@ -9292,16 +6633,22 @@ export function KnowHowWorkspaceApp({
                   setDialog({ type: "support-decision", request })
                 }
                 onRevokeSupport={(grant) => {
-                  if (
-                    window.confirm(
-                      `Revoke ${grant.displayName || grant.email}'s temporary access now?`,
+                  void (async () => {
+                    if (
+                      !(await askToConfirm({
+                        title: "Revoke temporary access?",
+                        description: `Revoke ${grant.displayName || grant.email}'s temporary access now?`,
+                        confirmLabel: "Revoke",
+                        tone: "danger",
+                      }))
                     )
-                  )
-                    void command(
+                      return;
+                    await command(
                       "revokeSupportAccess",
                       { grantId: grant.id },
                       "Temporary support access revoked",
                     ).catch(() => undefined);
+                  })();
                 }}
               />
             ) : null}
@@ -9313,23 +6660,31 @@ export function KnowHowWorkspaceApp({
                 onEdit={(item) => setDialog({ type: "vault-editor", item })}
                 onReveal={(item) => setDialog({ type: "vault-reveal", item })}
                 onDelete={(item) => {
-                  if (
-                    window.confirm(
-                      `Delete ${item.title}? This encrypted item cannot be recovered.`,
+                  void (async () => {
+                    if (
+                      !(await askToConfirm({
+                        title: "Delete vault item?",
+                        description: `Delete ${item.title}? This encrypted item cannot be recovered.`,
+                        confirmLabel: "Delete",
+                        tone: "danger",
+                      }))
                     )
-                  )
-                    void command(
+                      return;
+                    await command(
                       "deleteVaultItem",
                       { vaultItemId: item.id },
                       "Vault item deleted",
                     ).catch(() => undefined);
+                  })();
                 }}
               />
             ) : null}
             {view === "Support" ? (
+              canOpenSupport ? (
               <SupportView
                 tickets={supportTickets}
                 busy={busy || !workspaceMutable}
+                canCreate={canCreateSupportTicket && workspaceMutable}
                 onCreate={async (subject, message) => {
                   await command(
                     "createSupportTicket",
@@ -9352,6 +6707,20 @@ export function KnowHowWorkspaceApp({
                   );
                 }}
               />
+              ) : (
+                <EmptyState
+                  icon={LifeBuoy}
+                  title="Support is on Pro"
+                  description="In-app tickets are included on Pro trial, Pro, and Enterprise. Free workspaces can use the contact form."
+                  action={
+                    isAdmin ? (
+                      <Button onClick={() => setDialog({ type: "plan" })}>
+                        View plans
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              )
             ) : null}
             {view === "Organization" && organization ? (
               <OrganizationView
@@ -9430,6 +6799,7 @@ export function KnowHowWorkspaceApp({
                 workspaceName={workspace.name}
                 initial={workspace.settings}
                 busy={busy || !workspaceMutable}
+                removeBrandingEnabled={entitlements.removeBranding}
                 onRefresh={onRefresh}
                 onSave={async (settings) => {
                   await command(
@@ -9437,107 +6807,6 @@ export function KnowHowWorkspaceApp({
                     { settings },
                     "Workspace settings saved",
                   );
-                }}
-              />
-            ) : null}
-            {view === "Platform" &&
-              data.viewer.platformAdministrator &&
-              data.platform ? (
-              <PlatformView
-                key={`${platformSection}:${platformAccountId ?? "all"}`}
-                platform={data.platform}
-                busy={busy}
-                section={platformSection}
-                workspaceId={platformAccountId}
-                onNavigate={onNavigate}
-                onProvision={() => setDialog({ type: "platform-create" })}
-                onStatus={(workspaceId, status) => {
-                  if (window.confirm(`${titleCase(status)} this workspace?`))
-                    void command(
-                      "setWorkspaceStatus",
-                      { targetWorkspaceId: workspaceId, status },
-                      `Workspace ${status}`,
-                    ).catch(() => undefined);
-                }}
-                onAssign={(target) =>
-                  setDialog({ type: "assign-admin", workspace: target })
-                }
-                onRequestSupport={(target) =>
-                  setDialog({ type: "support-request", workspace: target })
-                }
-                onExtendSubscription={async (
-                  targetWorkspaceId,
-                  expiresAt,
-                  graceDays,
-                  retentionDays,
-                ) => {
-                  return command(
-                    "extendSubscription",
-                    {
-                      targetWorkspaceId,
-                      expiresAt,
-                      graceDays,
-                      retentionDays,
-                    },
-                    "Subscription extended",
-                  );
-                }}
-                onConvertSubscription={async (
-                  targetWorkspaceId,
-                  manualReference,
-                  expiresAt,
-                ) => {
-                  return command(
-                    "convertSubscription",
-                    { targetWorkspaceId, manualReference, expiresAt },
-                    "Manual contract recorded",
-                  );
-                }}
-                onApproveDeletion={async (caseId, confirmation) => {
-                  return command(
-                    "approveDeletionCase",
-                    { caseId, confirmation },
-                    "Tenant purge approved",
-                  );
-                }}
-                canManageBetaAccess={Boolean(
-                  data.viewer.platformRoles?.some((role) =>
-                    ["owner", "operations"].includes(role),
-                  ),
-                )}
-                onCreateBetaAccess={async (input) => {
-                  return command(
-                    "createBetaAccessGrant",
-                    input,
-                    "Private-beta access generated",
-                  ) as Promise<{ grant: BetaAccessGrant; code: string }>;
-                }}
-                onRevokeBetaAccess={(grantId) =>
-                  command(
-                    "revokeBetaAccessGrant",
-                    { grantId },
-                    "Private-beta access revoked",
-                  )
-                }
-                canManagePlatformControls={Boolean(
-                  data.viewer.platformRoles?.some((role) =>
-                    ["owner", "operations"].includes(role),
-                  ),
-                )}
-                onPlatformControl={(action, payload, successMessage) =>
-                  command(action, payload, successMessage)
-                }
-                onRevokeAppointment={(appointment) => {
-                  if (
-                    window.confirm(
-                      `Revoke the administrator appointment for ${appointment.email}?`,
-                    )
-                  )
-                    void command(
-                      "revokeAppointment",
-                      { appointmentId: appointment.id },
-                      "Appointment revoked",
-                    ).catch(() => undefined);
                 }}
               />
             ) : null}
@@ -9568,6 +6837,7 @@ export function KnowHowWorkspaceApp({
           <MemberDialog
             member={dialog.member}
             busy={busy}
+            showGovernanceRoles={workspace.settings.requireReviewBeforePublish}
             onClose={() => setDialog(null)}
             onSave={async (nextRoles, capabilities) => {
               await command(
@@ -9602,10 +6872,43 @@ export function KnowHowWorkspaceApp({
             }}
           />
         ) : null}
+        {dialog?.type === "plan" && isAdmin ? (
+          <PlanDialog
+            subscription={workspace.subscription}
+            entitlements={entitlements}
+            busy={busy}
+            onClose={() => setDialog(null)}
+            onStartTrial={async () => {
+              await command(
+                "startProTrial",
+                { workspaceId: workspace.id },
+                "Pro trial started — no payment method required",
+              );
+              setDialog(null);
+            }}
+            onSelectPro={async () => {
+              await command(
+                "selectProPlan",
+                { workspaceId: workspace.id },
+                "Pro selected. We will invoice offline.",
+              );
+              setDialog(null);
+            }}
+            onRequestEnterprise={async () => {
+              await command(
+                "requestEnterprisePlan",
+                { workspaceId: workspace.id },
+                "Enterprise request sent",
+              );
+              setDialog(null);
+            }}
+          />
+        ) : null}
         {dialog?.type === "invite" && isAdmin && workspaceMutable ? (
           <InviteDialog
             busy={busy}
             origin={window.location.origin}
+            showGovernanceRoles={workspace.settings.requireReviewBeforePublish}
             onClose={() => setDialog(null)}
             onCreate={async (payload) => {
               onBusyChange(true);
@@ -9632,8 +6935,8 @@ export function KnowHowWorkspaceApp({
                 await onRefresh();
                 toast.success(
                   created.length === 1
-                    ? "Invitation created"
-                    : `${created.length} invitations created`,
+                    ? "Invitation sent"
+                    : `${created.length} invitations sent`,
                 );
                 return created;
               } catch (error) {
@@ -9666,104 +6969,7 @@ export function KnowHowWorkspaceApp({
             }
           />
         ) : null}
-        {dialog?.type === "setup-wizard" && onboardingAudience ? (
-          <Modal
-            title="Getting started"
-            eyebrow="Workspace setup"
-            onClose={() => setDialog(null)}
-          >
-            <SetupWizard
-              onboarding={active.onboarding}
-              busy={busy}
-              canCapture={canCapture}
-              canManageAccess={isAdmin}
-              chrome="plain"
-              onConfirmReadiness={() =>
-                command(
-                  "confirmOnboardingReadiness",
-                  {
-                    ordinaryDataOnly: true,
-                    pilotPoliciesReviewed: true,
-                  },
-                  "Pilot workspace readiness confirmed",
-                ).then(() => undefined)
-              }
-              onNavigate={(nextView) => {
-                setDialog(null);
-                navigateToView(nextView);
-              }}
-              onOpenExtension={() => setDialog({ type: "extension" })}
-              onDismiss={() =>
-                command("dismissOnboarding", {}, "").then(() => {
-                  setDialog(null);
-                })
-              }
-            />
-          </Modal>
-        ) : null}
-        {dialog?.type === "platform-create" &&
-          data.viewer.platformAdministrator ? (
-          <PlatformProvisioningDialog
-            busy={busy}
-            initialRun={data.platform?.provisioningRuns[0]}
-            onClose={() => setDialog(null)}
-            onSave={(runId, step, stepData) =>
-              command(
-                "saveProvisioningRun",
-                { ...(runId ? { runId } : {}), step, data: stepData },
-                "",
-              )
-            }
-            onComplete={(runId, finalStepData) =>
-              command<PlatformProvisioningResult>(
-                "completeProvisioningRun",
-                { runId, finalStepData },
-                "Organization provisioned",
-              )
-            }
-          />
-        ) : null}
-        {dialog?.type === "assign-admin" &&
-          data.viewer.platformAdministrator ? (
-          <AssignAdminDialog
-            workspace={dialog.workspace}
-            busy={busy}
-            onClose={() => setDialog(null)}
-            onAssign={async (email) => {
-              await command(
-                "assignWorkspaceAdministrator",
-                { targetWorkspaceId: dialog.workspace.id, email },
-                "Workspace administrator assigned",
-              );
-              setDialog(null);
-            }}
-          />
-        ) : null}
-        {dialog?.type === "support-request" &&
-          data.viewer.platformAdministrator ? (
-          <SupportRequestDialog
-            workspace={dialog.workspace}
-            busy={busy}
-            onClose={() => setDialog(null)}
-            onRequest={async (
-              requestedRole,
-              reason,
-              requestedDurationHours,
-            ) => {
-              await command(
-                "requestSupportAccess",
-                {
-                  workspaceId: dialog.workspace.id,
-                  requestedRole,
-                  reason,
-                  requestedDurationHours,
-                },
-                "Support request submitted for approval",
-              );
-              setDialog(null);
-            }}
-          />
-        ) : null}
+        {shareDialog}
         {dialog?.type === "support-decision" && isAdmin ? (
           <SupportDecisionDialog
             request={dialog.request}
@@ -9826,6 +7032,7 @@ export function KnowHowWorkspaceApp({
             }}
           />
         ) : null}
+        {confirmDialog}
         {busy ? (
           <div className="busy-indicator" role="status">
             <LoaderCircle className="spin" /> Working securely…
@@ -10033,12 +7240,21 @@ export function PlatformProvisioningDialog({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const contactEmailValid = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(
+    primaryContactEmail.trim(),
+  );
+  const identityStepReady =
+    legalName.trim().length >= 2 &&
+    displayName.trim().length >= 2 &&
+    primaryContactName.trim().length >= 2 &&
+    contactEmailValid &&
+    country.trim().length === 2;
 
   const stepLabels = [
     "Identity",
     "Branding",
     "Workspaces",
-    "Pilot",
+    "Contract",
     "Owners",
     "Invites",
   ];
@@ -10049,7 +7265,7 @@ export function PlatformProvisioningDialog({
         [legalName, displayName, primaryContactName].some(
           (value) => value.trim().length < 2,
         ) ||
-        !primaryContactEmail.includes("@") ||
+        !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(primaryContactEmail.trim()) ||
         country.trim().length !== 2
       ) {
         throw new Error(
@@ -10205,7 +7421,7 @@ export function PlatformProvisioningDialog({
       })),
     );
     const invitationLinks = created.invitations.map((invitation) => ({
-      label: `${invitation.email} · ${titleCase(invitation.role)} invitation`,
+      label: `${invitation.email} · ${workspaceRoleLabel(invitation.role)} invitation`,
       url: `${window.location.origin}/app?invite=${encodeURIComponent(invitation.token)}`,
     }));
     return (
@@ -10343,6 +7559,8 @@ export function PlatformProvisioningDialog({
                 <input
                   required
                   type="email"
+                  autoComplete="email"
+                  pattern="^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$"
                   value={primaryContactEmail}
                   onChange={(event) =>
                     setPrimaryContactEmail(event.target.value)
@@ -10497,12 +7715,12 @@ export function PlatformProvisioningDialog({
         {step === 4 ? (
           <div className="provisioning-step">
             <p className="modal-copy">
-              Set explicit pilot dates and conservative capacity limits.
-              Payments and public trials remain disabled.
+              Set contract dates and conservative capacity limits. Clients are
+              invoiced offline.
             </p>
             <div className="form-grid two">
               <label className="field">
-                <span>Pilot start</span>
+                <span>Contract start</span>
                 <input
                   required
                   type="date"
@@ -10511,7 +7729,7 @@ export function PlatformProvisioningDialog({
                 />
               </label>
               <label className="field">
-                <span>Pilot end</span>
+                <span>Contract end</span>
                 <input
                   required
                   type="date"
@@ -10728,12 +7946,16 @@ export function PlatformProvisioningDialog({
           <button
             className="button secondary"
             type="button"
-            disabled={working}
+            disabled={working || (step === 1 && !identityStepReady)}
             onClick={() => void saveCurrent(false, true)}
           >
             Save & close
           </button>
-          <button className="button primary" type="submit" disabled={working}>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={working || (step === 1 && !identityStepReady)}
+          >
             {working ? (
               <LoaderCircle className="spin" />
             ) : step === 6 ? (
@@ -10755,7 +7977,7 @@ export function SupportRequestDialog({
   onClose,
   onRequest,
 }: {
-  workspace: PlatformWorkspace;
+  workspace: { id: string; name: string };
   busy: boolean;
   onClose: () => void;
   onRequest: (
@@ -10772,7 +7994,7 @@ export function SupportRequestDialog({
     hours.trim() !== "" &&
     Number.isInteger(parsedHours) &&
     parsedHours >= 1 &&
-    parsedHours <= 168;
+    parsedHours <= 24;
   return (
     <Modal
       title={`Request support access · ${workspace.name}`}
@@ -10802,7 +8024,7 @@ export function SupportRequestDialog({
             ariaLabel="Requested role"
             options={WORKSPACE_ROLES.map((item) => ({
               value: item,
-              label: titleCase(item),
+              label: workspaceRoleLabel(item),
             }))}
           />
           <small>
@@ -10824,11 +8046,11 @@ export function SupportRequestDialog({
           />
         </label>
         <div className="field">
-          <span>Requested duration (1–168 hours)</span>
+          <span>Requested duration (1–24 hours)</span>
           <input
             type="number"
             min={1}
-            max={168}
+            max={24}
             required
             value={hours}
             onChange={(event) => setHours(event.target.value)}
@@ -10858,7 +8080,7 @@ export function AssignAdminDialog({
   onClose,
   onAssign,
 }: {
-  workspace: PlatformWorkspace;
+  workspace: { id: string; name: string };
   busy: boolean;
   onClose: () => void;
   onAssign: (email: string) => Promise<void>;

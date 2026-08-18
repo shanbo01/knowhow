@@ -20,17 +20,38 @@ import {
   type WorkspaceMemberRecord,
   type WorkspaceRecord,
 } from "./domain-records";
+import {
+  entitlementsForPlan,
+  inferredCommercialPlan,
+  isCommercialPlan,
+  PRO_INVOICE_DAYS,
+  PRO_TRIAL_DAYS,
+  subscriptionKindForPlan,
+  trialConsumed,
+  type CommercialPlan,
+} from "./commercial-plan";
+import {
+  isAccountTag,
+} from "./platform-intelligence";
 import { HttpError } from "./http-security";
 import { GuideCommandService } from "./guide-command-service";
 import {
   evaluateSubscription,
   subscriptionForWorkspace,
 } from "./lifecycle-service";
-import { EntitlementService } from "./entitlement-service";
-import { LifecycleSimulationService } from "./lifecycle-simulation-service";
+import {
+  applyPlanEntitlements,
+  EntitlementDeniedError,
+  EntitlementService,
+  OVERRIDABLE_ENTITLEMENTS,
+  recordEntitlementBlocked,
+  type EntitlementOverridePayload,
+  type EntitlementValue,
+  type OverridableEntitlement,
+} from "./entitlement-service";
 import { PricingCatalogService } from "./pricing-catalog-service";
 import { GuideAccessService } from "./guide-access-service";
-import { resourceId } from "./ids";
+import { resourceId, deterministicResourceId } from "./ids";
 import {
   inputBoolean,
   inputEmail,
@@ -115,7 +136,7 @@ function supportText(
 
 function provisioningStep(step: number, raw: Record<string, unknown>) {
   if (step === 1) {
-    return {
+    const identity = {
       legalName: inputText(raw.legalName, "Legal name", { min: 2, max: 200 }),
       displayName: inputText(raw.displayName, "Display name", {
         min: 2,
@@ -134,6 +155,14 @@ function provisioningStep(step: number, raw: Record<string, unknown>) {
         max: 2,
       }).toUpperCase(),
     };
+    if (!/\.[a-z]{2,}$/i.test(identity.primaryContactEmail.split("@")[1] ?? "")) {
+      throw new HttpError(
+        400,
+        "EMAIL_INVALID",
+        "Primary contact email is invalid.",
+      );
+    }
+    return identity;
   }
   if (step === 2) {
     const accentColor = inputText(
@@ -575,6 +604,21 @@ export class CommandService {
           return result;
         });
       } catch (error) {
+        if (error instanceof EntitlementDeniedError) {
+          const blockedWorkspaceId =
+            typeof payload.workspaceId === "string"
+              ? payload.workspaceId
+              : typeof payload.targetWorkspaceId === "string"
+                ? payload.targetWorkspaceId
+                : null;
+          if (blockedWorkspaceId) {
+            await recordEntitlementBlocked(
+              this.store,
+              blockedWorkspaceId,
+              error.entitlementKind,
+            );
+          }
+        }
         if (!(error instanceof RecordConflictError)) throw error;
         const committed = await this.store.get(
           TABLES.idempotencyKeys,
@@ -709,6 +753,13 @@ export class CommandService {
         },
       ),
     );
+    const workspaceRow = await this.store.get(
+      TABLES.workspaces,
+      input.workspaceId,
+    );
+    const workspaceName = workspaceRow
+      ? decodePayload<WorkspaceRecord>(workspaceRow, null as never).name
+      : "your KnowHow workspace";
     await queueNotification(this.store, {
       organizationId: input.organizationId,
       workspaceId: input.workspaceId,
@@ -716,7 +767,7 @@ export class CommandService {
       kind: "invitation.created",
       subjectId: invitationId,
       idempotencyKey: `${options.idempotencyKey}:self-service-invitation`,
-      payload: { expiresAt, credential: token },
+      payload: { expiresAt, credential: token, workspaceName },
     });
     return {
       id: invitationId,
@@ -806,6 +857,216 @@ export class CommandService {
         requestId: options.requestId,
       });
       return { grant };
+    }
+
+    if (action === "updateLead" || action === "convertLead") {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform operations access is required.",
+        );
+      }
+      const leadId = inputText(payload.leadId, "Lead", { min: 1, max: 36 });
+      const row = await this.store.get(TABLES.leads, leadId);
+      if (!row) throw new HttpError(404, "LEAD_NOT_FOUND", "Lead not found.");
+      const details = decodePayload<{
+        kind?: string;
+        name?: string;
+        email?: string;
+        organization?: string;
+        role?: string;
+        teamSize?: number;
+        country?: string;
+        workflow?: string;
+        ordinaryDataOnly?: boolean;
+        occurredAt?: string;
+        notes?: string;
+        ownerLabel?: string;
+        convertedRunId?: string;
+      }>(row, {});
+      if (action === "convertLead") {
+        if (details.convertedRunId) {
+          return { runId: details.convertedRunId, converted: true };
+        }
+        const country =
+          typeof details.country === "string" && details.country.trim().length === 2
+            ? details.country.trim().toUpperCase()
+            : "QA";
+        const runId = resourceId("provision");
+        const createdAt = nowIso();
+        const stepOne = {
+          legalName: inputText(
+            details.organization || details.name || "New organization",
+            "Legal name",
+            { min: 2, max: 200 },
+          ),
+          displayName: inputText(
+            details.organization || details.name || "New organization",
+            "Display name",
+            { min: 2, max: 128 },
+          ),
+          primaryContactName: inputText(
+            details.name || "Primary contact",
+            "Primary contact",
+            { min: 2, max: 128 },
+          ),
+          primaryContactEmail: inputEmail(details.email || row.email),
+          country,
+        };
+        await this.store.create(
+          TABLES.provisioningRuns,
+          runId,
+          rowData(
+            {
+              user_id: identity.userId,
+              status: "draft",
+              kind: "organization",
+              sequence: 1,
+              request_id: options.requestId,
+              created_by: identity.userId,
+            },
+            {
+              steps: { "1": stepOne },
+              completedSteps: [],
+              currentStep: 1,
+              createdAt,
+              updatedAt: createdAt,
+              sourceLeadId: leadId,
+            },
+          ),
+        );
+        await this.store.update(
+          TABLES.leads,
+          leadId,
+          rowData(
+            {
+              status: "converted",
+              updated_by: identity.userId,
+            },
+            {
+              ...details,
+              notes: details.notes ?? "",
+              convertedRunId: runId,
+            },
+          ),
+        );
+        return { runId, converted: true };
+      }
+      const statuses = new Set([
+        "new",
+        "qualified",
+        "waiting",
+        "converted",
+        "rejected",
+        "closed",
+      ]);
+      const status = payload.status
+        ? inputText(payload.status, "Lead status", { min: 3, max: 16 })
+        : stringValue(row.status, "new");
+      if (!statuses.has(status)) {
+        throw new HttpError(400, "LEAD_STATUS_INVALID", "Lead status is invalid.");
+      }
+      const notes =
+        payload.notes === undefined
+          ? (details.notes ?? "")
+          : inputText(payload.notes, "Notes", { max: 4_000, optional: true });
+      const ownerLabel =
+        payload.ownerLabel === undefined
+          ? (details.ownerLabel ?? "")
+          : inputText(payload.ownerLabel, "Owner", { max: 128, optional: true });
+      await this.store.update(
+        TABLES.leads,
+        leadId,
+        rowData(
+          { status, updated_by: identity.userId },
+          { ...details, notes, ownerLabel },
+        ),
+      );
+      return { leadId, status, notes, ownerLabel };
+    }
+
+    if (action === "updateOrganizationRecord") {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform operations access is required.",
+        );
+      }
+      const organizationId = inputText(payload.organizationId, "Organization", {
+        min: 1,
+        max: 36,
+      });
+      const row = await this.store.get(TABLES.organizations, organizationId);
+      if (!row) {
+        throw new HttpError(404, "ORGANIZATION_NOT_FOUND", "Organization not found.");
+      }
+      const current = decodePayload<OrganizationRecord>(row, null as never);
+      const next: OrganizationRecord = {
+        ...current,
+        legalName: payload.legalName
+          ? inputText(payload.legalName, "Legal name", { min: 2, max: 200 })
+          : current.legalName,
+        displayName: payload.displayName
+          ? inputText(payload.displayName, "Display name", { min: 2, max: 128 })
+          : current.displayName,
+        primaryContactName: payload.primaryContactName
+          ? inputText(payload.primaryContactName, "Primary contact", {
+              min: 2,
+              max: 128,
+            })
+          : current.primaryContactName,
+        primaryContactEmail: payload.primaryContactEmail
+          ? inputEmail(payload.primaryContactEmail)
+          : current.primaryContactEmail,
+        country: payload.country
+          ? inputText(payload.country, "Country", { min: 2, max: 2 }).toUpperCase()
+          : current.country,
+        internalNotes:
+          payload.internalNotes === undefined
+            ? current.internalNotes
+            : inputText(payload.internalNotes, "Notes", {
+                max: 4_000,
+                optional: true,
+              }),
+        ownerLabel:
+          payload.ownerLabel === undefined
+            ? current.ownerLabel
+            : inputText(payload.ownerLabel, "Owner", {
+                max: 128,
+                optional: true,
+              }),
+        accountTags:
+          payload.accountTags === undefined
+            ? current.accountTags
+            : inputStringList(payload.accountTags, "Account tags", 8, 32).map(
+                (tag) => {
+                  if (!isAccountTag(tag)) {
+                    throw new HttpError(
+                      400,
+                      "ACCOUNT_TAG_INVALID",
+                      "Account tag is invalid.",
+                    );
+                  }
+                  return tag;
+                },
+              ),
+      };
+      await this.store.update(
+        TABLES.organizations,
+        organizationId,
+        rowData(
+          {
+            status: row.status ?? current.status,
+            updated_by: identity.userId,
+          },
+          next,
+        ),
+      );
+      return { organizationId };
     }
 
     if (action === "saveSelfServiceSetup") {
@@ -1282,6 +1543,7 @@ export class CommandService {
             },
             {
               kind: "design_partner",
+              plan: "enterprise",
               status: "active",
               startsAt: pilotStart.toISOString(),
               expiresAt: pilotEnd.toISOString(),
@@ -1318,6 +1580,9 @@ export class CommandService {
           extensionEnabled: true,
           supportEnabled: true,
           removeBranding: false,
+          privacyToolsEnabled: true,
+          customSubdomainEnabled: true,
+          fileExportsEnabled: true,
           publicSignup: false,
           payments: false,
           ssoScim: false,
@@ -1410,6 +1675,10 @@ export class CommandService {
         );
         const inviteRole = role(invitation.role ?? "viewer", true);
         const workspaceId = created[workspaceIndex].workspaceId;
+        const workspaceRow = await this.store.get(TABLES.workspaces, workspaceId);
+        const workspaceName = workspaceRow
+          ? decodePayload<WorkspaceRecord>(workspaceRow, null as never).name
+          : "KnowHow workspace";
         const invitationId = resourceId("invite");
         const expiresAtSeconds =
           Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
@@ -1451,7 +1720,7 @@ export class CommandService {
           kind: "invitation.created",
           subjectId: invitationId,
           idempotencyKey: `${options.idempotencyKey}:team:${workspaceIndex}:${email}`,
-          payload: { expiresAt, credential: token },
+          payload: { expiresAt, credential: token, workspaceName },
         });
         invitationResults.push({ email, workspaceId, token, role: inviteRole });
       }
@@ -1477,9 +1746,6 @@ export class CommandService {
         min: 1,
         max: 36,
       });
-      await new EntitlementService(this.store, workspaceId).requireFeature(
-        "supportEnabled",
-      );
       const workspaceRow = await this.store.get(TABLES.workspaces, workspaceId);
       if (!workspaceRow || workspaceRow.status !== "active") {
         throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
@@ -1616,6 +1882,7 @@ export class CommandService {
         );
       const current = subscription.value;
       const changedAt = nowIso();
+      const reason = inputText(payload.reason, "Reason", { min: 8, max: 500 });
       let next: SubscriptionRecord;
       if (action === "extendSubscription") {
         const newExpiry = new Date(
@@ -1664,36 +1931,63 @@ export class CommandService {
             : new Date(
                 inputText(payload.expiresAt, "Expiry", { min: 20, max: 40 }),
               ).toISOString();
+        const requestedPlan: CommercialPlan = isCommercialPlan(payload.plan)
+          ? payload.plan
+          : payload.plan === "pro"
+            ? "pro"
+            : "enterprise";
+        if (requestedPlan === "pro_trial") {
+          throw new HttpError(
+            400,
+            "SUBSCRIPTION_PLAN_INVALID",
+            "Use grant Pro trial to start or restart a trial.",
+          );
+        }
+        const complimentary = payload.complimentary === true;
         next = {
           ...current,
-          kind: "paid",
+          kind: subscriptionKindForPlan(requestedPlan),
+          plan: requestedPlan,
           status: "active",
-          expiresAt,
+          expiresAt: requestedPlan === "free" ? null : expiresAt,
           publicTrial: false,
-          manualContract: true,
+          manualContract: requestedPlan !== "free",
+          complimentary,
           convertedAt: changedAt,
+          ...(requestedPlan === "free"
+            ? { trialConsumed: true, downgradedAt: changedAt, graceDays: 0 }
+            : {}),
         };
-        await this.store.create(
-          TABLES.manualInvoices,
-          resourceId("invoice"),
-          rowData(
-            {
-              organization_id: workspace.organizationId,
-              workspace_id: workspaceId,
-              subject_id: subscription.row.$id,
-              status: "recorded",
-              kind: "manual",
-              request_id: options.requestId,
-              created_by: identity.userId,
-            },
-            {
-              manualReference,
-              recordedAt: changedAt,
-              recordedBy: identity.userId,
-              paymentCollectedByKnowHow: false,
-            },
-          ),
-        );
+        await applyPlanEntitlements(this.store, {
+          organizationId: workspace.organizationId,
+          workspaceId,
+          actorUserId: identity.userId,
+          entitlements: entitlementsForPlan(requestedPlan),
+        });
+        if (requestedPlan !== "free") {
+          await this.store.create(
+            TABLES.manualInvoices,
+            resourceId("invoice"),
+            rowData(
+              {
+                organization_id: workspace.organizationId,
+                workspace_id: workspaceId,
+                subject_id: subscription.row.$id,
+                status: "recorded",
+                kind: "manual",
+                request_id: options.requestId,
+                created_by: identity.userId,
+              },
+              {
+                manualReference,
+                recordedAt: changedAt,
+                recordedBy: identity.userId,
+                paymentCollectedByKnowHow: false,
+                complimentary,
+              },
+            ),
+          );
+        }
       }
       await this.store.update(
         TABLES.subscriptions,
@@ -1762,14 +2056,240 @@ export class CommandService {
           action === "extendSubscription"
             ? "Subscription expiry extended"
             : "Subscription converted by manual contract",
-        metadata: { kind: next.kind, expiresAt: next.expiresAt },
+        metadata: {
+          kind: next.kind,
+          plan: next.plan ?? inferredCommercialPlan(next),
+          expiresAt: next.expiresAt,
+          reason,
+        },
       });
       return {
         subscriptionId: subscription.row.$id,
         status: next.status,
         kind: next.kind,
+        plan: next.plan ?? inferredCommercialPlan(next),
         expiresAt: next.expiresAt,
       };
+    }
+
+    if (action === "grantProTrial" || action === "updateEntitlementOverrides") {
+      const platformRoles = await this.platformRoles(identity);
+      if (!platformMayManage(platformRoles)) {
+        throw new HttpError(
+          403,
+          "PLATFORM_OPERATIONS_REQUIRED",
+          "Platform operations access is required.",
+        );
+      }
+      requireReauthentication(options.reauthenticated);
+      const workspaceId = inputText(payload.targetWorkspaceId, "Workspace", {
+        min: 1,
+        max: 36,
+      });
+      const workspaceRow = await this.store.get(TABLES.workspaces, workspaceId);
+      if (!workspaceRow) {
+        throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
+      }
+      const workspace = decodePayload<WorkspaceRecord>(
+        workspaceRow,
+        null as never,
+      );
+      const subscription = await subscriptionForWorkspace(
+        this.store,
+        workspaceId,
+      );
+      if (!subscription) {
+        throw new HttpError(
+          404,
+          "SUBSCRIPTION_NOT_FOUND",
+          "Subscription not found.",
+        );
+      }
+      const reason = inputText(payload.reason, "Reason", { min: 8, max: 500 });
+      const changedAt = nowIso();
+      if (action === "grantProTrial") {
+        const storedPlan = inferredCommercialPlan(subscription.value);
+        if (storedPlan !== "free" && storedPlan !== "pro_trial") {
+          throw new HttpError(
+            409,
+            "PRO_TRIAL_NOT_AVAILABLE",
+            "A Pro trial can only be granted from Free or an existing trial.",
+          );
+        }
+        const days = inputInteger(
+          payload.days ?? PRO_TRIAL_DAYS,
+          "Trial days",
+          1,
+          90,
+        );
+        const expiresAt = new Date(
+          Date.now() + days * 86_400_000,
+        ).toISOString();
+        const next: SubscriptionRecord = {
+          ...subscription.value,
+          plan: "pro_trial",
+          kind: subscriptionKindForPlan("pro_trial"),
+          status: "active",
+          expiresAt,
+          graceDays: 0,
+          publicTrial: false,
+          manualContract: false,
+          complimentary: false,
+          trialConsumed: true,
+          extendedAt: changedAt,
+        };
+        await this.store.update(
+          TABLES.subscriptions,
+          subscription.row.$id,
+          rowData(
+            {
+              organization_id: workspace.organizationId,
+              workspace_id: workspaceId,
+              status: next.status,
+              kind: next.kind,
+              updated_by: identity.userId,
+            },
+            next,
+          ),
+        );
+        await applyPlanEntitlements(this.store, {
+          organizationId: workspace.organizationId,
+          workspaceId,
+          actorUserId: identity.userId,
+          entitlements: entitlementsForPlan("pro_trial"),
+        });
+        if (
+          workspace.status === "suspended" &&
+          workspace.suspensionReason === "lifecycle"
+        ) {
+          await this.store.update(
+            TABLES.workspaces,
+            workspaceId,
+            rowData(
+              {
+                organization_id: workspace.organizationId,
+                slug: workspace.slug,
+                status: "active",
+                updated_by: identity.userId,
+              },
+              { ...workspace, status: "active", suspensionReason: null },
+            ),
+          );
+        }
+        await appendAudit(this.store, identity, workspaceId, {
+          action: "subscription.trial-granted",
+          targetType: "subscription",
+          targetId: subscription.row.$id,
+          summary: `Pro trial granted for ${days} days`,
+          metadata: { plan: "pro_trial", days, expiresAt, reason },
+        });
+        return { plan: "pro_trial", days, expiresAt };
+      }
+
+      const currentPlan = inferredCommercialPlan(subscription.value);
+      if (currentPlan === "free") {
+        throw new HttpError(
+          409,
+          "ENTITLEMENT_OVERRIDE_FROZEN",
+          "Grant a Pro trial or convert the plan before overriding Free entitlements.",
+        );
+      }
+      const overrides = payload.overrides;
+      if (
+        !Array.isArray(overrides) ||
+        overrides.length === 0 ||
+        overrides.length > 12
+      ) {
+        throw new HttpError(
+          400,
+          "ENTITLEMENT_OVERRIDE_INVALID",
+          "Provide between 1 and 12 entitlement overrides.",
+        );
+      }
+      const allowed = new Set<string>(OVERRIDABLE_ENTITLEMENTS);
+      const kinds: string[] = [];
+      for (const item of overrides) {
+        const entry = inputObject(item, "Override");
+        const kind = inputText(entry.kind, "Entitlement", {
+          min: 3,
+          max: 64,
+        }) as OverridableEntitlement;
+        if (!allowed.has(kind)) {
+          throw new HttpError(
+            400,
+            "ENTITLEMENT_OVERRIDE_INVALID",
+            "That entitlement cannot be overridden.",
+          );
+        }
+        const expiresAt = inputText(entry.expiresAt, "Override expiry", {
+          min: 20,
+          max: 40,
+        });
+        if (
+          !Number.isFinite(Date.parse(expiresAt)) ||
+          Date.parse(expiresAt) <= Date.now()
+        ) {
+          throw new HttpError(
+            400,
+            "ENTITLEMENT_OVERRIDE_INVALID",
+            "Override expiry must be in the future.",
+          );
+        }
+        let value: EntitlementValue = false;
+        if (kind === "maximumUsers" || kind === "maximumCreators") {
+          value = inputInteger(entry.value, kind, 1, 10_000);
+        } else if (kind === "storageBytes") {
+          value = inputInteger(entry.value, kind, 1, 5_000_000_000_000);
+        } else {
+          value = inputBoolean(entry.value, kind);
+        }
+        const payloadValue: EntitlementOverridePayload = {
+          value,
+          source: "override",
+          reason,
+          expiresAt,
+          grantedBy: identity.userId,
+          grantedAt: changedAt,
+        };
+        const existing = await this.store.list(TABLES.entitlements, {
+          filters: [
+            { field: "workspace_id", value: workspaceId },
+            { field: "kind", value: kind },
+          ],
+          limit: 1,
+        });
+        const fields = rowData(
+          {
+            organization_id: workspace.organizationId,
+            workspace_id: workspaceId,
+            kind,
+            status: "active",
+            updated_by: identity.userId,
+          },
+          payloadValue,
+        );
+        if (existing[0]) {
+          await this.store.update(TABLES.entitlements, existing[0].$id, fields);
+        } else {
+          const id = await deterministicResourceId(
+            "entitle",
+            `${workspaceId}:${kind}`,
+          );
+          await this.store.create(TABLES.entitlements, id, {
+            ...fields,
+            created_by: identity.userId,
+          });
+        }
+        kinds.push(kind);
+      }
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "entitlements.overridden",
+        targetType: "entitlement",
+        targetId: workspaceId,
+        summary: "Operator entitlement override applied",
+        metadata: { kinds, reason },
+      });
+      return { updated: kinds.length };
     }
 
     if (
@@ -1814,34 +2334,6 @@ export class CommandService {
             )
           : await service.retire(identity.userId, catalogId, expectedRevision);
       return { catalog };
-    }
-
-    if (
-      action === "createLifecycleSimulationTenant" ||
-      action === "simulateLifecycleState"
-    ) {
-      const platformRoles = await this.platformRoles(identity);
-      if (!platformMayManage(platformRoles)) {
-        throw new HttpError(
-          403,
-          "PLATFORM_OPERATIONS_REQUIRED",
-          "Platform owner or operations access is required for lifecycle simulation.",
-        );
-      }
-      requireReauthentication(options.reauthenticated);
-      const simulation = new LifecycleSimulationService(this.store);
-      if (action === "createLifecycleSimulationTenant") {
-        return simulation.createSyntheticTenant(identity, {
-          label: payload.label,
-          confirmation: payload.confirmation,
-          requestId: options.requestId,
-        });
-      }
-      return simulation.simulate(identity, {
-        workspaceId: payload.targetWorkspaceId,
-        state: payload.state,
-        confirmation: payload.confirmation,
-      });
     }
 
     if (action === "approveDeletionCase") {
@@ -2735,6 +3227,122 @@ export class CommandService {
       return { expired };
     }
 
+    if (action === "replySupportTicket" || action === "closeSupportTicket") {
+      const platformRoles = await this.platformRoles(identity);
+      if (platformMaySupport(platformRoles)) {
+        const ticketId = inputText(payload.ticketId, "Support ticket", {
+          min: 1,
+          max: 36,
+        });
+        const ticket = await this.store.get(TABLES.supportTickets, ticketId);
+        if (!ticket) {
+          throw new HttpError(
+            404,
+            "SUPPORT_TICKET_NOT_FOUND",
+            "Support ticket not found.",
+          );
+        }
+        const workspaceId = stringValue(ticket.workspace_id);
+        const workspaceRow = await this.store.get(TABLES.workspaces, workspaceId);
+        const workspace = workspaceRow
+          ? decodePayload<WorkspaceRecord>(workspaceRow, null as never)
+          : null;
+        if (!workspaceRow || !workspace) {
+          throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
+        }
+        const ticketDetails = decodePayload<Record<string, unknown>>(ticket, {});
+        const changedAt = nowIso();
+        if (action === "closeSupportTicket") {
+          await this.store.update(
+            TABLES.supportTickets,
+            ticketId,
+            rowData(
+              { status: "closed", updated_by: identity.userId },
+              {
+                ...ticketDetails,
+                status: "closed",
+                updatedAt: changedAt,
+                closedAt: changedAt,
+                closedBy: identity.userId,
+              },
+            ),
+          );
+          await appendAudit(this.store, identity, workspaceId, {
+            action: "support.ticket-closed",
+            targetType: "support-ticket",
+            targetId: ticketId,
+            summary: "In-app support ticket closed",
+          });
+          return { closed: true, workspaceId };
+        }
+        if (ticket.status === "closed") {
+          throw new HttpError(
+            409,
+            "SUPPORT_TICKET_CLOSED",
+            "This support ticket is closed.",
+          );
+        }
+        const body = supportText(payload.message, "Support message", {
+          min: 2,
+          max: 4_000,
+        });
+        const messages = await this.store.list(TABLES.supportMessages, {
+          filters: [{ field: "subject_id", value: ticketId }],
+          orderBy: "sequence",
+          order: "desc",
+          limit: 1,
+        });
+        const sequence = Number(messages[0]?.sequence ?? 0) + 1;
+        await this.store.create(
+          TABLES.supportMessages,
+          resourceId("message"),
+          rowData(
+            {
+              organization_id: workspace.organizationId,
+              workspace_id: workspaceId,
+              user_id: identity.userId,
+              subject_id: ticketId,
+              status: "visible",
+              kind: "support",
+              sequence,
+              occurred_at: changedAt,
+              created_by: identity.userId,
+            },
+            { authorName: identity.name, authorKind: "support", body },
+          ),
+        );
+        await this.store.update(
+          TABLES.supportTickets,
+          ticketId,
+          rowData(
+            { status: "waiting_customer", updated_by: identity.userId },
+            { ...ticketDetails, updatedAt: changedAt },
+          ),
+        );
+        const targetEmail = String(ticket.email ?? "");
+        if (targetEmail) {
+          await queueNotification(this.store, {
+            organizationId: workspace.organizationId,
+            workspaceId,
+            userId: String(ticket.user_id),
+            email: targetEmail,
+            kind: "support.ticket_updated",
+            subjectId: ticketId,
+            idempotencyKey: `${options.idempotencyKey}:support-reply`,
+            payload: { workspaceName: workspace.name },
+          });
+        }
+        await appendAudit(this.store, identity, workspaceId, {
+          action: "support.ticket-replied",
+          targetType: "support-ticket",
+          targetId: ticketId,
+          summary: "In-app support ticket updated",
+          metadata: { sequence, authorKind: "support" },
+        });
+        return { replied: true, sequence, workspaceId };
+      }
+    }
+
     const workspaceId = inputText(payload.workspaceId, "Workspace", {
       min: 1,
       max: 36,
@@ -2748,6 +3356,7 @@ export class CommandService {
       workspaceAccess.lifecycleAccess === "read_only" &&
       ![
         "recordGuideView",
+        "recordGuideReaction",
         "revokeSupportAccess",
         "revokeCaptureDevices",
       ].includes(action)
@@ -2816,6 +3425,7 @@ export class CommandService {
             startedAt?: string;
             dismissedAt?: string;
             skippedSteps?: unknown;
+            extensionPinnedAt?: string;
           }>(existing, {})
         : {};
       const confirmedAt = nowIso();
@@ -2841,6 +3451,9 @@ export class CommandService {
               : {}),
             ...(Array.isArray(current.skippedSteps)
               ? { skippedSteps: current.skippedSteps }
+              : {}),
+            ...(typeof current.extensionPinnedAt === "string"
+              ? { extensionPinnedAt: current.extensionPinnedAt }
               : {}),
           },
         ),
@@ -2884,6 +3497,7 @@ export class CommandService {
             ordinaryDataOnly?: boolean;
             pilotPoliciesReviewed?: boolean;
             skippedSteps?: unknown;
+            extensionPinnedAt?: string;
           }>(existing, {})
         : {};
       const dismissedAt = nowIso();
@@ -2914,6 +3528,9 @@ export class CommandService {
             ...(Array.isArray(current.skippedSteps)
               ? { skippedSteps: current.skippedSteps }
               : {}),
+            ...(typeof current.extensionPinnedAt === "string"
+              ? { extensionPinnedAt: current.extensionPinnedAt }
+              : {}),
           },
         ),
       );
@@ -2926,8 +3543,266 @@ export class CommandService {
       return { dismissed: true, dismissedAt };
     }
 
+    if (action === "confirmExtensionPinned") {
+      requireAuthorized("workspace.read", context);
+      if (workspaceAccess.supportGrant) {
+        throw new HttpError(
+          403,
+          "ONBOARDING_MEMBERSHIP_REQUIRED",
+          "A permanent workspace member must complete onboarding.",
+        );
+      }
+      const fallbackProgressId = await deterministicId(
+        "onboard",
+        `${workspaceId}:${identity.userId}`,
+      );
+      const existingRows = await this.store.list(TABLES.onboardingProgress, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "user_id", value: identity.userId },
+        ],
+        limit: 1,
+      });
+      const existing = existingRows[0] ?? null;
+      const progressId = existing?.$id ?? fallbackProgressId;
+      const current = existing
+        ? decodePayload<{
+            startedAt?: string;
+            readinessConfirmedAt?: string;
+            dismissedAt?: string;
+            ordinaryDataOnly?: boolean;
+            pilotPoliciesReviewed?: boolean;
+            skippedSteps?: unknown;
+            extensionPinnedAt?: string;
+          }>(existing, {})
+        : {};
+      const pinnedAt = current.extensionPinnedAt ?? nowIso();
+      await this.store.upsert(
+        TABLES.onboardingProgress,
+        progressId,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            user_id: identity.userId,
+            status: "active",
+            occurred_at: pinnedAt,
+            updated_by: identity.userId,
+          },
+          {
+            startedAt: current.startedAt ?? pinnedAt,
+            extensionPinnedAt: pinnedAt,
+            ...(typeof current.readinessConfirmedAt === "string"
+              ? { readinessConfirmedAt: current.readinessConfirmedAt }
+              : {}),
+            ...(typeof current.dismissedAt === "string"
+              ? { dismissedAt: current.dismissedAt }
+              : {}),
+            ...(current.ordinaryDataOnly === true
+              ? { ordinaryDataOnly: true }
+              : {}),
+            ...(current.pilotPoliciesReviewed === true
+              ? { pilotPoliciesReviewed: true }
+              : {}),
+            ...(Array.isArray(current.skippedSteps)
+              ? { skippedSteps: current.skippedSteps }
+              : {}),
+          },
+        ),
+      );
+      return { pinned: true, pinnedAt };
+    }
+
+    if (
+      action === "startProTrial" ||
+      action === "selectProPlan" ||
+      action === "requestEnterprisePlan"
+    ) {
+      requireAuthorized("workspace.settings.manage", context);
+      if (workspaceAccess.supportGrant) {
+        throw new HttpError(
+          403,
+          "SUPPORT_GRANT_RESTRICTED",
+          "Temporary support access cannot change the workspace plan.",
+        );
+      }
+      const subscription = await subscriptionForWorkspace(
+        this.store,
+        workspaceId,
+      );
+      if (!subscription) {
+        throw new HttpError(
+          404,
+          "SUBSCRIPTION_NOT_FOUND",
+          "Subscription not found.",
+        );
+      }
+      const current = subscription.value;
+      const storedPlan = inferredCommercialPlan(current);
+      const changedAt = nowIso();
+      if (action === "requestEnterprisePlan") {
+        const leadId = resourceId("lead");
+        const existing = (
+          await this.store.list(TABLES.leads, {
+            filters: [
+              { field: "email", value: identity.email },
+              { field: "status", value: "new" },
+            ],
+            order: "desc",
+            limit: 25,
+          })
+        ).find((row) => {
+          const details = decodePayload<{
+            kind?: string;
+            workspaceId?: string;
+          }>(row, {});
+          return (
+            details.kind === "pricing" &&
+            details.workspaceId === workspaceId &&
+            Date.parse(row.$createdAt) > Date.now() - 24 * 60 * 60 * 1_000
+          );
+        });
+        if (existing) {
+          return { requested: true, leadId: existing.$id, duplicate: true };
+        }
+        await this.store.create(
+          TABLES.leads,
+          leadId,
+          rowData(
+            {
+              organization_id: workspaceAccess.workspace.organizationId,
+              workspace_id: workspaceId,
+              email: identity.email,
+              user_id: identity.userId,
+              status: "new",
+              kind: "pricing",
+              request_id: options.requestId,
+              occurred_at: changedAt,
+              created_by: identity.userId,
+            },
+            {
+              kind: "pricing",
+              name: identity.name,
+              email: identity.email,
+              organization: workspaceAccess.workspace.name,
+              role: "administrator",
+              teamSize: null,
+              country: "",
+              workflow: "Enterprise plan request",
+              notes: `In-app Enterprise request for ${workspaceAccess.workspace.name}`,
+              ordinaryDataOnly: true,
+              workspaceId,
+              occurredAt: changedAt,
+            },
+          ),
+        );
+        await appendAudit(this.store, identity, workspaceId, {
+          action: "plan.enterprise-requested",
+          targetType: "subscription",
+          targetId: subscription.row.$id,
+          summary: "Enterprise plan requested",
+        });
+        return { requested: true, leadId, duplicate: false };
+      }
+
+      const nextPlan: CommercialPlan =
+        action === "startProTrial" ? "pro_trial" : "pro";
+      if (action === "startProTrial") {
+        if (storedPlan !== "free") {
+          throw new HttpError(
+            409,
+            "PRO_TRIAL_NOT_AVAILABLE",
+            "A Pro trial can only be started from the Free plan.",
+          );
+        }
+        if (trialConsumed(current)) {
+          throw new HttpError(
+            409,
+            "PRO_TRIAL_USED",
+            "This workspace already used its Pro trial.",
+          );
+        }
+      } else if (storedPlan !== "free" && storedPlan !== "pro_trial") {
+        throw new HttpError(
+          409,
+          "PRO_PLAN_NOT_AVAILABLE",
+          "Choose Pro from Free or an active Pro trial.",
+        );
+      }
+
+      const trialDays = action === "startProTrial" ? PRO_TRIAL_DAYS : PRO_INVOICE_DAYS;
+      const expiresAt = new Date(
+        Date.now() + trialDays * 86_400_000,
+      ).toISOString();
+      const next: SubscriptionRecord = {
+        ...current,
+        plan: nextPlan,
+        kind: subscriptionKindForPlan(nextPlan),
+        status: "active",
+        startsAt: current.startsAt,
+        expiresAt,
+        graceDays: action === "startProTrial" ? 0 : 7,
+        publicTrial: false,
+        manualContract: action === "selectProPlan",
+        trialConsumed: true,
+        ...(action === "selectProPlan" ? { convertedAt: changedAt } : {}),
+      };
+      await this.store.update(
+        TABLES.subscriptions,
+        subscription.row.$id,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            status: next.status,
+            kind: next.kind,
+            updated_by: identity.userId,
+          },
+          next,
+        ),
+      );
+      await applyPlanEntitlements(this.store, {
+        organizationId: workspaceAccess.workspace.organizationId,
+        workspaceId,
+        actorUserId: identity.userId,
+        entitlements: entitlementsForPlan(nextPlan),
+      });
+      await appendAudit(this.store, identity, workspaceId, {
+        action:
+          action === "startProTrial"
+            ? "plan.pro-trial-started"
+            : "plan.pro-selected",
+        targetType: "subscription",
+        targetId: subscription.row.$id,
+        summary:
+          action === "startProTrial"
+            ? "14-day Pro trial started"
+            : "Pro plan selected for offline invoice",
+        metadata: { plan: nextPlan, expiresAt },
+      });
+      return {
+        plan: nextPlan,
+        kind: next.kind,
+        expiresAt,
+        paymentMethodRequired: false,
+      };
+    }
+
     if (action === "createSupportTicket") {
       requireAuthorized("workspace.read", context);
+      if (
+        workspaceAccess.supportGrant ||
+        !(
+          workspaceAccess.roles.includes("administrator") ||
+          workspaceAccess.roles.includes("creator")
+        )
+      ) {
+        throw new HttpError(
+          403,
+          "SUPPORT_TICKET_ROLE_REQUIRED",
+          "A workspace administrator or creator can open a support ticket.",
+        );
+      }
       await new EntitlementService(this.store, workspaceId).requireFeature(
         "supportEnabled",
       );
@@ -3348,6 +4223,10 @@ export class CommandService {
           input.watermarkExports,
           "Export watermark",
         ),
+        requireReviewBeforePublish: inputBoolean(
+          input.requireReviewBeforePublish,
+          "Require review before publish",
+        ),
       };
       if (settings.removeBranding) {
         await new EntitlementService(this.store, workspaceId).requireFeature(
@@ -3368,6 +4247,7 @@ export class CommandService {
         removeBranding: settings.removeBranding,
         allowRestrictedExports: settings.allowRestrictedExports,
         watermarkExports: settings.watermarkExports,
+        requireReviewBeforePublish: settings.requireReviewBeforePublish,
       };
       if (rows[0])
         await this.store.update(
@@ -3520,6 +4400,10 @@ export class CommandService {
 
     if (action === "createInvite") {
       requireAuthorized("workspace.invitations.manage", context);
+      await new EntitlementService(
+        this.store,
+        workspaceId,
+      ).assertMemberCapacity();
       const inviteRole = role(payload.role, true);
       const email = inputEmail(payload.email);
       const label = inputText(payload.label ?? `Invite ${email}`, "Label", {
@@ -3581,7 +4465,11 @@ export class CommandService {
         kind: "invitation.created",
         subjectId: invitationId,
         idempotencyKey: `${options.idempotencyKey}:invitation`,
-        payload: { expiresAt, credential: token },
+        payload: {
+          expiresAt,
+          credential: token,
+          workspaceName: workspaceAccess.workspace.name,
+        },
       });
       return {
         id: invitationId,
@@ -3817,6 +4705,62 @@ export class CommandService {
       return { recorded: true };
     }
 
+    if (action === "recordGuideReaction") {
+      const guideId = inputText(payload.guideId, "Guide", { min: 1, max: 36 });
+      const reaction = inputText(payload.reaction, "Reaction", {
+        min: 1,
+        max: 8,
+      });
+      if (!["like", "dislike", "clear"].includes(reaction)) {
+        throw new HttpError(
+          400,
+          "INPUT_INVALID",
+          "Reaction must be like, dislike, or clear.",
+        );
+      }
+      const guide = await this.store.get(TABLES.guides, guideId);
+      if (!guide || guide.workspace_id !== workspaceId)
+        throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+      const guideDetails = decodePayload<GuideRecord>(guide, null as never);
+      if (!guideDetails?.publishedRevisionId) {
+        throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+      }
+      await new GuideAccessService(this.store).require(
+        identity,
+        workspaceId,
+        guideId,
+        guideDetails.publishedRevisionId,
+        "guide.read",
+      );
+      const reactionKey = `${workspaceId}:guide.reaction:${guideId}:${identity.userId}`;
+      const reactionId = await deterministicId("usage", reactionKey);
+      if (reaction === "clear") {
+        const existing = await this.store.get(TABLES.usageEvents, reactionId);
+        if (existing) await this.store.delete(TABLES.usageEvents, reactionId);
+        return { reaction: null };
+      }
+      const kind = reaction === "like" ? "guide.liked" : "guide.disliked";
+      await this.store.upsert(
+        TABLES.usageEvents,
+        reactionId,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            user_id: identity.userId,
+            subject_id: guideId,
+            kind,
+            status: "recorded",
+            occurred_at: nowIso(),
+            request_id: await deterministicId("request", reactionKey),
+            created_by: identity.userId,
+          },
+          {},
+        ),
+      );
+      return { reaction };
+    }
+
     if (action === "createPairingCode") {
       requireAuthorized("capture.create", context);
       await new EntitlementService(this.store, workspaceId).requireFeature(
@@ -3907,6 +4851,7 @@ export class CommandService {
         "saveGuide",
         "reviewGuide",
         "publishGuide",
+        "shareGuide",
         "archiveGuide",
         "deleteGuide",
         "restoreRevision",

@@ -4,7 +4,7 @@ import { CheckCircle2, LoaderCircle } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import styles from "../marketing.module.css";
 
-type LeadKind = "pilot" | "demo" | "pricing";
+type LeadKind = "demo" | "pricing";
 
 export function LeadForm({ kind }: { kind: LeadKind }) {
   const [state, setState] = useState<"idle" | "submitting" | "accepted">("idle");

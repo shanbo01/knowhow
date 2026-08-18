@@ -118,6 +118,8 @@ export type Guide = {
   canEdit: boolean;
   canReview: boolean;
   canPublish: boolean;
+  canShare: boolean;
+  canArchive: boolean;
   canDelete: boolean;
   createdAt: string;
   updatedAt: string;
@@ -129,6 +131,10 @@ export type Guide = {
   screenshotsLockedAt?: string;
   publishedRevision: GuideRevisionView | null;
   workingRevision: GuideRevisionView | null;
+  viewCount?: number;
+  likeCount?: number;
+  dislikeCount?: number;
+  viewerReaction?: "like" | "dislike" | null;
   revisionHistory?: Array<
     Pick<
       GuideRevisionView,
@@ -156,6 +162,10 @@ export type WorkspaceSummary = {
   draftCount: number;
   createdAt: string;
   subscription?: {
+    plan: "free" | "pro_trial" | "pro" | "enterprise";
+    billedPlan: "free" | "pro_trial" | "pro" | "enterprise";
+    kind: string;
+    status: string;
     access:
       | "active"
       | "read_only"
@@ -166,6 +176,9 @@ export type WorkspaceSummary = {
     expiresAt: string | null;
     graceEndsAt: string | null;
     deletionEligibleAt: string | null;
+    renewsAt: string | null;
+    trialConsumed: boolean;
+    pastDue: boolean;
   };
 };
 
@@ -176,6 +189,7 @@ export type WorkspaceSettings = {
   removeBranding: boolean;
   allowRestrictedExports: boolean;
   watermarkExports: boolean;
+  requireReviewBeforePublish: boolean;
 };
 
 export type WorkspaceMember = {
@@ -286,6 +300,273 @@ export type AdminAppointment = {
 
 export type PlatformSettings = {
   selfServiceWorkspaceLimit: number;
+};
+
+export type AccountTag =
+  | "employee"
+  | "investor"
+  | "partner"
+  | "beta"
+  | "press"
+  | "lifetime"
+  | "complimentary";
+
+export type PlatformHealth =
+  | "healthy"
+  | "at_risk"
+  | "churning"
+  | "trial"
+  | "free";
+
+export type PlatformNextAction =
+  | "none"
+  | "grant_trial"
+  | "extend_trial"
+  | "contact_churn"
+  | "enterprise_lead"
+  | "offer_seats"
+  | "expansion";
+
+export type PlatformQueueCounts = {
+  newLeads: number;
+  openTickets: number;
+  overdueSupport: number;
+  expiringSoon: number;
+  neverActivated: number;
+  deletionApprovals: number;
+  failedNotifications: number;
+};
+
+export type PlatformSubscriptionSummary = {
+  id: string;
+  workspaceId: string;
+  kind: string;
+  plan: string;
+  billedPlan?: string;
+  status: string;
+  access: string;
+  startsAt: string;
+  expiresAt: string | null;
+  graceEndsAt: string | null;
+  deletionEligibleAt: string | null;
+  trialConsumed?: boolean;
+  complimentary?: boolean;
+  downgradedAt?: string | null;
+  manualReference?: string | null;
+};
+
+export type PlatformHomeItem = {
+  workspaceId: string;
+  name: string;
+  organizationName: string;
+  plan: string;
+  reason: string;
+  nextAction: PlatformNextAction;
+  href: string;
+  daysRemaining?: number;
+  intentScore?: number;
+};
+
+export type PlatformHomeQueue = {
+  id: string;
+  title: string;
+  description: string;
+  items: PlatformHomeItem[];
+};
+
+export type PlatformHome = {
+  queues: PlatformHomeQueue[];
+  funnel: Array<{ id: string; label: string; count: number }>;
+  counts: PlatformQueueCounts & { customers: number; trials: number };
+  settings: PlatformSettings;
+};
+
+export type PlatformLeadRecord = {
+  id: string;
+  kind: string;
+  status: string;
+  organization: string;
+  contactName: string;
+  email: string;
+  role: string;
+  teamSize: number | null;
+  country: string;
+  workflow: string;
+  notes: string;
+  ownerLabel: string;
+  convertedRunId: string | null;
+  occurredAt: string;
+};
+
+export type PlatformTicketSummary = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  subject: string;
+  status: string;
+  requesterName: string;
+  requesterUserId: string;
+  responseTargetAt: string;
+  updatedAt: string;
+};
+
+export type PlatformTicketRecord = SupportTicket & {
+  workspaceId: string;
+  workspaceName: string;
+  requesterEmail: string;
+};
+
+export type PlatformAccountSummary = {
+  id: string;
+  organizationId: string;
+  organizationName: string;
+  name: string;
+  slug: string;
+  status: string;
+  createdAt: string;
+  subscription: PlatformSubscriptionSummary | null;
+  seatLimit: number | null;
+  memberCount?: number;
+  tags?: AccountTag[];
+  lastActivityAt?: string | null;
+  health?: PlatformHealth;
+  intentScore?: number;
+  nextAction?: PlatformNextAction;
+  nextActionReason?: string;
+  complimentary?: boolean;
+};
+
+export type PlatformPerson = {
+  userId: string;
+  name: string;
+  email: string;
+  roles: string[];
+};
+
+export type PlatformAccountRecord = PlatformAccountSummary & {
+  organization: {
+    id: string;
+    displayName: string;
+    legalName: string;
+    country: string;
+    status: string;
+    primaryContactName: string;
+    primaryContactEmail: string;
+    internalNotes: string;
+    ownerLabel: string;
+    accountTags: AccountTag[];
+  } | null;
+  administrators: PlatformPerson[];
+  billingContacts: PlatformPerson[];
+  memberCount: number;
+  publishedCount: number;
+  draftCount: number;
+  activation: {
+    firstPublishedAt: string | null;
+    firstTeammateViewAt: string | null;
+    firstTeammateCompletionAt: string | null;
+  };
+  activationChecklist?: Array<{
+    id: string;
+    label: string;
+    completed: boolean;
+    completedAt: string | null;
+  }>;
+  tickets: PlatformTicketSummary[];
+  originatingLead: { id: string; organization: string; email: string } | null;
+  entitlements: Array<{
+    id: string;
+    kind: string;
+    value: string | number | boolean;
+    source?: string;
+    reason?: string | null;
+    expiresAt?: string | null;
+  }>;
+  usage?: {
+    captures: number;
+    publishes: number;
+    views: number;
+    exportRequests: number;
+    paywallHits: number;
+    storageBytes: number;
+    storageLimit: number | null;
+    creatorCount: number;
+    creatorLimit: number | null;
+  };
+  extension?: {
+    version: string | null;
+    lastUsedAt: string | null;
+    deviceCount: number;
+  } | null;
+  lastActivityAt?: string | null;
+  timeline?: Array<{ at: string; kind: string; label: string }>;
+  domainSiblings?: Array<{ workspaceId: string; name: string; domain: string }>;
+  health?: PlatformHealth;
+  intentScore?: number;
+  nextAction?: PlatformNextAction;
+  nextActionReason?: string;
+  complimentary?: boolean;
+  trialConsumed?: boolean;
+  tags?: AccountTag[];
+  audits: Array<{
+    id: string;
+    action: string;
+    occurredAt: string;
+  }>;
+  supportRequest: {
+    id: string;
+    status: "pending" | "approved" | "denied" | "cancelled";
+    requestedRole: WorkspaceRole;
+    requestedDurationHours: number;
+    reason: string;
+    createdAt: string;
+  } | null;
+  supportGrant: {
+    id: string;
+    role: WorkspaceRole;
+    grantedAt: string;
+    expiresAt: string;
+  } | null;
+};
+
+export type PlatformSearchHit = {
+  kind: "section" | "account" | "lead" | "ticket" | "person";
+  id: string;
+  label: string;
+  description: string;
+  href: string;
+};
+
+export type PlatformDeletionCase = {
+  id: string;
+  organizationId: string;
+  workspaceId: string;
+  workspaceName: string;
+  status: string;
+  eligibleAt: string;
+  confirmationText?: string;
+};
+
+export type PlatformNotificationFailure = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  kind: string;
+  attempts: number;
+  lastFailedAt: string;
+};
+
+export type PlatformAuditSummary = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  action: string;
+  occurredAt: string;
+};
+
+export type PlatformPage<T> = {
+  items: T[];
+  nextCursor: string | null;
 };
 
 export type BetaAccessGrant = {
@@ -546,8 +827,21 @@ export type Viewer = {
   selfServiceSetup?: SelfServiceSetup;
 };
 
+export type WorkspaceEntitlements = {
+  maximumUsers: number;
+  maximumCreators: number;
+  storageBytes: number;
+  extensionEnabled: boolean;
+  supportEnabled: boolean;
+  removeBranding: boolean;
+  privacyToolsEnabled: boolean;
+  customSubdomainEnabled: boolean;
+  fileExportsEnabled: boolean;
+};
+
 export type WorkspaceBundle = {
   workspace: WorkspaceSummary & { settings: WorkspaceSettings };
+  entitlements: WorkspaceEntitlements;
   metrics: WorkspaceMetrics;
   members: WorkspaceMember[];
   groups: WorkspaceGroup[];
@@ -567,10 +861,10 @@ export type WorkspaceBundle = {
         | "workspace_readiness"
         | "teammate_invitation"
         | "extension_installation"
+        | "extension_pin"
         | "first_capture"
-        | "first_edit"
-        | "first_publication"
-        | "teammate_completion";
+        | "first_guide"
+        | "first_publication";
       completed: boolean;
       completedAt: string | null;
     }>;
@@ -590,108 +884,11 @@ export type BootstrapResponse = {
   organizations?: OrganizationAdministration[];
   platform?: {
     generatedAt: string;
-    metrics: PlatformMetrics;
-    workspaces: PlatformWorkspace[];
     settings: PlatformSettings;
+    queueCounts: PlatformQueueCounts;
     appointments: AdminAppointment[];
-    organizations: Array<{
-      id: string;
-      displayName: string;
-      legalName: string;
-      country: string;
-      status: string;
-      workspaceCount: number;
-      createdAt: string;
-    }>;
-    subscriptions: Array<{
-      id: string;
-      workspaceId: string;
-      kind: string;
-      status: string;
-      access: string;
-      startsAt: string;
-      expiresAt: string | null;
-      graceEndsAt: string | null;
-      deletionEligibleAt: string | null;
-    }>;
-    entitlements: Array<{
-      id: string;
-      workspaceId: string;
-      kind: string;
-      value: string | number | boolean;
-    }>;
-    leads: Array<{
-      id: string;
-      kind: string;
-      status: string;
-      organization: string;
-      contactName: string;
-      email: string;
-      occurredAt: string;
-    }>;
-    activation: Array<{
-      workspaceId: string;
-      firstPublishedAt: string | null;
-      firstTeammateViewAt: string | null;
-      firstTeammateCompletionAt: string | null;
-    }>;
-    support: Array<{
-      id: string;
-      workspaceId: string;
-      status: string;
-      requesterName: string;
-      responseTargetAt: string;
-      updatedAt: string;
-    }>;
-    notificationFailures: Array<{
-      id: string;
-      workspaceId: string;
-      kind: string;
-      attempts: number;
-      lastFailedAt: string;
-    }>;
-    deletionCases: Array<{
-      id: string;
-      organizationId: string;
-      workspaceId: string;
-      status: string;
-      eligibleAt: string;
-      confirmationText?: string;
-    }>;
     provisioningRuns: PlatformProvisioningRun[];
-    betaAccess: {
-      grants: BetaAccessGrant[];
-      events: BetaAccessEvent[];
-    };
     pricingCatalogs?: PlatformPricingCatalog[];
-    lifecycleSimulation?: {
-      enabled: boolean;
-      environment: string;
-      productionForbidden: true;
-      createConfirmation: string;
-      states: ReadonlyArray<
-        | "trial_active"
-        | "near_expiry"
-        | "read_only"
-        | "suspended"
-        | "retention"
-        | "deletion_eligible"
-        | "pending_deletion"
-      >;
-    };
-    systemHealth: {
-      failedNotifications: number;
-      overdueSupport: number;
-      expiringWithinSevenDays: number;
-      deletionApprovals: number;
-      failedOperations: number;
-    };
-    platformAudits: Array<{
-      id: string;
-      workspaceId: string;
-      action: string;
-      occurredAt: string;
-    }>;
   };
 };
 

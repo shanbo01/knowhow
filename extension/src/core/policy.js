@@ -12,14 +12,14 @@ const DEFAULT_EXCLUDED_HOSTS = Object.freeze([
 // mergePolicy() uses this to migrate policies saved under an older schema so
 // stale stored values (like the previous "Smart Blur on by default") don't
 // silently keep overriding a new, safer default forever.
-export const CAPTURE_POLICY_SCHEMA_VERSION = 4;
+export const CAPTURE_POLICY_SCHEMA_VERSION = 5;
 
-// Keys whose *default* changed up to CAPTURE_POLICY_SCHEMA_VERSION 4: Smart Blur
-// flipped from opt-out to opt-in (3), and workspace recommendations stopped
-// switching individual detectors on (4), which had left every install with
-// emails, phones, financial numbers, long IDs and form fields already covered.
-// A policy persisted under an older schema version has these values discarded
-// in favor of the current defaults below, instead of being merged over them.
+// Keys whose *default* changed up to schema 4: Smart Blur flipped from opt-out
+// to opt-in (3), and workspace recommendations stopped switching individual
+// detectors on (4), which had left every install with emails, phones, financial
+// numbers, long IDs and form fields already covered. A policy persisted under
+// an older schema version has these values discarded in favor of the current
+// defaults below, instead of being merged over them.
 const MIGRATED_DEFAULT_KEYS = Object.freeze([
   "smartBlurEnabled",
   "redactEmails",
@@ -34,6 +34,15 @@ const MIGRATED_DEFAULT_KEYS = Object.freeze([
   "redactCommonNames",
 ]);
 
+// Schema 5: leftover Common names and the three hidden Number flags can no
+// longer keep covering after the author turned every menu detector off.
+const SCHEMA_5_RESET_KEYS = Object.freeze([
+  "redactCommonNames",
+  "redactPhoneNumbers",
+  "redactFinancialNumbers",
+  "redactIds",
+]);
+
 export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   version: "local-v1",
   schemaVersion: CAPTURE_POLICY_SCHEMA_VERSION,
@@ -42,7 +51,7 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   blockInsecureHttp: false,
   // Smart Blur has one explicit session control. Workspace categories can
   // recommend what to detect, but they never turn the feature on for the
-  // author. Password fields and embedded frames remain mandatory protections.
+  // author. Only the six menu toggles produce covers.
   smartBlurEnabled: false,
   // Smart Blur is opt-in: the author reviews and adds blur in the app editor
   // instead of the extension guessing and baking it in automatically.
@@ -204,14 +213,19 @@ export function sameOrigin(left, right) {
 }
 
 export function mergePolicy(stored = {}) {
-  const isLegacySchema =
-    !Number.isInteger(stored.schemaVersion) ||
-    stored.schemaVersion < CAPTURE_POLICY_SCHEMA_VERSION;
-  const carryForward = isLegacySchema
+  const storedVersion = Number.isInteger(stored.schemaVersion)
+    ? stored.schemaVersion
+    : 0;
+  const resetKeys = new Set();
+  if (storedVersion < 4) {
+    for (const key of MIGRATED_DEFAULT_KEYS) resetKeys.add(key);
+  }
+  if (storedVersion < 5) {
+    for (const key of SCHEMA_5_RESET_KEYS) resetKeys.add(key);
+  }
+  const carryForward = resetKeys.size
     ? Object.fromEntries(
-        Object.entries(stored).filter(
-          ([key]) => !MIGRATED_DEFAULT_KEYS.includes(key),
-        ),
+        Object.entries(stored).filter(([key]) => !resetKeys.has(key)),
       )
     : stored;
   return {

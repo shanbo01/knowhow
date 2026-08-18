@@ -8,6 +8,13 @@ import {
   type WorkspaceMemberRecord,
   type WorkspaceRecord,
 } from "./domain-records";
+import {
+  entitlementsForPlan,
+  FREE_ENTITLEMENTS,
+  isCommercialPlan,
+  PRO_TRIAL_DAYS,
+  type CommercialPlan,
+} from "./commercial-plan";
 import { HttpError } from "./http-security";
 import { deterministicResourceId } from "./ids";
 import { inputEmail, inputText, slugify } from "./input";
@@ -47,6 +54,7 @@ export type SelfServiceSetupInput = {
   workspaceName?: unknown;
   accentColor?: unknown;
   inviteEmail?: unknown;
+  plan?: unknown;
 };
 
 export type SelfServiceSetupResult = {
@@ -57,9 +65,10 @@ export type SelfServiceSetupResult = {
   onboardingProgressId: string;
   trial: {
     startsAt: string;
-    expiresAt: string;
-    graceEndsAt: string;
-    deletionEligibleAt: string;
+    expiresAt: string | null;
+    graceEndsAt: string | null;
+    deletionEligibleAt: string | null;
+    plan: CommercialPlan;
   };
   invite?: {
     id: string;
@@ -347,19 +356,38 @@ export class SelfServiceProvisioningService {
       );
     }
 
-    const plan = await this.trialPlan();
+    const catalogPlan = await this.trialPlan();
+    const requestedPlan =
+      input.plan === "free" || input.plan === "pro_trial"
+        ? input.plan
+        : isCommercialPlan(input.plan)
+          ? "pro_trial"
+          : "pro_trial";
+    const commercialPlan: CommercialPlan =
+      requestedPlan === "free" ? "free" : "pro_trial";
     const now = options.now ? new Date(options.now) : new Date();
     if (!Number.isFinite(now.getTime())) throw new Error("Invalid setup time.");
     const startsAt = now.toISOString();
-    const expiresAt = new Date(
-      now.getTime() + plan.trialDays * DAY,
-    ).toISOString();
-    const graceEndsAt = new Date(
-      now.getTime() + (plan.trialDays + plan.graceDays) * DAY,
-    ).toISOString();
-    const deletionEligibleAt = new Date(
-      now.getTime() + (plan.trialDays + plan.retentionDays) * DAY,
-    ).toISOString();
+    const trialDays =
+      commercialPlan === "pro_trial"
+        ? catalogPlan.trialDays || PRO_TRIAL_DAYS
+        : 0;
+    const expiresAt =
+      commercialPlan === "pro_trial"
+        ? new Date(now.getTime() + trialDays * DAY).toISOString()
+        : null;
+    const graceEndsAt =
+      commercialPlan === "pro_trial"
+        ? new Date(
+            now.getTime() + (trialDays + catalogPlan.graceDays) * DAY,
+          ).toISOString()
+        : null;
+    const deletionEligibleAt =
+      commercialPlan === "pro_trial"
+        ? new Date(
+            now.getTime() + (trialDays + catalogPlan.retentionDays) * DAY,
+          ).toISOString()
+        : null;
     const workspaceSlug = `${slugify(required.workspaceName!)}-${ids.workspaceId.slice(-5)}`;
     const organizationSlug = `${slugify(required.organizationName!)}-${ids.organizationId.slice(-5)}`;
 
@@ -369,7 +397,13 @@ export class SelfServiceProvisioningService {
       workspaceSlug,
       subscriptionId: ids.subscriptionId,
       onboardingProgressId: ids.onboardingProgressId,
-      trial: { startsAt, expiresAt, graceEndsAt, deletionEligibleAt },
+      trial: {
+        startsAt,
+        expiresAt,
+        graceEndsAt,
+        deletionEligibleAt,
+        plan: commercialPlan,
+      },
     };
 
     const organization: OrganizationRecord = {
@@ -392,14 +426,30 @@ export class SelfServiceProvisioningService {
     };
     const subscription: SubscriptionRecord = {
       kind: "trial",
+      plan: commercialPlan,
       startsAt,
       expiresAt,
-      graceDays: plan.graceDays,
-      retentionDays: plan.retentionDays,
+      graceDays: commercialPlan === "pro_trial" ? catalogPlan.graceDays : 0,
+      retentionDays:
+        commercialPlan === "pro_trial" ? catalogPlan.retentionDays : 90,
       publicTrial: false,
       manualContract: false,
       status: "active",
+      trialConsumed: commercialPlan === "pro_trial",
     };
+    const planEntitlements =
+      commercialPlan === "free"
+        ? FREE_ENTITLEMENTS
+        : {
+            ...entitlementsForPlan("pro_trial"),
+            ...catalogPlan.entitlements,
+            extensionEnabled: true,
+            supportEnabled: true,
+            removeBranding: true,
+            privacyToolsEnabled: true,
+            customSubdomainEnabled: true,
+            fileExportsEnabled: true,
+          };
     const accentColor = normalizeAccent(required.accentColor);
 
     await this.store.create(
@@ -504,13 +554,16 @@ export class SelfServiceProvisioningService {
         },
         {
           ...subscription,
-          catalogItemId: plan.catalogItemId,
+          catalogItemId:
+            commercialPlan === "pro_trial"
+              ? catalogPlan.catalogItemId
+              : "built_in_free_default",
           originalExpiresAt: expiresAt,
           deletionEligibleAt,
         },
       ),
     );
-    for (const [kind, value] of Object.entries(plan.entitlements)) {
+    for (const [kind, value] of Object.entries(planEntitlements)) {
       const entitlementId = await deterministicResourceId(
         "entitle",
         `${ids.workspaceId}:${kind}`,
@@ -526,7 +579,13 @@ export class SelfServiceProvisioningService {
             status: "active",
             created_by: identity.userId,
           },
-          { value, source: plan.catalogItemId },
+          {
+            value,
+            source:
+              commercialPlan === "pro_trial"
+                ? catalogPlan.catalogItemId
+                : "built_in_free_default",
+          },
         ),
       );
     }
@@ -641,7 +700,7 @@ export class SelfServiceProvisioningService {
       summary: "Organization and trial workspace created through self-service",
       metadata: {
         ...(admission?.grantId ? { admissionGrantId: admission.grantId } : {}),
-        trialDays: plan.trialDays,
+        trialDays,
       },
     });
     return result;

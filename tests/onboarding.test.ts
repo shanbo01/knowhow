@@ -68,7 +68,18 @@ test("pilot onboarding is resumable and requires both data-boundary confirmation
     member,
     workspaceId,
   );
-  assert.equal(bootstrap.activeWorkspace?.onboarding.steps.length, 7);
+  assert.equal(bootstrap.activeWorkspace?.onboarding.steps.length, 6);
+  assert.deepEqual(
+    bootstrap.activeWorkspace?.onboarding.steps.map((step) => step.id),
+    [
+      "workspace_readiness",
+      "teammate_invitation",
+      "extension_installation",
+      "extension_pin",
+      "first_capture",
+      "first_publication",
+    ],
+  );
   assert.equal(
     bootstrap.activeWorkspace?.onboarding.steps[0].id,
     "workspace_readiness",
@@ -248,8 +259,72 @@ test("activation derives publication and teammate completion from authoritative 
     steps.find((step) => step.id === "first_publication")?.completedAt,
     publishedAt,
   );
+});
+
+test("Free getting started omits capture steps so 100% is reachable without a trial", async () => {
+  const store = new InMemoryRecordStore();
+  const { organizationId, workspaceId } = await seedWorkspace(store, {
+    subscription: {
+      kind: "trial",
+      plan: "free",
+      startsAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: null,
+      graceDays: 0,
+      retentionDays: 90,
+      publicTrial: false,
+      manualContract: false,
+      status: "active",
+      trialConsumed: false,
+    },
+  });
+  const member = identity("free-owner", "free@acme.example", "Owner");
+  await seedWorkspaceMember(store, {
+    organizationId,
+    workspaceId,
+    userId: member.userId,
+    email: member.email,
+    roles: ["administrator"],
+  });
+  const bootstrap = await new BootstrapService(store).bootstrap(
+    member,
+    workspaceId,
+  );
+  assert.deepEqual(
+    bootstrap.activeWorkspace?.onboarding.steps.map((step) => step.id),
+    [
+      "workspace_readiness",
+      "teammate_invitation",
+      "first_guide",
+      "first_publication",
+    ],
+  );
+});
+
+test("pinning the extension completes the pin onboarding step", async () => {
+  const store = new InMemoryRecordStore();
+  const { organizationId, workspaceId } = await seedWorkspace(store);
+  const member = identity("pin-member", "pin@acme.example", "Member");
+  await seedWorkspaceMember(store, {
+    organizationId,
+    workspaceId,
+    userId: member.userId,
+    email: member.email,
+    roles: ["creator"],
+  });
+  await new CommandService(store).execute(
+    member,
+    "confirmExtensionPinned",
+    { workspaceId },
+    options("pinned"),
+  );
+  const bootstrap = await new BootstrapService(store).bootstrap(
+    member,
+    workspaceId,
+  );
   assert.equal(
-    steps.find((step) => step.id === "teammate_completion")?.completedAt,
-    completedAt,
+    bootstrap.activeWorkspace?.onboarding.steps.find(
+      (step) => step.id === "extension_pin",
+    )?.completed,
+    true,
   );
 });

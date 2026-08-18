@@ -54,10 +54,6 @@
         /\b(?=[A-Z0-9-]{8,}\b)(?=(?:[A-Z0-9-]*\d){2,})[A-Z0-9][A-Z0-9-]{7,}\b/gi,
       ],
       [state.policy.redactAllNumbers === true, /\d+/g],
-      [
-        state.policy.redactCommonNames === true,
-        /\b[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\b/g,
-      ],
     ];
     for (const [enabled, pattern] of replacements) {
       if (enabled) output = output.replace(pattern, "[redacted]");
@@ -642,28 +638,28 @@
   }
 
   function formFieldMasks() {
-    const smartBlurEnabled = state.policy.smartBlurEnabled === true;
-    const selectors = [
-      "input[type=password]",
-      "[autocomplete*=password]",
-      "[autocomplete=one-time-code]",
-      "[autocomplete=cc-number]",
-      "[data-knowhow-redact]",
-    ];
-    if (smartBlurEnabled && state.policy.redactFormFields === true) {
+    if (state.policy.smartBlurEnabled !== true) return [];
+    const selectors = [];
+    if (state.policy.redactFormFields === true) {
       selectors.push(
+        "input[type=password]",
+        "[autocomplete*=password]",
+        "[autocomplete=one-time-code]",
+        "[autocomplete=cc-number]",
+        "[data-knowhow-redact]",
         "input:not([type=button]):not([type=submit]):not([type=reset])",
         "textarea",
         "select",
         "[contenteditable=true]",
       );
     }
-    if (smartBlurEnabled && state.policy.redactEmails === true) {
+    if (state.policy.redactEmails === true) {
       selectors.push("input[type=email]", "[autocomplete=email]");
     }
-    if (smartBlurEnabled && state.policy.redactPhoneNumbers === true) {
+    if (state.policy.redactPhoneNumbers === true) {
       selectors.push("input[type=tel]", "[autocomplete=tel]");
     }
+    if (!selectors.length) return [];
     const selector = selectors.join(",");
     return queryAllOpenRoots(selector)
       .filter(
@@ -706,11 +702,6 @@
         /\b(?=[A-Z0-9-]{8,}\b)(?=(?:[A-Z0-9-]*\d){2,})[A-Z0-9][A-Z0-9-]{7,}\b/gi,
       ],
       [policy.redactAllNumbers === true, "number", /\d+/g],
-      [
-        policy.redactCommonNames === true,
-        "common-name",
-        /\b[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\b/g,
-      ],
     ];
     for (const [enabled, reason, pattern] of detectors) {
       if (!enabled) continue;
@@ -784,6 +775,16 @@
 
   function textMasks() {
     if (state.policy.smartBlurEnabled !== true) return [];
+    if (
+      state.policy.redactEmails !== true &&
+      state.policy.redactPhoneNumbers !== true &&
+      state.policy.redactFinancialNumbers !== true &&
+      state.policy.redactIds !== true &&
+      state.policy.redactAllNumbers !== true &&
+      state.policy.redactLongText !== true
+    ) {
+      return [];
+    }
     const masks = [];
     let visited = 0;
     for (const root of observableRoots()) {
@@ -827,6 +828,8 @@
   }
 
   function embeddedFrameMasks() {
+    if (state.policy.smartBlurEnabled !== true) return [];
+    if (state.policy.redactImages !== true) return [];
     return queryAllOpenRoots("iframe")
       .filter(inPage)
       .map((frame) => rectFor(frame, "embedded-frame"))
@@ -985,12 +988,6 @@
   }
 
   function exclusionCoversMask(mask) {
-    if (
-      mask?.reason === "password-field" ||
-      mask?.reason === "embedded-frame"
-    ) {
-      return false;
-    }
     for (const exclusion of manualExclusions.values()) {
       const element = resolveManualElement(exclusion);
       if (!(element instanceof Element) || !element.isConnected) continue;
@@ -1640,7 +1637,7 @@
   }
 
   const PANEL_FONT =
-    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+    "'Google Sans Flex Variable',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
   function syncManualSelectionCopy() {
     const blurCount = manualSelections.size;
@@ -1748,11 +1745,7 @@
 
   function isProtectedUnblurTarget(element) {
     if (!(element instanceof Element)) return true;
-    if (element.matches("iframe,frame,object,embed")) return true;
-    if (element.closest("iframe")) return true;
-    if (element.matches("input[type='password']")) return true;
-    if (element.closest("input[type='password']")) return true;
-    return false;
+    return element === document.documentElement || element === document.body;
   }
 
   function manualExclusionForElement(element) {
@@ -2009,13 +2002,13 @@
     panel.style.cssText =
       "display:none;width:min(292px,calc(100vw - 32px));" +
       "max-height:min(520px,calc(100vh - 96px));margin-bottom:9px;overflow:auto;" +
-      "border-radius:14px;background:#121215;" +
+      "border-radius:14px;background:#171714;" +
       "box-shadow:0 0 0 1px rgba(255,255,255,.07),0 22px 60px rgba(0,0,0,.42);";
 
     const heading = document.createElement("div");
     heading.style.cssText =
       "position:sticky;top:0;display:grid;gap:2px;padding:13px 15px 11px;" +
-      "background:#121215;border-bottom:1px solid rgba(255,255,255,.07);";
+      "background:#171714;border-bottom:1px solid rgba(255,255,255,.07);";
     const headingRow = document.createElement("div");
     headingRow.style.cssText =
       "display:flex;align-items:center;justify-content:space-between;gap:14px;";
@@ -2047,7 +2040,7 @@
     choose.dataset.knowhowManualCount = "";
     choose.style.cssText =
       "min-height:36px;margin-top:10px;border:1px solid rgba(255,255,255,.11);" +
-      "border-radius:9px;background:#202024;color:#f4f4f5;font:700 12px/1 " +
+      "border-radius:9px;background:#22221e;color:#f5f4f0;font:700 12px/1 " +
       PANEL_FONT + ";cursor:pointer;";
     choose.addEventListener("click", () => enterElementPicker("blur"));
     const unblur = document.createElement("button");
@@ -2064,7 +2057,7 @@
     trigger.dataset.knowhowBlurTrigger = "";
     trigger.style.cssText =
       "display:flex;align-items:center;gap:8px;padding:9px 14px 9px 12px;border:0;" +
-      "border-radius:999px;background:#121215;color:#fff;" +
+      "border-radius:999px;background:#171714;color:#fff;" +
       "box-shadow:0 0 0 1px rgba(255,255,255,.08),0 10px 30px rgba(0,0,0,.34);" +
       "font:700 12px/1 " +
       PANEL_FONT +
@@ -2167,9 +2160,10 @@
   }
 
   function claimPreparedFrame() {
-    const frame = [...preparedFrames]
-      .reverse()
-      .find((candidate) => frameIsEligible(candidate));
+    const frames = [...preparedFrames].reverse();
+    const frame =
+      frames.find((candidate) => frameIsEligible(candidate)) ||
+      frames.find((candidate) => frameIsClaimable(candidate));
     if (!frame) return null;
     frame.consumed = true;
     preparedFrames = preparedFrames.filter(
@@ -2233,16 +2227,15 @@
         });
       })
       .then((response) => {
-        if (
-          response?.ok === true &&
-          response.navigationKey === state.navigationKey
-        ) {
+        if (response?.ok === true && response.frameId) {
           const preparedFrame = {
             id: response.frameId,
             capturedAtMs: response.capturedAtMs,
-            visualEpoch: epoch,
-            viewportKey: context.viewportKey,
-            navigationKey: state.navigationKey,
+            visualEpoch: Number.isFinite(Number(response.visualEpoch))
+              ? Number(response.visualEpoch)
+              : epoch,
+            viewportKey: response.viewportKey || context.viewportKey,
+            navigationKey: response.navigationKey || state.navigationKey,
             consumed: false,
           };
           preparedFrames = [
@@ -2654,10 +2647,18 @@
     hideBlurPreviewForCapture();
   }
 
+  function stallForEarlyCapture(ms = 64) {
+    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 80);
+    while (performance.now() < until) {
+      // Hold the content thread so the visible-tab snapshot can finish while
+      // this page still shows the pre-click UI. Do not preventDefault.
+    }
+  }
+
   function stageInteraction(element, context, sourceEvent = "click") {
     const interactionId = crypto.randomUUID();
-    const frameId = claimPreparedFrame();
     hideCaptureChrome();
+    const frameId = claimPreparedFrame();
     const staged = {
       interactionId,
       element,
@@ -2687,6 +2688,7 @@
       viewportKey: viewportKey(context.viewport),
       context: staged.context,
     });
+    stallForEarlyCapture(64);
     return staged;
   }
 

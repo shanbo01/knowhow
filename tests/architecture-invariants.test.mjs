@@ -152,29 +152,34 @@ test("product routes share the guarded app while marketing stays public", async 
     appPage,
     workspacePage,
     marketingPage,
+    landing,
     shell,
     workspaceShell,
     workspaceRoutes,
     auditRoute,
     platformPage,
+    platformApp,
   ] = await Promise.all([
     read("app/app/page.tsx"),
     read("app/w/[workspaceSlug]/[[...segments]]/page.tsx"),
     read("app/page.tsx"),
+    read("app/components/landing/landing-experience.tsx"),
     read("app/components/knowhow-app.tsx"),
     read("app/components/knowhow-workspace-app.tsx"),
     read("lib/workspace-routes.ts"),
     read("app/api/knowhow/audit/route.ts"),
     read("app/platform/[[...segments]]/page.tsx"),
+    read("app/components/platform/platform-app.tsx"),
   ]);
 
   assert.match(appPage, /<KnowHowApp\s*\/>/);
   assert.match(workspacePage, /<KnowHowApp\s*\/>/);
-  assert.match(marketingPage, /href="\/start-trial"/);
-  assert.match(marketingPage, /href="\/contact"/);
-  assert.doesNotMatch(marketingPage, /href="\/request-pilot"/);
-  assert.match(marketingPage, /Start free trial/);
-  assert.doesNotMatch(marketingPage, /Start private beta/i);
+  assert.match(marketingPage, /<LandingExperience/);
+  assert.match(landing, /href="\/start-trial"/);
+  assert.match(landing, /href="\/contact"/);
+  assert.doesNotMatch(landing, /href="\/request-pilot"/);
+  assert.match(landing, /Start free trial/);
+  assert.doesNotMatch(landing, /Start private beta/i);
 
   assert.doesNotMatch(
     shell,
@@ -201,9 +206,11 @@ test("product routes share the guarded app while marketing stays public", async 
   assert.doesNotMatch(workspaceShell, /export function ActivityView/);
   assert.doesNotMatch(workspaceRoutes, /["']activity["']/);
   assert.match(platformPage, /<KnowHowApp\s*\/>/);
-  assert.match(workspaceRoutes, /"ops"/);
+  assert.match(workspaceRoutes, /ops:\s*"tools"/);
+  assert.match(workspaceRoutes, /accounts:\s*"customers"/);
   assert.match(workspaceRoutes, /\/platform\/\$\{section\}/);
-  assert.match(workspaceShell, /PLATFORM_NAV/);
+  assert.match(platformApp, /PLATFORM_NAV/);
+  assert.doesNotMatch(workspaceShell, /export function PlatformView/);
   assert.doesNotMatch(workspaceShell, /Approved email domains/);
   assert.doesNotMatch(workspaceShell, /<h2>Capture policy<\/h2>/);
   assert.doesNotMatch(workspaceShell, /Approved organization domains/);

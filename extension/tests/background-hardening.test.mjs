@@ -192,7 +192,7 @@ test("retry focuses the original tab and recaptures the current page", async () 
   assert.match(retry, /chrome\.tabs\.update\(entry\.tabId, \{ active: true \}\)/);
   assert.match(retry, /That tab was closed/);
   assert.match(retry, /hideLiveBlur: false/);
-  assert.doesNotMatch(source, /newestSameTabPreparedFrame\(/);
+  assert.match(source, /newestSameTabPreparedFrame\(/);
   assert.match(source, /autoRetryNeedsAttentionOnTab\(tabId\)/);
   assert.doesNotMatch(
     retry,

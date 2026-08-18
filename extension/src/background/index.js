@@ -43,6 +43,7 @@ import {
 import { sanitizeCapturedText } from "../core/redaction.js";
 import {
   newestEligiblePreparedFrame,
+  newestSameTabPreparedFrame,
   preparedFrameEligible,
   retainPreparedFrameMetadata,
 } from "../core/prepared-frame.js";
@@ -1556,7 +1557,12 @@ async function preparePageContext(state, fallback) {
   };
 }
 
-async function validateActiveCaptureTab(state, policy, expectedSanitizedUrl) {
+async function validateActiveCaptureTab(
+  state,
+  policy,
+  expectedSanitizedUrl,
+  { ignorePageMove = false } = {},
+) {
   const [tab] = await chrome.tabs.query({
     active: true,
     windowId: state.windowId,
@@ -1566,19 +1572,18 @@ async function validateActiveCaptureTab(state, policy, expectedSanitizedUrl) {
   }
   const verdict = evaluateCaptureUrl(requireRegularPageUrl(tab), policy);
   if (!verdict.allowed) throw new Error(verdict.reason);
-  // Capture follows the author across sites, so what has to hold is that the tab
-  // still shows the exact page this screenshot was queued for. Without a pinned
-  // page, the session's current origin is the guard.
-  if (expectedSanitizedUrl) {
-    if (verdict.sanitizedUrl !== expectedSanitizedUrl) {
+  if (!ignorePageMove) {
+    if (expectedSanitizedUrl) {
+      if (verdict.sanitizedUrl !== expectedSanitizedUrl) {
+        throw new Error(
+          "The captured page changed before its screenshot was ready. Try the action again.",
+        );
+      }
+    } else if (verdict.origin !== state.origin) {
       throw new Error(
-        "The captured page changed before its screenshot was ready. Try the action again.",
+        "The captured page moved to another site before its screenshot was ready. Try the action again.",
       );
     }
-  } else if (verdict.origin !== state.origin) {
-    throw new Error(
-      "The captured page moved to another site before its screenshot was ready. Try the action again.",
-    );
   }
   return { tab, verdict };
 }
@@ -1588,14 +1593,16 @@ async function captureVisiblePage(
   policy,
   expectedSanitizedUrl,
   reserveSlot,
-  { hideLiveBlur = true } = {},
+  { hideLiveBlur = true, keepOnNavigation = false } = {},
 ) {
   await requireCaptureHostAccess();
   // The rate-limit wait happens before validation so the checks below describe
   // the tab as it is at the instant the screenshot is taken.
   if (!(await reserveSlot())) return null;
   const activationEpoch = windowActivationEpochs.current(state.windowId);
-  await validateActiveCaptureTab(state, policy, expectedSanitizedUrl);
+  await validateActiveCaptureTab(state, policy, expectedSanitizedUrl, {
+    ignorePageMove: keepOnNavigation,
+  });
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     throw new Error("The active tab changed before screenshot capture began.");
   }
@@ -1630,6 +1637,7 @@ async function captureVisiblePage(
     state,
     policy,
     expectedSanitizedUrl,
+    { ignorePageMove: keepOnNavigation },
   );
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     dataUrl = null;
@@ -1904,7 +1912,7 @@ async function processPreparedFrame({
     policy,
     latest.sanitizedUrl,
     reserveSlot,
-    { hideLiveBlur },
+    { hideLiveBlur, keepOnNavigation: true },
   );
   if (!captured) return null;
   let dataUrl = captured.dataUrl;
@@ -1934,24 +1942,27 @@ async function processPreparedFrame({
     if (!processed?.ok) {
       throw new Error(processed?.error || "Local screenshot redaction failed.");
     }
-    if (deadlineRequired) {
-      const verified = await sendToCapturedTab(
-        state,
-        { type: "KNOWHOW_VERIFY_DOCUMENT" },
-        typeof documentId === "string" ? { documentId } : undefined,
-      );
-      if (
-        !verified?.ok ||
-        (viewportKey && verified.viewportKey !== viewportKey) ||
-        (frameNavigationKey && verified.navigationKey !== frameNavigationKey)
-      ) {
-        await deleteCaptureFrame(state.sessionId, frameId);
-        throw new Error(
-          "The page changed before KnowHow could preserve its pre-action screenshot.",
-        );
-      }
-    }
-    return { id: frameId, capturedAtMs };
+    const verified = await sendToCapturedTab(
+      state,
+      { type: "KNOWHOW_VERIFY_DOCUMENT" },
+      typeof documentId === "string" ? { documentId } : undefined,
+    ).catch(() => null);
+    return {
+      id: frameId,
+      capturedAtMs,
+      navigationKey:
+        verified?.ok && verified.navigationKey
+          ? verified.navigationKey
+          : frameNavigationKey,
+      viewportKey:
+        verified?.ok && verified.viewportKey
+          ? verified.viewportKey
+          : viewportKey,
+      visualEpoch:
+        verified?.ok && Number.isFinite(Number(verified.visualEpoch))
+          ? Number(verified.visualEpoch)
+          : visualEpoch,
+    };
   } finally {
     dataUrl = null;
   }
@@ -2002,12 +2013,17 @@ async function prepareCaptureFrame(message, sender) {
         viewportKey: message.viewportKey,
         documentId,
         reserveSlot,
-        deadlineRequired: true,
+        deadlineRequired: false,
         hideLiveBlur: false,
       }),
     { deadlineMs: 1_600 },
   );
   if (!result) return { ok: false, abandoned: true };
+  const storedNavigationKey = result.navigationKey || message.navigationKey;
+  const storedViewportKey = result.viewportKey || message.viewportKey;
+  const storedVisualEpoch = Number.isFinite(Number(result.visualEpoch))
+    ? Number(result.visualEpoch)
+    : message.visualEpoch;
   const next = await withStateMutation(async () => {
     const latest = await getCaptureState();
     if (
@@ -2024,9 +2040,9 @@ async function prepareCaptureFrame(message, sender) {
         id: frameId,
         tabId: latest.tabId,
         documentId,
-        navigationKey: message.navigationKey,
-        visualEpoch: message.visualEpoch,
-        viewportKey: message.viewportKey,
+        navigationKey: storedNavigationKey,
+        visualEpoch: storedVisualEpoch,
+        viewportKey: storedViewportKey,
         capturedAtMs: result.capturedAtMs,
       },
     ].slice(-2);
@@ -2051,8 +2067,27 @@ async function prepareCaptureFrame(message, sender) {
     ok: true,
     frameId,
     capturedAtMs: result.capturedAtMs,
-    navigationKey: message.navigationKey,
+    navigationKey: storedNavigationKey,
+    viewportKey: storedViewportKey,
+    visualEpoch: storedVisualEpoch,
   };
+}
+
+function pageMovedError(error) {
+  return /page changed before KnowHow|moved to another site before its screenshot|preserve its pre-action screenshot/i.test(
+    String(error?.message || error || ""),
+  );
+}
+
+function newestReusablePreparedFrame(state) {
+  return newestSameTabPreparedFrame(
+    state?.preparedFrames,
+    {
+      sessionId: state?.sessionId,
+      tabId: state?.tabId,
+    },
+    { maxAgeMs: 12_000 },
+  );
 }
 
 async function captureFallbackFrame(
@@ -2064,6 +2099,39 @@ async function captureFallbackFrame(
   if (!entry || entry.status !== CaptureEntryStatus.CAPTURING) return;
   if (entry.frameId) return;
   const frameId = `interaction-${entry.id}`;
+
+  async function attachFrame(nextFrameId) {
+    const attached = await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      const current = captureEntry(latest, entryId);
+      if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
+        if (nextFrameId === frameId) {
+          await deleteCaptureFrame(state.sessionId, frameId).catch(
+            () => undefined,
+          );
+        }
+        return latest;
+      }
+      if (current.frameId && current.frameId !== nextFrameId) return latest;
+      const updated = {
+        ...updateCaptureEntry(latest, entryId, {
+          frameId: nextFrameId,
+          capturePending: false,
+        }),
+        preparedFrames: (latest.preparedFrames || []).filter(
+          (frame) => frame.id !== nextFrameId,
+        ),
+      };
+      await setCaptureState(updated);
+      return updated;
+    });
+    if (captureEntry(attached, entryId)?.frameId === nextFrameId) {
+      await finalizeInteractionEntry(entryId);
+      return true;
+    }
+    return false;
+  }
+
   try {
     let captureContext = {
       ...(entry.context || {}),
@@ -2103,32 +2171,20 @@ async function captureFallbackFrame(
           viewportKey: current.viewportKey,
           documentId: current.documentId,
           reserveSlot,
-          deadlineRequired: true,
+          deadlineRequired: false,
           hideLiveBlur,
         });
       },
       { deadlineMs },
     );
-    if (!result) {
-      throw new Error(
-        "KnowHow could not preserve the pre-action screenshot. Retry this step from the side panel.",
-      );
-    }
-    await withStateMutation(async () => {
+    let attachedId = result ? frameId : null;
+    if (!attachedId) {
       const latest = await getCaptureState();
-      const current = captureEntry(latest, entryId);
-      if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
-        await deleteCaptureFrame(state.sessionId, frameId).catch(() => undefined);
-        return latest;
-      }
-      const updated = updateCaptureEntry(latest, entryId, {
-        frameId,
-        capturePending: false,
-      });
-      await setCaptureState(updated);
-      return updated;
-    });
-    await finalizeInteractionEntry(entryId);
+      attachedId = newestReusablePreparedFrame(latest)?.id || null;
+    }
+    if (attachedId) {
+      await attachFrame(attachedId);
+    }
     await sendToCapturedTab(state, {
       type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
     });
@@ -2136,6 +2192,12 @@ async function captureFallbackFrame(
     await sendToCapturedTab(state, {
       type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
     });
+    if (pageMovedError(error)) {
+      const latest = await getCaptureState();
+      const reused = newestReusablePreparedFrame(latest);
+      if (reused) await attachFrame(reused.id);
+      return;
+    }
     await deleteCaptureFrame(state.sessionId, frameId).catch(() => undefined);
     await withStateMutation(async () => {
       const latest = await getCaptureState();
@@ -2375,6 +2437,14 @@ async function stageCaptureInteraction(message, sender) {
         `This capture reached the ${CAPTURE_LIMITS.maxSteps}-step safety limit.`,
       );
     }
+    const preparedCandidate = {
+      sessionId: current.sessionId,
+      tabId: sender.tab?.id,
+      documentId: sender.documentId || null,
+      navigationKey: message.navigationKey,
+      visualEpoch: message.visualEpoch,
+      viewportKey: message.viewportKey,
+    };
     const prepared = message.frameId
       ? (current.preparedFrames || []).find(
           (frame) =>
@@ -2383,15 +2453,16 @@ async function stageCaptureInteraction(message, sender) {
         )
       : newestEligiblePreparedFrame(
           current.preparedFrames,
-          {
-            sessionId: current.sessionId,
-            tabId: sender.tab?.id,
-            documentId: sender.documentId || null,
-            navigationKey: message.navigationKey,
-            visualEpoch: message.visualEpoch,
-            viewportKey: message.viewportKey,
-          },
+          preparedCandidate,
           { maxAgeMs: CAPTURE_LIMITS.preparedFrameMaxAgeMs },
+        ) ||
+        newestEligiblePreparedFrame(
+          current.preparedFrames,
+          preparedCandidate,
+          {
+            maxAgeMs: CAPTURE_LIMITS.preparedFrameMaxAgeMs,
+            ignoreVisualEpoch: true,
+          },
         );
     const reserved = reserveCaptureEntry(current, {
       id: message.interactionId,
@@ -3170,14 +3241,23 @@ async function attachSettledFrameToLastClick(details) {
         await deleteCaptureFrame(current.sessionId, frameId).catch(() => undefined);
         return current;
       }
-      const updated = updateCaptureEntry(current, entry.id, {
-        additionalFrameId: frameId,
-      });
+      const updated = updateCaptureEntry(
+        current,
+        entry.id,
+        currentEntry.frameId
+          ? { additionalFrameId: frameId }
+          : { frameId, capturePending: false },
+      );
       await setCaptureState(updated);
       return updated;
     });
     const attachedEntry = captureEntry(attached, entry.id);
     if (
+      attachedEntry?.status === CaptureEntryStatus.CAPTURING &&
+      attachedEntry.frameId === frameId
+    ) {
+      await finalizeInteractionEntry(attachedEntry.id);
+    } else if (
       attachedEntry?.status === CaptureEntryStatus.READY &&
       attachedEntry.additionalFrameId === frameId
     ) {

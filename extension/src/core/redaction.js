@@ -7,8 +7,6 @@ const FINANCIAL_PATTERN =
 const LONG_ID_PATTERN =
   /\b(?=[A-Z0-9-]{8,}\b)(?=(?:[A-Z0-9-]*\d){2,})[A-Z0-9][A-Z0-9-]{7,}\b/gi;
 const ANY_NUMBER_PATTERN = /\d+/g;
-const COMMON_NAME_PATTERN =
-  /\b[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\s+[A-Z][a-z]{1,30}(?:[-'][A-Z]?[a-z]+)?\b/g;
 
 function finite(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -178,7 +176,6 @@ export function detectSensitiveRanges(text, options = {}) {
     ],
     [options.redactIds === true, "identifier", LONG_ID_PATTERN],
     [options.redactAllNumbers === true, "number", ANY_NUMBER_PATTERN],
-    [options.redactCommonNames === true, "common-name", COMMON_NAME_PATTERN],
   ];
 
   for (const [enabled, reason, pattern] of detectors) {

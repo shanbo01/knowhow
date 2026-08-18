@@ -63,6 +63,27 @@ test("a policy stored before recommendations stopped enabling detectors is reset
   assert.equal(migrated.clickTargetColor, "#123456");
 });
 
+test("schema 5 clears leftover name and hidden-number detectors without dropping Email", () => {
+  const migrated = mergePolicy({
+    schemaVersion: 4,
+    smartBlurEnabled: true,
+    redactEmails: true,
+    redactCommonNames: true,
+    redactPhoneNumbers: true,
+    redactFinancialNumbers: true,
+    redactIds: true,
+    clickTargetColor: "#123456",
+  });
+  assert.equal(migrated.schemaVersion, CAPTURE_POLICY_SCHEMA_VERSION);
+  assert.equal(migrated.smartBlurEnabled, true);
+  assert.equal(migrated.redactEmails, true);
+  assert.equal(migrated.redactCommonNames, false);
+  assert.equal(migrated.redactPhoneNumbers, false);
+  assert.equal(migrated.redactFinancialNumbers, false);
+  assert.equal(migrated.redactIds, false);
+  assert.equal(migrated.clickTargetColor, "#123456");
+});
+
 test("only regular HTTP and HTTPS pages are eligible", () => {
   for (const url of [
     "chrome://settings",

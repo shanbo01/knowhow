@@ -3,10 +3,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const fixtureOrigin = `http://127.0.0.1:${process.env.KNOWHOW_E2E_PORT || "43117"}`;
 
 async function installRecorder(page, theme, options = {}) {
   await page.goto(
-    `http://127.0.0.1:43117/e2e/fixtures/${
+    `${fixtureOrigin}/e2e/fixtures/${
       options.fixture || `capture-${theme}.html`
     }`,
   );
@@ -269,10 +270,10 @@ for (const theme of ["light", "dark"]) {
 test("permanent blur destroys fine detail while retaining color and feathering", async ({
   page,
 }) => {
-  await page.goto("http://127.0.0.1:43117/e2e/fixtures/capture-light.html");
-  const metrics = await page.evaluate(async () => {
+  await page.goto(`${fixtureOrigin}/e2e/fixtures/capture-light.html`);
+  const metrics = await page.evaluate(async (origin) => {
     const { paintPermanentBlur } = await import(
-      "http://127.0.0.1:43117/src/offscreen/offscreen.js"
+      `${origin}/src/offscreen/offscreen.js`
     );
     document.body.replaceChildren();
     document.body.style.cssText =
@@ -370,7 +371,7 @@ test("permanent blur destroys fine detail while retaining color and feathering",
       haloDifference: meanDifference(before, after, 78, 56, 2, 48),
       outsideDifference: meanDifference(before, after, 70, 56, 4, 48),
     };
-  });
+  }, fixtureOrigin);
 
   expect(metrics.detailRatio).toBeLessThan(0.45);
   expect(metrics.colorDistance).toBeGreaterThan(45);
@@ -633,6 +634,30 @@ test("table rows cover ink, not the whole row, and stay clipped under chrome", a
       return rect.top >= chromeBottom - 2 || rect.bottom <= header.top + 2;
     });
   });
+});
+
+test("master Smart Blur with every menu detector off covers nothing", async ({
+  page,
+}) => {
+  await installRecorder(page, "dark", {
+    policy: {
+      smartBlurEnabled: true,
+      redactEmails: false,
+      redactPhoneNumbers: false,
+      redactFinancialNumbers: false,
+      redactIds: false,
+      redactAllNumbers: false,
+      redactFormFields: false,
+      redactImages: false,
+      redactTableRows: false,
+      redactLongText: false,
+    },
+  });
+  await expect(page.locator("#secret")).toBeVisible();
+  await expect(page.locator("#nested-frame")).toBeVisible();
+  await expect(
+    page.locator("[data-knowhow-blurred], .knowhow-blur-region"),
+  ).toHaveCount(0);
 });
 
 test("prepare screenshot hides live blur without tearing the overlay down", async ({

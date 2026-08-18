@@ -1,5 +1,4 @@
 import type {
-  AdminAppointment,
   AuditEvent,
   BootstrapResponse,
   Guide,
@@ -7,7 +6,6 @@ import type {
   Invitation,
   OrganizationAdministration,
   OrganizationRole,
-  PlatformWorkspace,
   SelfServiceSetup,
   SupportAccessGrant,
   SupportAccessRequest,
@@ -34,7 +32,6 @@ import {
   type OrganizationRecord,
   type GuideStepRecord,
   type RevisionRecord,
-  type SubscriptionRecord,
   type SupportGrantRecord,
   type WorkspaceGroupRecord,
   type WorkspaceMemberRecord,
@@ -44,12 +41,11 @@ import { TABLES } from "./appwrite-resources";
 import { authorize } from "./policy";
 import type { RecordData, RecordStore, StoredRecord } from "./record-store";
 import type { AuthenticatedIdentity } from "./session-identity";
-import { evaluateSubscription } from "./lifecycle-service";
-import {
-  LIFECYCLE_SIMULATION_CREATE_CONFIRMATION,
-  lifecycleSimulationAvailability,
-} from "./lifecycle-simulation-service";
 import { PricingCatalogService } from "./pricing-catalog-service";
+import { PlatformQueryService } from "./platform-query-service";
+import { toWorkspaceSubscriptionView } from "./commercial-plan";
+import { EntitlementService } from "./entitlement-service";
+import type { WorkspaceEntitlements } from "../knowhow-types";
 
 function stringValue(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -109,7 +105,17 @@ function summary(
   memberCount: number,
   guides: Guide[],
   lifecycle?: WorkspaceAccess["lifecycle"],
+  subscription?: WorkspaceAccess["subscription"],
 ): WorkspaceSummary {
+  const subscriptionView = toWorkspaceSubscriptionView(
+    subscription ?? null,
+    lifecycle ?? {
+      access: "active",
+      expiresAt: null,
+      graceEndsAt: null,
+      deletionEligibleAt: null,
+    },
+  );
   return {
     id: row.$id,
     organizationId: workspace.organizationId,
@@ -121,7 +127,7 @@ function summary(
     publishedCount: guides.filter((guide) => guide.publishedRevision).length,
     draftCount: guides.filter((guide) => guide.workingRevision).length,
     createdAt: workspace.createdAt,
-    ...(lifecycle ? { subscription: lifecycle } : {}),
+    ...(subscriptionView ? { subscription: subscriptionView } : {}),
   };
 }
 
@@ -220,11 +226,42 @@ async function loadGuideRows(
   return { guides, revisions, steps, audiences, reviews };
 }
 
+function guideEngagement(
+  guideId: string,
+  userId: string,
+  usageRows: Array<StoredRecord<RecordData>>,
+) {
+  const viewers = new Set<string>();
+  let likeCount = 0;
+  let dislikeCount = 0;
+  let viewerReaction: "like" | "dislike" | null = null;
+  for (const row of usageRows) {
+    if (stringValue(row.subject_id) !== guideId) continue;
+    if (row.kind === "guide.viewed") {
+      viewers.add(stringValue(row.user_id));
+    } else if (row.kind === "guide.liked") {
+      likeCount += 1;
+      if (stringValue(row.user_id) === userId) viewerReaction = "like";
+    } else if (row.kind === "guide.disliked") {
+      dislikeCount += 1;
+      if (stringValue(row.user_id) === userId) viewerReaction = "dislike";
+    }
+  }
+  return {
+    viewCount: viewers.size,
+    likeCount,
+    dislikeCount,
+    viewerReaction,
+  };
+}
+
 function hydrateGuides(
   identity: AuthenticatedIdentity,
   access: WorkspaceAccess,
   rows: GuideRows,
   members: WorkspaceMember[],
+  requireReviewBeforePublish: boolean,
+  usageRows: Array<StoredRecord<RecordData>> = [],
 ) {
   const accessServiceContext = {
     isVerifiedIdentity: true,
@@ -287,6 +324,7 @@ function hydrateGuides(
         privacyReviewed:
           revision.source === "manual" || Boolean(revision.privacyReviewedAt),
         reviewApproved: reviewApproved(revisionId, rows),
+        requireReviewBeforePublish,
       };
       if (
         !authorize("guide.read", { ...accessServiceContext, guide: facts })
@@ -308,7 +346,21 @@ function hydrateGuides(
     const editFacts = working?.facts ?? {
       revisionStatus: "draft" as const,
       isAuthor: source.authorUserId === identity.userId,
+      requireReviewBeforePublish,
     };
+    const canPublishWorking = working
+      ? authorize("guide.publish", {
+          ...accessServiceContext,
+          guide: working.facts,
+        }).allowed
+      : false;
+    const canChangeLiveAudience =
+      Boolean(published) &&
+      (access.roles.includes("administrator") ||
+        access.roles.includes("publisher") ||
+        (access.roles.includes("creator") &&
+          source.authorUserId === identity.userId &&
+          !requireReviewBeforePublish));
     guides.push({
       id: row.$id,
       workspaceId: access.workspaceRow.$id,
@@ -330,12 +382,9 @@ function hydrateGuides(
             guide: working.facts,
           }).allowed
         : false,
-      canPublish: working
-        ? authorize("guide.publish", {
-            ...accessServiceContext,
-            guide: working.facts,
-          }).allowed
-        : false,
+      canPublish: canPublishWorking,
+      canShare: canPublishWorking || canChangeLiveAudience,
+      canArchive: authorize("guide.archive", accessServiceContext).allowed,
       canDelete:
         access.roles.includes("administrator") ||
         access.roles.includes("publisher") ||
@@ -347,6 +396,7 @@ function hydrateGuides(
       screenshotsLockedAt: source.screenshotsLockedAt ?? undefined,
       publishedRevision: publishedView,
       workingRevision: workingView,
+      ...guideEngagement(row.$id, identity.userId, usageRows),
       revisionHistory: revisionRows.map((revisionRow) => {
         const revision = revisionSources.get(revisionRow.$id)!;
         return {
@@ -424,7 +474,6 @@ export class BootstrapService {
       mediaRows,
       onboardingRows,
       extensionDeviceRows,
-      editAuditRows,
     ] = await Promise.all([
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
       this.store.list(TABLES.workspaceMembers, { filters }),
@@ -461,15 +510,7 @@ export class BootstrapService {
           { field: "user_id", value: identity.userId },
           { field: "status", value: "active" },
         ],
-        limit: 1,
-      }),
-      this.store.list(TABLES.auditSegments, {
-        filters: [
-          { field: "workspace_id", value: workspaceId },
-          { field: "kind", value: "guide.updated" },
-        ],
-        order: "asc",
-        limit: 1,
+        limit: 20,
       }),
     ]);
     const members = memberRows.map(memberView);
@@ -479,15 +520,22 @@ export class BootstrapService {
         .filter((row) => row.user_id === member.userId)
         .map((row) => stringValue(row.subject_id));
     }
-    const guides = hydrateGuides(identity, access, guideRows, members);
-    const isAdmin =
-      access.roles.includes("administrator") && !access.supportGrant;
     const settings = settingRows[0]
       ? {
           ...DEFAULT_WORKSPACE_SETTINGS,
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
+    const guides = hydrateGuides(
+      identity,
+      access,
+      guideRows,
+      members,
+      settings.requireReviewBeforePublish,
+      usageRows,
+    );
+    const isAdmin =
+      access.roles.includes("administrator") && !access.supportGrant;
     const metrics = metricView(members, groups, guides, usageRows, mediaRows);
     const workspace = summary(
       access.workspaceRow,
@@ -496,12 +544,16 @@ export class BootstrapService {
       members.length,
       guides,
       access.lifecycle,
+      access.subscription,
     );
+    const entitlements =
+      (await new EntitlementService(this.store, workspaceId).snapshot()) as WorkspaceEntitlements;
     const onboardingRecord = onboardingRows[0]
       ? decodePayload<{
           startedAt?: string;
           readinessConfirmedAt?: string;
           dismissedAt?: string;
+          extensionPinnedAt?: string;
         }>(onboardingRows[0], {})
       : {};
     const firstUsageAt = (kind: string) =>
@@ -516,28 +568,26 @@ export class BootstrapService {
           .filter((row) => row.user_id !== identity.userId)
           .map((row) => row.$createdAt),
       ].sort()[0] ?? null;
-    const guideAuthors = new Map(
-      guideRows.guides.map((row) => [
-        row.$id,
-        decodePayload<GuideRecord>(row, null as never)?.authorUserId ?? "",
-      ]),
-    );
     const firstPublishedAt =
       firstUsageAt("activation.first_guide_published") ??
       firstUsageAt("guide.published");
-    const firstTeammateCompletionAt =
-      firstUsageAt("activation.first_teammate_completion") ??
-      usageRows
-        .filter(
-          (row) =>
-            row.kind === "guide.completed" &&
-            typeof row.subject_id === "string" &&
-            typeof row.user_id === "string" &&
-            guideAuthors.get(row.subject_id) !== row.user_id,
-        )
-        .map((row) => stringValue(row.occurred_at, row.$createdAt))
-        .sort()[0] ??
-      null;
+    const firstGuideAt =
+      guideRows.guides
+        .map((row) => stringValue(row.$createdAt))
+        .filter(Boolean)
+        .sort()[0] ?? firstUsageAt("capture.completed");
+    const pinnedAt =
+      [
+        ...(typeof onboardingRecord.extensionPinnedAt === "string"
+          ? [onboardingRecord.extensionPinnedAt]
+          : []),
+        ...extensionDeviceRows
+          .map(
+            (row) =>
+              decodePayload<{ toolbarPinnedAt?: string }>(row, {}).toolbarPinnedAt,
+          )
+          .filter((value): value is string => Boolean(value)),
+      ].sort()[0] ?? null;
     const onboardingSteps: WorkspaceBundle["onboarding"]["steps"] = [
       {
         id: "workspace_readiness",
@@ -549,30 +599,35 @@ export class BootstrapService {
         completed: Boolean(invitedAt),
         completedAt: invitedAt,
       },
-      {
-        id: "extension_installation",
-        completed: extensionDeviceRows.length > 0,
-        completedAt: extensionDeviceRows[0]?.$createdAt ?? null,
-      },
-      {
-        id: "first_capture",
-        completed: Boolean(firstUsageAt("capture.completed")),
-        completedAt: firstUsageAt("capture.completed"),
-      },
-      {
-        id: "first_edit",
-        completed: editAuditRows.length > 0,
-        completedAt: editAuditRows[0]?.$createdAt ?? null,
-      },
+      ...(entitlements.extensionEnabled
+        ? ([
+            {
+              id: "extension_installation" as const,
+              completed: extensionDeviceRows.length > 0,
+              completedAt: extensionDeviceRows[0]?.$createdAt ?? null,
+            },
+            {
+              id: "extension_pin" as const,
+              completed: Boolean(pinnedAt),
+              completedAt: pinnedAt,
+            },
+            {
+              id: "first_capture" as const,
+              completed: Boolean(firstUsageAt("capture.completed")),
+              completedAt: firstUsageAt("capture.completed"),
+            },
+          ] as const)
+        : ([
+            {
+              id: "first_guide" as const,
+              completed: Boolean(firstGuideAt),
+              completedAt: firstGuideAt,
+            },
+          ] as const)),
       {
         id: "first_publication",
         completed: Boolean(firstPublishedAt),
         completedAt: firstPublishedAt,
-      },
-      {
-        id: "teammate_completion",
-        completed: Boolean(firstTeammateCompletionAt),
-        completedAt: firstTeammateCompletionAt,
       },
     ];
     const onboardingCompletedAt = onboardingSteps.every(
@@ -708,6 +763,17 @@ export class BootstrapService {
 
     return {
       workspace: { ...workspace, settings },
+      entitlements: {
+        maximumUsers: entitlements.maximumUsers,
+        maximumCreators: entitlements.maximumCreators,
+        storageBytes: entitlements.storageBytes,
+        extensionEnabled: entitlements.extensionEnabled,
+        supportEnabled: entitlements.supportEnabled,
+        removeBranding: entitlements.removeBranding,
+        privacyToolsEnabled: entitlements.privacyToolsEnabled,
+        customSubdomainEnabled: entitlements.customSubdomainEnabled,
+        fileExportsEnabled: entitlements.fileExportsEnabled,
+      },
       metrics,
       members,
       groups,
@@ -867,202 +933,11 @@ export class BootstrapService {
     roles: PlatformRole[],
   ) {
     if (!roles.length) return undefined;
-    const workspaceRows = await this.store.list(TABLES.workspaces, {
-      order: "desc",
-    });
-    const subscriptionRows = await this.store.list(TABLES.subscriptions);
-    const memberRows = await this.store.list(TABLES.workspaceMembers);
-    const guideRows = await this.store.list(TABLES.guides);
-    const usageRows = await this.store.list(TABLES.usageEvents);
-    const mediaRows = await this.store.list(TABLES.privateMedia);
-    const supportCases = await this.store.list(TABLES.supportCases, {
-      filters: [{ field: "user_id", value: identity.userId }],
-    });
-    const supportGrants = await this.store.list(TABLES.supportGrants, {
-      filters: [{ field: "user_id", value: identity.userId }],
-    });
-    const workspaces: PlatformWorkspace[] = workspaceRows.map((row) => {
-      const workspace = decodePayload<WorkspaceRecord>(row, null as never);
-      const scopedMembers = memberRows.filter(
-        (member) => member.workspace_id === row.$id,
-      );
-      const scopedGuides = guideRows.filter(
-        (guide) => guide.workspace_id === row.$id,
-      );
-      const scopedUsage = usageRows.filter(
-        (usage) => usage.workspace_id === row.$id,
-      );
-      const scopedMedia = mediaRows.filter(
-        (media) => media.workspace_id === row.$id,
-      );
-      const administrators = scopedMembers
-        .map(memberView)
-        .filter(
-          (member) =>
-            member.status === "active" &&
-            member.roles.includes("administrator"),
-        )
-        .map((member) => ({
-          userId: member.userId,
-          name: member.name,
-          email: member.email,
-        }));
-      const count = (kind: string) =>
-        scopedUsage.filter((usage) => usage.kind === kind).length;
-      const request = supportCases.find(
-        (item) => item.workspace_id === row.$id,
-      );
-      const grant = supportGrants.find(
-        (item) =>
-          item.workspace_id === row.$id &&
-          item.status === "active" &&
-          Date.parse(stringValue(item.expires_at)) > Date.now(),
-      );
-      const requestDetails = request
-        ? decodePayload<Partial<SupportAccessRequest>>(request, {})
-        : null;
-      const grantDetails = grant
-        ? decodePayload<SupportGrantRecord>(grant, null as never)
-        : null;
-      const subscriptionRow = subscriptionRows.find(
-        (item) => item.workspace_id === row.$id && item.status !== "cancelled",
-      );
-      const subscriptionValue = subscriptionRow
-        ? decodePayload<SubscriptionRecord>(subscriptionRow, null as never)
-        : null;
-      return {
-        id: row.$id,
-        organizationId: workspace.organizationId,
-        name: workspace.name,
-        slug: workspace.slug,
-        status: workspace.status,
-        roles: [],
-        memberCount: scopedMembers.length,
-        publishedCount: scopedGuides.filter(
-          (guide) => guide.status === "published",
-        ).length,
-        draftCount: scopedGuides.filter(
-          (guide) => guide.status === "draft" || guide.status === "review",
-        ).length,
-        createdAt: workspace.createdAt,
-        administrators,
-        captures: count("capture.completed"),
-        views: count("guide.viewed"),
-        completions: count("guide.completed"),
-        exports: count("guide.exported"),
-        storageBytes: scopedMedia.reduce(
-          (total, media) =>
-            total +
-            numberValue(
-              decodePayload<{ byteSize?: number }>(media, {}).byteSize,
-            ),
-          0,
-        ),
-        failedOperations: count("operation.failed"),
-        ...(workspace.simulation
-          ? {
-              simulation: {
-                synthetic: true as const,
-                disposable: true as const,
-                lastState:
-                  typeof (workspace.simulation as { lastState?: unknown })
-                    .lastState === "string"
-                    ? String(
-                        (workspace.simulation as { lastState?: unknown })
-                          .lastState,
-                      )
-                    : "trial_active",
-                lastSimulatedAt:
-                  typeof (workspace.simulation as { lastSimulatedAt?: unknown })
-                    .lastSimulatedAt === "string"
-                    ? String(
-                        (
-                          workspace.simulation as {
-                            lastSimulatedAt?: unknown;
-                          }
-                        ).lastSimulatedAt,
-                      )
-                    : null,
-              },
-            }
-          : {}),
-        ...(subscriptionValue
-          ? { subscription: evaluateSubscription(subscriptionValue) }
-          : {}),
-        supportRequest:
-          request && requestDetails
-            ? {
-                id: request.$id,
-                status: stringValue(request.status, "pending") as "pending",
-                requestedRole: requestDetails.requestedRole ?? "viewer",
-                requestedDurationHours: numberValue(
-                  requestDetails.requestedDurationHours,
-                  1,
-                ),
-                reason: requestDetails.reason ?? "",
-                createdAt: request.$createdAt,
-              }
-            : null,
-        supportGrant:
-          grant && grantDetails
-            ? {
-                id: grant.$id,
-                role: grantDetails.role,
-                grantedAt: grantDetails.grantedAt,
-                expiresAt: grantDetails.expiresAt,
-              }
-            : null,
-      };
-    });
-    const settingsRows = await this.store.list(TABLES.catalogItems, {
-      filters: [{ field: "slug", value: "platform_settings" }],
-      limit: 1,
-    });
-    const settings = settingsRows[0]
-      ? decodePayload<{ selfServiceWorkspaceLimit: number }>(settingsRows[0], {
-          selfServiceWorkspaceLimit: 1,
-        })
-      : { selfServiceWorkspaceLimit: 1 };
-    const appointmentRows = await this.store.list(
-      TABLES.initialAdminAppointments,
-      {
+    const queues = await new PlatformQueryService(this.store).queues(identity);
+    const [appointmentRows, provisioningRows, pricingCatalogs] = await Promise.all([
+      this.store.list(TABLES.initialAdminAppointments, {
         filters: [{ field: "status", value: "active" }],
-      },
-    );
-    const appointments: AdminAppointment[] = appointmentRows.map((row) => ({
-      id: row.$id,
-      workspaceId: stringValue(row.workspace_id),
-      email: stringValue(row.email),
-      status: "active",
-      expiresAt: stringValue(row.expires_at),
-      createdAt: row.$createdAt,
-    }));
-    const active = workspaces.filter(
-      (workspace) => workspace.status === "active",
-    );
-    const [
-      organizationRows,
-      entitlementRows,
-      leadRows,
-      supportTicketRows,
-      notificationRows,
-      lifecycleRows,
-      provisioningRows,
-      platformAuditRows,
-      betaAccessGrants,
-      betaAccessEvents,
-      pricingCatalogs,
-    ] = await Promise.all([
-      this.store.list(TABLES.organizations, { order: "desc" }),
-      this.store.list(TABLES.entitlements),
-      this.store.list(TABLES.leads, { order: "desc", limit: 500 }),
-      this.store.list(TABLES.supportTickets, { order: "desc", limit: 500 }),
-      this.store.list(TABLES.notificationDeliveries, {
-        filters: [{ field: "status", value: "failed" }],
-        order: "desc",
-        limit: 500,
       }),
-      this.store.list(TABLES.lifecycleCases, { order: "desc", limit: 500 }),
       this.store.list(TABLES.provisioningRuns, {
         filters: [
           { field: "user_id", value: identity.userId },
@@ -1071,256 +946,36 @@ export class BootstrapService {
         order: "desc",
         limit: 25,
       }),
-      this.store.list(TABLES.auditSegments, { order: "desc", limit: 1_000 }),
-      new BetaAccessService(this.store).listGrants(),
-      new BetaAccessService(this.store).listEvents(),
       new PricingCatalogService(this.store).list(),
     ]);
-    const subscriptions = subscriptionRows.map((row) => {
-      const value = decodePayload<SubscriptionRecord>(row, null as never);
-      const evaluation = evaluateSubscription(value);
-      return {
-        id: row.$id,
-        workspaceId: stringValue(row.workspace_id),
-        kind: stringValue(row.kind, value?.kind ?? "design_partner"),
-        status: stringValue(row.status, value?.status ?? "active"),
-        access: evaluation.access,
-        startsAt: value?.startsAt ?? row.$createdAt,
-        expiresAt: evaluation.expiresAt,
-        graceEndsAt: evaluation.graceEndsAt,
-        deletionEligibleAt: evaluation.deletionEligibleAt,
-      };
-    });
-    const activation = workspaceRows.map((workspace) => {
-      const events = usageRows.filter(
-        (event) => event.workspace_id === workspace.$id,
-      );
-      const first = (kind: string) =>
-        events
-          .filter((event) => event.kind === kind)
-          .sort((left, right) =>
-            stringValue(left.occurred_at).localeCompare(
-              stringValue(right.occurred_at),
-            ),
-          )[0];
-      return {
-        workspaceId: workspace.$id,
-        firstPublishedAt: first("activation.first_guide_published")
-          ? stringValue(first("activation.first_guide_published")!.occurred_at)
-          : null,
-        firstTeammateViewAt: first("activation.first_teammate_view")
-          ? stringValue(first("activation.first_teammate_view")!.occurred_at)
-          : null,
-        firstTeammateCompletionAt: first("activation.first_teammate_completion")
-          ? stringValue(
-              first("activation.first_teammate_completion")!.occurred_at,
-            )
-          : null,
-      };
-    });
-    const now = Date.now();
-    const failedNotifications = notificationRows.length;
-    const overdueSupport = supportTicketRows.filter(
-      (row) =>
-        row.status === "waiting_support" &&
-        Date.parse(
-          stringValue(
-            decodePayload<{ responseTargetAt?: string }>(row, {})
-              .responseTargetAt,
-          ),
-        ) < now,
-    ).length;
-    const expiringWithinSevenDays = subscriptions.filter(
-      (item) =>
-        item.expiresAt &&
-        Date.parse(item.expiresAt) >= now &&
-        Date.parse(item.expiresAt) <= now + 7 * 86_400_000,
-    ).length;
-    const deletionApprovals = lifecycleRows.filter(
-      (row) => row.status === "awaiting_approval",
-    ).length;
     return {
-      generatedAt: new Date(now).toISOString(),
-      metrics: {
-        users: new Set(memberRows.map((member) => member.user_id)).size,
-        activeWorkspaces: active.length,
-        suspendedWorkspaces: workspaces.filter(
-          (workspace) => workspace.status === "suspended",
-        ).length,
-        archivedWorkspaces: workspaces.filter(
-          (workspace) => workspace.status === "archived",
-        ).length,
-        drafts: workspaces.reduce(
-          (total, workspace) => total + workspace.draftCount,
-          0,
-        ),
-        published: workspaces.reduce(
-          (total, workspace) => total + workspace.publishedCount,
-          0,
-        ),
-        captures: workspaces.reduce(
-          (total, workspace) => total + workspace.captures,
-          0,
-        ),
-        views: workspaces.reduce(
-          (total, workspace) => total + workspace.views,
-          0,
-        ),
-        completions: workspaces.reduce(
-          (total, workspace) => total + workspace.completions,
-          0,
-        ),
-        exports: workspaces.reduce(
-          (total, workspace) => total + workspace.exports,
-          0,
-        ),
-        storageBytes: workspaces.reduce(
-          (total, workspace) => total + workspace.storageBytes,
-          0,
-        ),
-        failedOperations: workspaces.reduce(
-          (total, workspace) => total + workspace.failedOperations,
-          0,
-        ),
-      },
-      workspaces,
-      settings,
-      appointments,
-      organizations: organizationRows.map((row) => {
-        const organization = decodePayload<{
-          displayName?: string;
-          legalName?: string;
-          country?: string;
-          createdAt?: string;
-        }>(row, {});
-        return {
-          id: row.$id,
-          displayName: organization.displayName ?? "Organization",
-          legalName: organization.legalName ?? "",
-          country: organization.country ?? "",
-          status: stringValue(row.status),
-          workspaceCount: workspaceRows.filter(
-            (workspace) => workspace.organization_id === row.$id,
-          ).length,
-          createdAt: organization.createdAt ?? row.$createdAt,
-        };
-      }),
-      subscriptions,
-      entitlements: entitlementRows.map((row) => ({
+      generatedAt: new Date().toISOString(),
+      settings: queues.settings,
+      queueCounts: queues.counts,
+      appointments: appointmentRows.map((row) => ({
         id: row.$id,
         workspaceId: stringValue(row.workspace_id),
-        kind: stringValue(row.kind),
-        value:
-          decodePayload<{ value?: string | number | boolean }>(row, {}).value ??
-          false,
+        email: stringValue(row.email),
+        status: "active" as const,
+        expiresAt: stringValue(row.expires_at),
+        createdAt: row.$createdAt,
       })),
-      leads: leadRows.map((row) => {
-        const lead = decodePayload<{ organization?: string; name?: string }>(
-          row,
-          {},
-        );
-        return {
-          id: row.$id,
-          kind: stringValue(row.kind),
-          status: stringValue(row.status),
-          organization: lead.organization ?? "",
-          contactName: lead.name ?? "",
-          email: stringValue(row.email),
-          occurredAt: stringValue(row.occurred_at, row.$createdAt),
-        };
-      }),
-      activation,
-      support: supportTicketRows.map((row) => {
-        const ticket = decodePayload<{
-          requesterName?: string;
-          responseTargetAt?: string;
-          updatedAt?: string;
-        }>(row, {});
-        return {
-          id: row.$id,
-          workspaceId: stringValue(row.workspace_id),
-          status: stringValue(row.status),
-          requesterName: ticket.requesterName ?? "Workspace member",
-          responseTargetAt: ticket.responseTargetAt ?? row.$createdAt,
-          updatedAt: ticket.updatedAt ?? row.$updatedAt,
-        };
-      }),
-      notificationFailures: notificationRows.map((row) => {
-        const notification = decodePayload<{
-          attempts?: number;
-          lastFailedAt?: string;
-        }>(row, {});
-        return {
-          id: row.$id,
-          workspaceId: stringValue(row.workspace_id),
-          kind: stringValue(row.kind),
-          attempts: numberValue(notification.attempts),
-          lastFailedAt: notification.lastFailedAt ?? row.$updatedAt,
-        };
-      }),
-      deletionCases: lifecycleRows.map((row) => {
-        const lifecycle = decodePayload<{
-          eligibleAt?: string;
-          confirmationText?: string;
-        }>(row, {});
-        return {
-          id: row.$id,
-          organizationId: stringValue(row.organization_id),
-          workspaceId: stringValue(row.workspace_id),
-          status: stringValue(row.status),
-          eligibleAt: lifecycle.eligibleAt ?? stringValue(row.scheduled_at),
-          ...(roles.includes("owner") && lifecycle.confirmationText
-            ? { confirmationText: lifecycle.confirmationText }
-            : {}),
-        };
-      }),
       provisioningRuns: provisioningRows.map((row) => {
         const run = decodePayload<{
           currentStep?: number;
           completedSteps?: number[];
           updatedAt?: string;
+          steps?: Record<string, Record<string, unknown>>;
         }>(row, {});
         return {
           id: row.$id,
           currentStep: numberValue(run.currentStep, 1),
           completedSteps: run.completedSteps ?? [],
           updatedAt: run.updatedAt ?? row.$updatedAt,
-          steps: decodePayload<{
-            steps?: Record<string, Record<string, unknown>>;
-          }>(row, {}).steps,
+          steps: run.steps,
         };
       }),
-      betaAccess: { grants: betaAccessGrants, events: betaAccessEvents },
       pricingCatalogs,
-      lifecycleSimulation: {
-        ...lifecycleSimulationAvailability(),
-        createConfirmation: LIFECYCLE_SIMULATION_CREATE_CONFIRMATION,
-        states: [
-          "trial_active",
-          "near_expiry",
-          "read_only",
-          "suspended",
-          "retention",
-          "deletion_eligible",
-          "pending_deletion",
-        ] as const,
-      },
-      systemHealth: {
-        failedNotifications,
-        overdueSupport,
-        expiringWithinSevenDays,
-        deletionApprovals,
-        failedOperations: workspaces.reduce(
-          (total, workspace) => total + workspace.failedOperations,
-          0,
-        ),
-      },
-      platformAudits: platformAuditRows.map((row) => ({
-        id: row.$id,
-        workspaceId: stringValue(row.workspace_id),
-        action: stringValue(decodePayload<{ action?: string }>(row, {}).action),
-        occurredAt: stringValue(row.occurred_at, row.$createdAt),
-      })),
     };
   }
 
@@ -1330,10 +985,11 @@ export class BootstrapService {
   ): Promise<Guide[]> {
     const access = await this.access.requireWorkspace(workspaceId, identity);
     const filters = [{ field: "workspace_id", value: workspaceId }] as const;
-    const [memberRows, groupMembershipRows, guideRows] = await Promise.all([
+    const [memberRows, groupMembershipRows, guideRows, settingRows] = await Promise.all([
       this.store.list(TABLES.workspaceMembers, { filters }),
       this.store.list(TABLES.groupMemberships, { filters }),
       loadGuideRows(this.store, workspaceId),
+      this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
     ]);
     const members = memberRows.map(memberView);
     for (const member of members) {
@@ -1341,7 +997,19 @@ export class BootstrapService {
         .filter((row) => row.user_id === member.userId)
         .map((row) => stringValue(row.subject_id));
     }
-    return hydrateGuides(identity, access, guideRows, members);
+    const settings = settingRows[0]
+      ? {
+          ...DEFAULT_WORKSPACE_SETTINGS,
+          ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
+        }
+      : DEFAULT_WORKSPACE_SETTINGS;
+    return hydrateGuides(
+      identity,
+      access,
+      guideRows,
+      members,
+      settings.requireReviewBeforePublish,
+    );
   }
 
   async bootstrap(
@@ -1449,6 +1117,8 @@ export class BootstrapService {
               canEdit: false,
               canReview: false,
               canPublish: false,
+              canShare: false,
+              canArchive: false,
               canDelete: false,
               createdAt: value.createdAt,
               updatedAt: value.updatedAt,
@@ -1457,6 +1127,7 @@ export class BootstrapService {
             };
           }),
           access.lifecycle,
+          access.subscription,
         ),
       );
     }

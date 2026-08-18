@@ -151,6 +151,61 @@ test("captured publication requires approval, privacy review, and publisher role
   );
 });
 
+test("share-first policy lets authors publish drafts unless review is required", () => {
+  const draft: GuideAuthorizationFacts = {
+    revisionStatus: "draft",
+    isAuthor: true,
+    privacyReviewed: true,
+  };
+  assert.equal(
+    authorize("guide.publish", context(["creator"], draft)).allowed,
+    true,
+  );
+  assert.equal(
+    authorize(
+      "guide.publish",
+      context(["creator"], { ...draft, isAuthor: false }),
+    ).code,
+    "PUBLISHER_REQUIRED",
+  );
+  assert.equal(
+    authorize(
+      "guide.publish",
+      context(["creator"], { ...draft, requireReviewBeforePublish: true }),
+    ).code,
+    "GUIDE_REVIEW_STATE_REQUIRED",
+  );
+  assert.equal(
+    authorize(
+      "guide.publish",
+      context(["administrator"], {
+        ...draft,
+        isAuthor: false,
+        requireReviewBeforePublish: true,
+      }),
+    ).allowed,
+    true,
+  );
+  assert.equal(
+    authorize(
+      "guide.publish",
+      context(["publisher"], { ...draft, isAuthor: false }),
+    ).allowed,
+    true,
+  );
+  assert.equal(
+    authorize(
+      "guide.publish",
+      context(["creator"], {
+        ...draft,
+        sourceType: "capture",
+        privacyReviewed: false,
+      }),
+    ).code,
+    "PRIVACY_REVIEW_REQUIRED",
+  );
+});
+
 test("temporary support access cannot become governance or platform authority", () => {
   const support: AuthorizationContext = {
     ...context(["administrator"]),

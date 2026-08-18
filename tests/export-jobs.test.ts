@@ -9,6 +9,7 @@ import {
   type RevisionRecord,
 } from "../lib/server/domain-records";
 import {
+  completeDueExportJob,
   processExportJob,
   verifiedExportObject,
 } from "../lib/server/export-job-service";
@@ -142,6 +143,114 @@ async function seedPublishedGuide(store: InMemoryRecordStore) {
   return { organizationId, workspaceId, userId, guideId, revisionId };
 }
 
+async function seedShareFirstPublishedGuide(store: InMemoryRecordStore) {
+  const { organizationId, workspaceId } = await seedWorkspace(store, {
+    workspaceId: "workspace_share_export",
+  });
+  const userId = "sharer";
+  await seedWorkspaceMember(store, {
+    organizationId,
+    workspaceId,
+    userId,
+    email: "sharer@acme.example",
+    roles: ["administrator", "creator"],
+  });
+  const guideId = "guide_share_export";
+  const revisionId = "revision_share_export";
+  const now = "2026-08-18T00:00:00.000Z";
+  const guide: GuideRecord = {
+    title: "Share-first printer reset",
+    slug: "share-first-printer-reset",
+    authorUserId: userId,
+    publishedRevisionId: revisionId,
+    workingRevisionId: null,
+    screenshotsLockedAt: now,
+    archivedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const revision: RevisionRecord = {
+    guideId,
+    number: 1,
+    status: "published",
+    title: guide.title,
+    summary: "Share without a review gate.",
+    category: "Printing",
+    tags: ["printer"],
+    systemReferences: [],
+    authorId: userId,
+    createdAt: now,
+    updatedAt: now,
+    publishedBy: userId,
+    publishedAt: now,
+    source: "manual",
+  };
+  await store.create(
+    TABLES.guides,
+    guideId,
+    rowData(
+      {
+        organization_id: organizationId,
+        workspace_id: workspaceId,
+        slug: guide.slug,
+        status: "published",
+        created_by: userId,
+      },
+      guide,
+    ),
+  );
+  await store.create(
+    TABLES.guideRevisions,
+    revisionId,
+    rowData(
+      {
+        organization_id: organizationId,
+        workspace_id: workspaceId,
+        subject_id: guideId,
+        status: "published",
+        version: 1,
+        created_by: userId,
+      },
+      revision,
+    ),
+  );
+  await store.create(
+    TABLES.guideSteps,
+    "step_share_export",
+    rowData(
+      {
+        organization_id: organizationId,
+        workspace_id: workspaceId,
+        subject_id: revisionId,
+        sequence: 1,
+        kind: "heading",
+        status: "published",
+      },
+      {
+        id: "step_share_export",
+        kind: "heading",
+        title: "Clear the queue",
+        description: "",
+      },
+    ),
+  );
+  await store.create(
+    TABLES.guideAudiences,
+    "audience_share_export",
+    rowData(
+      {
+        organization_id: organizationId,
+        workspace_id: workspaceId,
+        subject_id: revisionId,
+        kind: "workspace",
+        status: "active",
+      },
+      { kind: "workspace", workspaceId },
+    ),
+  );
+  return { organizationId, workspaceId, userId, guideId, revisionId };
+}
+
 test("asynchronous exports lease, render, hash, and replay idempotently", async () => {
   const store = new InMemoryRecordStore();
   const privateObjects = new InMemoryPrivateObjectStore();
@@ -182,20 +291,19 @@ test("asynchronous exports lease, render, hash, and replay idempotently", async 
     ),
   );
 
-  const completed = await processExportJob(
+  const completedRow = await completeDueExportJob(
     store,
     privateObjects,
     exportObjects,
     jobId,
     new Date("2026-08-01T00:00:01.000Z"),
   );
-  assert.equal(completed.status, "ready");
-  assert.ok("byteSize" in completed);
+  assert.equal(completedRow.status, "ready");
   const row = await store.get(TABLES.exportJobs, jobId);
   assert.equal(row?.status, "ready");
   const ready = decodePayload<ExportJobRecord>(row, details);
   assert.equal(ready.attempts, 1);
-  assert.equal(ready.byteSize, completed.byteSize);
+  assert.ok(ready.byteSize);
   assert.match(ready.sha256 ?? "", /^[a-f0-9]{64}$/);
   const object = await verifiedExportObject(exportObjects, ready);
   assert.match(new TextDecoder().decode(object.bytes), /Reset a Printer Queue/);
@@ -215,6 +323,76 @@ test("asynchronous exports lease, render, hash, and replay idempotently", async 
     ).attempts,
     1,
   );
+});
+
+test("share-first published guides export without a review receipt", async () => {
+  const store = new InMemoryRecordStore();
+  const privateObjects = new InMemoryPrivateObjectStore();
+  const exportObjects = new InMemoryPrivateObjectStore();
+  const seeded = await seedShareFirstPublishedGuide(store);
+  const jobId = "export_share_00000000000000000000001";
+  const details: ExportJobRecord = {
+    guideId: seeded.guideId,
+    revisionId: seeded.revisionId,
+    format: "markdown",
+    filename: "share-first-printer-reset.md",
+    outputFileId: "output_share_00000000000000000000001",
+    requestedAt: "2026-08-18T00:00:01.000Z",
+    requester: {
+      userId: seeded.userId,
+      name: "Sharer",
+      email: "sharer@acme.example",
+    },
+    attempts: 0,
+    watermarked: false,
+  };
+  await store.create(
+    TABLES.exportJobs,
+    jobId,
+    rowData(
+      {
+        organization_id: seeded.organizationId,
+        workspace_id: seeded.workspaceId,
+        user_id: seeded.userId,
+        subject_id: seeded.revisionId,
+        status: "queued",
+        kind: "markdown",
+        idempotency_key: "export-share-key",
+        request_id: "request-export-share",
+        scheduled_at: details.requestedAt,
+      },
+      details,
+    ),
+  );
+
+  const completedRow = await completeDueExportJob(
+    store,
+    privateObjects,
+    exportObjects,
+    jobId,
+    new Date("2026-08-18T00:00:02.000Z"),
+  );
+  assert.equal(completedRow.status, "ready");
+  const ready = decodePayload<ExportJobRecord>(
+    await store.get(TABLES.exportJobs, jobId),
+    details,
+  );
+  const object = await verifiedExportObject(exportObjects, ready);
+  assert.match(new TextDecoder().decode(object.bytes), /Share\\-first printer reset/);
+  const drifted = {
+    async get(id: string) {
+      const inner = await exportObjects.get(id);
+      return inner
+        ? { ...inner, contentType: "application/octet-stream", filename: "stored.bin" }
+        : null;
+    },
+    put: exportObjects.put.bind(exportObjects),
+    delete: exportObjects.delete.bind(exportObjects),
+    clone: exportObjects.clone.bind(exportObjects),
+  };
+  const served = await verifiedExportObject(drifted, ready);
+  assert.equal(served.contentType, ready.contentType);
+  assert.equal(served.filename, ready.filename);
 });
 
 test("failed exports retry with bounded attempts and no output", async () => {

@@ -68,6 +68,22 @@ const nextConfig: NextConfig = {
   },
   // The unpacked local KnowHow extension has a stable Chrome origin.
   allowedDevOrigins: ["phbofjenfnnnnndghhinoldlfbpaedpo"],
+  async redirects() {
+    return [
+      { source: "/product", destination: "/#product", permanent: false },
+      { source: "/how-it-works", destination: "/#how", permanent: false },
+      { source: "/pricing", destination: "/#pricing", permanent: false },
+      { source: "/use-cases", destination: "/", permanent: false },
+      { source: "/internal-it", destination: "/", permanent: false },
+      { source: "/employee-onboarding", destination: "/", permanent: false },
+      { source: "/operational-procedures", destination: "/", permanent: false },
+      { source: "/compliance-evidence", destination: "/", permanent: false },
+      { source: "/customer-service-desk-procedures", destination: "/", permanent: false },
+      { source: "/software-training", destination: "/", permanent: false },
+      { source: "/request-demo", destination: "/contact", permanent: false },
+      { source: "/request-pilot", destination: "/contact", permanent: false },
+    ];
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

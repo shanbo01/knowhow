@@ -13,7 +13,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 import {
   AuthGate,
   MfaEnrollmentGate,
@@ -22,13 +21,11 @@ import {
   type BackendState,
 } from "./auth-gate";
 import {
-  AssignAdminDialog,
   OrganizationView,
   PlatformProvisioningDialog,
-  PlatformView,
   KnowHowWorkspaceApp,
-  SupportRequestDialog,
 } from "./knowhow-workspace-app";
+import { PlatformApp } from "./platform/platform-app";
 import { ProductBrand } from "./product-brand";
 import {
   SelfServiceSetup,
@@ -57,15 +54,14 @@ import type { NavigationGuard } from "../../lib/navigation-guard";
 import type {
   BootstrapResponse,
   OrganizationAdministration,
-  OrganizationRole,
-  PlatformProvisioningResult,
-  PlatformWorkspace,
-  WorkspaceRole,
-} from "../../lib/knowhow-types";
+          OrganizationRole,
+          PlatformProvisioningResult,
+        } from "../../lib/knowhow-types";
 import {
   guideEditorHref,
   guideHref,
   parseAppRoute,
+  platformHref,
   routeWorkspaceSlug,
   workspaceHref,
   type AppRoute,
@@ -79,6 +75,7 @@ function errorMessage(error: unknown) {
 const PENDING_INVITE_KEY = "knowhow-pending-invite";
 const PENDING_APPOINTMENT_KEY = "knowhow-pending-appointment";
 const PENDING_BETA_ACCESS_KEY = "knowhow-pending-beta-access";
+const PENDING_SIGNUP_PLAN_KEY = "knowhow-pending-signup-plan";
 
 function locationKeyFromWindow() {
   if (typeof window === "undefined") return "/";
@@ -97,6 +94,17 @@ function rememberAppointmentFromLocation() {
   const token = new URLSearchParams(window.location.search).get("appointment");
   if (token) window.sessionStorage.setItem(PENDING_APPOINTMENT_KEY, token);
   return token ?? window.sessionStorage.getItem(PENDING_APPOINTMENT_KEY);
+}
+
+function rememberSignupPlanFromLocation() {
+  if (typeof window === "undefined") return "pro_trial";
+  const plan = new URLSearchParams(window.location.search).get("plan");
+  if (plan === "free" || plan === "pro_trial") {
+    window.sessionStorage.setItem(PENDING_SIGNUP_PLAN_KEY, plan);
+    return plan;
+  }
+  const stored = window.sessionStorage.getItem(PENDING_SIGNUP_PLAN_KEY);
+  return stored === "free" || stored === "pro_trial" ? stored : "pro_trial";
 }
 
 function rememberBetaAccessFromLocation() {
@@ -362,22 +370,12 @@ function WorkspaceOnboarding({
   organizations,
   busy,
   error,
-  route,
   onNavigate,
   onSaveProvisioning,
   onCompleteProvisioning,
   onAppointOrganizationMember,
   onUpdateOrganizationMember,
-  onSetWorkspaceStatus,
-  onAssignAdministrator,
-  onRequestSupport,
-  onExtendSubscription,
-  onConvertSubscription,
-  onApproveDeletion,
   onRevokeAppointment,
-  onCreateBetaAccess,
-  onRevokeBetaAccess,
-  onPlatformControl,
   onSignOut,
 }: {
   viewerName: string;
@@ -386,7 +384,6 @@ function WorkspaceOnboarding({
   organizations: OrganizationAdministration[];
   busy: boolean;
   error: string;
-  route: AppRoute;
   onNavigate: (href: string) => void;
   onSaveProvisioning: (
     runId: string | null,
@@ -419,61 +416,13 @@ function WorkspaceOnboarding({
     roles: OrganizationRole[],
     status: "active" | "revoked",
   ) => Promise<unknown>;
-  onSetWorkspaceStatus: (
-    workspaceId: string,
-    status: "active" | "suspended" | "archived",
-  ) => Promise<void>;
-  onAssignAdministrator: (workspaceId: string, email: string) => Promise<void>;
-  onRequestSupport: (
-    workspaceId: string,
-    requestedRole: WorkspaceRole,
-    reason: string,
-    requestedDurationHours: number,
-  ) => Promise<void>;
-  onExtendSubscription: (
-    workspaceId: string,
-    expiresAt: string,
-    graceDays: number,
-    retentionDays: number,
-  ) => Promise<unknown>;
-  onConvertSubscription: (
-    workspaceId: string,
-    manualReference: string,
-    expiresAt: string | null,
-  ) => Promise<unknown>;
-  onApproveDeletion: (caseId: string, confirmation: string) => Promise<unknown>;
   onRevokeAppointment: (appointmentId: string) => Promise<void>;
-  onCreateBetaAccess: (input: {
-    label?: string;
-    email?: string;
-    expiresAt: string;
-    maxUses: number;
-  }) => Promise<{
-    grant: NonNullable<
-      BootstrapResponse["platform"]
-    >["betaAccess"]["grants"][number];
-    code: string;
-  }>;
-  onRevokeBetaAccess: (grantId: string) => Promise<unknown>;
-  onPlatformControl: (
-    action:
-      | "createPricingCatalog"
-      | "updatePricingCatalog"
-      | "retirePricingCatalog"
-      | "createLifecycleSimulationTenant"
-      | "simulateLifecycleState",
-    payload: Record<string, unknown>,
-    successMessage: string,
-  ) => Promise<unknown>;
   onSignOut: () => Promise<void>;
 }) {
   const [provisioningOpen, setProvisioningOpen] = useState(false);
+  const [provisioningRunId, setProvisioningRunId] = useState<string | undefined>();
   const [accessLink, setAccessLink] = useState("");
   const [accessLinkError, setAccessLinkError] = useState("");
-  const [assigningWorkspace, setAssigningWorkspace] =
-    useState<PlatformWorkspace | null>(null);
-  const [requestingWorkspace, setRequestingWorkspace] =
-    useState<PlatformWorkspace | null>(null);
 
   function redeemAccessLink() {
     setAccessLinkError("");
@@ -624,77 +573,38 @@ function WorkspaceOnboarding({
           className="onboarding-platform"
           aria-label="Platform administration"
         >
-          <PlatformView
-            platform={platform}
-            busy={busy}
-            section={route.kind === "platform" ? route.section : "overview"}
-            workspaceId={route.kind === "platform" ? route.workspaceId : undefined}
-            onNavigate={onNavigate}
-            onProvision={() => setProvisioningOpen(true)}
-            onStatus={(workspaceId, status) => {
-              if (
-                !window.confirm(
-                  `${status === "active" ? "Restore" : status === "suspended" ? "Suspend" : "Archive"} this workspace?`,
-                )
-              )
-                return;
-              void onSetWorkspaceStatus(workspaceId, status).catch(
-                () => undefined,
-              );
-            }}
-            onAssign={setAssigningWorkspace}
-            onRequestSupport={setRequestingWorkspace}
-            onExtendSubscription={onExtendSubscription}
-            onConvertSubscription={onConvertSubscription}
-            onApproveDeletion={onApproveDeletion}
-            canManageBetaAccess={canCreateWorkspace}
-            onCreateBetaAccess={onCreateBetaAccess}
-            onRevokeBetaAccess={onRevokeBetaAccess}
-            canManagePlatformControls={canCreateWorkspace}
-            onPlatformControl={onPlatformControl}
-            onRevokeAppointment={(appointment) => {
-              if (
-                window.confirm(
-                  `Revoke the administrator appointment for ${appointment.email}?`,
-                )
-              )
-                void onRevokeAppointment(appointment.id).catch(() => undefined);
-            }}
-          />
+          <div className="create-workspace-form">
+            <div className="section-heading compact">
+              <div>
+                <h2>Platform console</h2>
+                <p>
+                  Operator queues, customer profiles, inbound leads, and
+                  commercial controls live in the dedicated console.
+                </p>
+              </div>
+            </div>
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => onNavigate(platformHref())}
+            >
+              Open platform console
+            </button>
+          </div>
         </section>
-      ) : null}
-      {assigningWorkspace ? (
-        <AssignAdminDialog
-          workspace={assigningWorkspace}
-          busy={busy}
-          onClose={() => setAssigningWorkspace(null)}
-          onAssign={async (email) => {
-            await onAssignAdministrator(assigningWorkspace.id, email);
-            setAssigningWorkspace(null);
-          }}
-        />
-      ) : null}
-      {requestingWorkspace ? (
-        <SupportRequestDialog
-          workspace={requestingWorkspace}
-          busy={busy}
-          onClose={() => setRequestingWorkspace(null)}
-          onRequest={async (requestedRole, reason, requestedDurationHours) => {
-            await onRequestSupport(
-              requestingWorkspace.id,
-              requestedRole,
-              reason,
-              requestedDurationHours,
-            );
-            setRequestingWorkspace(null);
-          }}
-        />
       ) : null}
       {provisioningOpen && platform ? (
         <PlatformProvisioningDialog
           busy={busy}
-          initialRun={platform.provisioningRuns[0]}
-          onClose={() => setProvisioningOpen(false)}
+          initialRun={
+            provisioningRunId
+              ? platform.provisioningRuns.find((run) => run.id === provisioningRunId)
+              : platform.provisioningRuns[0]
+          }
+          onClose={() => {
+            setProvisioningOpen(false);
+            setProvisioningRunId(undefined);
+          }}
           onSave={onSaveProvisioning}
           onComplete={onCompleteProvisioning}
         />
@@ -891,6 +801,7 @@ export default function Home() {
     const invite = rememberInviteFromLocation();
     const appointment = appointmentFromLocation();
     const betaAccess = rememberBetaAccessFromLocation();
+    rememberSignupPlanFromLocation();
     setAppointmentToken(appointment);
     setSignupCredential(
       invite
@@ -1200,139 +1111,6 @@ export default function Home() {
       await openWorkspace(workspaceId);
     } catch (nextError) {
       setError(errorMessage(nextError));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const setPlatformWorkspaceStatus = async (
-    workspaceId: string,
-    status: "active" | "suspended" | "archived",
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      await knowhowCommand("setWorkspaceStatus", {
-        targetWorkspaceId: workspaceId,
-        status,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const assignPlatformWorkspaceAdministrator = async (
-    workspaceId: string,
-    email: string,
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      await knowhowCommand("assignWorkspaceAdministrator", {
-        targetWorkspaceId: workspaceId,
-        email,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const requestSupportAccess = async (
-    workspaceId: string,
-    requestedRole: WorkspaceRole,
-    reason: string,
-    requestedDurationHours: number,
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      await knowhowCommand("requestSupportAccess", {
-        workspaceId,
-        requestedRole,
-        reason,
-        requestedDurationHours,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const extendPlatformSubscription = async (
-    workspaceId: string,
-    expiresAt: string,
-    graceDays: number,
-    retentionDays: number,
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await knowhowCommand("extendSubscription", {
-        targetWorkspaceId: workspaceId,
-        expiresAt,
-        graceDays,
-        retentionDays,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-      return result;
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const convertPlatformSubscription = async (
-    workspaceId: string,
-    manualReference: string,
-    expiresAt: string | null,
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await knowhowCommand("convertSubscription", {
-        targetWorkspaceId: workspaceId,
-        manualReference,
-        expiresAt,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-      return result;
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const approvePlatformDeletion = async (
-    caseId: string,
-    confirmation: string,
-  ) => {
-    setBusy(true);
-    setError("");
-    try {
-      const result = await knowhowCommand("approveDeletionCase", {
-        caseId,
-        confirmation,
-      });
-      await loadBootstrap(activeWorkspaceId || undefined);
-      return result;
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-      throw nextError;
     } finally {
       setBusy(false);
     }
@@ -1665,6 +1443,27 @@ export default function Home() {
     );
   }
 
+  if (
+    route.kind === "platform" &&
+    bootstrap.viewer.platformAdministrator &&
+    bootstrap.platform
+  ) {
+    return (
+      <>
+        <PlatformApp
+          viewer={bootstrap.viewer}
+          platform={bootstrap.platform}
+          route={route}
+          activeWorkspaceSlug={bootstrap.activeWorkspace?.workspace.slug}
+          onNavigate={navigate}
+          onRefresh={() => loadBootstrap(activeWorkspaceId || undefined)}
+          onSignOut={signOut}
+        />
+        {reauthenticationGate}
+      </>
+    );
+  }
+
   if (bootstrap.recovery) {
     return (
       <SubscriptionRecovery
@@ -1732,9 +1531,13 @@ export default function Home() {
                 const result = await knowhowCommand<{
                   workspaceId: string;
                   workspaceSlug: string;
-                }>("completeSelfServiceSetup", draft);
+                }>("completeSelfServiceSetup", {
+                  ...draft,
+                  plan: rememberSignupPlanFromLocation(),
+                });
                 if (typeof window !== "undefined") {
                   window.sessionStorage.removeItem(PENDING_BETA_ACCESS_KEY);
+                  window.sessionStorage.removeItem(PENDING_SIGNUP_PLAN_KEY);
                 }
                 setSignupCredential(null);
                 await openWorkspace(result.workspaceId, true);
@@ -1765,7 +1568,6 @@ export default function Home() {
           organizations={bootstrap.organizations ?? []}
           busy={busy}
           error={error}
-          route={route}
           onNavigate={navigate}
           onSaveProvisioning={async (runId, step, data) => {
             setBusy(true);
@@ -1866,62 +1668,6 @@ export default function Home() {
                 status,
               });
               await loadBootstrap(activeWorkspaceId || undefined);
-              return result;
-            } catch (nextError) {
-              setError(errorMessage(nextError));
-              throw nextError;
-            } finally {
-              setBusy(false);
-            }
-          }}
-          onSetWorkspaceStatus={setPlatformWorkspaceStatus}
-          onAssignAdministrator={assignPlatformWorkspaceAdministrator}
-          onRequestSupport={requestSupportAccess}
-          onExtendSubscription={extendPlatformSubscription}
-          onConvertSubscription={convertPlatformSubscription}
-          onApproveDeletion={approvePlatformDeletion}
-          onCreateBetaAccess={async (input) => {
-            setBusy(true);
-            setError("");
-            try {
-              const result = await knowhowCommand<{
-                grant: NonNullable<
-                  BootstrapResponse["platform"]
-                >["betaAccess"]["grants"][number];
-                code: string;
-              }>("createBetaAccessGrant", input);
-              await loadBootstrap(activeWorkspaceId || undefined);
-              return result;
-            } catch (nextError) {
-              setError(errorMessage(nextError));
-              throw nextError;
-            } finally {
-              setBusy(false);
-            }
-          }}
-          onRevokeBetaAccess={async (grantId) => {
-            setBusy(true);
-            setError("");
-            try {
-              const result = await knowhowCommand("revokeBetaAccessGrant", {
-                grantId,
-              });
-              await loadBootstrap(activeWorkspaceId || undefined);
-              return result;
-            } catch (nextError) {
-              setError(errorMessage(nextError));
-              throw nextError;
-            } finally {
-              setBusy(false);
-            }
-          }}
-          onPlatformControl={async (action, payload, successMessage) => {
-            setBusy(true);
-            setError("");
-            try {
-              const result = await knowhowCommand(action, payload);
-              await loadBootstrap(activeWorkspaceId || undefined);
-              toast.success(successMessage);
               return result;
             } catch (nextError) {
               setError(errorMessage(nextError));

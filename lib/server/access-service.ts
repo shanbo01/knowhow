@@ -1,5 +1,5 @@
 import type { OrganizationRole, WorkspaceRole, WorkspaceStatus } from "../knowhow-types";
-import { decodePayload, type LifecycleAccess, type SupportGrantRecord, type WorkspaceMemberRecord, type WorkspaceRecord } from "./domain-records";
+import { decodePayload, type LifecycleAccess, type SupportGrantRecord, type SubscriptionRecord, type WorkspaceMemberRecord, type WorkspaceRecord } from "./domain-records";
 import { HttpError } from "./http-security";
 import { TABLES } from "./appwrite-resources";
 import type { AuthorizationContext } from "./policy";
@@ -20,6 +20,7 @@ export type WorkspaceAccess = {
   supportGrant: (SupportGrantRecord & { id: string }) | null;
   lifecycleAccess: LifecycleAccess;
   lifecycle: LifecycleEvaluation;
+  subscription: SubscriptionRecord | null;
 };
 
 function activeExpiry(value: unknown) {
@@ -94,6 +95,7 @@ export class AccessService {
         supportGrant: null,
         lifecycleAccess,
         lifecycle,
+        subscription: subscription?.value ?? null,
       };
     }
 
@@ -120,6 +122,7 @@ export class AccessService {
           supportGrant: { ...grant, id: grantRow.$id },
           lifecycleAccess,
           lifecycle,
+          subscription: subscription?.value ?? null,
         };
       }
     }
@@ -134,6 +137,7 @@ export class AccessService {
         supportGrant: null,
         lifecycleAccess,
         lifecycle,
+        subscription: subscription?.value ?? null,
       };
     }
     return null;

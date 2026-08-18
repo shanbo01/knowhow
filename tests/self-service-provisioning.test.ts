@@ -3,6 +3,7 @@ import test from "node:test";
 import { TABLES } from "../lib/server/appwrite-resources";
 import { CommandService } from "../lib/server/command-service";
 import { decodePayload, rowData } from "../lib/server/domain-records";
+import { EntitlementService } from "../lib/server/entitlement-service";
 import { HttpError } from "../lib/server/http-security";
 import { InMemoryRecordStore } from "../lib/server/record-store";
 import type { AuthenticatedIdentity } from "../lib/server/session-identity";
@@ -129,6 +130,9 @@ test("a verified user resumes setup and creates one complete trial tenant", asyn
   assert.ok(result.organizationId.startsWith("org_"));
   assert.ok(result.workspaceId.startsWith("workspac_"));
   assert.match(result.invite?.inviteUrl ?? "", /^\/app\?invite=/);
+  assert.ok(result.trial.expiresAt);
+  assert.ok(result.trial.graceEndsAt);
+  assert.ok(result.trial.deletionEligibleAt);
   assert.equal(
     Date.parse(result.trial.expiresAt) - Date.parse(result.trial.startsAt),
     14 * 86_400_000,
@@ -147,7 +151,7 @@ test("a verified user resumes setup and creates one complete trial tenant", asyn
   assert.equal((await store.list(TABLES.workspaces)).length, 1);
   assert.equal((await store.list(TABLES.organizationMemberships)).length, 1);
   assert.equal((await store.list(TABLES.workspaceMembers)).length, 1);
-  assert.equal((await store.list(TABLES.entitlements)).length, 9);
+  assert.equal((await store.list(TABLES.entitlements)).length, 12);
   assert.equal((await store.list(TABLES.onboardingProgress)).length, 1);
   const usageEvents = await store.list(TABLES.usageEvents);
   assert.equal(usageEvents.length, 3);
@@ -185,6 +189,7 @@ test("a verified user resumes setup and creates one complete trial tenant", asyn
   );
   const trial = decodePayload<Record<string, unknown>>(subscription, {});
   assert.equal(trial.kind, "trial");
+  assert.equal(trial.plan, "pro_trial");
   assert.equal(trial.publicTrial, false);
   assert.equal(trial.manualContract, false);
   assert.equal(trial.originalExpiresAt, result.trial.expiresAt);
@@ -393,4 +398,36 @@ test("concurrent completion and new idempotency keys replay one cross-bound tena
   );
   assert.equal(organization?.created_by, owner.userId);
   assert.equal(organization?.$id, first.organizationId);
+});
+
+test("Free signup creates a forever Free workspace without a trial clock", async () => {
+  const store = new InMemoryRecordStore();
+  const owner = identity(
+    "free-owner",
+    "free@northstar.test",
+    "Free Owner",
+  );
+  await admit(store, owner, owner.userId);
+  const result = (await new CommandService(store).execute(
+    owner,
+    "completeSelfServiceSetup",
+    { ...setup, plan: "free" },
+    options("complete-free"),
+  )) as SelfServiceSetupResult;
+
+  assert.equal(result.trial.plan, "free");
+  assert.equal(result.trial.expiresAt, null);
+  const subscription = decodePayload<Record<string, unknown>>(
+    await store.get(TABLES.subscriptions, result.subscriptionId),
+    {},
+  );
+  assert.equal(subscription.plan, "free");
+  assert.equal(subscription.trialConsumed, false);
+  const entitlements = await new EntitlementService(
+    store,
+    result.workspaceId,
+  ).snapshot();
+  assert.equal(entitlements.extensionEnabled, false);
+  assert.equal(entitlements.privacyToolsEnabled, false);
+  assert.equal(entitlements.supportEnabled, false);
 });

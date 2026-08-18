@@ -123,25 +123,43 @@ export function searchGuides(workspaceId: string, query: string) {
   return knowhowApi<{ results: GuideSearchResult[] }>(`/api/knowhow/search?${params}`);
 }
 
+export function queryPlatform<T>(params: Record<string, string | undefined>) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) search.set(key, value);
+  }
+  return knowhowApi<T>(`/api/knowhow/platform?${search}`);
+}
+
 export async function downloadAuthorizedExport(
   workspaceId: string,
   guideId: string,
-  format: "pdf" | "html" | "markdown",
+  format: "pdf" | "html" | "markdown" | "pptx",
 ) {
   const queued = await knowhowApi<{
     jobId: string;
     status: string;
     pollAfterMs: number;
+    error?: string;
+    filename?: string;
   }>("/api/knowhow/export", {
     method: "POST",
     headers: { "x-idempotency-key": crypto.randomUUID() },
     body: JSON.stringify({ workspaceId, guideId, format }),
   });
-  const deadline = Date.now() + 150_000;
   let status = queued.status;
-  let failure = "";
+  let failure = queued.error ?? "";
+  if (status !== "ready" && status !== "queued" && status !== "processing") {
+    throw new Error(
+      failure ||
+        (status === "expired"
+          ? "The export expired before it was downloaded."
+          : "The export could not be created."),
+    );
+  }
+  const deadline = Date.now() + 150_000;
   while (status !== "ready" && Date.now() < deadline) {
-    if (status === "failed" || status === "expired") break;
+    if (status === "failed" || status === "expired" || status === "retry") break;
     await new Promise((resolve) =>
       window.setTimeout(resolve, Math.max(500, queued.pollAfterMs || 750)),
     );
@@ -149,7 +167,7 @@ export async function downloadAuthorizedExport(
       `/api/knowhow/export?${new URLSearchParams({ jobId: queued.jobId })}`,
     );
     status = state.status;
-    failure = state.error ?? "";
+    failure = state.error ?? failure;
   }
   if (status !== "ready") {
     throw new Error(
@@ -158,7 +176,7 @@ export async function downloadAuthorizedExport(
           ? "The export expired before it was downloaded."
           : status === "failed"
             ? "The export could not be created."
-            : "The export is still processing. Try again in a moment."),
+            : "The export could not be created. Try again in a moment."),
     );
   }
   const params = new URLSearchParams({ jobId: queued.jobId, download: "1" });
@@ -180,8 +198,12 @@ export async function downloadAuthorizedExport(
   anchor.download =
     response.headers
       .get("content-disposition")
-      ?.match(/filename="([^"]+)"/)?.[1] ?? `knowhow-guide.${format}`;
+      ?.match(/filename="([^"]+)"/)?.[1] ??
+    queued.filename ??
+    `knowhow-guide.${format}`;
+  document.body.appendChild(anchor);
   anchor.click();
+  anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 

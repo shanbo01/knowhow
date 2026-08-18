@@ -40,11 +40,11 @@ const REAUTHENTICATED_ACTIONS = new Set([
   "revokeSupportAccess",
   "extendSubscription",
   "convertSubscription",
+  "grantProTrial",
+  "updateEntitlementOverrides",
   "createPricingCatalog",
   "updatePricingCatalog",
   "retirePricingCatalog",
-  "createLifecycleSimulationTenant",
-  "simulateLifecycleState",
   "approveDeletionCase",
   "completeProvisioningRun",
 ]);

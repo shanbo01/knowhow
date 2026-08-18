@@ -60,12 +60,11 @@ export function SelectMenu<T extends string>({
         <SelectTrigger aria-label={ariaLabel} className="kh-select-trigger">
           {leading ? <span className="kh-select-leading" aria-hidden="true">{leading}</span> : null}
           {renderValue && selected ? (
-            <>
-              <SelectValue className="sr-only">{selected.label}</SelectValue>
-              <span className="kh-select-value">{renderValue(selected)}</span>
-            </>
+            <span className="kh-select-value">{renderValue(selected)}</span>
           ) : (
-            <SelectValue className="kh-select-value" placeholder="Select" />
+            <SelectValue className="kh-select-value" placeholder="Select">
+              {selected?.label ?? "Select"}
+            </SelectValue>
           )}
         </SelectTrigger>
         <SelectContent align={align} className={cn("kh-select-options", contentClassName)} aria-label={ariaLabel}>

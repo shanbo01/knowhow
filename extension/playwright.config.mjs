@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const e2ePort = process.env.KNOWHOW_E2E_PORT || "43117";
+
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "../outputs/playwright-extension",
@@ -8,9 +10,13 @@ export default defineConfig({
   reporter: "list",
   webServer: {
     command: "node e2e/fixture-server.mjs",
-    url: "http://127.0.0.1:43117/e2e/fixtures/capture-light.html",
+    url: `http://127.0.0.1:${e2ePort}/e2e/fixtures/capture-light.html`,
     reuseExistingServer: true,
     timeout: 10_000,
+    env: {
+      ...process.env,
+      KNOWHOW_E2E_PORT: e2ePort,
+    },
   },
   use: {
     headless: true,

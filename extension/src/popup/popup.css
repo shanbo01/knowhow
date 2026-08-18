@@ -1,59 +1,51 @@
 @font-face {
-  font-family: "Kumbh Sans";
+  font-family: "Google Sans Flex Variable";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 1 1000;
   font-display: swap;
-  src: url("./fonts/kumbh-sans-latin-400-normal.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Kumbh Sans";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("./fonts/kumbh-sans-latin-700-normal.woff2") format("woff2");
+  src: url("./fonts/google-sans-flex-latin-wght-normal.woff2") format("woff2-variations");
 }
 
 :root {
   color-scheme: light;
-  --background: #f7f7f9;
-  --foreground: #111216;
+  --background: #f5f4f0;
+  --foreground: #11110f;
   --card: #ffffff;
-  --card-muted: #f1f2f4;
-  --muted: #6d7078;
-  --muted-foreground: #858992;
-  --border: #e6e7ea;
-  --border-strong: #d7d9de;
-  --primary: #121214;
+  --card-muted: #f8f7f4;
+  --muted: #6e6c66;
+  --muted-foreground: #8a8882;
+  --border: #deddd7;
+  --border-strong: #cfcbc3;
+  --primary: #11110f;
   --primary-foreground: #ffffff;
-  --accent: #c2410c;
-  --accent-soft: #fff4ec;
-  --accent-strong: #9a3412;
+  --accent: #ff5a12;
+  --accent-soft: #ffe7da;
+  --accent-strong: #eb4d08;
   --danger: #c52828;
   --danger-soft: #fff2f2;
   --success: #15965f;
-  --shadow: 0 12px 32px rgb(16 16 18 / 0.08);
-  --shadow-sm: 0 1px 2px rgb(16 16 18 / 0.05);
-  font-family: "Kumbh Sans", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --shadow: 0 12px 32px rgb(17 17 15 / 0.08);
+  --shadow-sm: 0 1px 2px rgb(17 17 15 / 0.05);
+  font-family: "Google Sans Flex Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   background: var(--background);
   color: var(--foreground);
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --background: #15171a;
-  --foreground: #f5f5f6;
-  --card: #1d2024;
-  --card-muted: #272a30;
-  --muted: #a5a9b2;
-  --muted-foreground: #858b95;
-  --border: #30343a;
-  --border-strong: #3b4048;
-  --primary: #f4f4f5;
-  --primary-foreground: #111113;
-  --accent: #fb923c;
+  --background: #0e0e0c;
+  --foreground: #f5f4f0;
+  --card: #171714;
+  --card-muted: #1c1c18;
+  --muted: #a6a49d;
+  --muted-foreground: #85827a;
+  --border: #2e2e29;
+  --border-strong: #3b3933;
+  --primary: #f5f4f0;
+  --primary-foreground: #11110f;
+  --accent: #ff5a12;
   --accent-soft: #3a2115;
-  --accent-strong: #fdba74;
+  --accent-strong: #ff7b2f;
   --danger: #fb7185;
   --danger-soft: #3b1b22;
   --success: #34d399;
@@ -408,12 +400,7 @@ input {
   justify-content: center;
   gap: 7px;
   padding: 0 13px;
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.primary {
+  border-radius: 999px;
   border: 1px solid var(--primary);
   background: var(--primary);
   color: var(--primary-foreground);
@@ -450,6 +437,10 @@ input {
   min-height: 46px;
   font-size: 14px;
   letter-spacing: -0.015em;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 12px 28px rgb(255 90 18 / 0.25);
 }
 
 .record-button-dot {
@@ -1166,8 +1157,8 @@ input {
 /* Browser-feedback visual pass: depth defines surfaces; borders are reserved
    for focus, recording targets, and other semantic indicators. */
 :root {
-  --surface-shadow: 0 1px 2px rgb(15 23 42 / 0.025), 0 7px 21px rgb(15 23 42 / 0.055);
-  --control-shadow: 0 1px 2px rgb(15 23 42 / 0.035), 0 3px 9px rgb(15 23 42 / 0.04);
+  --surface-shadow: 0 1px 2px rgb(17 17 15 / 0.025), 0 7px 21px rgb(17 17 15 / 0.055);
+  --control-shadow: 0 1px 2px rgb(17 17 15 / 0.035), 0 3px 9px rgb(17 17 15 / 0.04);
 }
 
 :root[data-theme="dark"] {
@@ -1211,7 +1202,14 @@ input {
 
 .primary {
   border: 0;
-  box-shadow: 0 4px 12px rgb(16 16 18 / 0.14);
+  box-shadow: 0 4px 12px rgb(17 17 15 / 0.14);
+}
+
+.start-button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 12px 28px rgb(255 90 18 / 0.25);
 }
 
 .step-thumbnail,

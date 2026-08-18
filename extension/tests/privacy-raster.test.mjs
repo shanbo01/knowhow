@@ -110,6 +110,28 @@ test("live blur frosts page pixels in tight rects instead of gray circular slabs
   assert.match(captureSource, /function isLeafBlurHost\(/);
   assert.match(captureSource, /svg,\[role=img\]/);
   assert.match(captureSource, /function exclusionCoversMask\(/);
+  assert.doesNotMatch(
+    captureSource.slice(
+      captureSource.indexOf("function exclusionCoversMask"),
+      captureSource.indexOf("function collectMasks"),
+    ),
+    /password-field/,
+  );
+  assert.match(
+    captureSource.slice(
+      captureSource.indexOf("function formFieldMasks"),
+      captureSource.indexOf("function rangeFindings"),
+    ),
+    /if \(state.policy.redactFormFields === true\)/,
+  );
+  assert.match(
+    captureSource.slice(
+      captureSource.indexOf("function embeddedFrameMasks"),
+      captureSource.indexOf("function isInboxStyleRow"),
+    ),
+    /redactImages !== true/,
+  );
+  assert.doesNotMatch(captureSource, /redactCommonNames === true/);
   assert.match(captureSource, /Unblur elements/);
   assert.match(captureSource, /\["redactEmails", "Email"\]/);
   assert.match(captureSource, /\["redactAllNumbers", "Number"\]/);

@@ -248,24 +248,18 @@ async function createAndPublishManualGuide(
     .locator(".step-title-input")
     .first()
     .fill("Open the KnowHow workspace and confirm access");
-  await page.getByRole("button", { name: "Request review" }).first().click();
-
-  await expect(page.getByRole("heading", { name: "Guides" })).toBeVisible({
-    timeout: 30_000,
+  await page.getByRole("button", { name: "Share" }).first().click();
+  const shareDialog = page.getByRole("dialog");
+  await expect(shareDialog.getByRole("heading", { name: title })).toBeVisible({
+    timeout: 15_000,
   });
-  let card = page.locator(".guide-card").filter({ hasText: title });
-  await expect(card).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
-  await card.getByRole("button", { name: "Approve" }).click();
-  await expect(page.getByText("Review approved")).toBeVisible({
+  await shareDialog.getByRole("button", { name: "Share", exact: true }).click();
+  await expect(page.getByText("Guide shared")).toBeVisible({
     timeout: 20_000,
   });
-  card = page.locator(".guide-card").filter({ hasText: title });
-  await card.getByRole("button", { name: "Publish" }).click();
-  await expect(page.getByText("New revision published")).toBeVisible({
+  await expect(page.getByRole("heading", { name: title })).toBeVisible({
     timeout: 20_000,
   });
-  await expect(card.getByText("Published")).toBeVisible({ timeout: 20_000 });
 }
 
 async function openPublishedGuide(

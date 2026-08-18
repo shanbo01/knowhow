@@ -2,6 +2,7 @@ export * from "../guide-contracts";
 export { renderGuideToHtml } from "./html";
 export { renderGuideToMarkdown } from "./markdown";
 export { renderGuideToPdf } from "./pdf";
+export { renderGuideToPptx } from "./pptx";
 export { prepareGuideExport } from "./policy";
 export {
   GuideRendererError,

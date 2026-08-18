@@ -69,14 +69,30 @@ async function forgetAuth() {
   ]);
 }
 
+async function toolbarPinned() {
+  try {
+    if (typeof chrome === "undefined" || !chrome.action?.getUserSettings) {
+      return undefined;
+    }
+    const settings = await chrome.action.getUserSettings();
+    return Boolean(settings?.isOnToolbar);
+  } catch {
+    return undefined;
+  }
+}
+
 async function refreshAccessToken(auth) {
   if (!auth.refreshToken) {
     throw new Error("Open KnowHow while signed in to connect this browser.");
   }
+  const pinned = await toolbarPinned();
   const response = await fetch(apiUrl("/token/refresh"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshToken: auth.refreshToken }),
+    body: JSON.stringify({
+      refreshToken: auth.refreshToken,
+      ...(pinned === true ? { toolbarPinned: true } : {}),
+    }),
   });
   // A revoked or expired credential is dropped rather than retried forever:
   // once it is gone, opening KnowHow reconnects this browser automatically.

@@ -64,7 +64,7 @@ Useful focused commands:
 - `npm run appwrite:smoke:local` verifies the local database, tables, private buckets, Auth session flow, transactions, and exact cleanup of disposable fixtures.
 - `npm run workers:local:once` runs both local worker handlers once and records a readiness heartbeat.
 - `npm run workers:local:notifications` drains only the local notification queue.
-- `npm run load:pilot` verifies the configured pilot-size boundary without contacting a remote service.
+- `npm run load:boundary` verifies the configured size boundary without contacting a remote service.
 - `npm run extension:build` builds the unpacked local extension under `outputs/extension`.
 - `npm run security:secrets` and `npm run security:audit` run the security gates.
 

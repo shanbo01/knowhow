@@ -7,6 +7,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return PUBLIC_MARKETING_PATHS.map((path) => ({
     url: `${origin}${path === "/" ? "" : path}`,
     changeFrequency: path === "/" ? "weekly" : "monthly",
-    priority: path === "/" ? 1 : path === "/product" ? 0.9 : 0.7,
+    priority: path === "/" ? 1 : 0.7,
   }));
 }

@@ -49,7 +49,7 @@ export class AppwriteRecordStore implements RecordStore {
       MAX_LIST_SIZE,
     );
     const result: Array<StoredRecord<T>> = [];
-    let cursor: string | undefined;
+    let cursor: string | undefined = options.cursor;
 
     while (result.length < requestedLimit) {
       const pageLimit = Math.min(PAGE_SIZE, requestedLimit - result.length);

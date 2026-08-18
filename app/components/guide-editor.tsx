@@ -11,10 +11,8 @@ import {
   ImagePlus,
   ListChecks,
   Plus,
-  Search,
   Save,
-  Send,
-  ShieldCheck,
+  Share2,
   SlidersHorizontal,
   StickyNote,
   Trash2,
@@ -37,6 +35,7 @@ import type {
 import { flattenScreenshot, needsFlattening } from "../../lib/screenshot-flatten";
 import { ScreenshotEditor } from "./screenshot-editor";
 import { SelectMenu } from "./select-menu";
+import { GuideShareDialog, type GuideExportFormatChoice } from "./guide-share-dialog";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { WorkspaceLogo } from "./workspace-logo";
 import { Button } from "@/components/ui/button";
@@ -67,12 +66,21 @@ type GuideEditorProps = {
   groups: WorkspaceGroup[];
   members: WorkspaceMember[];
   busy: boolean;
+  privacyToolsEnabled?: boolean;
   onClose: () => void;
   onSave: (payload: GuideEditorPayload) => Promise<GuideSaveResult>;
-  onSaved?: (result: GuideSaveResult, transition: GuideEditorPayload["transition"]) => void;
+  onShare?: (payload: GuideEditorPayload) => Promise<GuideSaveResult>;
+  onExport?: (format: GuideExportFormatChoice) => Promise<void>;
+  onStartTrial?: () => void;
+  onSaved?: (result: GuideSaveResult, transition: GuideEditorPayload["transition"] | "share") => void;
   onMediaChanged?: () => Promise<unknown>;
   onDelete?: () => Promise<void>;
   onRegisterNavigationGuard: (guard: NavigationGuard | null) => void;
+  requireReviewBeforePublish?: boolean;
+  canShare?: boolean;
+  liveUrl?: string;
+  fileExportsEnabled?: boolean;
+  canExport?: boolean;
 };
 
 const STEP_KINDS: Array<{
@@ -261,12 +269,21 @@ export function GuideEditor({
   groups,
   members,
   busy,
+  privacyToolsEnabled = true,
   onClose,
   onSave,
+  onShare,
+  onExport,
+  onStartTrial,
   onSaved,
   onMediaChanged,
   onDelete,
   onRegisterNavigationGuard,
+  requireReviewBeforePublish = false,
+  canShare = true,
+  liveUrl = "",
+  fileExportsEnabled = false,
+  canExport = false,
 }: GuideEditorProps) {
   const revision = selectedRevision(guide);
   const [title, setTitle] = useState(revision?.title ?? "");
@@ -290,8 +307,7 @@ export function GuideEditor({
   const [insertAfterId, setInsertAfterId] = useState<string | "start" | null>(null);
   const [leavePromptOpen, setLeavePromptOpen] = useState(false);
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
-  const [groupSearch, setGroupSearch] = useState("");
-  const [memberSearch, setMemberSearch] = useState("");
+  const [shareOpen, setShareOpen] = useState(false);
   const ensureDraftRef = useRef<Promise<GuideSaveResult> | null>(null);
   const [draftIds, setDraftIds] = useState<GuideSaveResult | null>(
     guide?.workingRevision
@@ -301,7 +317,12 @@ export function GuideEditor({
 
   const source = revision?.source ?? "manual";
   const isCaptured = source === "browser-capture";
-  const isWorkspaceAudience = audiences.some((item) => item.kind === "workspace");
+  const liveAudience = guide?.publishedRevision?.audiences ?? [];
+  const scopeLabel = !guide?.publishedRevision
+    ? "Private"
+    : liveAudience.some((item) => item.kind === "workspace")
+      ? "Entire workspace"
+      : "Restricted";
   const [savedSnapshot, setSavedSnapshot] = useState(() => guideDraftSnapshot({
     title,
     summary,
@@ -364,26 +385,6 @@ export function GuideEditor({
     window.addEventListener("pointerdown", dismissInsertMenu);
     return () => window.removeEventListener("pointerdown", dismissInsertMenu);
   }, [insertAfterId]);
-
-  const restrictedLabels = useMemo(
-    () =>
-      audiences
-        .filter((item) => item.kind !== "workspace")
-        .map((item) => item.label)
-        .filter(Boolean),
-    [audiences],
-  );
-  const filteredGroups = useMemo(() => {
-    const query = groupSearch.trim().toLocaleLowerCase();
-    if (!query) return groups;
-    return groups.filter((group) => `${group.name} ${group.description ?? ""}`.toLocaleLowerCase().includes(query));
-  }, [groupSearch, groups]);
-  const filteredMembers = useMemo(() => {
-    const query = memberSearch.trim().toLocaleLowerCase();
-    const activeMembers = members.filter((member) => member.status === "active");
-    if (!query) return activeMembers;
-    return activeMembers.filter((member) => `${member.name ?? ""} ${member.email}`.toLocaleLowerCase().includes(query));
-  }, [memberSearch, members]);
 
   function updateStep(id: string, patch: Partial<EditorBlock>) {
     setSteps((items) =>
@@ -527,49 +528,25 @@ export function GuideEditor({
     });
   }
 
-  function setWorkspaceAudience(enabled: boolean) {
-    if (enabled) {
-      setAudiences([{ kind: "workspace", label: "Entire workspace" }]);
-      return;
-    }
-    setAudiences([]);
-  }
-
-  function toggleAudience(kind: "group" | "user", subjectId: string, label: string) {
-    setAudiences((items) => {
-      const withoutWorkspace = items.filter((item) => item.kind !== "workspace");
-      const exists = withoutWorkspace.some(
-        (item) => item.kind === kind && item.subjectId === subjectId,
-      );
-      return exists
-        ? withoutWorkspace.filter(
-            (item) => !(item.kind === kind && item.subjectId === subjectId),
-          )
-        : [...withoutWorkspace, { kind, subjectId, label }];
-    });
-  }
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLocalError("");
+  function validateDraft() {
     if (title.trim().length < 3) {
       setLocalError("Give the guide a clear title.");
-      return;
+      return false;
     }
     if (!summary.trim()) {
       setLocalError("Add a short purpose or outcome.");
-      return;
+      return false;
     }
     if (!steps.length || steps.some((step) => !step.title.trim())) {
       setLocalError("Every step needs a title.");
-      return;
+      return false;
     }
     for (const step of steps) {
       if (!step.crop) continue;
       const { x, y, width, height } = step.crop;
       if (width <= 0 || height <= 0 || x + width > 1 || y + height > 1) {
         setLocalError("Each screenshot crop must stay inside the image boundary.");
-        return;
+        return false;
       }
     }
     for (const step of steps) {
@@ -581,81 +558,100 @@ export function GuideEditor({
         const regionValid = width > 0 && height > 0 && annotation.x + width <= 1 && annotation.y + height <= 1;
         if (!finite || !pointValid || (annotation.kind !== "click" && !regionValid)) {
           setLocalError("Each screenshot annotation must stay inside the image boundary.");
-          return;
+          return false;
         }
         if (annotation.color && !/^#[0-9a-f]{6}$/i.test(annotation.color)) {
           setLocalError("Each screenshot annotation needs a valid six-digit color.");
-          return;
+          return false;
         }
       }
     }
     if (!audiences.length) {
       setLocalError("Select at least one audience before saving.");
-      return;
+      return false;
     }
+    return true;
+  }
+
+  async function flattenIfNeeded() {
+    if (guide?.screenshotsLockedAt || !steps.some(needsFlattening)) return steps;
+    if (!guide?.workingRevision) {
+      throw new Error("Save a private draft before sharing.");
+    }
+    const workingRevisionId = guide.workingRevision.id;
+    setFlattening(true);
+    try {
+      const finalSteps = await Promise.all(
+        steps.map(async (step) => {
+          if (!step.screenshotMediaId || !needsFlattening(step)) return step;
+          const mediaUrl = await loadAuthorizedMediaUrl(workspace.id, step.screenshotMediaId);
+          try {
+            const flattened = await flattenScreenshot(mediaUrl, step);
+            const uploaded = await replaceDraftScreenshot({
+              workspaceId: workspace.id,
+              guideId: guide.id,
+              revisionId: workingRevisionId,
+              stepId: step.id,
+              bytes: flattened.blob,
+              width: flattened.width,
+              height: flattened.height,
+              redactionState: "redacted",
+            });
+            return { ...step, screenshotMediaId: uploaded.mediaId, ...flattened.patch };
+          } finally {
+            URL.revokeObjectURL(mediaUrl);
+          }
+        }),
+      );
+      setSteps(finalSteps);
+      await onMediaChanged?.();
+      return finalSteps;
+    } finally {
+      setFlattening(false);
+    }
+  }
+
+  function payloadFor(transition: GuideEditorPayload["transition"], nextSteps: EditorBlock[]): GuideEditorPayload {
+    return {
+      guideId: guide?.id,
+      revisionId: guide?.workingRevision?.id,
+      title: title.trim(),
+      summary: summary.trim(),
+      category: category.trim(),
+      tags: tags
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      systemReferences: systemReferences
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+      steps: nextSteps.map((step) => ({ ...step, title: step.title.trim() })),
+      audiences,
+      source,
+      privacyReviewed,
+      transition,
+    };
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalError("");
+    if (!validateDraft()) return;
     if (transition === "review" && isCaptured && !privacyReviewed) {
       setLocalError("Complete the privacy review before requesting review.");
       return;
     }
 
     let finalSteps = steps;
-    if (transition === "review" && !guide?.screenshotsLockedAt && steps.some(needsFlattening)) {
-      if (!guide?.workingRevision) {
-        setLocalError("Save a private draft before requesting review.");
-        return;
-      }
-      const workingRevisionId = guide.workingRevision.id;
-      setFlattening(true);
-      try {
-        finalSteps = await Promise.all(
-          steps.map(async (step) => {
-            if (!step.screenshotMediaId || !needsFlattening(step)) return step;
-            const mediaUrl = await loadAuthorizedMediaUrl(workspace.id, step.screenshotMediaId);
-            try {
-              const flattened = await flattenScreenshot(mediaUrl, step);
-              const uploaded = await replaceDraftScreenshot({
-                workspaceId: workspace.id,
-                guideId: guide.id,
-                revisionId: workingRevisionId,
-                stepId: step.id,
-                bytes: flattened.blob,
-                width: flattened.width,
-                height: flattened.height,
-                redactionState: "redacted",
-              });
-              return { ...step, screenshotMediaId: uploaded.mediaId, ...flattened.patch };
-            } finally {
-              URL.revokeObjectURL(mediaUrl);
-            }
-          }),
-        );
-        setSteps(finalSteps);
-        await onMediaChanged?.();
-      } catch (error) {
-        setLocalError(error instanceof Error ? error.message : "The screenshots could not be flattened for review.");
-        return;
-      } finally {
-        setFlattening(false);
-      }
+    try {
+      if (transition === "review") finalSteps = await flattenIfNeeded();
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "The screenshots could not be flattened.");
+      return;
     }
 
-    const payload: GuideEditorPayload = {
-      guideId: guide?.id,
-      revisionId: guide?.workingRevision?.id,
-      title: title.trim(),
-      summary: summary.trim(),
-      category: category.trim(),
-      tags: tags.split(",").map((item) => item.trim()).filter(Boolean),
-      systemReferences: systemReferences
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-      steps: finalSteps,
-      audiences,
-      source,
-      privacyReviewed,
-      transition,
-    };
+    const payload = payloadFor(transition, finalSteps);
     try {
       const result = await onSave(payload);
       const nextSavedSnapshot = guideDraftSnapshot({
@@ -669,13 +665,38 @@ export function GuideEditor({
         privacyReviewed,
       });
       setSavedSnapshot(nextSavedSnapshot);
-      // Navigation can happen synchronously after the save callback. Update
-      // the ref now so a route replacement is never mistaken for a discard.
       dirtyRef.current = false;
       onSaved?.(result, transition);
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : "The guide could not be saved.");
     }
+  }
+
+  async function shareOrReview(kind: "share" | "review") {
+    setLocalError("");
+    if (!validateDraft()) throw new Error("Finish the required guide fields first.");
+    if (isCaptured && !privacyReviewed) {
+      throw new Error("Complete the privacy review before sharing.");
+    }
+    const finalSteps = await flattenIfNeeded();
+    const payload = payloadFor(kind === "review" ? "review" : "draft", finalSteps);
+    const result =
+      kind === "share" && onShare ? await onShare(payload) : await onSave(payload);
+    setSavedSnapshot(
+      guideDraftSnapshot({
+        title,
+        summary,
+        category,
+        tags,
+        systemReferences,
+        steps: finalSteps,
+        audiences,
+        privacyReviewed,
+      }),
+    );
+    dirtyRef.current = false;
+    setShareOpen(false);
+    onSaved?.(result, kind === "share" ? "share" : "review");
   }
 
   function requestClose() {
@@ -713,7 +734,7 @@ export function GuideEditor({
         onSubmit={submit}
         onKeyDown={(event) => {
           // Enter inside text fields / the screenshot stage must not submit
-          // the whole guide editor. Only the explicit Save / Request review
+          // the whole guide editor. Only the explicit Save / Share
           // buttons should trigger submit.
           if (event.key !== "Enter") return;
           const target = event.target as HTMLElement;
@@ -728,7 +749,7 @@ export function GuideEditor({
               <ArrowLeft /> Guides
             </Button>
             <span className="editor-header-divider" />
-            <span className="editor-scope">Private</span>
+            <span className="editor-scope">{scopeLabel}</span>
             <strong
               id="guide-editor-title"
               className="editor-title-display"
@@ -742,8 +763,20 @@ export function GuideEditor({
             <Button variant={guide ? "outline" : undefined} type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
               <Save /> Save
             </Button>
-            <Button variant={guide ? undefined : "outline"} type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
-              <Send /> Request review
+            <Button
+              variant={guide ? undefined : "outline"}
+              type="button"
+              disabled={busy || flattening}
+              onClick={() => {
+                setLocalError("");
+                if (!validateDraft()) return;
+                if (audiences.length === 1 && audiences[0]?.kind === "user" && isCaptured) {
+                  setAudiences([{ kind: "workspace", label: "Entire workspace" }]);
+                }
+                setShareOpen(true);
+              }}
+            >
+              <Share2 /> Share
             </Button>
             <Button className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector">
               <SlidersHorizontal /> Settings
@@ -831,6 +864,7 @@ export function GuideEditor({
                             accentColor={workspace.settings.accentColor}
                             clickTargetColor={workspace.settings.clickTargetColor}
                             locked={Boolean(guide?.screenshotsLockedAt)}
+                            privacyToolsEnabled={privacyToolsEnabled}
                             canReplace={Boolean(guide?.workingRevision || draftIds)}
                             busy={uploadingStepId === step.id}
                             onChange={(patch) => updateScreenshotState(step, patch)}
@@ -912,49 +946,22 @@ export function GuideEditor({
             </div>
             <section className="card sidebar-card">
               <p className="eyebrow">Audience</p>
-              <h3>Who receives the published version?</h3>
-              <label className="choice-row emphasized">
-                <input type="checkbox" checked={isWorkspaceAudience} onChange={(event) => setWorkspaceAudience(event.target.checked)} />
-                <span><strong>Entire workspace</strong><small>All active members of {workspace.name}</small></span>
-              </label>
-              {!isWorkspaceAudience ? (
-                <div className="audience-picker-scroll">
-                  <div className="choice-section">
-                    <span className="field-label">Groups</span>
-                    <label className="audience-search">
-                      <Search />
-                      <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Search groups" aria-label="Search groups" />
-                    </label>
-                    <div className="audience-option-list">
-                      {filteredGroups.map((group) => (
-                        <label className="choice-row" key={group.id}>
-                          <input type="checkbox" checked={audiences.some((item) => item.kind === "group" && item.subjectId === group.id)} onChange={() => toggleAudience("group", group.id, group.name)} />
-                          <span><strong>{group.name}</strong><small>{group.sensitive ? "Sensitive group" : `${group.memberCount} members`}</small></span>
-                        </label>
-                      ))}
-                      {!filteredGroups.length ? <p className="audience-empty">No matching groups</p> : null}
-                    </div>
-                  </div>
-                  <details className="audience-people" open>
-                    <summary>Named people</summary>
-                    <label className="audience-search">
-                      <Search />
-                      <input value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} placeholder="Search people" aria-label="Search people" />
-                    </label>
-                    <div className="audience-option-list">
-                      {filteredMembers.map((member) => (
-                        <label className="choice-row" key={member.id}>
-                          <input type="checkbox" checked={audiences.some((item) => item.kind === "user" && item.subjectId === member.userId)} onChange={() => toggleAudience("user", member.userId, member.name || member.email)} />
-                          <span><strong>{member.name || member.email}</strong><small>{member.email}</small></span>
-                        </label>
-                      ))}
-                      {!filteredMembers.length ? <p className="audience-empty">No matching people</p> : null}
-                    </div>
-                  </details>
-                </div>
-              ) : null}
-              {!audiences.length ? <p className="inline-warning"><TriangleAlert /> No audience selected</p> : null}
-              {restrictedLabels.length ? <p className="privacy-caption"><ShieldCheck /> Restricted to {restrictedLabels.join(", ")}</p> : null}
+              <h3>Who can view the live version?</h3>
+              <p>
+                Choose the audience from Share. This panel is for privacy review
+                and branding.
+              </p>
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => {
+                  setLocalError("");
+                  if (!validateDraft()) return;
+                  setShareOpen(true);
+                }}
+              >
+                <Share2 /> Share
+              </button>
             </section>
 
             {isCaptured ? (
@@ -964,7 +971,7 @@ export function GuideEditor({
                 <p>Confirm every screenshot is redacted and contains only information this audience may see.</p>
                 <label className="choice-row emphasized">
                   <input type="checkbox" checked={privacyReviewed} onChange={(event) => setPrivacyReviewed(event.target.checked)} />
-                  <span><strong>I reviewed every capture</strong><small>Required before review or publication</small></span>
+                  <span><strong>I reviewed every capture</strong><small>Required before sharing</small></span>
                 </label>
               </section>
             ) : null}
@@ -991,13 +998,22 @@ export function GuideEditor({
             </button>
           ) : null}
           <div className="editor-validation" role={localError ? "alert" : "status"}>
-            {localError || (flattening ? <><Save /> Flattening screenshots for review…</> : isDirty ? <><Save /> Unsaved changes</> : <><Check /> Changes remain private until published.</>)}
+            {localError || (flattening ? <><Save /> Flattening screenshots…</> : isDirty ? <><Save /> Unsaved changes</> : <><Check /> Draft stays private until you share it.</>)}
           </div>
           <button className="button secondary" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
             <Save /> Save private draft
           </button>
-          <button className="button primary" type="submit" disabled={busy || flattening || (isCaptured && !privacyReviewed)} onClick={() => setTransition("review")}>
-            <Send /> Request review
+          <button
+            className="button primary"
+            type="button"
+            disabled={busy || flattening}
+            onClick={() => {
+              setLocalError("");
+              if (!validateDraft()) return;
+              setShareOpen(true);
+            }}
+          >
+            <Share2 /> Share
           </button>
         </footer>
       </form>
@@ -1022,6 +1038,32 @@ export function GuideEditor({
           busy={busy}
           onCancel={() => setDeletePromptOpen(false)}
           onConfirm={deleteGuide}
+        />
+      ) : null}
+      {shareOpen ? (
+        <GuideShareDialog
+          open
+          title={title.trim() || "Untitled guide"}
+          workspaceName={workspace.name}
+          liveUrl={liveUrl}
+          isLive={Boolean(guide?.publishedRevision)}
+          audiences={audiences}
+          groups={groups}
+          members={members}
+          captured={isCaptured}
+          privacyReviewed={privacyReviewed}
+          canShare={canShare}
+          canRequestReview={Boolean(requireReviewBeforePublish)}
+          busy={busy || flattening}
+          fileExportsEnabled={fileExportsEnabled}
+          canExport={canExport}
+          onClose={() => setShareOpen(false)}
+          onAudiencesChange={setAudiences}
+          onPrivacyReviewedChange={setPrivacyReviewed}
+          onShare={() => shareOrReview("share")}
+          onRequestReview={() => shareOrReview("review")}
+          onExport={onExport}
+          onStartTrial={onStartTrial}
         />
       ) : null}
     </main>

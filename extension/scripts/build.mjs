@@ -325,20 +325,18 @@ export async function buildKnowHowCapturePackage({
     await writeFile(builtConfigPath, configuredSource, "utf8");
     const popupFontDirectory = resolve(workDirectory, "src", "popup", "fonts");
     await mkdir(popupFontDirectory, { recursive: true });
-    for (const weight of ["400", "700"]) {
-      await cp(
-        resolve(
-          extensionRoot,
-          "..",
-          "node_modules",
-          "@fontsource",
-          "kumbh-sans",
-          "files",
-          `kumbh-sans-latin-${weight}-normal.woff2`,
-        ),
-        resolve(popupFontDirectory, `kumbh-sans-latin-${weight}-normal.woff2`),
-      );
-    }
+    await cp(
+      resolve(
+        extensionRoot,
+        "..",
+        "node_modules",
+        "@fontsource-variable",
+        "google-sans-flex",
+        "files",
+        "google-sans-flex-latin-wght-normal.woff2",
+      ),
+      resolve(popupFontDirectory, "google-sans-flex-latin-wght-normal.woff2"),
+    );
     await writeFile(
       resolve(workDirectory, "manifest.json"),
       JSON.stringify(manifest, null, 2) + "\n",

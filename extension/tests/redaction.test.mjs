@@ -100,7 +100,7 @@ test("all-number masking stays opt-in", () => {
   ]);
 });
 
-test("captured metadata redacts formatted numbers, IDs, and optional names", () => {
+test("captured metadata redacts formatted numbers and IDs, not leftover names", () => {
   const input = "Call +974 5555 1234 for Alice Example about AB-12345678";
   const sanitized = sanitizeCapturedText(
     input,
@@ -112,7 +112,7 @@ test("captured metadata redacts formatted numbers, IDs, and optional names", () 
     500,
   );
   assert.equal(sanitized.includes("5555"), false);
-  assert.equal(sanitized.includes("Alice Example"), false);
+  assert.equal(sanitized.includes("Alice Example"), true);
   assert.equal(sanitized.includes("AB-12345678"), false);
   assert.match(sanitized, /\[redacted\]/);
 });

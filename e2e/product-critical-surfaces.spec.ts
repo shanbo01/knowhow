@@ -1,19 +1,15 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { BootstrapResponse } from "../lib/knowhow-types";
 import {
   DELETION_CONFIRMATION,
   PILOT_WORKSPACE_SLUG,
   PUBLISHED_GUIDE_ID,
   REVIEW_GUIDE_ID,
   pilotBootstrap,
+  pilotPlatformQuery,
   recoveryBootstrap,
 } from "./fixtures/pilot-bootstrap";
-
-type RecordedCommand = {
-  action: string;
-  payload: Record<string, unknown>;
-};
+import { installProductBackend } from "./fixtures/product-backend";
 
 async function expectNoWcagViolations(page: Page) {
   const results = await new AxeBuilder({ page })
@@ -28,92 +24,6 @@ async function expectNoWcagViolations(page: Page) {
   ).toEqual([]);
 }
 
-async function installProductBackend(
-  page: Page,
-  bootstrap: BootstrapResponse,
-) {
-  const commands: RecordedCommand[] = [];
-
-  await page.route("**/api/auth/health", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' }),
-  );
-  await page.route("**/api/auth/session", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        user: {
-          id: bootstrap.viewer.id,
-          email: bootstrap.viewer.email,
-          name: bootstrap.viewer.name,
-          emailVerification: true,
-          mfa: true,
-        },
-      }),
-    }),
-  );
-  await page.route("**/api/auth/mfa/requirement", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: '{"required":true,"enabled":true}',
-    }),
-  );
-  await page.route(
-    (url) => url.pathname === "/api/knowhow/export",
-    async (route) => {
-      if (route.request().method() === "POST") {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: '{"jobId":"export_synthetic","status":"ready","pollAfterMs":0}',
-        });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/pdf",
-        headers: {
-          "content-disposition": 'attachment; filename="synthetic-guide.pdf"',
-        },
-        body: "%PDF-1.4\n% synthetic browser rehearsal\n",
-      });
-    },
-  );
-  await page.route(
-    (url) => url.pathname === "/api/knowhow",
-    async (route) => {
-      if (route.request().method() === "GET") {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(bootstrap),
-        });
-        return;
-      }
-
-      const command = route.request().postDataJSON() as RecordedCommand;
-      commands.push(command);
-      const response =
-        command.action === "createInvite"
-          ? { token: "signed.synthetic.invitation" }
-          : command.action === "saveGuide"
-            ? {
-                guideId: REVIEW_GUIDE_ID,
-                revisionId: "revision_review_1",
-              }
-            : {};
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(response),
-      });
-    },
-  );
-
-  return commands;
-}
-
 test.describe("critical pilot product surfaces", () => {
   test("onboarding, capture, invitation, and support remain operable", async ({
     page,
@@ -122,8 +32,10 @@ test.describe("critical pilot product surfaces", () => {
 
     await page.goto("/app");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Pro trial · Ends/ })).toBeVisible();
     await expect(page.getByText("Getting started")).toBeVisible();
-    await expect(page.getByText("0 of 7")).toBeVisible();
+    await expect(page.getByText("Invite teammates")).toBeVisible();
+    await expect(page.getByText("Pin the extension")).toBeVisible();
     await expectNoWcagViolations(page);
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/capture`);
@@ -146,8 +58,10 @@ test.describe("critical pilot product surfaces", () => {
       page.getByText("Paste one address per line, or separate them with commas."),
     ).toBeVisible();
     await page.getByLabel("Invitee emails").fill("new.teammate@alpha.example");
-    await page.getByRole("button", { name: "Create invitation" }).click();
-    await expect(page.getByText("Invitation ready")).toBeVisible();
+    await page.getByRole("button", { name: "Send invitation" }).click();
+    await expect(
+      page.getByRole("dialog").getByText("Invitation sent"),
+    ).toBeVisible();
     expect(commands.some((command) => command.action === "createInvite")).toBe(true);
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/support`);
@@ -169,7 +83,7 @@ test.describe("critical pilot product surfaces", () => {
     await expect(page.getByLabel("Guide title")).toHaveValue(
       "Review the captured onboarding flow",
     );
-    await expect(page.getByRole("button", { name: "Request review" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Share" })).toBeVisible();
     await page.getByLabel("Guide title").fill("Review the synthetic captured flow");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect
@@ -181,8 +95,45 @@ test.describe("critical pilot product surfaces", () => {
     const reviewCard = page
       .locator(".guide-card")
       .filter({ hasText: "Review the captured onboarding flow" });
-    await expect(reviewCard.getByRole("button", { name: "Approve" })).toBeVisible();
-    await reviewCard.getByRole("button", { name: "Publish" }).click();
+    await expect(reviewCard.getByRole("button", { name: "Share" })).toBeVisible();
+    await reviewCard.getByRole("button", { name: "Share" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Share", exact: true }).click();
+    await expect
+      .poll(() => commands.some((command) => command.action === "shareGuide"))
+      .toBe(true);
+  });
+
+  test("governed workspaces still review then approve and publish", async ({
+    page,
+  }) => {
+    const bootstrap = pilotBootstrap();
+    bootstrap.activeWorkspace!.workspace.settings.requireReviewBeforePublish =
+      true;
+    const commands = await installProductBackend(page, bootstrap);
+
+    await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/settings`);
+    await expect(
+      page.getByRole("heading", { name: "Settings & policies" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Require review before sharing"),
+    ).toBeVisible();
+
+    await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/guides`);
+    const reviewCard = page
+      .locator(".guide-card")
+      .filter({ hasText: "Review the captured onboarding flow" });
+    await expect(
+      reviewCard.getByRole("button", { name: "Approve and publish" }),
+    ).toBeVisible();
+    await reviewCard.getByRole("button", { name: "Approve and publish" }).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Approve and publish" })
+      .click();
+    await expect
+      .poll(() => commands.some((command) => command.action === "reviewGuide"))
+      .toBe(true);
     await expect
       .poll(() => commands.some((command) => command.action === "publishGuide"))
       .toBe(true);
@@ -199,6 +150,14 @@ test.describe("critical pilot product surfaces", () => {
     await expect(
       page.getByRole("heading", { name: "Complete a synthetic access request" }),
     ).toBeVisible();
+    await expect(page.getByRole("button", { name: /Live v/ })).toHaveCount(0);
+    await expect(page.getByText("0 views")).toBeVisible();
+    await page.getByRole("button", { name: "Like this guide" }).click();
+    await expect
+      .poll(() =>
+        commands.some((command) => command.action === "recordGuideReaction"),
+      )
+      .toBe(true);
     await page.getByRole("button", { name: "Mark complete" }).click();
     await expect
       .poll(() =>
@@ -206,9 +165,11 @@ test.describe("critical pilot product surfaces", () => {
       )
       .toBe(true);
 
-    await page.getByRole("button", { name: "Export" }).click();
+    await page.getByRole("button", { name: "Share" }).click();
+    const shareDialog = page.getByRole("dialog");
+    await expect(shareDialog.getByRole("button", { name: "PDF" })).toBeVisible();
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("menuitem", { name: "PDF" }).click();
+    await shareDialog.getByRole("button", { name: "PDF" }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe("synthetic-guide.pdf");
   });
@@ -220,9 +181,9 @@ test.describe("critical pilot product surfaces", () => {
 
     await page.goto("/platform");
     await expect(
-      page.getByRole("heading", { name: "Platform administration" }),
+      page.getByRole("heading", { name: "Home" }),
     ).toBeVisible();
-    await expect(page.getByText("Self-service limit: 0")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Provision organization" }).first()).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(
@@ -242,6 +203,7 @@ test.describe("critical pilot product surfaces", () => {
     ).not.toBeVisible();
 
     await page.goto("/platform/accounts");
+    await expect(page.getByRole("heading", { name: "Customers" })).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(
@@ -249,17 +211,20 @@ test.describe("critical pilot product surfaces", () => {
         ),
       )
       .toBe(true);
-    const activeWorkspaceRow = page
+    await page
       .locator(".member-row")
-      .filter({ hasText: "Alpha Operations" });
-    await activeWorkspaceRow.getByRole("button", { name: "Workspace actions" }).click();
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("menuitem", { name: "Suspend" }).click();
+      .filter({ hasText: "Alpha Operations" })
+      .click();
+    await expect(page.getByRole("heading", { name: "Alpha Operations" })).toBeVisible();
+    await page.getByRole("button", { name: "Suspend" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Suspend" }).click();
     await expect
       .poll(() => commands.some((command) => command.action === "setWorkspaceStatus"))
       .toBe(true);
 
     await page.goto("/platform/ops");
+    await expect(page.getByRole("heading", { name: "Tools" })).toBeVisible();
+    await expect(page.getByText("Self-service limit: 0")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Deletion approvals" })).toBeVisible();
     await page.getByRole("button", { name: "Review deletion" }).click();
     await expect(
@@ -291,5 +256,85 @@ test.describe("critical pilot product surfaces", () => {
     await expect(page.getByRole("link", { name: "Contact KnowHow" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Dashboard" })).toHaveCount(0);
     await expectNoWcagViolations(page);
+  });
+
+  test("Free plan hides Capture and Support and explains the Pro lock", async ({
+    page,
+  }) => {
+    const bootstrap = structuredClone(pilotBootstrap());
+    const entitlements = {
+      maximumUsers: 3,
+      maximumCreators: 1,
+      storageBytes: 1_000_000_000,
+      extensionEnabled: false,
+      supportEnabled: false,
+      removeBranding: false,
+      privacyToolsEnabled: false,
+      customSubdomainEnabled: false,
+      fileExportsEnabled: false,
+    };
+    const subscription = {
+      plan: "free" as const,
+      billedPlan: "free" as const,
+      kind: "trial",
+      status: "active",
+      access: "active" as const,
+      expiresAt: null,
+      graceEndsAt: null,
+      deletionEligibleAt: null,
+      renewsAt: null,
+      trialConsumed: false,
+      pastDue: false,
+    };
+    bootstrap.workspaces[0]!.subscription = subscription;
+    if (bootstrap.activeWorkspace) {
+      bootstrap.activeWorkspace.entitlements = entitlements;
+      bootstrap.activeWorkspace.workspace.subscription = subscription;
+    }
+    await installProductBackend(page, bootstrap);
+
+    await page.goto("/app");
+    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Free" })).toBeVisible();
+    const workspaceNav = page.getByRole("navigation", {
+      name: "Workspace navigation",
+    });
+    await expect(workspaceNav.getByRole("button", { name: "Capture" })).toHaveCount(0);
+    await expect(workspaceNav.getByRole("button", { name: "Support" })).toHaveCount(0);
+
+    await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/capture`);
+    await expect(page.getByText("Capture is on Pro")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Install and pair" })).toHaveCount(0);
+  });
+
+  test("platform client lists do not flash empty while loading", async ({
+    page,
+  }) => {
+    await installProductBackend(page, pilotBootstrap());
+    await page.route(
+      (url) => url.pathname === "/api/knowhow/platform",
+      async (route) => {
+        const url = new URL(route.request().url());
+        if (
+          url.searchParams.get("resource") === "customers" ||
+          url.searchParams.get("resource") === "accounts"
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            pilotPlatformQuery(url.searchParams.get("resource"), url.searchParams),
+          ),
+        });
+      },
+    );
+
+    await page.goto("/platform/accounts");
+    await expect(page.getByText("Loading…")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No customers yet" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "No customers match" })).toHaveCount(0);
+    await expect(page.getByText("Alpha Operations")).toBeVisible();
   });
 });

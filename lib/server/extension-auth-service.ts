@@ -5,7 +5,7 @@ import { HttpError, readJsonObject } from "./http-security";
 import { inputText } from "./input";
 import { TABLES } from "./appwrite-resources";
 import { requireAuthorized } from "./policy";
-import { EntitlementService } from "./entitlement-service";
+import { EntitlementDeniedError, EntitlementService, recordEntitlementBlocked } from "./entitlement-service";
 import type { RecordData, RecordStore, StoredRecord } from "./record-store";
 import type { AuthenticatedIdentity } from "./session-identity";
 import {
@@ -31,6 +31,7 @@ export type ExtensionDeviceDetails = {
   createdAt: string;
   pairedAt?: string;
   lastUsedAt?: string;
+  toolbarPinnedAt?: string;
   refreshExpiresAt?: string;
   refreshRotation?: number;
   previousRefreshHash?: string;
@@ -215,6 +216,7 @@ export class ExtensionAuthService {
   async refresh(request: Request) {
     const payload = await readJsonObject(request, 20_000);
     const refreshToken = inputText(payload.refreshToken, "Device credential", { min: 40, max: 256 });
+    const toolbarPinned = payload.toolbarPinned === true;
     if (!/^[A-Za-z0-9_-]+$/.test(refreshToken)) {
       throw new HttpError(401, "DEVICE_REFRESH_INVALID", "The browser credential is invalid or expired.");
     }
@@ -260,20 +262,31 @@ export class ExtensionAuthService {
     const nextRefresh = randomCredential();
     const nextHash = await hashToken(nextRefresh);
     const refreshedAt = new Date().toISOString();
-    await this.store.transaction(async (transaction) => {
-      const latest = await transaction.get(TABLES.extensionDevices, current!.$id);
-      if (!latest || latest.status !== "active" || latest.subject_id !== suppliedHash) {
-        throw new HttpError(401, "DEVICE_REFRESH_INVALID", "The browser credential was already rotated.");
+    try {
+      await this.store.transaction(async (transaction) => {
+        const latest = await transaction.get(TABLES.extensionDevices, current!.$id);
+        if (!latest || latest.status !== "active" || latest.subject_id !== suppliedHash) {
+          throw new HttpError(401, "DEVICE_REFRESH_INVALID", "The browser credential was already rotated.");
+        }
+        const accessService = new AccessService(transaction);
+        const latestDetails = decodePayload<ExtensionDeviceDetails>(latest, currentDetails);
+        const latestIdentity = identityFrom(latest, latestDetails);
+        const access = await accessService.requireWorkspace(String(latest.workspace_id), latestIdentity);
+        if (!access.membershipRow) throw new HttpError(403, "MEMBERSHIP_REQUIRED", "Workspace membership ended.");
+        requireAuthorized("capture.create", accessService.context(access));
+        await new EntitlementService(transaction, String(latest.workspace_id)).requireFeature("extensionEnabled");
+        current = await transaction.update(TABLES.extensionDevices, latest.$id, rowData({ subject_id: nextHash, updated_by: latestIdentity.userId }, { ...latestDetails, minimumVersion: currentMinimum, previousRefreshHash: suppliedHash, refreshRotation: Number(latestDetails.refreshRotation ?? 0) + 1, lastUsedAt: refreshedAt, ...(toolbarPinned ? { toolbarPinnedAt: latestDetails.toolbarPinnedAt ?? refreshedAt } : {}) }));
+      });
+    } catch (error) {
+      if (error instanceof EntitlementDeniedError) {
+        await recordEntitlementBlocked(
+          this.store,
+          String(current.workspace_id),
+          error.entitlementKind,
+        );
       }
-      const accessService = new AccessService(transaction);
-      const latestDetails = decodePayload<ExtensionDeviceDetails>(latest, currentDetails);
-      const latestIdentity = identityFrom(latest, latestDetails);
-      const access = await accessService.requireWorkspace(String(latest.workspace_id), latestIdentity);
-      if (!access.membershipRow) throw new HttpError(403, "MEMBERSHIP_REQUIRED", "Workspace membership ended.");
-      requireAuthorized("capture.create", accessService.context(access));
-      await new EntitlementService(transaction, String(latest.workspace_id)).requireFeature("extensionEnabled");
-      current = await transaction.update(TABLES.extensionDevices, latest.$id, rowData({ subject_id: nextHash, updated_by: latestIdentity.userId }, { ...latestDetails, minimumVersion: currentMinimum, previousRefreshHash: suppliedHash, refreshRotation: Number(latestDetails.refreshRotation ?? 0) + 1, lastUsedAt: refreshedAt }));
-    });
+      throw error;
+    }
     return {
       ...(await accessToken(current, decodePayload<ExtensionDeviceDetails>(current, currentDetails))),
       refreshToken: nextRefresh,

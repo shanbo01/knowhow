@@ -5,25 +5,15 @@ import { usePathname } from "next/navigation";
 import styles from "../marketing.module.css";
 
 const links = [
-  { href: "/product", label: "Product" },
-  { href: "/how-it-works", label: "How it works" },
-  { href: "/use-cases", label: "Use cases" },
+  { href: "/#how", label: "How it works" },
+  { href: "/#product", label: "Product" },
+  { href: "/#pricing", label: "Pricing" },
+  { href: "/security", label: "Security" },
   { href: "/trust", label: "Trust" },
-  { href: "/pricing", label: "Pricing" },
 ] as const;
 
 function isActive(pathname: string, href: string) {
-  if (href === "/use-cases") {
-    return (
-      pathname === "/use-cases" ||
-      pathname === "/internal-it" ||
-      pathname === "/employee-onboarding" ||
-      pathname === "/customer-service-desk-procedures" ||
-      pathname === "/operational-procedures" ||
-      pathname === "/compliance-evidence" ||
-      pathname === "/software-training"
-    );
-  }
+  if (href.startsWith("/#")) return pathname === "/";
   return pathname === href;
 }
 

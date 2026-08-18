@@ -37,6 +37,7 @@ import {
 } from "../../lib/knowhow-client";
 import type { EditorBlock } from "../../lib/knowhow-types";
 import { paintRasterRedaction } from "../../lib/redaction-raster";
+import { useConfirmDialog } from "./confirm-dialog";
 
 type Annotation = NonNullable<EditorBlock["annotations"]>[number];
 type Redaction = NonNullable<EditorBlock["redactions"]>[number];
@@ -278,6 +279,7 @@ export type ScreenshotEditorProps = {
   locked: boolean;
   canReplace: boolean;
   busy: boolean;
+  privacyToolsEnabled?: boolean;
   onChange: (patch: Partial<EditorBlock>) => void;
   onReplaceFile: (file: File) => void;
   onRemove: () => void;
@@ -292,6 +294,7 @@ export function ScreenshotEditor({
   locked,
   canReplace,
   busy,
+  privacyToolsEnabled = true,
   onChange,
   onReplaceFile,
   onRemove,
@@ -318,6 +321,7 @@ export function ScreenshotEditor({
   const cropFrameRef = useRef<number | null>(null);
   const cropPendingRef = useRef(false);
   const decodeRetryRef = useRef("");
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const dragRef = useRef<{
     kind: DragKind;
     startClientX: number;
@@ -549,11 +553,25 @@ export function ScreenshotEditor({
   }
 
   function chooseCanvasTool(nextMode: Mode) {
+    if (
+      !privacyToolsEnabled &&
+      (nextMode === "redact" ||
+        nextMode === "box" ||
+        nextMode === "arrow" ||
+        nextMode === "text")
+    ) {
+      closeCanvasMenu();
+      return;
+    }
     setMode(nextMode);
     closeCanvasMenu();
   }
 
   function addAnnotation(kind: Annotation["kind"], point: { x: number; y: number }, size?: { width: number; height: number }, extra?: Partial<Annotation>) {
+    if (!privacyToolsEnabled && kind !== "click") {
+      setMode("view");
+      return;
+    }
     const isClick = kind === "click";
     const width = size?.width ?? (isClick ? 0.035 : 0.22);
     const height = size?.height ?? (isClick ? 0.035 : 0.12);
@@ -585,6 +603,10 @@ export function ScreenshotEditor({
   }
 
   function addRedaction(rect: { x: number; y: number; width: number; height: number }) {
+    if (!privacyToolsEnabled) {
+      setMode("view");
+      return;
+    }
     if (rect.width < 0.01 || rect.height < 0.01) {
       setMode("view");
       return;
@@ -973,8 +995,16 @@ export function ScreenshotEditor({
     URL.revokeObjectURL(anchor.href);
   }
 
-  function handleDelete() {
-    if (!window.confirm("Delete this screenshot? This cannot be undone.")) return;
+  async function handleDelete() {
+    if (
+      !(await askToConfirm({
+        title: "Delete this screenshot?",
+        description: "Delete this screenshot? This cannot be undone.",
+        confirmLabel: "Delete",
+        tone: "danger",
+      }))
+    )
+      return;
     onRemove();
   }
 
@@ -1130,14 +1160,22 @@ export function ScreenshotEditor({
                 {canvasMenuView === "main" ? (
                   <>
                     <button type="button" role="menuitem" onClick={() => chooseCanvasTool("click")} disabled={locked}><MousePointerClick /> Add click target</button>
-                    <button type="button" role="menuitem" onClick={() => setCanvasMenuView("annotate")} disabled={locked}><Square /> Annotate</button>
-                    <button type="button" role="menuitem" onClick={() => chooseCanvasTool("redact")} disabled={locked}><EyeOff /> Redact</button>
+                    {privacyToolsEnabled ? (
+                      <>
+                        <button type="button" role="menuitem" onClick={() => setCanvasMenuView("annotate")} disabled={locked}><Square /> Annotate</button>
+                        <button type="button" role="menuitem" onClick={() => chooseCanvasTool("redact")} disabled={locked}><EyeOff /> Redact</button>
+                      </>
+                    ) : (
+                      <button type="button" role="menuitem" disabled>
+                        <EyeOff /> Smart Blur, redact, and annotate are on Pro
+                      </button>
+                    )}
                     <button type="button" role="menuitem" onClick={() => chooseCanvasTool(mode === "crop" ? "view" : "crop")}><CropIcon /> {mode === "crop" ? "Done cropping" : "Crop"}</button>
                     {zoom > MIN_ZOOM + 0.01 ? <button type="button" role="menuitem" onClick={() => { commit({ crop: undefined }); closeCanvasMenu(); }}><CropIcon /> Reset crop</button> : null}
                     <div className="shot-canvas-menu-divider" />
                     <button type="button" role="menuitem" onClick={() => { fileInputRef.current?.click(); closeCanvasMenu(); }} disabled={!canReplace || busy}>{busy ? <LoaderCircle className="spin" /> : <RefreshCw />} Replace image</button>
                     <button type="button" role="menuitem" onClick={() => { void handleDownload(); closeCanvasMenu(); }} disabled={!url}><Download /> Download</button>
-                    <button type="button" role="menuitem" className="danger" onClick={() => { closeCanvasMenu(); handleDelete(); }}><Trash2 /> Delete image</button>
+                    <button type="button" role="menuitem" className="danger" onClick={() => { closeCanvasMenu(); void handleDelete(); }}><Trash2 /> Delete image</button>
                   </>
                 ) : (
                   <>
@@ -1463,6 +1501,7 @@ export function ScreenshotEditor({
             <button type="button" className="icon-button tiny" onClick={() => setMode("view")} aria-label="Cancel tool"><X /></button>
           </div>
         ) : null}
+        {confirmDialog}
       </div>
 
     </div>

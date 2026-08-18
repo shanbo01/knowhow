@@ -19,6 +19,7 @@ export type ListRecordsOptions = {
   limit?: number;
   orderBy?: string;
   order?: "asc" | "desc";
+  cursor?: string;
 };
 
 export class RecordConflictError extends Error {
@@ -89,9 +90,14 @@ export class InMemoryRecordStore implements RecordStore {
       .filter((record) => matches(record, options.filters))
       .sort((left, right) =>
         String(left[orderBy]).localeCompare(String(right[orderBy])) * direction,
-      )
-      .slice(0, options.limit ?? 5_000);
-    return clone(records) as Array<StoredRecord<T>>;
+      );
+    const start = options.cursor
+      ? records.findIndex((record) => record.$id === options.cursor) + 1
+      : 0;
+    const from = start > 0 ? start : options.cursor ? records.length : 0;
+    return clone(records.slice(from, from + (options.limit ?? 5_000))) as Array<
+      StoredRecord<T>
+    >;
   }
 
   async create<T extends RecordData>(table: TableName, id: string, data: T) {

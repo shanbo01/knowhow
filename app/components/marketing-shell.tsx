@@ -33,20 +33,10 @@ export function MarketingFooter() {
       <nav className={styles.footerLinks} aria-label="Footer navigation">
         <div>
           <strong>Product</strong>
-          <Link href="/product">Product overview</Link>
-          <Link href="/how-it-works">How it works</Link>
+          <Link href="/#product">Product</Link>
+          <Link href="/#how">How it works</Link>
           <Link href="/extension">Capture extension</Link>
-          <Link href="/pricing">Pricing</Link>
-        </div>
-        <div>
-          <strong>Use cases</strong>
-          <Link href="/use-cases">All use cases</Link>
-          <Link href="/internal-it">Internal IT</Link>
-          <Link href="/employee-onboarding">Employee onboarding</Link>
-          <Link href="/customer-service-desk-procedures">Service desk</Link>
-          <Link href="/operational-procedures">Operations</Link>
-          <Link href="/compliance-evidence">Compliance</Link>
-          <Link href="/software-training">Software training</Link>
+          <Link href="/#pricing">Pricing</Link>
         </div>
         <div>
           <strong>Company</strong>

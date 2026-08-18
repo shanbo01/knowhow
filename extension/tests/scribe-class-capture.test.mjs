@@ -135,12 +135,20 @@ test("capture hides live blur before click JPEGs and bakes ink-tight privacy sam
     backgroundSource.indexOf("async function finalizeInteractionEntry"),
   );
   assert.match(fallbackSlice, /deadlineMs = 1_200/);
-  assert.match(fallbackSlice, /deadlineRequired: true/);
+  assert.match(fallbackSlice, /deadlineRequired: false/);
+  assert.doesNotMatch(fallbackSlice, /deadlineRequired: true/);
   assert.doesNotMatch(fallbackSlice, /visualEpoch !== entry\.visualEpoch/);
   assert.doesNotMatch(
     fallbackSlice,
     /No clean pre-action screenshot was ready\. Hover over the control/,
   );
+  assert.match(fallbackSlice, /pageMovedError\(error\)/);
+  assert.ok(
+    fallbackSlice.indexOf("pageMovedError(error)") <
+      fallbackSlice.indexOf("markCaptureEntryFailed"),
+    "a page move must not fail the click card",
+  );
+  assert.match(backgroundSource, /newestSameTabPreparedFrame\(/);
 
   assert.match(offscreenSource, /geometry\.privacySampleSize/);
   assert.match(offscreenSource, /const halo = 0/);
@@ -159,6 +167,21 @@ test("pointerdown stages without a hover frame and same-tab nav attaches an extr
     contentSource.indexOf("function onPointerMove"),
   );
   assert.match(pointerSlice, /stageInteraction\(element, context, sourceEvent\)/);
+  assert.match(contentSource, /function stallForEarlyCapture\(/);
+  assert.match(contentSource, /stallForEarlyCapture\(64\)/);
+  assert.match(
+    contentSource,
+    /Math.min\(Math.max\(0, Number\(ms\) \|\| 0\), 80\)/,
+  );
+  const stageSlice = contentSource.slice(
+    contentSource.indexOf("function stageInteraction"),
+    contentSource.indexOf("function commitStagedInteraction"),
+  );
+  assert.ok(
+    stageSlice.indexOf("STAGE_INTERACTION") <
+      stageSlice.indexOf("stallForEarlyCapture(64)"),
+    "pointerdown must stall after STAGE so the visible tab can be snapshotted",
+  );
 
   const recordSlice = backgroundSource.slice(
     backgroundSource.indexOf("async function recordNavigationDestination"),

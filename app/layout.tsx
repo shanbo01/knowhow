@@ -1,10 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import "@fontsource/kumbh-sans/latin-400.css";
-import "@fontsource/kumbh-sans/latin-500.css";
-import "@fontsource/kumbh-sans/latin-600.css";
-import "@fontsource/kumbh-sans/latin-700.css";
-import "@fontsource/kumbh-sans/latin-800.css";
+import "@fontsource-variable/google-sans-flex/wght.css";
 import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
 import "./auth-experience.css";

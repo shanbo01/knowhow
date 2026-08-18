@@ -8,9 +8,11 @@ import {
   type GuideRecord,
 } from "../../../../lib/server/domain-records";
 import {
+  completeDueExportJob,
   safeExportFilename,
   verifiedExportObject,
 } from "../../../../lib/server/export-job-service";
+import { EntitlementService } from "../../../../lib/server/entitlement-service";
 import { GuideAccessService } from "../../../../lib/server/guide-access-service";
 import {
   assertCookieMutationRequest,
@@ -38,11 +40,11 @@ export const dynamic = "force-dynamic";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,128}$/;
-const FORMATS = new Set(["pdf", "html", "markdown"] as const);
+const FORMATS = new Set(["pdf", "html", "markdown", "pptx"] as const);
 
 function exportFormat(value: unknown): ExportJobRecord["format"] {
   if (typeof value !== "string" || !FORMATS.has(value as ExportJobRecord["format"])) {
-    throw new HttpError(400, "EXPORT_FORMAT_INVALID", "Choose PDF, HTML, or Markdown.");
+    throw new HttpError(400, "EXPORT_FORMAT_INVALID", "Choose PDF, PowerPoint, HTML, or Markdown.");
   }
   return value as ExportJobRecord["format"];
 }
@@ -68,7 +70,12 @@ export async function POST(request: Request) {
       throw new HttpError(400, "IDEMPOTENCY_KEY_INVALID", "A valid idempotency key is required.");
     }
     const identity = await requireVerifiedSession(request);
-    const { store } = createRequestServices();
+    const { store, objects, exportObjects } = createRequestServices();
+    if (format === "pdf" || format === "html" || format === "pptx") {
+      await new EntitlementService(store, workspaceId).requireFeature(
+        "fileExportsEnabled",
+      );
+    }
     await consumeFixedWindows(store, [
       {
         scope: "knowhow.export",
@@ -118,7 +125,7 @@ export async function POST(request: Request) {
       `${identity.userId}:${workspaceId}:${guideId}:${format}:${idempotencyKey}`,
     );
     const outputFileId = await deterministicResourceId("output", jobId);
-    const extension = format === "markdown" ? "md" : format;
+    const extension = format === "markdown" ? "md" : format === "pptx" ? "pptx" : format;
     const details: ExportJobRecord = {
       guideId,
       revisionId: guide.publishedRevisionId,
@@ -196,13 +203,13 @@ export async function POST(request: Request) {
       // A concurrent request may have committed the deterministic job first.
       if (!(await store.get(TABLES.exportJobs, jobId))) throw error;
     }
-    const job = await store.get(TABLES.exportJobs, jobId);
-    if (!job || job.user_id !== identity.userId) {
+    const queued = await store.get(TABLES.exportJobs, jobId);
+    if (!queued || queued.user_id !== identity.userId) {
       throw new HttpError(500, "EXPORT_QUEUE_FAILED", "The export could not be queued.", {
         expose: false,
       });
     }
-    const replay = decodePayload<ExportJobRecord>(job, null as never);
+    const replay = decodePayload<ExportJobRecord>(queued, null as never);
     if (
       !replay ||
       replay.guideId !== guideId ||
@@ -215,16 +222,23 @@ export async function POST(request: Request) {
         "The idempotency key was already used for another export.",
       );
     }
+    const job = await completeDueExportJob(store, objects, exportObjects, jobId);
+    const ready = job.status === "ready";
+    const failed = job.status === "failed" || job.status === "retry";
     return withRequestId(
       jsonResponse(
         {
           jobId,
           status: String(job.status),
           created,
-          pollAfterMs: 750,
+          pollAfterMs: ready ? 0 : 750,
           requestId,
+          filename: replay.filename,
+          ...(failed
+            ? { error: "The export could not be created. Try again or contact support." }
+            : {}),
         },
-        { status: created ? 202 : 200 },
+        { status: ready || !created ? 200 : 202 },
       ),
       requestId,
     );
@@ -242,7 +256,7 @@ export async function GET(request: Request) {
       throw new HttpError(400, "EXPORT_JOB_ID_INVALID", "Export job ID is invalid.");
     }
     const identity = await requireVerifiedSession(request);
-    const { store, exportObjects } = createRequestServices();
+    const { store, objects, exportObjects } = createRequestServices();
     await consumeFixedWindows(store, [
       {
         scope: "knowhow.export-status",
@@ -251,11 +265,11 @@ export async function GET(request: Request) {
         windowSeconds: 600,
       },
     ]);
-    const job = await store.get(TABLES.exportJobs, jobId);
+    let job = await store.get(TABLES.exportJobs, jobId);
     if (!job || job.user_id !== identity.userId) {
       throw new HttpError(404, "EXPORT_JOB_NOT_FOUND", "Export job not found.");
     }
-    const details = decodePayload<ExportJobRecord>(job, null as never);
+    let details = decodePayload<ExportJobRecord>(job, null as never);
     if (!details) {
       throw new HttpError(500, "EXPORT_JOB_CORRUPT", "The export job is unavailable.", {
         expose: false,
@@ -268,6 +282,15 @@ export async function GET(request: Request) {
       details.revisionId,
       "guide.export",
     );
+    if (url.searchParams.get("download") !== "1") {
+      job = await completeDueExportJob(store, objects, exportObjects, jobId);
+      details = decodePayload<ExportJobRecord>(job, details);
+      if (!details) {
+        throw new HttpError(500, "EXPORT_JOB_CORRUPT", "The export job is unavailable.", {
+          expose: false,
+        });
+      }
+    }
     const expired = Boolean(
       details.expiresAt && Date.parse(details.expiresAt) <= Date.now(),
     );
@@ -305,7 +328,7 @@ export async function GET(request: Request) {
         format: details.format,
         filename: details.filename,
         attempts: details.attempts,
-        ...(job.status === "failed"
+        ...(job.status === "failed" || job.status === "retry"
           ? { error: "The export could not be created. Try again or contact support." }
           : {}),
         ...(details.completedAt ? { completedAt: details.completedAt } : {}),

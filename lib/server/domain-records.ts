@@ -17,6 +17,17 @@ export type OrganizationRecord = {
   country: string;
   status: "provisioning" | "active" | "suspended" | "deleting" | "deleted";
   createdAt: string;
+  internalNotes?: string;
+  ownerLabel?: string;
+  accountTags?: Array<
+    | "employee"
+    | "investor"
+    | "partner"
+    | "beta"
+    | "press"
+    | "lifetime"
+    | "complimentary"
+  >;
 };
 
 export type WorkspaceRecord = {
@@ -127,6 +138,7 @@ export type PricingCatalogRecord = {
 };
 
 export type SubscriptionKind = "design_partner" | "trial" | "paid";
+export type CommercialPlan = "free" | "pro_trial" | "pro" | "enterprise";
 export type SubscriptionStatus =
   | "active"
   | "grace"
@@ -139,6 +151,7 @@ export type SubscriptionStatus =
 
 export type SubscriptionRecord = {
   kind: SubscriptionKind;
+  plan?: CommercialPlan;
   startsAt: string;
   expiresAt: string | null;
   graceDays: number;
@@ -146,8 +159,11 @@ export type SubscriptionRecord = {
   publicTrial: false;
   manualContract: boolean;
   status: SubscriptionStatus;
+  trialConsumed?: boolean;
+  complimentary?: boolean;
   extendedAt?: string;
   convertedAt?: string;
+  downgradedAt?: string;
   lastEvaluatedAt?: string;
 };
 
@@ -211,7 +227,7 @@ export type LifecycleCaseRecord = {
 export type ExportJobRecord = {
   guideId: string;
   revisionId: string;
-  format: "pdf" | "html" | "markdown";
+  format: "pdf" | "html" | "markdown" | "pptx";
   filename: string;
   outputFileId: string;
   requestedAt: string;
@@ -325,6 +341,7 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   removeBranding: false,
   allowRestrictedExports: false,
   watermarkExports: true,
+  requireReviewBeforePublish: false,
 };
 
 export function encodePayload(value: unknown) {

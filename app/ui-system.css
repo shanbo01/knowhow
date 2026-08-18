@@ -10,9 +10,9 @@
   --kh-control-height: 2.375rem;
   --kh-control-height-sm: 2rem;
   --kh-control-height-lg: 2.75rem;
-  --kh-control-radius: 0.625rem;
-  --kh-surface-radius: 0.75rem;
-  --kh-dialog-radius: 0.875rem;
+  --kh-control-radius: 0.75rem;
+  --kh-surface-radius: 1rem;
+  --kh-dialog-radius: 1.25rem;
   --kh-control-gap: 0.45rem;
   --kh-control-pad-x: 0.8rem;
   --kh-control-font-size: 0.8125rem;
@@ -20,12 +20,12 @@
   --kh-ui-speed: 140ms;
   --kh-focus-ring: 0 0 0 3px color-mix(in srgb, var(--ring) 24%, transparent);
   --kh-surface-shadow:
-    0 1px 2px rgb(15 23 42 / 0.025),
-    0 8px 24px rgb(15 23 42 / 0.055);
+    0 1px 2px rgb(17 17 15 / 0.04),
+    0 10px 28px rgb(17 17 15 / 0.06);
   --kh-control-shadow:
-    0 1px 2px rgb(15 23 42 / 0.035),
-    0 3px 10px rgb(15 23 42 / 0.04);
-  --kh-floating-shadow: 0 16px 42px rgb(15 23 42 / 0.12);
+    0 1px 2px rgb(17 17 15 / 0.04),
+    0 3px 10px rgb(17 17 15 / 0.05);
+  --kh-floating-shadow: 0 16px 42px rgb(17 17 15 / 0.14);
 }
 
 :root[data-theme="dark"],
@@ -59,6 +59,13 @@
     box-shadow var(--kh-ui-speed) ease,
     transform var(--kh-ui-speed) ease,
     opacity var(--kh-ui-speed) ease;
+}
+
+.top-create,
+.auth-primary-button,
+.experience-shell .topbar-primary-action,
+.button.primary {
+  border-radius: 999px !important;
 }
 
 [data-slot="button"][data-size="xs"],
@@ -168,6 +175,43 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.focused-guide-route .editor-header,
+.focused-guide-route .guide-reader-header,
+.focused-guide-route .document-header {
+  background: var(--card);
+  border-color: var(--border);
+}
+
+.focused-guide-route .editor-title-input,
+.focused-guide-route .document-header h1 {
+  letter-spacing: -0.04em;
+  font-weight: 750;
+}
+
+.focused-guide-route .step-editor,
+.focused-guide-route .shot-editor,
+.focused-guide-route .document-step {
+  border-radius: 1rem !important;
+}
+
+.focused-guide-route .button.primary,
+.focused-guide-route .editor-publish,
+.focused-guide-route .top-create {
+  border-radius: 999px !important;
+}
+
+@media (max-width: 900px) {
+  .focused-guide-route .editor-header,
+  .focused-guide-route .guide-reader-header-inner {
+    padding-inline: 1rem;
+  }
+
+  .focused-guide-route .guide-editor,
+  .focused-guide-route .guide-reader-page {
+    min-width: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

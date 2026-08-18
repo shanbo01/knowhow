@@ -15,6 +15,8 @@ test("companion guides prefer the published revision and keep pending blur overl
       canEdit: true,
       canReview: false,
       canPublish: false,
+      canShare: false,
+      canArchive: false,
       canDelete: false,
       createdAt: "2026-08-14T00:00:00.000Z",
       updatedAt: "2026-08-14T12:00:00.000Z",

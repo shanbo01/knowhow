@@ -4,6 +4,7 @@ import {
   renderGuideToHtml,
   renderGuideToMarkdown,
   renderGuideToPdf,
+  renderGuideToPptx,
   type GuideRenderOptions,
 } from "../exports";
 import {
@@ -44,7 +45,7 @@ function jobDetails(row: StoredRecord<RecordData>) {
     !details.outputFileId ||
     !details.requester?.userId ||
     !details.requester.email ||
-    !["pdf", "html", "markdown"].includes(details.format)
+    !["pdf", "html", "markdown", "pptx"].includes(details.format)
   ) {
     throw new HttpError(500, "EXPORT_JOB_CORRUPT", "The export job is invalid.", {
       expose: false,
@@ -128,11 +129,7 @@ async function putIdempotently(
   const verifyExisting = async () => {
     const existing = await objects.get(input.id);
     if (!existing) return false;
-    if (
-      existing.contentType !== input.contentType ||
-      existing.filename !== input.filename ||
-      (await sha256Bytes(existing.bytes)) !== expectedHash
-    ) {
+    if ((await sha256Bytes(existing.bytes)) !== expectedHash) {
       throw new HttpError(
         500,
         "EXPORT_OUTPUT_COLLISION",
@@ -259,6 +256,10 @@ export async function processExportJob(
     } else if (details.format === "html") {
       bytes = new TextEncoder().encode(renderGuideToHtml(built.revision, options));
       contentType = "text/html";
+    } else if (details.format === "pptx") {
+      bytes = await renderGuideToPptx(built.revision, options);
+      contentType =
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     } else {
       bytes = new TextEncoder().encode(renderGuideToMarkdown(built.revision, options));
       contentType = "text/markdown";
@@ -322,6 +323,32 @@ export async function processExportJob(
   }
 }
 
+export async function completeDueExportJob(
+  store: RecordStore,
+  privateObjects: PrivateObjectStore,
+  exportObjects: PrivateObjectStore,
+  jobId: string,
+  now = new Date(),
+) {
+  const current = await store.get(TABLES.exportJobs, jobId);
+  if (!current) {
+    throw new HttpError(404, "EXPORT_JOB_NOT_FOUND", "Export job not found.");
+  }
+  if (
+    current.status === "ready" ||
+    current.status === "failed" ||
+    current.status === "expired"
+  ) {
+    return current;
+  }
+  await processExportJob(store, privateObjects, exportObjects, jobId, now);
+  const next = await store.get(TABLES.exportJobs, jobId);
+  if (!next) {
+    throw new HttpError(404, "EXPORT_JOB_NOT_FOUND", "Export job not found.");
+  }
+  return next;
+}
+
 export async function verifiedExportObject(
   objects: PrivateObjectStore,
   details: ExportJobRecord,
@@ -337,8 +364,6 @@ export async function verifiedExportObject(
   const object = await objects.get(details.outputFileId);
   if (
     !object ||
-    object.contentType !== details.contentType ||
-    object.filename !== details.filename ||
     object.bytes.byteLength !== details.byteSize ||
     (await sha256Bytes(object.bytes)) !== details.sha256
   ) {
@@ -346,5 +371,9 @@ export async function verifiedExportObject(
       expose: false,
     });
   }
-  return object;
+  return {
+    bytes: object.bytes,
+    filename: details.filename,
+    contentType: details.contentType,
+  };
 }
