@@ -80,7 +80,7 @@ export type GuideReaderViewProps = {
   onEdit?: () => void;
   onDelete?: () => void;
   onRevisionChange?: (revision: GuideRevisionMode) => void;
-  onExport?: (format: "pdf" | "html" | "markdown") => void;
+  onExport?: (format: "pdf" | "pptx" | "html" | "markdown") => void;
   onRestore?: (revisionId: string) => void;
   onPublishedViewed?: () => void;
   onComplete?: () => void;
@@ -246,7 +246,7 @@ export function GuideReaderView({
                   <Link2 /> Copy live link
                 </button>
               ) : null}
-              {canExport && guide.publishedRevision && interactive && !onShare ? (
+              {canExport && guide.publishedRevision && interactive ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     className="button secondary small"
@@ -257,6 +257,9 @@ export function GuideReaderView({
                   <DropdownMenuContent align="end" className="export-menu">
                     <DropdownMenuItem onClick={() => onExport?.("pdf")}>
                       PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onExport?.("pptx")}>
+                      PowerPoint
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => onExport?.("html")}>
                       HTML

@@ -15,8 +15,8 @@ import {
   assertBucketContract,
   assertDatabaseContract,
   assertTableContract,
-  localSiteOrigin,
   resolveSmokeTarget,
+  smokeSiteOrigin,
 } from "./appwrite-contract-guards.mjs";
 
 const required = (name) => {
@@ -25,7 +25,15 @@ const required = (name) => {
   return value;
 };
 
-const { endpoint } = resolveSmokeTarget(required("APPWRITE_ENDPOINT"));
+const smokeMode = process.env.KNOWHOW_SMOKE_MODE?.trim() || "local";
+assert.ok(
+  ["local", "controlled"].includes(smokeMode),
+  "KNOWHOW_SMOKE_MODE must be local or controlled.",
+);
+const { endpoint, target } = resolveSmokeTarget(required("APPWRITE_ENDPOINT"), {
+  mode: smokeMode,
+  allowedHosts: process.env.KNOWHOW_APPWRITE_HOSTS,
+});
 
 const projectId = required("APPWRITE_PROJECT_ID");
 const apiKey = required("APPWRITE_API_KEY");
@@ -33,11 +41,19 @@ assert.ok(
   apiKey.length >= 20 && !apiKey.toLowerCase().includes("replace-with-"),
   "APPWRITE_API_KEY is invalid.",
 );
-assert.equal(
-  projectId,
-  "knowhow-local",
-  "The local smoke may run only against the knowhow-local project.",
-);
+if (target === "local") {
+  assert.equal(
+    projectId,
+    "knowhow-local",
+    "The local smoke may run only against the knowhow-local project.",
+  );
+} else {
+  assert.notEqual(
+    projectId,
+    "knowhow-local",
+    "The controlled smoke refuses the disposable local project.",
+  );
+}
 const databaseId = process.env.APPWRITE_DATABASE_ID?.trim() || "knowhow_core";
 const mediaBucketId =
   process.env.APPWRITE_PRIVATE_MEDIA_BUCKET_ID?.trim() ||
@@ -383,7 +399,7 @@ try {
 
   const rawSiteOrigin = process.env.KNOWHOW_SMOKE_SITE_ORIGIN?.trim();
   const siteOrigin = rawSiteOrigin
-    ? localSiteOrigin(rawSiteOrigin)
+    ? smokeSiteOrigin(rawSiteOrigin, { mode: target })
     : undefined;
   if (siteOrigin) {
     for (const path of ["/api/health", "/api/auth/health"]) {
@@ -485,7 +501,7 @@ process.stdout.write(
   `${JSON.stringify(
     {
       status: "passed",
-      target: "local",
+      target,
       endpoint: new URL(endpoint).origin,
       projectId,
       checks,

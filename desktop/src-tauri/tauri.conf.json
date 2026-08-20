@@ -1,0 +1,90 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "KnowHow Capture",
+  "version": "0.1.0",
+  "identifier": "com.knowhow.capture",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "KnowHow Capture",
+        "width": 660,
+        "height": 780,
+        "minWidth": 540,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "contentProtected": true
+      },
+      {
+        "label": "hud",
+        "title": "KnowHow Capture controls",
+        "url": "index.html",
+        "width": 520,
+        "height": 345,
+        "minWidth": 460,
+        "minHeight": 68,
+        "visible": false,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "contentProtected": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'none'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "createUpdaterArtifacts": false,
+    "category": "Productivity",
+    "shortDescription": "Capture Windows workflows as private KnowHow guides.",
+    "longDescription": "A privacy-first screenshot recorder for creating KnowHow workflow guides across Windows applications.",
+    "publisher": "KnowHow",
+    "copyright": "Copyright © KnowHow",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/nsis-hooks.nsh",
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": ["en-US"],
+        "upgradeCode": "adb9a824-c74e-5177-b3f7-c0acaa0543a0",
+        "fragmentPaths": ["./windows/wix-cleanup.wxs"],
+        "componentGroupRefs": ["KnowHowCaptureDataCleanup"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": false,
+      "endpoints": [],
+      "pubkey": ""
+    }
+  }
+}

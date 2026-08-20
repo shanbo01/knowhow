@@ -31,6 +31,15 @@ The pilot must not be used for automated high-impact decisions, regulated record
 5. Complete the privacy review truthfully. If prohibited data may have been uploaded, stop publication and contact the administrator/support immediately.
 6. Restrict the guide audience to the minimum necessary users/groups. Publication is not a substitute for data-owner approval.
 
+For Windows desktop capture, also:
+
+1. Capture only workflows the organization has authorized. Do not use KnowHow for covert surveillance, employee monitoring, keylogging, or collection unrelated to a guide the creator is intentionally recording.
+2. Choose the narrowest scope that works. Window and application scope are preferred over monitor or all-displays capture.
+3. Close password managers, private/incognito browser windows, Windows Security and credential dialogs, unrelated apps, notifications, and other confidential surfaces before recording. KnowHow blocks or masks known protected surfaces, but the creator remains responsible for the visible desktop.
+4. “Capture typed text” may place exact non-password text in the private draft. Turn it off unless the wording is needed, and never rely on it to identify every secret-like value.
+5. Pause before switching to unrelated or elevated work. Treat the HUD’s out-of-scope/protected status as a stop signal, not a reason to weaken operating-system protections.
+6. Finish into the private web editor and complete the existing privacy review before sharing, export, review submission, or publication.
+
 ## Responsibilities
 
 - Organization owners approve use cases, train users, maintain membership, and provide legal/security contacts.

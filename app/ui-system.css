@@ -223,3 +223,62 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Canonical landing-page logo treatment. This file loads after the
+   experience styles so app shells cannot restyle the shared mark. */
+.product-brand {
+  gap: 10px;
+}
+
+.product-brand-mark,
+.experience-shell .sidebar-brand .product-brand-mark,
+.auth-intro .product-brand-mark {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #11110f;
+  color: #fff;
+}
+
+.product-brand-mark svg,
+.experience-shell .sidebar-brand .product-brand-mark svg,
+.auth-intro .product-brand-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.product-brand-mark::after,
+.auth-intro .product-brand-mark::after {
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border: 0;
+  background: #ff5a12;
+  box-shadow: 0 0 0 3px rgb(255 90 18 / 14%);
+}
+
+.product-brand-copy strong,
+.experience-shell .sidebar-brand .product-brand-copy strong,
+.auth-intro .product-brand-copy strong {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  text-transform: lowercase;
+}
+
+/* Opening screens intentionally keep the same artwork at display size. */
+.opening-product-brand .product-brand-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+}
+
+.opening-product-brand .product-brand-mark svg {
+  width: 26px;
+  height: 26px;
+}

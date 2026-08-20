@@ -6,6 +6,7 @@ import {
   ArrowUp,
   Check,
   Copy,
+  Download,
   GripVertical,
   Heading2,
   ImagePlus,
@@ -22,6 +23,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { loadAuthorizedMediaUrl, replaceDraftScreenshot } from "../../lib/knowhow-client";
 import type { NavigationGuard } from "../../lib/navigation-guard";
+import { isCapturedGuideSource, type GuideSource } from "../../lib/guide-contracts";
 import type {
   Audience,
   Guide,
@@ -35,7 +37,8 @@ import type {
 import { flattenScreenshot, needsFlattening } from "../../lib/screenshot-flatten";
 import { ScreenshotEditor } from "./screenshot-editor";
 import { SelectMenu } from "./select-menu";
-import { GuideShareDialog, type GuideExportFormatChoice } from "./guide-share-dialog";
+import { GuideShareDialog } from "./guide-share-dialog";
+import { GuideExportDialog, type GuideExportFormatChoice } from "./guide-export-dialog";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { WorkspaceLogo } from "./workspace-logo";
 import { Button } from "@/components/ui/button";
@@ -50,7 +53,7 @@ export type GuideEditorPayload = {
   systemReferences: string[];
   steps: EditorBlock[];
   audiences: Audience[];
-  source: "manual" | "browser-capture";
+  source: GuideSource;
   privacyReviewed: boolean;
   transition: "draft" | "review";
 };
@@ -296,7 +299,7 @@ export function GuideEditor({
   const [steps, setSteps] = useState<EditorBlock[]>(() => editableSteps(revision));
   const [audiences, setAudiences] = useState<Audience[]>(initialAudience(revision));
   const [privacyReviewed, setPrivacyReviewed] = useState(
-    Boolean(revision?.privacyReviewedAt) || revision?.source !== "browser-capture",
+    Boolean(revision?.privacyReviewedAt) || !isCapturedGuideSource(revision?.source),
   );
   const [localError, setLocalError] = useState("");
   const [uploadingStepId, setUploadingStepId] = useState("");
@@ -308,6 +311,9 @@ export function GuideEditor({
   const [leavePromptOpen, setLeavePromptOpen] = useState(false);
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
+  const inspectorPanelRef = useRef<HTMLElement>(null);
   const ensureDraftRef = useRef<Promise<GuideSaveResult> | null>(null);
   const [draftIds, setDraftIds] = useState<GuideSaveResult | null>(
     guide?.workingRevision
@@ -316,7 +322,8 @@ export function GuideEditor({
   );
 
   const source = revision?.source ?? "manual";
-  const isCaptured = source === "browser-capture";
+  const isCaptured = isCapturedGuideSource(source);
+  const isDesktopCapture = source === "desktop-capture";
   const liveAudience = guide?.publishedRevision?.audiences ?? [];
   const scopeLabel = !guide?.publishedRevision
     ? "Private"
@@ -385,6 +392,45 @@ export function GuideEditor({
     window.addEventListener("pointerdown", dismissInsertMenu);
     return () => window.removeEventListener("pointerdown", dismissInsertMenu);
   }, [insertAfterId]);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
+    const panel = inspectorPanelRef.current;
+    const trigger = inspectorTriggerRef.current;
+    if (!panel) return;
+    const focusable = () =>
+      [...panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => !element.hidden);
+    focusable()[0]?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setInspectorOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    panel.addEventListener("keydown", handleKeyDown);
+    return () => {
+      panel.removeEventListener("keydown", handleKeyDown);
+      if (trigger?.isConnected) window.requestAnimationFrame(() => trigger.focus());
+    };
+  }, [inspectorOpen]);
 
   function updateStep(id: string, patch: Partial<EditorBlock>) {
     setSteps((items) =>
@@ -778,12 +824,26 @@ export function GuideEditor({
             >
               <Share2 /> Share
             </Button>
-            <Button className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector">
+            <Button ref={inspectorTriggerRef} className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector" aria-haspopup="dialog">
               <SlidersHorizontal /> Settings
               {isCaptured && !privacyReviewed ? <span className="editor-attention-dot" aria-label="Privacy review required" /> : null}
             </Button>
           </div>
         </header>
+
+        {isDesktopCapture && !privacyReviewed ? (
+          <div className="desktop-capture-privacy-banner" role="status">
+            <TriangleAlert />
+            <div>
+              <strong>Review captured text as private guide content</strong>
+              <span>
+                Exact non-password text may already be included in step
+                instructions. Sharing, review submission, export, and
+                publication stay blocked until you complete the privacy review.
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         <div className="editor-layout">
           <main className="editor-canvas">
@@ -939,7 +999,7 @@ export function GuideEditor({
           </main>
 
           {inspectorOpen ? <button className="editor-inspector-backdrop" type="button" aria-hidden="true" tabIndex={-1} onClick={() => setInspectorOpen(false)} /> : null}
-          <aside id="guide-editor-inspector" className={`editor-sidebar${inspectorOpen ? " open" : ""}`} aria-label="Guide settings">
+          <aside ref={inspectorPanelRef} id="guide-editor-inspector" className={`editor-sidebar${inspectorOpen ? " open" : ""}`} role="dialog" aria-modal={inspectorOpen ? true : undefined} aria-hidden={!inspectorOpen} inert={!inspectorOpen} aria-label="Guide settings">
             <div className="editor-sidebar-heading">
               <div><span className="eyebrow">Guide settings</span><strong>Access and privacy</strong></div>
               <button className="icon-button" type="button" aria-label="Close guide settings" onClick={() => setInspectorOpen(false)}><X /></button>
@@ -1003,6 +1063,11 @@ export function GuideEditor({
           <button className="button secondary" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
             <Save /> Save private draft
           </button>
+          {guide?.publishedRevision && onExport ? (
+            <button className="button secondary" type="button" disabled={busy || flattening} onClick={() => setExportOpen(true)}>
+              <Download /> Export
+            </button>
+          ) : null}
           <button
             className="button primary"
             type="button"
@@ -1055,13 +1120,26 @@ export function GuideEditor({
           canShare={canShare}
           canRequestReview={Boolean(requireReviewBeforePublish)}
           busy={busy || flattening}
-          fileExportsEnabled={fileExportsEnabled}
-          canExport={canExport}
           onClose={() => setShareOpen(false)}
           onAudiencesChange={setAudiences}
           onPrivacyReviewedChange={setPrivacyReviewed}
           onShare={() => shareOrReview("share")}
           onRequestReview={() => shareOrReview("review")}
+        />
+      ) : null}
+      {exportOpen && guide?.publishedRevision && onExport ? (
+        <GuideExportDialog
+          open
+          title={title.trim() || guide.title}
+          isLive={Boolean(guide.publishedRevision)}
+          restricted={Boolean(
+            guide.publishedRevision &&
+              !guide.publishedRevision.audiences.some((audience) => audience.kind === "workspace"),
+          )}
+          fileExportsEnabled={fileExportsEnabled}
+          canExport={canExport}
+          busy={busy}
+          onClose={() => setExportOpen(false)}
           onExport={onExport}
           onStartTrial={onStartTrial}
         />

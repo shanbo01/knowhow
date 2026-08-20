@@ -23,16 +23,48 @@ const LOCAL_INTERNAL_HOSTS = new Set([
   "appwrite",
   "appwrite-internal",
 ]);
+const CONTROLLED_ENVIRONMENTS = new Set(["staging", "production"]);
 
 function normalizedExactUrl(raw: string, url: URL) {
   const normalized = url.toString().replace(/\/$/, "");
   return raw === normalized || raw === `${normalized}/`;
 }
 
-function localAppwriteEndpoint(
+function controlledEnvironment(
+  environment: AppwriteServerConfig["environment"],
+) {
+  return CONTROLLED_ENVIRONMENTS.has(environment);
+}
+
+function configuredAppwriteHosts(
+  environment: AppwriteServerConfig["environment"],
+) {
+  if (!controlledEnvironment(environment)) return new Set<string>();
+  const entries = required("KNOWHOW_APPWRITE_HOSTS")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (
+    !entries.length ||
+    entries.some(
+      (value) =>
+        !/^[a-z0-9.-]+(?::\d{1,5})?$/.test(value) ||
+        LOCAL_ENDPOINT_HOSTS.has(value.split(":")[0]),
+    )
+  ) {
+    throw new Error(
+      "KNOWHOW_APPWRITE_HOSTS must contain exact non-local Appwrite hosts.",
+    );
+  }
+  return new Set(entries);
+}
+
+function appwriteEndpoint(
   value: string,
   name: string,
-  allowedHosts: ReadonlySet<string>,
+  environment: AppwriteServerConfig["environment"],
+  localHosts: ReadonlySet<string>,
+  remoteHosts: ReadonlySet<string>,
 ) {
   if (value !== value.trim()) {
     throw new Error(`${name} must not contain surrounding whitespace.`);
@@ -43,9 +75,16 @@ function localAppwriteEndpoint(
   } catch {
     throw new Error(`${name} must be a valid URL.`);
   }
+  const controlled = controlledEnvironment(environment);
+  const hostAllowed = controlled
+    ? remoteHosts.has(endpoint.host.toLowerCase()) &&
+      !LOCAL_ENDPOINT_HOSTS.has(endpoint.hostname)
+    : localHosts.has(endpoint.hostname);
   if (
-    !["http:", "https:"].includes(endpoint.protocol) ||
-    !allowedHosts.has(endpoint.hostname) ||
+    (controlled
+      ? endpoint.protocol !== "https:"
+      : !["http:", "https:"].includes(endpoint.protocol)) ||
+    !hostAllowed ||
     endpoint.pathname.replace(/\/$/, "") !== "/v1" ||
     endpoint.username ||
     endpoint.password ||
@@ -53,7 +92,11 @@ function localAppwriteEndpoint(
     endpoint.hash ||
     !normalizedExactUrl(value, endpoint)
   ) {
-    throw new Error(`${name} must be an exact local Appwrite /v1 endpoint.`);
+    throw new Error(
+      controlled
+        ? `${name} must be an exact HTTPS Appwrite /v1 endpoint on an allowlisted host.`
+        : `${name} must be an exact local Appwrite /v1 endpoint.`,
+    );
   }
   return endpoint.toString().replace(/\/$/, "");
 }
@@ -66,19 +109,27 @@ function required(name: string) {
 
 function deploymentEnvironment(): AppwriteServerConfig["environment"] {
   const value = process.env.KNOWHOW_ENVIRONMENT?.trim().toLowerCase();
+  if (!value) return "development";
   if (value === "production" || value === "staging" || value === "test") {
     return value;
   }
-  return "development";
+  if (value === "development") return value;
+  throw new Error("KNOWHOW_ENVIRONMENT is invalid.");
 }
 
-function exactLocalOrigin(value: string) {
+function exactApplicationOrigin(
+  value: string,
+  environment: AppwriteServerConfig["environment"],
+) {
   if (value !== value.trim()) return false;
   try {
     const url = new URL(value);
+    const controlled = controlledEnvironment(environment);
     return (
-      ["http:", "https:"].includes(url.protocol) &&
-      LOCAL_ENDPOINT_HOSTS.has(url.hostname) &&
+      (controlled
+        ? url.protocol === "https:" && !LOCAL_ENDPOINT_HOSTS.has(url.hostname)
+        : ["http:", "https:"].includes(url.protocol) &&
+          LOCAL_ENDPOINT_HOSTS.has(url.hostname)) &&
       url.pathname === "/" &&
       !url.username &&
       !url.password &&
@@ -92,19 +143,25 @@ function exactLocalOrigin(value: string) {
 }
 
 export function getAppwriteServerConfig(): AppwriteServerConfig {
-  const endpoint = localAppwriteEndpoint(
+  const environment = deploymentEnvironment();
+  const remoteHosts = configuredAppwriteHosts(environment);
+  const endpoint = appwriteEndpoint(
     required("APPWRITE_ENDPOINT"),
     "APPWRITE_ENDPOINT",
+    environment,
     LOCAL_ENDPOINT_HOSTS,
+    remoteHosts,
   );
   const internalValue = process.env.APPWRITE_INTERNAL_ENDPOINT?.trim();
   const config: AppwriteServerConfig = {
     endpoint,
     internalEndpoint: internalValue
-      ? localAppwriteEndpoint(
+      ? appwriteEndpoint(
           internalValue,
           "APPWRITE_INTERNAL_ENDPOINT",
+          environment,
           LOCAL_INTERNAL_HOSTS,
+          remoteHosts,
         )
       : endpoint,
     projectId: required("APPWRITE_PROJECT_ID"),
@@ -117,10 +174,17 @@ export function getAppwriteServerConfig(): AppwriteServerConfig {
     exportsBucketId:
       process.env.APPWRITE_EXPORTS_BUCKET_ID?.trim() ||
       APPWRITE_RESOURCES.exportsBucket,
-    environment: deploymentEnvironment(),
+    environment,
   };
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(config.projectId)) {
-    throw new Error("APPWRITE_PROJECT_ID is invalid.");
+  for (const [name, value] of [
+    ["APPWRITE_PROJECT_ID", config.projectId],
+    ["APPWRITE_DATABASE_ID", config.databaseId],
+    ["APPWRITE_PRIVATE_MEDIA_BUCKET_ID", config.privateMediaBucketId],
+    ["APPWRITE_EXPORTS_BUCKET_ID", config.exportsBucketId],
+  ] as const) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
+      throw new Error(`${name} is invalid.`);
+    }
   }
   if (config.apiKey.length < 20) {
     throw new Error("APPWRITE_API_KEY is invalid.");
@@ -136,17 +200,23 @@ export function deploymentConfigurationIssues(
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+  const normalizedAllowedOrigins = allowedOrigins.flatMap((value) => {
+    if (!exactApplicationOrigin(value, config.environment)) return [];
+    return [new URL(value).origin];
+  });
   if (
     !allowedOrigins.length ||
-    allowedOrigins.some((value) => !exactLocalOrigin(value))
+    normalizedAllowedOrigins.length !== allowedOrigins.length
   ) {
     issues.push("allowed_origins");
   }
 
   const siteOrigin = process.env.KNOWHOW_SITE_ORIGIN?.trim() ?? "";
   if (
-    !exactLocalOrigin(siteOrigin) ||
-    !allowedOrigins.includes(siteOrigin.replace(/\/$/, ""))
+    !exactApplicationOrigin(siteOrigin, config.environment) ||
+    !normalizedAllowedOrigins.includes(
+      siteOrigin ? new URL(siteOrigin).origin : "",
+    )
   ) {
     issues.push("site_origin");
   }
@@ -174,12 +244,23 @@ export function deploymentConfigurationIssues(
   if ((process.env.KNOWHOW_EXPORT_WORKER_SECRET?.trim().length ?? 0) < 32) {
     issues.push("export_worker_secret");
   }
-  if (
-    config.databaseId !== APPWRITE_RESOURCES.database ||
-    config.privateMediaBucketId !== APPWRITE_RESOURCES.privateMediaBucket ||
-    config.exportsBucketId !== APPWRITE_RESOURCES.exportsBucket
-  ) {
-    issues.push("resource_ids");
+  if (controlledEnvironment(config.environment)) {
+    if (config.projectId === "knowhow-local" || config.apiKey.length < 32) {
+      issues.push("appwrite_credentials");
+    }
+    if (
+      !process.env.APPWRITE_DATABASE_ID?.trim() ||
+      !process.env.APPWRITE_PRIVATE_MEDIA_BUCKET_ID?.trim() ||
+      !process.env.APPWRITE_EXPORTS_BUCKET_ID?.trim()
+    ) {
+      issues.push("resource_ids");
+    }
+    const release = process.env.KNOWHOW_RELEASE?.trim();
+    if (!release || release === "local" || release === "unversioned") {
+      issues.push("release_identity");
+    }
+    if (!process.env.RESEND_API_KEY?.trim()) issues.push("email_provider");
+    if (!process.env.SENTRY_DSN?.trim()) issues.push("monitoring");
   }
 
   const publicEnvironment =

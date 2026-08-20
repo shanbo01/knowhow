@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { BrandMarkGlyph } from "@/app/components/brand-mark-glyph";
 
 export type ProductBrandProps = {
   className?: string;
@@ -18,19 +19,11 @@ export function ProductBrand({
   return (
     <span id={id} className={cn("product-brand", compact && "product-brand-compact", className)}>
       <span className="product-brand-mark" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path
-            d="M6 5v14M6 12h5.1M11.1 12l5-6M11.1 12l6 7"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <BrandMarkGlyph />
       </span>
       {!markOnly ? (
         <span className="product-brand-copy">
-          <strong>KnowHow</strong>
+          <strong>knowhow</strong>
           {!compact ? <small>Governed operations</small> : null}
         </span>
       ) : null}

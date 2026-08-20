@@ -24,6 +24,7 @@ export type PlanEntitlements = {
   maximumCreators: number;
   storageBytes: number;
   extensionEnabled: boolean;
+  desktopCaptureEnabled: boolean;
   supportEnabled: boolean;
   removeBranding: boolean;
   privacyToolsEnabled: boolean;
@@ -39,6 +40,7 @@ export const FREE_ENTITLEMENTS: PlanEntitlements = {
   maximumCreators: 1,
   storageBytes: 1_000_000_000,
   extensionEnabled: false,
+  desktopCaptureEnabled: false,
   supportEnabled: false,
   removeBranding: false,
   privacyToolsEnabled: false,
@@ -54,6 +56,7 @@ export const PRO_ENTITLEMENTS: PlanEntitlements = {
   maximumCreators: 25,
   storageBytes: 50_000_000_000,
   extensionEnabled: true,
+  desktopCaptureEnabled: true,
   supportEnabled: true,
   removeBranding: true,
   privacyToolsEnabled: true,

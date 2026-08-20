@@ -33,17 +33,31 @@ test.describe("critical pilot product surfaces", () => {
     await page.goto("/app");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Pro trial · Ends/ })).toBeVisible();
-    await expect(page.getByText("Getting started")).toBeVisible();
-    await expect(page.getByText("Invite teammates")).toBeVisible();
-    await expect(page.getByText("Pin the extension")).toBeVisible();
+    await expect(
+      page.locator(".onboarding-wizard-header").getByText("Getting started", { exact: true }),
+    ).toBeVisible();
+    const onboarding = page.getByLabel("Getting started", { exact: true });
+    await expect(
+      onboarding.getByRole("button", { name: "Invite teammates" }),
+    ).toBeVisible();
+    await expect(
+      onboarding.getByRole("button", { name: "Pin the extension" }),
+    ).toBeVisible();
     await expectNoWcagViolations(page);
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/capture`);
     await expect(
       page.getByRole("heading", { name: "Capture a workflow" }),
     ).toBeVisible();
-    await expect(page.getByText("Redaction happens before anything is uploaded")).toBeVisible();
-    await expect(page.getByText("Send a private draft")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Browser capture" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Desktop capture" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Human privacy gate" }),
+    ).toBeVisible();
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/members`);
     await expect(
@@ -52,7 +66,7 @@ test.describe("critical pilot product surfaces", () => {
     await expect(
       page.getByRole("heading", { name: "Temporary support requests" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Invite teammate" }).click();
+    await page.getByRole("button", { name: "Invite teammate", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Invite a teammate" })).toBeVisible();
     await expect(
       page.getByText("Paste one address per line, or separate them with commas."),
@@ -83,7 +97,35 @@ test.describe("critical pilot product surfaces", () => {
     await expect(page.getByLabel("Guide title")).toHaveValue(
       "Review the captured onboarding flow",
     );
-    await expect(page.getByRole("button", { name: "Share" })).toBeVisible();
+    await expect(
+      page.locator(".editor-header-actions").getByRole("button", { name: "Share", exact: true }),
+    ).toBeVisible();
+    const settingsTrigger = page.getByRole("button", { name: "Settings" });
+    const settingsPanel = page.locator("#guide-editor-inspector");
+    await expect(settingsPanel).toHaveAttribute("aria-hidden", "true");
+    await expect
+      .poll(() => settingsPanel.evaluate((node) => (node as HTMLElement).inert))
+      .toBe(true);
+    await settingsTrigger.click();
+    await expect(settingsPanel).toHaveAttribute("aria-hidden", "false");
+    await expect
+      .poll(() =>
+        settingsPanel.evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= window.innerWidth + 1;
+        }),
+      )
+      .toBe(true);
+    await expect(page.getByRole("button", { name: "Close guide settings" })).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect
+      .poll(() =>
+        settingsPanel.evaluate((node) => node.contains(document.activeElement)),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(settingsPanel).toHaveAttribute("aria-hidden", "true");
+    await expect(settingsTrigger).toBeFocused();
     await page.getByLabel("Guide title").fill("Review the synthetic captured flow");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect
@@ -97,7 +139,10 @@ test.describe("critical pilot product surfaces", () => {
       .filter({ hasText: "Review the captured onboarding flow" });
     await expect(reviewCard.getByRole("button", { name: "Share" })).toBeVisible();
     await reviewCard.getByRole("button", { name: "Share" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Share", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Publish", exact: true })
+      .click();
     await expect
       .poll(() => commands.some((command) => command.action === "shareGuide"))
       .toBe(true);
@@ -115,8 +160,9 @@ test.describe("critical pilot product surfaces", () => {
     await expect(
       page.getByRole("heading", { name: "Settings & policies" }),
     ).toBeVisible();
+    await page.getByRole("tab", { name: "Publishing" }).click();
     await expect(
-      page.getByText("Require review before sharing"),
+      page.getByText("Require review before publishing"),
     ).toBeVisible();
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/guides`);
@@ -152,7 +198,7 @@ test.describe("critical pilot product surfaces", () => {
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /Live v/ })).toHaveCount(0);
     await expect(page.getByText("0 views")).toBeVisible();
-    await page.getByRole("button", { name: "Like this guide" }).click();
+    await page.getByRole("button", { name: "Like this guide", exact: true }).click();
     await expect
       .poll(() =>
         commands.some((command) => command.action === "recordGuideReaction"),
@@ -165,11 +211,11 @@ test.describe("critical pilot product surfaces", () => {
       )
       .toBe(true);
 
-    await page.getByRole("button", { name: "Share" }).click();
-    const shareDialog = page.getByRole("dialog");
-    await expect(shareDialog.getByRole("button", { name: "PDF" })).toBeVisible();
+    await page.getByRole("button", { name: "Export" }).click();
+    const pdfExport = page.getByRole("menuitem", { name: "PDF" });
+    await expect(pdfExport).toBeVisible();
     const downloadPromise = page.waitForEvent("download");
-    await shareDialog.getByRole("button", { name: "PDF" }).click();
+    await pdfExport.click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe("synthetic-guide.pdf");
   });
@@ -192,6 +238,32 @@ test.describe("critical pilot product surfaces", () => {
       )
       .toBe(true);
     await expectNoWcagViolations(page);
+
+    const sidebarTrigger = page.getByRole("button", { name: "Toggle Sidebar" });
+    if ((page.viewportSize()?.width ?? 0) >= 768) {
+      await sidebarTrigger.click();
+      await expect
+        .poll(() =>
+          page.locator('[data-slot="sidebar-container"]').evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            return rect.right <= 1;
+          }),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          page.locator('[data-slot="sidebar-gap"]').evaluate((node) =>
+            Math.round(node.getBoundingClientRect().width),
+          ),
+        )
+        .toBe(0);
+    } else {
+      await sidebarTrigger.click();
+      const mobileSidebar = page.locator('[data-mobile="true"]');
+      await expect(mobileSidebar).toBeVisible();
+      await mobileSidebar.getByRole("button", { name: "Home", exact: true }).click();
+      await expect(page.locator('[data-mobile="true"]')).not.toBeVisible();
+    }
 
     await page.getByRole("button", { name: "Provision organization" }).first().click();
     await expect(
@@ -267,6 +339,7 @@ test.describe("critical pilot product surfaces", () => {
       maximumCreators: 1,
       storageBytes: 1_000_000_000,
       extensionEnabled: false,
+      desktopCaptureEnabled: false,
       supportEnabled: false,
       removeBranding: false,
       privacyToolsEnabled: false,
@@ -303,7 +376,11 @@ test.describe("critical pilot product surfaces", () => {
     await expect(workspaceNav.getByRole("button", { name: "Support" })).toHaveCount(0);
 
     await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/capture`);
-    await expect(page.getByText("Capture is on Pro")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Browser and Windows capture, Smart Blur, redact, and annotate are included on Pro.",
+      ),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Install and pair" })).toHaveCount(0);
   });
 

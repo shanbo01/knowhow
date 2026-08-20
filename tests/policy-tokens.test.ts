@@ -66,6 +66,13 @@ test("default-deny policy separates roles, audiences, and working revisions", ()
     true,
   );
   assert.equal(
+    authorize(
+      "guide.read",
+      context(["administrator"], { ...draft, isAudienceMember: false }),
+    ).allowed,
+    false,
+  );
+  assert.equal(
     authorize("workspace.groups.manage", context(["administrator"])).allowed,
     true,
   );
@@ -183,8 +190,8 @@ test("share-first policy lets authors publish drafts unless review is required",
         isAuthor: false,
         requireReviewBeforePublish: true,
       }),
-    ).allowed,
-    true,
+    ).code,
+    "GUIDE_REVIEW_STATE_REQUIRED",
   );
   assert.equal(
     authorize(
@@ -249,7 +256,7 @@ test("vault capability stays separate and unverified identities always fail", ()
     }).allowed,
     true,
   );
-  assert.equal(authorize("vault.use", context(["administrator"])).allowed, true);
+  assert.equal(authorize("vault.use", context(["administrator"])).allowed, false);
   assert.equal(
     authorize("workspace.read", {
       ...context(["administrator"]),

@@ -15,7 +15,7 @@ KnowHow processes customer personal data only to provide, secure, support, measu
 - Subject matter/duration: invitation-only 30-day pilot plus grace, retention, deletion, backup, and legally required periods.
 - Nature/purpose: authentication, membership/authorization, SOP capture/edit/review/publication/view/completion, private storage/export, support, notification, security/audit, lifecycle/deletion, and content-free usage measurement.
 - Data subjects: authorized customer personnel and limited individuals incidentally visible in approved ordinary business-process material.
-- Data: name/work email, account/security state, memberships/roles, organization/workspace settings, approved guide content, locally redacted screenshots, reviews/completions, support messages, audit/security/notification metadata.
+- Data: name/work email, account/security state, memberships/roles, paired Windows device metadata, organization/workspace settings, approved guide content, locally redacted screenshots, optional exact non-password desktop-control text when enabled, reviews/completions, support messages, and audit/security/notification metadata.
 - Prohibited categories: credentials/secrets, payment data, health data, national IDs, sensitive/special-category data, children's data, and all categories excluded by the acceptable-use policy.
 
 ## 4. Confidentiality and personnel
@@ -28,13 +28,15 @@ KnowHow limits access to authorized personnel with confidentiality obligations, 
 - Verified email; secure HTTP-only sessions; administrator TOTP and recovery controls; exact origins, CSRF, rate/size limits, and security headers.
 - Default-deny policy with separate platform, organization, workspace, vault, audience, support, and subscription checks.
 - Private encrypted Storage; local screenshot rasterization/redaction; no raw/form/clipboard/key capture; human privacy review.
-- Short-lived scoped extension access, rotating refresh credentials, device inventory/revocation, minimum versions, narrow MV3 permissions.
+- Short-lived scoped browser/Windows access, browser-mediated Windows device approval with PKCE, rotating refresh credentials and reuse detection, per-device inventory/revocation, entitlement/membership revalidation, minimum versions, and narrow MV3/Tauri permissions.
+- Windows source frames remain in GPU/RAM; mandatory/excluded/Smart Blur masks are rasterized before persistence; processed recovery data uses per-session AES-GCM keys wrapped by Windows DPAPI; local sessions expire after 24 hours and their keys are erased on discard, successful upload, expiry, or uninstall.
+- Signed x64/ARM64 installers and signed updater payloads, protected release approval, non-exportable Artifact Signing identity, dependency/SBOM/malware gates, and deferred installation during active capture.
 - Transactions for one-use/last-admin/idempotency/audit/lifecycle/deletion invariants; append-only hash-chained audit.
 - Versioned key rotation; context-bound encrypted notification credentials; secrets outside source/logs.
 - Scrubbed telemetry, content-free logs/analytics/notifications, dependency and secret scanning, CI/security testing.
 - Operator-owned encrypted backups, isolated local restore rehearsal, integrity hashes, media quarantine/reconciliation, and incident response.
 
-Independent media DR, contractual SLA, third-party penetration test, and enterprise identity are expressly not included in this pilot.
+Independent media DR, contractual SLA, third-party penetration test, and enterprise identity are expressly not included in this pilot. Windows capture supports screenshot-based guides only; it does not collect video, microphone audio, transcription, or AI-derived content.
 
 ## 6. Subprocessors and transfers
 

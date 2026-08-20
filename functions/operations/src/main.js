@@ -912,6 +912,7 @@ async function runLifecycle({ tables }, now) {
         maximumCreators: 1,
         storageBytes: 1_000_000_000,
         extensionEnabled: false,
+        desktopCaptureEnabled: false,
         supportEnabled: false,
         removeBranding: false,
         privacyToolsEnabled: false,
@@ -1121,7 +1122,15 @@ async function expireCredentials({ tables }, now) {
     ["support_grants", ["active"]],
     ["invitations", ["active"]],
     ["initial_admin_appointments", ["active"]],
-    ["extension_devices", ["active", "pairing"]],
+    [
+      "extension_devices",
+      [
+        "active",
+        "pairing",
+        "authorization_pending",
+        "authorization_approved",
+      ],
+    ],
   ]) {
     for (const status of statuses) {
       const rows = await listAll(tables, tableId, [
@@ -1153,6 +1162,114 @@ async function expireCredentials({ tables }, now) {
       rowId: row.$id,
     });
   return { expired, cleanedIdempotency: idempotency.length };
+}
+
+async function cleanupAbandonedCaptures({ tables, storage }, now) {
+  const expiredRows = [];
+  for (const status of ["recording", "paused"]) {
+    expiredRows.push(
+      ...(await listAll(tables, "captures", [
+        Query.equal("status", [status]),
+        Query.lessThanEqual("expires_at", now.toISOString()),
+      ])),
+    );
+  }
+  let discarded = 0;
+  let removedMedia = 0;
+  let failures = 0;
+  for (const row of expiredRows) {
+    const capture = payload(row);
+    const revisionId = capture.revisionId;
+    const workspaceId = String(row.workspace_id || capture.workspaceId || "");
+    if (!revisionId || !workspaceId) {
+      failures += 1;
+      continue;
+    }
+    const mediaRows = await listAll(tables, "private_media", [
+      Query.equal("workspace_id", [workspaceId]),
+      Query.equal("subject_id", [revisionId]),
+    ]);
+    let captureFailed = false;
+    for (const mediaRow of mediaRows) {
+      const media = payload(mediaRow);
+      const fileId = media.storageFileId || mediaRow.$id;
+      try {
+        await storage.deleteFile({ bucketId: PRIVATE_BUCKET, fileId });
+      } catch (caught) {
+        if (caught?.code !== 404) {
+          failures += 1;
+          captureFailed = true;
+          continue;
+        }
+      }
+      await tables.deleteRow({
+        databaseId: DATABASE_ID,
+        tableId: "private_media",
+        rowId: mediaRow.$id,
+      });
+      removedMedia += 1;
+    }
+    if (captureFailed) continue;
+    const completedAt = now.toISOString();
+    if (capture.guideId) {
+      try {
+        const guide = await tables.getRow({
+          databaseId: DATABASE_ID,
+          tableId: "guides",
+          rowId: capture.guideId,
+        });
+        await tables.updateRow({
+          databaseId: DATABASE_ID,
+          tableId: "guides",
+          rowId: capture.guideId,
+          data: fields(
+            {
+              status: "deleted",
+              deleted_at: completedAt,
+              updated_by: "knowhow_ops",
+            },
+            {
+              ...payload(guide),
+              deletedAt: completedAt,
+              updatedAt: completedAt,
+            },
+          ),
+          permissions: [],
+        });
+      } catch (caught) {
+        if (caught?.code !== 404) {
+          failures += 1;
+          continue;
+        }
+      }
+    }
+    await tables.updateRow({
+      databaseId: DATABASE_ID,
+      tableId: "captures",
+      rowId: row.$id,
+      data: fields(
+        {
+          status: "discarded",
+          updated_by: "knowhow_ops",
+        },
+        {
+          ...capture,
+          status: "discarded",
+          finishedAt: completedAt,
+          updatedAt: completedAt,
+          cleanupReason: "capture-expired",
+        },
+      ),
+      permissions: [],
+    });
+    discarded += 1;
+  }
+  return {
+    inspected: expiredRows.length,
+    discarded,
+    removedMedia,
+    failures,
+  };
 }
 
 async function rollupUsage({ tables }, now) {
@@ -2060,10 +2177,11 @@ const operationsWorker = async ({ req, res, log, error }) => {
   const requestId = crypto.randomUUID();
   try {
     const api = services(req);
-    const [lifecycle, expiry, rollups] = await Promise.all([
+    const [lifecycle, expiry, rollups, captureCleanup] = await Promise.all([
       runLifecycle(api, started),
       expireCredentials(api, started),
       rollupUsage(api, started),
+      cleanupAbandonedCaptures(api, started),
     ]);
     const purge = await purgeApproved(api, started);
     const notifications = await deliverNotifications(api, new Date());
@@ -2081,6 +2199,7 @@ const operationsWorker = async ({ req, res, log, error }) => {
       lifecycle,
       expiry,
       rollups,
+      captureCleanup,
       purge,
       notifications,
       provisioningCleanup,
@@ -2118,6 +2237,7 @@ export {
   PURGE_TABLES,
   USER_REFERENCE_TABLES,
   buildPurgePlan,
+  cleanupAbandonedCaptures,
   cleanupStagedProvisioning,
   cleanupExpiredExports,
   deliverNotifications,

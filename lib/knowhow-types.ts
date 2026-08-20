@@ -2,8 +2,8 @@
 // immutable contract in guide-contracts.ts; the server adapter is the only
 // place that converts editable view blocks into that canonical contract.
 export { WORKSPACE_ROLES } from "./guide-contracts";
-export type { WorkspaceRole } from "./guide-contracts";
-import type { WorkspaceRole } from "./guide-contracts";
+export type { GuideSource, WorkspaceRole } from "./guide-contracts";
+import type { GuideSource, WorkspaceRole } from "./guide-contracts";
 export type WorkspaceStatus = "active" | "suspended" | "archived";
 export type RevisionStatus = "draft" | "review" | "published" | "archived";
 export type AudienceKind = "workspace" | "group" | "user";
@@ -106,7 +106,7 @@ export type GuideRevisionView = {
   publishedBy?: string;
   publishedAt?: string;
   privacyReviewedAt?: string;
-  source: "manual" | "browser-capture";
+  source: GuideSource;
 };
 
 export type Guide = {
@@ -190,6 +190,7 @@ export type WorkspaceSettings = {
   allowRestrictedExports: boolean;
   watermarkExports: boolean;
   requireReviewBeforePublish: boolean;
+  desktopTypedTextPolicy: "allowed" | "disabled";
 };
 
 export type WorkspaceMember = {
@@ -211,6 +212,7 @@ export type WorkspaceGroup = {
   sensitive: boolean;
   kind?: "all_members" | "custom";
   memberCount: number;
+  publishedGuideCount?: number;
   memberIds: string[];
   createdAt: string;
 };
@@ -832,6 +834,7 @@ export type WorkspaceEntitlements = {
   maximumCreators: number;
   storageBytes: number;
   extensionEnabled: boolean;
+  desktopCaptureEnabled: boolean;
   supportEnabled: boolean;
   removeBranding: boolean;
   privacyToolsEnabled: boolean;
@@ -839,9 +842,23 @@ export type WorkspaceEntitlements = {
   fileExportsEnabled: boolean;
 };
 
+export type DesktopCaptureDevice = {
+  id: string;
+  deviceId: string;
+  name: string;
+  architecture: "x64" | "arm64";
+  version: string;
+  minimumVersion: string;
+  status: "active" | "approved" | "revoked";
+  pairedAt: string | null;
+  lastUsedAt: string | null;
+  refreshExpiresAt: string | null;
+};
+
 export type WorkspaceBundle = {
   workspace: WorkspaceSummary & { settings: WorkspaceSettings };
   entitlements: WorkspaceEntitlements;
+  desktopCaptureDevices?: DesktopCaptureDevice[];
   metrics: WorkspaceMetrics;
   members: WorkspaceMember[];
   groups: WorkspaceGroup[];

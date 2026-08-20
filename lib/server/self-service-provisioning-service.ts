@@ -444,6 +444,7 @@ export class SelfServiceProvisioningService {
             ...entitlementsForPlan("pro_trial"),
             ...catalogPlan.entitlements,
             extensionEnabled: true,
+            desktopCaptureEnabled: true,
             supportEnabled: true,
             removeBranding: true,
             privacyToolsEnabled: true,

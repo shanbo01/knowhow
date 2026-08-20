@@ -7,6 +7,7 @@ import type {
   WorkspaceSettings,
   WorkspaceStatus,
 } from "../knowhow-types";
+import type { GuideSource } from "../guide-contracts";
 import type { RecordData } from "./record-store";
 
 export type OrganizationRecord = {
@@ -297,7 +298,7 @@ export type RevisionRecord = {
   publishedAt?: string;
   privacyReviewedAt?: string;
   privacyReviewedBy?: string;
-  source: "manual" | "browser-capture";
+  source: GuideSource;
 };
 
 export type GuideStepRecord = EditorBlock;
@@ -342,6 +343,7 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   allowRestrictedExports: false,
   watermarkExports: true,
   requireReviewBeforePublish: false,
+  desktopTypedTextPolicy: "allowed",
 };
 
 export function encodePayload(value: unknown) {

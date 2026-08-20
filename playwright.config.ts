@@ -1,18 +1,30 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const configuredBaseUrl = process.env.KNOWHOW_E2E_BASE_URL?.trim();
+const controlledTarget = process.env.KNOWHOW_E2E_CONTROLLED === "1";
+if (controlledTarget && !configuredBaseUrl) {
+  throw new Error(
+    "KNOWHOW_E2E_CONTROLLED=1 requires an explicit KNOWHOW_E2E_BASE_URL.",
+  );
+}
 if (configuredBaseUrl) {
   const url = new URL(configuredBaseUrl);
+  const local = ["localhost", "127.0.0.1"].includes(url.hostname);
   if (
-    !["localhost", "127.0.0.1"].includes(url.hostname) ||
-    !["http:", "https:"].includes(url.protocol) ||
+    (controlledTarget
+      ? url.protocol !== "https:" || local
+      : !local || !["http:", "https:"].includes(url.protocol)) ||
     url.pathname !== "/" ||
     url.username ||
     url.password ||
     url.search ||
     url.hash
   ) {
-    throw new Error("KNOWHOW_E2E_BASE_URL must be an exact local origin.");
+    throw new Error(
+      controlledTarget
+        ? "Controlled KNOWHOW_E2E_BASE_URL must be an exact non-local HTTPS origin."
+        : "KNOWHOW_E2E_BASE_URL must be an exact local origin.",
+    );
   }
 }
 const baseUrl = configuredBaseUrl || "http://localhost:3001";

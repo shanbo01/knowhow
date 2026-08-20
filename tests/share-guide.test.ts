@@ -202,17 +202,21 @@ test("creators can share their own drafts unless review is required", async () =
     ),
     "GUIDE_REVIEW_STATE_REQUIRED",
   );
-  const adminShare = await service.execute(
-    admin,
-    "shareGuide",
-    {
-      workspaceId,
-      guideId: governed.guideId,
-      audiences: [{ kind: "workspace", label: "Entire workspace" }],
-    },
-    options("admin-bypass"),
+  assert.equal(
+    await codeOf(
+      service.execute(
+        admin,
+        "shareGuide",
+        {
+          workspaceId,
+          guideId: governed.guideId,
+          audiences: [{ kind: "workspace", label: "Entire workspace" }],
+        },
+        options("admin-bypass"),
+      ),
+    ),
+    "DRAFT_EDITOR_REQUIRED",
   );
-  assert.deepEqual(adminShare, { published: true });
 });
 
 test("captured guides still require a privacy review before share", async () => {

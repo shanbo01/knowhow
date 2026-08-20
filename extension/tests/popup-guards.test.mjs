@@ -95,8 +95,8 @@ test("the feedback preview mirrors the updated header and provides navigable sam
   assert.match(html, /class="record-button-dot"/);
   assert.match(css, /\.start-button \{[^}]*font-size: 14px/);
   assert.match(css, /\.record-button-dot \{[^}]*background: #ef4444/);
-  assert.match(css, /--background: #f7f7f9/);
-  assert.match(css, /:root\[data-theme="dark"\] \{[\s\S]*--background: #15171a;[\s\S]*--card: #1d2024/);
+  assert.match(css, /--background: #f5f4f0/);
+  assert.match(css, /:root\[data-theme="dark"\] \{[\s\S]*--background: #0e0e0c;[\s\S]*--card: #171714/);
   assert.match(source, /function previewCompanion\(\)/);
   assert.match(source, /function previewScreenshotSvg\(/);
   assert.match(source, /function previewCapturedSteps\(\)/);

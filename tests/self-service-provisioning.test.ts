@@ -151,7 +151,15 @@ test("a verified user resumes setup and creates one complete trial tenant", asyn
   assert.equal((await store.list(TABLES.workspaces)).length, 1);
   assert.equal((await store.list(TABLES.organizationMemberships)).length, 1);
   assert.equal((await store.list(TABLES.workspaceMembers)).length, 1);
-  assert.equal((await store.list(TABLES.entitlements)).length, 12);
+  const entitlements = await store.list(TABLES.entitlements);
+  assert.equal(entitlements.length, 13);
+  assert.ok(
+    entitlements.some(
+      (entitlement) =>
+        entitlement.kind === "desktopCaptureEnabled" &&
+        entitlement.status === "active",
+    ),
+  );
   assert.equal((await store.list(TABLES.onboardingProgress)).length, 1);
   const usageEvents = await store.list(TABLES.usageEvents);
   assert.equal(usageEvents.length, 3);

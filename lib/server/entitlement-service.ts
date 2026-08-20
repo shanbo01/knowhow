@@ -73,6 +73,7 @@ const DEFAULTS: Record<string, EntitlementValue> = {
   maximumCreators: 1,
   storageBytes: 1_000_000_000,
   extensionEnabled: false,
+  desktopCaptureEnabled: false,
   supportEnabled: false,
   removeBranding: false,
   privacyToolsEnabled: false,
@@ -88,6 +89,7 @@ export const OVERRIDABLE_ENTITLEMENTS = [
   "maximumCreators",
   "storageBytes",
   "extensionEnabled",
+  "desktopCaptureEnabled",
   "supportEnabled",
   "removeBranding",
   "privacyToolsEnabled",
@@ -199,6 +201,7 @@ export class EntitlementService {
   async requireFeature(
     kind:
       | "extensionEnabled"
+      | "desktopCaptureEnabled"
       | "supportEnabled"
       | "removeBranding"
       | "privacyToolsEnabled"

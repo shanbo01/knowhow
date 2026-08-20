@@ -2,6 +2,11 @@
 
 # dependencies
 /node_modules
+/desktop/node_modules/
+/desktop/dist/
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+/desktop/release-artifacts/
 /.pnp
 .pnp.*
 .yarn/*
@@ -37,6 +42,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !/.env.example
+!/.env.controlled.example
 /.dev.vars*
 
 # vercel

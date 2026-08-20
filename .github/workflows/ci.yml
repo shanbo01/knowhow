@@ -45,3 +45,30 @@ jobs:
           path: outputs/
           if-no-files-found: ignore
           retention-days: 14
+
+  desktop:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --prefix desktop
+      - run: npm run desktop:check
+      - name: Native formatting and correctness lints
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
+          cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: ARM64 compile check
+        shell: pwsh
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          cargo check `
+            --manifest-path desktop/src-tauri/Cargo.toml `
+            --target aarch64-pc-windows-msvc `
+            --all-targets
+      - run: npm audit --prefix desktop --audit-level=high

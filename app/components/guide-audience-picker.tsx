@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Search, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
   Audience,
@@ -99,32 +99,37 @@ export function GuideAudiencePicker({
               />
             </label>
             <div className="audience-option-list">
-              {filteredGroups.map((group) => (
-                <label className="choice-row" key={group.id}>
+              {filteredGroups.map((group) => {
+                const selected = audiences.some(
+                  (item) => item.kind === "group" && item.subjectId === group.id,
+                );
+                const unavailable = group.memberCount === 0 && !selected;
+                return (
+                <label className={`choice-row${unavailable ? " unavailable-choice" : ""}`} key={group.id}>
                   <input
                     type="checkbox"
-                    checked={audiences.some(
-                      (item) => item.kind === "group" && item.subjectId === group.id,
-                    )}
+                    checked={selected}
+                    disabled={unavailable}
                     onChange={() => toggle("group", group.id, group.name)}
                   />
                   <span>
                     <strong>{group.name}</strong>
                     <small>
-                      {group.sensitive
-                        ? "Sensitive group"
-                        : `${group.memberCount} members`}
+                      {group.memberCount === 0
+                        ? "No members yet"
+                        : `${group.memberCount} ${group.memberCount === 1 ? "member" : "members"}`}
+                      {group.sensitive ? " · Restricted membership" : ""}
                     </small>
                   </span>
                 </label>
-              ))}
+              )})}
               {!filteredGroups.length ? (
                 <p className="audience-empty">No matching groups</p>
               ) : null}
             </div>
           </div>
-          <details className="audience-people" open>
-            <summary>Named people</summary>
+          <div className="choice-section audience-people">
+            <span className="field-label">Specific people</span>
             <label className="audience-search">
               <Search />
               <input
@@ -157,19 +162,29 @@ export function GuideAudiencePicker({
                 <p className="audience-empty">No matching people</p>
               ) : null}
             </div>
-          </details>
+          </div>
         </div>
       ) : null}
       {!audiences.length ? (
-        <p className="inline-warning">
-          <TriangleAlert /> Select who can view this guide
+        <p className="audience-helper">
+          Choose at least one audience to enable the live link.
         </p>
       ) : null}
-      {restrictedLabels.length ? (
-        <p className="privacy-caption">
-          <ShieldCheck /> Restricted to {restrictedLabels.join(", ")}
-        </p>
-      ) : null}
+      <div className="audience-summary" aria-live="polite">
+        <span><ShieldCheck /> Audience</span>
+        <strong>
+          {workspaceSelected
+            ? "Entire workspace"
+            : restrictedLabels.length
+              ? restrictedLabels.join(", ")
+              : "No audience selected"}
+        </strong>
+        <small>
+          {workspaceSelected
+            ? "All active workspace members"
+            : `${restrictedLabels.length} ${restrictedLabels.length === 1 ? "audience entry" : "audience entries"}`}
+        </small>
+      </div>
     </div>
   );
 }

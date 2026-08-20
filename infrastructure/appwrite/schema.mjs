@@ -109,6 +109,7 @@ const definitions = [
       index("by_workspace_email", ["workspace_id", "email"]),
       index("by_workspace_status", ["workspace_id", "status"]),
       index("by_workspace_user_status", ["workspace_id", "user_id", "status"]),
+      index("by_email", ["email"]),
     ],
   ],
   [
@@ -167,6 +168,7 @@ const definitions = [
     [
       index("by_workspace_user_status", ["workspace_id", "user_id", "status"]),
       index("by_idempotency", ["workspace_id", "idempotency_key"], "unique"),
+      index("by_status_expiry", ["status", "expires_at"]),
     ],
   ],
   [
@@ -236,6 +238,12 @@ const definitions = [
     [
       index("by_workspace_user", ["workspace_id", "user_id"]),
       index("by_workspace_user_status", ["workspace_id", "user_id", "status"]),
+      index("by_workspace_user_status_kind", [
+        "workspace_id",
+        "user_id",
+        "status",
+        "kind",
+      ]),
       index("by_subject", ["subject_id"], "unique"),
       index("by_subject_status", ["subject_id", "status"]),
       index("by_status_expiry", ["status", "expires_at"]),
@@ -302,6 +310,7 @@ const definitions = [
       index("by_workspace_kind", ["workspace_id", "kind"]),
       index("by_time", ["occurred_at"]),
       index("by_request", ["request_id"], "unique"),
+      index("by_kind", ["kind"]),
     ],
   ],
   [
@@ -326,6 +335,7 @@ const definitions = [
     [
       index("by_email_status", ["email", "status"]),
       index("by_kind_time", ["kind", "occurred_at"]),
+      index("by_status", ["status"]),
     ],
   ],
   [
@@ -333,6 +343,7 @@ const definitions = [
     [
       index("by_workspace_status", ["workspace_id", "status"]),
       index("by_user_status", ["user_id", "status"]),
+      index("by_status", ["status"]),
     ],
   ],
   [
@@ -355,6 +366,7 @@ const definitions = [
     [
       index("by_workspace_status", ["workspace_id", "status"]),
       index("by_kind_schedule", ["kind", "scheduled_at"]),
+      index("by_status", ["status"]),
     ],
   ],
   [

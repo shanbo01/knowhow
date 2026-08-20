@@ -294,7 +294,11 @@ test.describe("real local private-beta journey", () => {
     browser: Browser;
     request: import("@playwright/test").APIRequestContext;
     baseURL?: string;
-  }) => {
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== "chrome",
+      "The single-use live-stack rehearsal runs once in desktop Chrome.",
+    );
     expect(baseURL).toBe("http://localhost:3001");
     const readiness = await request.get("/api/health?ready=1");
     expect(readiness.status()).toBe(200);

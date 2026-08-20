@@ -235,7 +235,7 @@ test("startProTrial is once, from Free, and never requires a payment method", as
   );
 });
 
-test("selectProPlan is offline and requestEnterprisePlan creates a lead", async () => {
+test("paid plan requests create leads without granting paid entitlements", async () => {
   const store = new InMemoryRecordStore();
   const { workspaceId, admin } = await seedAdmin(store, {
     kind: "trial",
@@ -254,9 +254,13 @@ test("selectProPlan is offline and requestEnterprisePlan creates a lead", async 
     "selectProPlan",
     { workspaceId },
     options("select-pro"),
-  )) as { plan: string; paymentMethodRequired: boolean };
-  assert.equal(selected.plan, "pro");
-  assert.equal(selected.paymentMethodRequired, false);
+  )) as { requested: boolean; leadId: string };
+  assert.equal(selected.requested, true);
+  const subscription = decodePayload<SubscriptionRecord>(
+    (await store.list(TABLES.subscriptions))[0],
+    null as never,
+  );
+  assert.equal(subscription.plan, "pro_trial");
 
   const requested = (await new CommandService(store).execute(
     admin,
@@ -265,7 +269,12 @@ test("selectProPlan is offline and requestEnterprisePlan creates a lead", async 
     options("request-ent"),
   )) as { requested: boolean; leadId: string };
   assert.equal(requested.requested, true);
-  assert.equal((await store.list(TABLES.leads)).length, 1);
+  const leads = await store.list(TABLES.leads);
+  assert.equal(leads.length, 2);
+  assert.deepEqual(
+    leads.map((row) => decodePayload<{ requestedPlan: string }>(row, null as never).requestedPlan).sort(),
+    ["enterprise", "pro"],
+  );
 });
 
 test("viewers cannot open support tickets on Pro", async () => {
@@ -683,4 +692,3 @@ test("entitlement denials write entitlement.blocked usage events", async () => {
   });
   assert.equal(events.length, 1);
 });
-

@@ -205,17 +205,14 @@ export function authorize(
     if (!guide?.revisionStatus) {
       return deny("GUIDE_CONTEXT_REQUIRED", "Guide authorization context is required.");
     }
-    if (roles.has("administrator")) {
-      return allow("Workspace administrators may inspect all guide states.");
-    }
     if (
       (guide.revisionStatus === "published" || guide.revisionStatus === "archived") &&
       guide.isAudienceMember
     ) {
       return allow("This published revision is shared with the actor.");
     }
-    if (guide.isAuthor && roles.has("creator")) {
-      return allow("Creators may read their own working revisions.");
+    if (guide.isAuthor && hasAnyRole(roles, "creator", "administrator")) {
+      return allow("Guide authors may read their own working revisions.");
     }
     if (guide.isAssignedReviewer && roles.has("reviewer")) {
       return allow("Assigned reviewers may read the review revision.");
@@ -229,8 +226,8 @@ export function authorize(
   if (action === "guide.update" || action === "guide.submit") {
     const isDraft = context.guide?.revisionStatus === "draft";
     const mayEdit =
-      roles.has("administrator") ||
-      (roles.has("creator") && context.guide?.isAuthor === true);
+      context.guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator");
     return isDraft && mayEdit
       ? allow("The actor may change this draft.")
       : deny("DRAFT_EDITOR_REQUIRED", "Only an authorized draft editor may do this.");
@@ -238,8 +235,7 @@ export function authorize(
 
   if (action === "guide.review") {
     const mayReview =
-      roles.has("administrator") ||
-      (roles.has("reviewer") && context.guide?.isAssignedReviewer === true);
+      roles.has("reviewer") && context.guide?.isAssignedReviewer === true;
     return context.guide?.revisionStatus === "review" && mayReview
       ? allow("The actor may review this submitted revision.")
       : deny("REVIEWER_REQUIRED", "An assigned reviewer is required.");
@@ -254,13 +250,13 @@ export function authorize(
       );
     }
     const requireReview = guide?.requireReviewBeforePublish === true;
-    const isAdmin = roles.has("administrator");
     const isPublisher = roles.has("publisher");
-    const isAuthorCreator = roles.has("creator") && guide?.isAuthor === true;
-    const mayShareDirect = isAdmin || isPublisher || isAuthorCreator;
+    const isAuthorCreator =
+      guide?.isAuthor === true && hasAnyRole(roles, "creator", "administrator");
+    const mayShareDirect = isPublisher || isAuthorCreator;
 
     if (guide?.revisionStatus === "draft") {
-      if ((!requireReview && mayShareDirect) || (requireReview && isAdmin)) {
+      if (!requireReview && mayShareDirect) {
         return allow("The actor may share this draft with the selected audience.");
       }
       return deny(
@@ -274,9 +270,6 @@ export function authorize(
     if (guide?.revisionStatus !== "review") {
       return deny("GUIDE_REVIEW_STATE_REQUIRED", "Only a review revision may be published.");
     }
-    if (isAdmin) {
-      return allow("Workspace administrators may publish a review revision.");
-    }
     if (guide.reviewApproved !== true) {
       return deny("REVIEW_APPROVAL_REQUIRED", "An approved review is required before publishing.");
     }
@@ -286,7 +279,7 @@ export function authorize(
   }
 
   if (action === "guide.archive") {
-    return hasAnyRole(roles, "administrator", "publisher")
+    return roles.has("publisher")
       ? allow("Publishers may archive guide revisions.")
       : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
   }
@@ -300,7 +293,7 @@ export function authorize(
   }
 
   if (action === "vault.use") {
-    return context.capabilities?.includes("vault") || roles.has("administrator")
+    return context.capabilities?.includes("vault")
       ? allow("The actor has the vault capability.")
       : deny("VAULT_CAPABILITY_REQUIRED", "Vault access is required.");
   }

@@ -7,7 +7,7 @@ import {
 } from "./fixtures/pilot-bootstrap";
 import { installProductBackend } from "./fixtures/product-backend";
 
-const enabled = process.env.VISUAL_QA === "1";
+const enabled = process.env.VISUAL_QA !== "0";
 const screenshotRoot = "outputs/visual-qa";
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -55,7 +55,7 @@ async function expectAppliedTheme(page: Page, theme: "light" | "dark") {
 }
 
 test.describe("visual system QA", () => {
-  test.skip(!enabled, "Set VISUAL_QA=1 to capture visual-system screenshots.");
+  test.skip(!enabled, "Set VISUAL_QA=0 to skip visual-system screenshots.");
 
   for (const theme of ["light", "dark"] as const) {
     test(`workspace surfaces in ${theme} theme`, async ({ page }, testInfo) => {
@@ -127,6 +127,9 @@ test.describe("visual system QA", () => {
     await expect(page.locator("main").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await shot(page, "landing-hero-1440");
+    const heroAction = page.getByRole("link", { name: /start free trial/i }).first();
+    await heroAction.hover();
+    await shot(page, "landing-hero-hover-1440");
     await page.locator("#how").scrollIntoViewIfNeeded();
     await shot(page, "landing-how-1440");
     await page.locator("#product").scrollIntoViewIfNeeded();
@@ -139,6 +142,9 @@ test.describe("visual system QA", () => {
     await expect(page.locator("main").first()).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await shot(page, "landing-hero-390");
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+    await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+    await shot(page, "landing-menu-open-390");
     await page.locator("#pricing").scrollIntoViewIfNeeded();
     await expectNoHorizontalOverflow(page);
     await shot(page, "landing-pricing-390");
@@ -161,6 +167,19 @@ test.describe("visual system QA", () => {
       page.getByRole("heading", { name: /create your knowhow account/i }),
     ).toBeVisible();
     await shot(page, "auth-sign-up-1440");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installProductBackend(page, pilotBootstrap());
+    await page.goto("/platform");
+    await expect(page.getByRole("button", { name: "Provision organization" }).first()).toBeVisible();
+    await shot(page, "platform-home-390");
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/w/${PILOT_WORKSPACE_SLUG}/guides/${REVIEW_GUIDE_ID}/edit`);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("dialog", { name: "Guide settings" })).toBeVisible();
+    await page.waitForTimeout(250);
+    await shot(page, "guide-editor-settings-open-1440");
 
     await page.goto(`file://${process.cwd().replaceAll("\\", "/")}/extension/src/popup/popup.html`);
     await expect(page.getByRole("button", { name: /start capture/i })).toBeVisible();

@@ -1,4 +1,5 @@
 import type { WorkspaceSettings } from "../knowhow-types";
+import { isCapturedGuideSource } from "../guide-contracts";
 import { AccessService, type WorkspaceAccess } from "./access-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -74,7 +75,7 @@ export class GuideAccessService {
       ...context,
       guide: {
         revisionStatus: revision.status,
-        sourceType: revision.source === "browser-capture" ? "capture" : "manual",
+        sourceType: isCapturedGuideSource(revision.source) ? "capture" : "manual",
         isAuthor: guide.authorUserId === identity.userId,
         isAssignedReviewer: assignments.some((row) => row.user_id === identity.userId),
         isAudienceMember: audienceMember,

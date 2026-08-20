@@ -25,12 +25,14 @@ import {
   ImagePlus,
   KeyRound,
   LayoutDashboard,
+  Laptop,
   LifeBuoy,
   Link2,
   LoaderCircle,
   LockKeyhole,
   LogOut,
   Mail,
+  MoreHorizontal,
   Moon,
   Paintbrush,
   Plus,
@@ -76,6 +78,7 @@ import {
 import { decryptSecretValue, encryptSecretValue } from "../../lib/crypto";
 import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
+import { isCapturedGuideSource } from "../../lib/guide-contracts";
 import {
   companionGuidesFromWorkspace,
   ensureKnowHowExtension,
@@ -86,6 +89,7 @@ import {
 import type {
   Audience,
   BootstrapResponse,
+  DesktopCaptureDevice,
   Guide,
   GuideSearchResult,
   Invitation,
@@ -121,15 +125,16 @@ import {
   type GuideSaveResult,
 } from "./guide-editor";
 import { GuideShareDialog } from "./guide-share-dialog";
-import { workspaceAudience } from "./guide-audience-picker";
+import { GuideExportDialog, type GuideExportFormatChoice } from "./guide-export-dialog";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { GuideReaderView } from "./guide-reader-view";
 import { useConfirmDialog } from "./confirm-dialog";
-import { HexColorPicker } from "./hex-color-picker";
+import { HexColorPicker, isValidHexColor } from "./hex-color-picker";
 import { SelectMenu } from "./select-menu";
 import { ProductBrand } from "./product-brand";
 import { WorkspaceLogo } from "./workspace-logo";
 import { ExtensionInstallInstructions } from "./extension-install-instructions";
+import { PolicyNote } from "./workspace-patterns";
 import {
   Dialog,
   DialogContent,
@@ -164,7 +169,6 @@ import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarHeader,
   SidebarMenu,
@@ -195,6 +199,7 @@ type DialogState =
   | { type: "member"; member: WorkspaceMember }
   | { type: "extension" }
   | { type: "share-guide"; guide: Guide }
+  | { type: "export-guide"; guide: Guide }
   | { type: "account-security" }
   | { type: "support-decision"; request: SupportAccessRequest }
   | { type: "vault-editor"; item: VaultItem | null }
@@ -250,26 +255,26 @@ const SECTION_TO_VIEW: Record<WorkspaceSection, Exclude<View, "Platform">> = {
 };
 
 const ROLE_COPY: Record<WorkspaceRole, string> = {
-  administrator: "Workspace settings, people, permissions, and all guides",
-  creator: "Create, edit, and share their own guides",
-  reviewer: "Inspect private drafts and record reviews",
-  publisher: "Publish reviewed revisions and archive guides",
+  administrator: "Manage workspace settings, people, groups, and audit; does not grant guide access",
+  creator: "Create and edit their own private drafts",
+  reviewer: "Read and decide only assigned review drafts",
+  publisher: "Publish approved revisions and archive guides",
   viewer: "Read published guides shared with them",
 };
 
 function workspaceRoleLabel(role: WorkspaceRole) {
-  if (role === "administrator") return "Workspace admin";
+  if (role === "administrator") return "Administrator";
   return titleCase(role);
 }
 
 function organizationRoleLabel(role: OrganizationRole) {
-  if (role === "owner") return "Admin";
-  if (role === "administrator") return "Organization admin";
+  if (role === "owner") return "Owner";
+  if (role === "administrator") return "Administrator";
   return titleCase(role);
 }
 
 function workspaceAccessLabel(roles: WorkspaceRole[]) {
-  if (roles.includes("administrator")) return "Workspace admin";
+  if (roles.includes("administrator")) return "Workspace administrator";
 
   const operationalRoles = (
     ["creator", "reviewer", "publisher"] as WorkspaceRole[]
@@ -319,6 +324,19 @@ function titleCase(value: string) {
   return value
     .replace(/[-_.]/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function audienceSuccessMessage(audiences: Audience[]) {
+  if (audiences.some((audience) => audience.kind === "workspace")) {
+    return "visible to the entire workspace";
+  }
+  const groupCount = audiences.filter((audience) => audience.kind === "group").length;
+  const personCount = audiences.filter((audience) => audience.kind === "user").length;
+  const parts = [
+    groupCount ? `${groupCount} ${groupCount === 1 ? "group" : "groups"}` : "",
+    personCount ? `${personCount} ${personCount === 1 ? "person" : "people"}` : "",
+  ].filter(Boolean);
+  return parts.length ? `visible to ${parts.join(" and ")}` : "kept private";
 }
 
 function countPhrase(count: number, singular: string, plural = `${singular}s`) {
@@ -442,6 +460,10 @@ function PlanDialog({
             : null}
           . Pro and Enterprise share the same product. Enterprise is for higher usage.
         </p>
+        <p className="privacy-caption">
+          Online billing is not available yet. Contact sales and we will follow up
+          before making any paid plan change.
+        </p>
         <ul className="privacy-caption">
           <li>Capture, Smart Blur, redact, and annotate: {entitlements.privacyToolsEnabled ? "included" : "Pro"}</li>
           <li>Custom subdomain: {entitlements.customSubdomainEnabled ? "included (preview)" : "Pro"}</li>
@@ -472,7 +494,7 @@ function PlanDialog({
               disabled={busy}
               onClick={() => void onSelectPro()}
             >
-              Choose Pro
+              Contact sales about Pro
             </button>
           ) : null}
           {plan !== "enterprise" ? (
@@ -1047,8 +1069,6 @@ function OverviewView({
     metrics.views > 0
       ? Math.min(100, (metrics.completions / metrics.views) * 100)
       : 0;
-  const activeMemberRate =
-    members.length > 0 ? (activeMembers / members.length) * 100 : 0;
   const audienceAssigned = guides.filter((guide) => {
     const revision = guide.workingRevision ?? guide.publishedRevision;
     return Boolean(revision?.audiences.length);
@@ -1149,14 +1169,14 @@ function OverviewView({
             <MetricCard
               label="Review queue"
               value={metrics.reviews}
-              hint={`${metrics.drafts} private drafts in progress`}
+              hint={`${countPhrase(metrics.drafts, "private draft")} in progress`}
               icon={ClipboardCheck}
               tone="warning"
             />
             <MetricCard
-              label="Total engagement"
-              value={metrics.views + metrics.completions}
-              hint={`${metrics.completions} guide completions`}
+              label="Guide activity"
+              value={metrics.views}
+              hint={`${countPhrase(metrics.completions, "completion")} from ${countPhrase(metrics.views, "view")}`}
               icon={BarChart3}
             />
           </section>
@@ -1167,22 +1187,30 @@ function OverviewView({
                 <div>
                   <CardTitle>Knowledge lifecycle</CardTitle>
                   <CardDescription>
-                    Current distribution across every release stage.
+                    Current revision distribution across every release stage.
                   </CardDescription>
                 </div>
                 <Badge variant="outline">{lifecycleTotal} total</Badge>
               </CardHeader>
               <CardContent className="lifecycle-card-content">
-                <div
+                {lifecycleTotal >= 5 ? (
+                  <div
                   className="lifecycle-donut"
                   style={{ background: lifecycleBackground }}
                   aria-label={`${metrics.published} published, ${metrics.reviews} in review, ${metrics.drafts} drafts`}
                 >
                   <div>
                     <strong>{lifecycleTotal}</strong>
-                    <span>guides</span>
+                    <span>revisions</span>
                   </div>
-                </div>
+                  </div>
+                ) : (
+                  <div className="low-data-state">
+                    <BookOpen />
+                    <strong>Early lifecycle</strong>
+                    <span>Counts are clearer than a chart while this workspace has only {countPhrase(lifecycleTotal, "revision")}.</span>
+                  </div>
+                )}
                 <div className="lifecycle-legend">
                   <button type="button" onClick={() => onNavigate("Guides")}>
                     <i className="lifecycle-published" />
@@ -1217,10 +1245,6 @@ function OverviewView({
                     Real usage totals from capture through completion.
                   </CardDescription>
                 </div>
-                <div className="engagement-summary">
-                  <strong>{metrics.views + metrics.completions}</strong>
-                  <span>interactions</span>
-                </div>
               </CardHeader>
               <CardContent className="engagement-bars">
                 {activityValues.map(({ label, value, icon: Icon, tone }) => (
@@ -1237,17 +1261,17 @@ function OverviewView({
                     <strong>{value}</strong>
                   </div>
                 ))}
-                <div className="completion-rate">
-                  <div>
-                    <span>Completion rate</span>
-                    <strong>{Math.round(completionRate)}%</strong>
+                {metrics.views >= 50 ? (
+                  <div className="completion-rate">
+                    <div><span>Completion rate</span><strong>{Math.round(completionRate)}%</strong></div>
+                    <DashboardProgress value={completionRate} label="Guide completion rate" tone="accent" />
                   </div>
-                  <DashboardProgress
-                    value={completionRate}
-                    label="Guide completion rate"
-                    tone="accent"
-                  />
-                </div>
+                ) : (
+                  <div className="low-data-inline">
+                    <strong>Not enough data for a reliable rate yet</strong>
+                    <span>{countPhrase(metrics.completions, "completion")} from {countPhrase(metrics.views, "view")}; rates appear after 50 views.</span>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -1348,8 +1372,7 @@ function OverviewView({
                           <span className="queue-guide-main">
                             <strong>{revision?.title ?? guide.title}</strong>
                             <small>
-                              {revision?.category || "Uncategorized"} · Updated{" "}
-                              {formatDate(guide.updatedAt)}
+                              Revision {revision?.number ?? "—"} · {revision?.authorName || "Former member"} · Updated {formatDate(guide.updatedAt)}
                             </small>
                           </span>
                           <StatusBadge status={guide.status} />
@@ -1410,30 +1433,16 @@ function OverviewView({
                     ) : null}
                   </AvatarGroup>
                   <div>
-                    <strong>{activeMembers} active people</strong>
-                    <span>across {groups.length} audience groups</span>
+                    <strong>{countPhrase(activeMembers, "active person", "active people")}</strong>
+                    <span>across {countPhrase(groups.length, "audience group")}</span>
                   </div>
-                </div>
-                <div className="coverage-metric">
-                  <div>
-                    <span>Active membership</span>
-                    <strong>{Math.round(activeMemberRate)}%</strong>
-                  </div>
-                  <DashboardProgress
-                    value={activeMemberRate}
-                    label="Active workspace membership"
-                  />
                 </div>
                 <div className="coverage-metric">
                   <div>
                     <span>Audience assignment</span>
-                    <strong>{Math.round(audienceCoverage)}%</strong>
+                    <strong>{guides.length >= 5 ? `${Math.round(audienceCoverage)}%` : `${audienceAssigned} of ${guides.length}`}</strong>
                   </div>
-                  <DashboardProgress
-                    value={audienceCoverage}
-                    label="Guides assigned to an audience"
-                    tone="accent"
-                  />
+                  {guides.length >= 5 ? <DashboardProgress value={audienceCoverage} label="Guides assigned to an audience" tone="accent" /> : null}
                 </div>
                 <div className="access-health-stats">
                   <button
@@ -1481,6 +1490,7 @@ function GuidesView({
   onOpen,
   onEdit,
   onShare,
+  onExport,
   onAction,
   busy,
   canCreate,
@@ -1490,6 +1500,7 @@ function GuidesView({
   onOpen: (guide: Guide) => void;
   onEdit: (guide: Guide) => void;
   onShare: (guide: Guide) => void;
+  onExport: (guide: Guide) => void;
   onAction: (
     action: string,
     payload: unknown,
@@ -1500,19 +1511,25 @@ function GuidesView({
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [pageSize, setPageSize] = useState(5);
+  const [sort, setSort] = useState("updated");
+  const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
-  const filtered = guides.filter((guide) => {
-    const revision = guide.workingRevision ?? guide.publishedRevision;
-    const text =
-      `${guide.title} ${revision?.summary ?? ""} ${revision?.tags.join(" ") ?? ""}`.toLowerCase();
-    return (
-      text.includes(query.toLowerCase()) &&
-      (status === "all" || guide.status === status)
-    );
-  });
+  const filtered = guides
+    .filter((guide) => {
+      const revision = guide.workingRevision ?? guide.publishedRevision;
+      const text =
+        `${guide.title} ${revision?.summary ?? ""} ${revision?.tags.join(" ") ?? ""}`.toLowerCase();
+      return (
+        text.includes(query.toLowerCase()) &&
+        (status === "all" || guide.status === status)
+      );
+    })
+    .sort((left, right) => {
+      if (sort === "title") return left.title.localeCompare(right.title);
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+    });
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
   const visibleGuides = filtered.slice(
@@ -1563,6 +1580,19 @@ function GuidesView({
                 { value: "archived", label: "Archived" },
               ]}
             />
+            <SelectMenu
+              className="filter-select"
+              value={sort}
+              onChange={(value) => {
+                setSort(value);
+                setPage(0);
+              }}
+              ariaLabel="Sort guides"
+              options={[
+                { value: "updated", label: "Recently updated" },
+                { value: "title", label: "Title A–Z" },
+              ]}
+            />
             <span className="result-count">
               {filtered.length} {filtered.length === 1 ? "guide" : "guides"}
             </span>
@@ -1574,12 +1604,25 @@ function GuidesView({
               const revision = guide.workingRevision ?? guide.publishedRevision;
               const live = guide.publishedRevision;
               return (
-                <article className="guide-card" key={guide.id}>
-                  <button
-                    className="guide-card-main"
-                    type="button"
-                    onClick={() => onOpen(guide)}
-                  >
+                <article
+                  className="guide-card guide-card-clickable"
+                  key={guide.id}
+                  role="link"
+                  tabIndex={0}
+                  aria-label={`Open ${revision?.title ?? guide.title}`}
+                  onClick={(event) => {
+                    if ((event.target as HTMLElement).closest("button, a, [role='menuitem']")) return;
+                    onOpen(guide);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onOpen(guide);
+                    }
+                  }}
+                >
+                  <div className="guide-card-main">
                     <span className="guide-icon large">
                       <BookOpen />
                     </span>
@@ -1588,7 +1631,7 @@ function GuidesView({
                         <strong>{revision?.title ?? guide.title}</strong>
                         {guide.restricted ? (
                           <span className="restricted-label">
-                            <LockKeyhole /> Restricted
+                            <LockKeyhole /> Audience restricted
                           </span>
                         ) : (
                           <span className="workspace-label">
@@ -1601,14 +1644,15 @@ function GuidesView({
                       </span>
                       <span className="guide-meta">
                         {revision?.category || "Uncategorized"} ·{" "}
-                        {revision?.steps.length ?? 0} blocks
+                        {revision?.steps.length ?? 0}{" "}
+                        {(revision?.steps.length ?? 0) === 1 ? "step" : "steps"}
                         {guide.publishedRevision
                           ? ` · ${guide.viewCount ?? 0} ${(guide.viewCount ?? 0) === 1 ? "view" : "views"}`
                           : ""}{" "}
                         · Updated {formatDate(guide.updatedAt)}
                       </span>
                     </span>
-                  </button>
+                  </div>
                   <div className="guide-state-column">
                     <StatusBadge status={guide.status} />
                     {guide.workingRevision && live ? (
@@ -1618,22 +1662,28 @@ function GuidesView({
                     ) : null}
                   </div>
                   <div className="guide-actions">
-                    {guide.canShare && guide.status !== "archived" ? (
-                      <button
-                        className="button ghost small"
-                        type="button"
-                        onClick={() => onShare(guide)}
-                      >
-                        Share
-                      </button>
-                    ) : null}
                     {guide.canEdit && guide.status !== "archived" ? (
                       <button
                         className="button ghost small"
                         type="button"
-                        onClick={() => onEdit(guide)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEdit(guide);
+                        }}
                       >
                         Edit
+                      </button>
+                    ) : null}
+                    {guide.canShare && guide.status !== "archived" ? (
+                      <button
+                        className="button ghost small"
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onShare(guide);
+                        }}
+                      >
+                        Share
                       </button>
                     ) : null}
                     {guide.canReview && guide.status === "review" ? (
@@ -1724,32 +1774,41 @@ function GuidesView({
                         Publish
                       </button>
                     ) : null}
-                    {guide.canArchive && guide.status !== "archived" ? (
-                      <button
-                        className="icon-button"
-                        title="Archive guide"
-                        disabled={busy}
-                        type="button"
-                        onClick={() =>
-                          onAction(
-                            "archiveGuide",
-                            { guideId: guide.id },
-                            "Guide archived",
-                          )
-                        }
-                      >
-                        <Archive />
-                      </button>
-                    ) : null}
-                    {guide.canDelete ? (
-                      <button
-                        className="button ghost small danger-button"
-                        disabled={busy}
-                        type="button"
-                        onClick={() => setDeleteTarget(guide)}
-                      >
-                        <Trash2 /> Delete
-                      </button>
+                    {(guide.publishedRevision || guide.canArchive || guide.canDelete) ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          className="icon-button"
+                          type="button"
+                          aria-label={`More actions for ${revision?.title ?? guide.title}`}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <MoreHorizontal />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+                          {guide.publishedRevision ? (
+                            <DropdownMenuItem onClick={() => onExport(guide)}>
+                              <Download /> Export
+                            </DropdownMenuItem>
+                          ) : null}
+                          {guide.canArchive && guide.status !== "archived" ? (
+                            <DropdownMenuItem
+                              disabled={busy}
+                              onClick={() => void onAction("archiveGuide", { guideId: guide.id }, "Guide archived")}
+                            >
+                              <Archive /> Archive
+                            </DropdownMenuItem>
+                          ) : null}
+                          {guide.canDelete ? (
+                            <DropdownMenuItem
+                              className="danger-menu-item"
+                              disabled={busy}
+                              onClick={() => setDeleteTarget(guide)}
+                            >
+                              <Trash2 /> Delete
+                            </DropdownMenuItem>
+                          ) : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     ) : null}
                   </div>
                 </article>
@@ -1774,7 +1833,7 @@ function GuidesView({
             }
           />
         )}
-        {filtered.length ? (
+        {filtered.length > pageSize ? (
           <ListPagination
             total={filtered.length}
             page={safePage}
@@ -1849,7 +1908,7 @@ function GuideViewer({
   onEdit: () => void;
   onDelete?: () => Promise<void>;
   onRevisionChange: (revision: GuideRevisionMode) => void;
-  onExport: (format: "pdf" | "html" | "markdown") => void;
+  onExport: (format: GuideExportFormatChoice) => void;
   onRestore: (revisionId: string) => void;
   onPublishedViewed: () => void;
   onComplete: () => void;
@@ -1910,30 +1969,69 @@ function GuideViewer({
 }
 
 function CaptureView({
-  canCapture,
+  browserAvailable,
+  desktopAvailable,
+  browserPlanEnabled,
+  desktopPlanEnabled,
+  desktopDevices,
+  typedTextPolicy,
+  busy,
+  onOpenExtension,
+  onRevokeDesktopDevice,
   planLocked,
   onOpenPlan,
 }: {
-  canCapture: boolean;
+  browserAvailable: boolean;
+  desktopAvailable: boolean;
+  browserPlanEnabled: boolean;
+  desktopPlanEnabled: boolean;
+  desktopDevices: DesktopCaptureDevice[];
+  typedTextPolicy: WorkspaceSettings["desktopTypedTextPolicy"];
+  busy: boolean;
+  onOpenExtension: () => void;
+  onRevokeDesktopDevice: (deviceRecordId: string) => Promise<void>;
   planLocked: boolean;
   onOpenPlan?: () => void;
 }) {
+  const desktopDownloads = [
+    {
+      label: "EXE · x64",
+      href: process.env.NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_X64_URL,
+    },
+    {
+      label: "MSI · x64",
+      href: process.env.NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_X64_URL,
+    },
+    {
+      label: "EXE · ARM64",
+      href: process.env.NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_ARM64_URL,
+    },
+    {
+      label: "MSI · ARM64",
+      href: process.env.NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_ARM64_URL,
+    },
+  ].filter(
+    (download): download is { label: string; href: string } =>
+      Boolean(download.href),
+  );
+
   return (
     <div className="view-stack">
       <div className="page-heading">
         <div>
-          <p className="eyebrow">Chrome & Edge</p>
+          <p className="eyebrow">Browser & Windows</p>
           <h1>Capture a workflow</h1>
           {planLocked ? (
             <>
               <p>
-                Capture, Smart Blur, redact, and annotate are included on Pro.
+                Browser and Windows capture, Smart Blur, redact, and annotate
+                are included on Pro.
                 Free workspaces stay on typed guides so unblurred screenshots
                 are never uploaded.
               </p>
               <p className="privacy-caption">
-                Capture is on Pro. Start a 14-day Pro trial to install the
-                extension and redact locally before upload.
+                Start a 14-day Pro trial to install a capture tool and redact
+                locally before upload.
               </p>
               {onOpenPlan ? (
                 <button className="button primary" type="button" onClick={onOpenPlan}>
@@ -1944,10 +2042,10 @@ function CaptureView({
           ) : (
             <>
               <p>
-                Record clicks and navigation, redact locally, then send an editable
-                private draft to KnowHow.
+                Choose the recorder that matches the work. Both create an
+                editable private draft in the same governed editor.
               </p>
-              {!canCapture ? (
+              {!browserAvailable && !desktopAvailable ? (
                 <p className="privacy-caption">
                   Capture is not enabled for your role in this workspace.
                 </p>
@@ -1958,65 +2056,132 @@ function CaptureView({
       </div>
       {planLocked ? null : (
         <>
-      <section className="capture-hero card">
-        <div className="capture-copy">
-          <p className="eyebrow">Browser extension</p>
-          <h2>Pair Chrome or Edge, then record the real work.</h2>
-          <p>
-            KnowHow captures click context and screenshots without passwords,
-            clipboard contents, raw keystrokes, incognito sessions, or
-            password-manager pages. Redaction happens before anything is
-            uploaded.
-          </p>
-          <ol>
-            <li>
-              <span>1</span>
-              <div>
-                <strong>Start with an explicit scope</strong>
-                <p>
-                  The indicator always shows the current host and recording
-                  state.
-                </p>
+          <section className="capture-source-grid">
+            <article className="card capture-source-card">
+              <div className="capture-source-heading">
+                <span><Globe2 /></span>
+                <div>
+                  <p className="eyebrow">Chrome & Edge</p>
+                  <h2>Browser capture</h2>
+                </div>
+                <Badge variant="outline">Extension</Badge>
               </div>
-            </li>
-            <li>
-              <span>2</span>
-              <div>
-                <strong>Pause instantly</strong>
-                <p>
-                  Queued events and in-flight screenshots are cancelled when
-                  paused.
-                </p>
+              <p>
+                Capture clicks and navigation inside a chosen browser scope,
+                review every screenshot locally, then upload a private draft.
+              </p>
+              <ul className="capture-source-points">
+                <li><Check /> Host-scoped recording indicator</li>
+                <li><Check /> Smart Blur before upload</li>
+                <li><Check /> Chrome side-panel guide companion</li>
+              </ul>
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy || !browserAvailable}
+                onClick={onOpenExtension}
+              >
+                <Link2 /> Connect browser extension
+              </button>
+              {!browserPlanEnabled ? (
+                <small>Browser capture is not included on this plan.</small>
+              ) : null}
+            </article>
+
+            <article className="card capture-source-card desktop-capture-card">
+              <div className="capture-source-heading">
+                <span><Laptop /></span>
+                <div>
+                  <p className="eyebrow">Windows 10 & 11</p>
+                  <h2>Desktop capture</h2>
+                </div>
+                <Badge variant="outline">New</Badge>
               </div>
-            </li>
-            <li>
-              <span>3</span>
-              <div>
-                <strong>Review every image locally</strong>
-                <p>
-                  Blur emails, form fields, number categories, similar elements,
-                  or whole regions.
+              <p>
+                Record meaningful actions across Windows applications with a
+                compact recorder, explicit target scope, and always-visible
+                controls.
+              </p>
+              <ul className="capture-source-points">
+                <li><Check /> App, window, monitor, or all displays</li>
+                <li><Check /> Pause, retry, finish, and discard from the HUD</li>
+                <li><Check /> Opens directly in the KnowHow web editor</li>
+              </ul>
+              {desktopDownloads.length ? (
+                <div className="desktop-downloads">
+                  {desktopDownloads.map((download) => (
+                    <a
+                      className="button secondary small"
+                      href={download.href}
+                      key={download.label}
+                    >
+                      <Download /> {download.label}
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p className="privacy-caption">
+                  Signed installers will appear here when the release channel
+                  is configured.
                 </p>
+              )}
+              {!desktopPlanEnabled ? (
+                <small>Windows capture is not included on this plan.</small>
+              ) : !desktopAvailable ? (
+                <small>Your role cannot start captures in this workspace.</small>
+              ) : null}
+            </article>
+          </section>
+
+          {desktopPlanEnabled ? (
+            <section className="card paired-desktop-devices">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Paired devices</p>
+                  <h2>Windows capture devices</h2>
+                  <p>
+                    Exact non-password text is {typedTextPolicy === "allowed" ? "allowed when the author enables it" : "disabled by workspace policy"}.
+                  </p>
+                </div>
               </div>
-            </li>
-            <li>
-              <span>4</span>
-              <div>
-                <strong>Send a private draft</strong>
-                <p>
-                  The same governed editor handles captured and manual guides.
+              {desktopDevices.length ? (
+                <div className="desktop-device-list">
+                  {desktopDevices.map((device) => (
+                    <div className="desktop-device-row" key={device.id}>
+                      <span className="desktop-device-row-icon"><Laptop /></span>
+                      <div>
+                        <strong>{device.name}</strong>
+                        <small>
+                          {device.version} · {device.architecture.toUpperCase()} · Last used {device.lastUsedAt ? formatDate(device.lastUsedAt, true) : "never"}
+                        </small>
+                      </div>
+                      <Badge variant="outline">Connected</Badge>
+                      <button
+                        className="button ghost small"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onRevokeDesktopDevice(device.id)}
+                      >
+                        <Trash2 /> Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-inline">
+                  No Windows devices are connected yet. Install the app and
+                  approve its named-device request in your browser.
                 </p>
-              </div>
-            </li>
-          </ol>
-        </div>
-      </section>
+              )}
+            </section>
+          ) : null}
+
       <section className="privacy-grid">
         {[
           {
             icon: LockKeyhole,
             title: "Always excluded",
-            copy: "Passwords, clipboard contents, raw keys, incognito, and password managers.",
+            copy: "Passwords, clipboard contents, raw keys, secure Windows surfaces, private browsing, and password managers.",
           },
           {
             icon: Shield,
@@ -2026,7 +2191,7 @@ function CaptureView({
           {
             icon: Eye,
             title: "Human privacy gate",
-            copy: "Common-name and long-text hints assist reviewers but never claim guaranteed protection.",
+            copy: "Desktop drafts stay private and cannot be shared, exported, or published until the author completes privacy review.",
           },
         ].map(({ icon: Icon, title, copy }) => (
           <article className="card privacy-card" key={title}>
@@ -2053,6 +2218,10 @@ function GroupsView({
   onNew: () => void;
   onEdit: (group: WorkspaceGroup) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const visibleGroups = groups.filter((group) =>
+    `${group.name} ${group.description}`.toLowerCase().includes(query.trim().toLowerCase()),
+  );
   return (
     <div className="view-stack">
       <div className="page-heading">
@@ -2067,8 +2236,17 @@ function GroupsView({
       </div>
       <section className="group-directory-card">
         {groups.length ? (
+          <div className="filter-bar group-filter-bar">
+            <label className="search-field">
+              <Search />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search groups" aria-label="Search audience groups" />
+            </label>
+            <span className="result-count">{countPhrase(visibleGroups.length, "group")}</span>
+          </div>
+        ) : null}
+        {groups.length ? (
           <div className="group-grid">
-            {groups.map((group) => (
+            {visibleGroups.map((group) => (
               <button
                 className="group-card"
                 type="button"
@@ -2085,12 +2263,16 @@ function GroupsView({
                   <strong>{group.name}</strong>
                   <small>
                     {group.kind === "all_members"
-                      ? "Built-in audience for publishing a guide to every active workspace member."
-                      : group.description || "No description"}
+                      ? "Built-in audience for every active workspace member."
+                      : group.description || null}
                   </small>
+                  <span className="group-card-meta">
+                    {countPhrase(group.memberCount, "member")} · {countPhrase(group.publishedGuideCount ?? 0, "published guide")}
+                  </span>
+                  {group.sensitive ? <span className="restricted-label"><LockKeyhole /> Restricted membership</span> : null}
                 </span>
                 <span className="group-count">
-                  <Users /> {group.memberCount}
+                  <Users /> {group.memberCount || "—"}
                 </span>
                 {group.kind === "all_members" ? (
                   <ShieldCheck />
@@ -2144,6 +2326,12 @@ function GroupDialog({
   const [description, setDescription] = useState(group?.description ?? "");
   const [sensitive, setSensitive] = useState(group?.sensitive ?? false);
   const [memberIds, setMemberIds] = useState(group?.memberIds ?? []);
+  const [memberQuery, setMemberQuery] = useState("");
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const activeMembers = members.filter((member) =>
+    member.status === "active" &&
+    `${member.name ?? ""} ${member.email}`.toLowerCase().includes(memberQuery.trim().toLowerCase()),
+  );
   return (
     <Modal
       title={group ? `Edit ${group.name}` : "Create audience group"}
@@ -2189,7 +2377,7 @@ function GroupDialog({
             onChange={(event) => setSensitive(event.target.checked)}
           />
           <span>
-            <strong>Sensitive group</strong>
+            <strong>Restricted membership</strong>
             <small>
               Membership can only be assigned by an administrator, never by a
               generic invite.
@@ -2197,10 +2385,12 @@ function GroupDialog({
           </span>
         </label>
         <div className="member-picker">
-          <span className="field-label">Members</span>
-          {members
-            .filter((member) => member.status === "active")
-            .map((member) => (
+          <div className="member-picker-heading">
+            <span className="field-label">Members · {memberIds.length} selected</span>
+            <label className="search-field compact"><Search /><input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="Search members" aria-label="Search members to add" /></label>
+          </div>
+          <small className="field-help">Group membership controls audience delivery; it never changes workspace roles.</small>
+          {activeMembers.map((member) => (
               <label className="choice-row" key={member.id}>
                 <input
                   type="checkbox"
@@ -2223,13 +2413,29 @@ function GroupDialog({
               </label>
             ))}
         </div>
+        {group && (group.publishedGuideCount ?? 0) > 0 ? (
+          <PolicyNote icon={LockKeyhole}>
+            This group is used by {countPhrase(group.publishedGuideCount ?? 0, "published guide")}. Remove that audience before deleting the group.
+          </PolicyNote>
+        ) : null}
         <footer className="modal-footer">
           {group ? (
             <button
               className="button danger-button"
               type="button"
-              disabled={busy}
-              onClick={() => onDelete(group.id)}
+              disabled={busy || (group.publishedGuideCount ?? 0) > 0}
+              onClick={() => {
+                void askToConfirm({
+                  title: `Delete ${group.name}?`,
+                  description: (group.publishedGuideCount ?? 0) > 0
+                    ? `${group.name} is used by ${countPhrase(group.publishedGuideCount ?? 0, "published guide")}. Remove that audience before deleting the group.`
+                    : `${countPhrase(group.memberCount, "member")} will lose this audience assignment. This does not suspend anyone.`,
+                  confirmLabel: "Delete group",
+                  tone: "danger",
+                }).then((confirmed) => {
+                  if (confirmed) void onDelete(group.id);
+                });
+              }}
             >
               <Trash2 /> Delete
             </button>
@@ -2248,6 +2454,7 @@ function GroupDialog({
           </button>
         </footer>
       </form>
+      {confirmDialog}
     </Modal>
   );
 }
@@ -2258,7 +2465,6 @@ function MembersView({
   supportRequests,
   supportGrants,
   busy,
-  onInvite,
   onEdit,
   onRevoke,
   onResolveSupport,
@@ -2269,7 +2475,6 @@ function MembersView({
   supportRequests: SupportAccessRequest[];
   supportGrants: SupportAccessGrant[];
   busy: boolean;
-  onInvite: () => void;
   onEdit: (member: WorkspaceMember) => void;
   onRevoke: (id: string) => void;
   onResolveSupport: (request: SupportAccessRequest) => void;
@@ -2301,6 +2506,9 @@ function MembersView({
           </p>
         </div>
       </div>
+      <PolicyNote icon={Shield}>
+        Roles grant actions. Audiences grant guide access. Vault is a separate capability.
+      </PolicyNote>
       {pendingSupport.length ? (
         <section className="card table-card">
           <div className="section-heading compact">
@@ -2382,7 +2590,7 @@ function MembersView({
                   ))}
                 </span>
                 <span className="group-list">
-                  {member.groupIds.length} groups
+                  {countPhrase(member.groupIds.length, "group")}
                 </span>
                 <ArrowRight />
               </button>
@@ -2447,7 +2655,7 @@ function MembersView({
             const status = invite.revokedAt
               ? "revoked"
               : invite.useCount >= invite.maxUses
-                ? "used"
+                ? "accepted"
                 : expired
                   ? "expired"
                   : "active";
@@ -2482,14 +2690,7 @@ function MembersView({
           <EmptyState
             icon={Link2}
             title="No invitation links"
-            description="Create a signed, expiring link with a basic preassigned role."
-            action={
-              !busy ? (
-                <button className="button primary" type="button" onClick={onInvite}>
-                  <UserPlus /> Invite teammate
-                </button>
-              ) : undefined
-            }
+            description="Invitations appear here after you send secure, exact-email access."
           />
         )}
       </section>
@@ -2611,14 +2812,12 @@ function SupportDecisionDialog({
 function MemberDialog({
   member,
   busy,
-  showGovernanceRoles = false,
   onClose,
   onSave,
   onSuspend,
 }: {
   member: WorkspaceMember;
   busy: boolean;
-  showGovernanceRoles?: boolean;
   onClose: () => void;
   onSave: (
     roles: WorkspaceRole[],
@@ -2627,6 +2826,8 @@ function MemberDialog({
   onSuspend: () => Promise<void>;
 }) {
   const [roles, setRoles] = useState(member.roles);
+  const [vaultEnabled, setVaultEnabled] = useState(member.capabilities?.includes("vault") ?? false);
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   return (
     <Modal
       title={member.name || member.email}
@@ -2646,15 +2847,7 @@ function MemberDialog({
         </div>
         <div className="role-picker">
           <span className="field-label">Workspace roles</span>
-          {WORKSPACE_ROLES.filter(
-            (role) =>
-              showGovernanceRoles ||
-              role === "administrator" ||
-              role === "creator" ||
-              role === "viewer" ||
-              roles.includes(role) ||
-              member.roles.includes(role),
-          ).map((role) => (
+          {WORKSPACE_ROLES.map((role) => (
             <label className="choice-row" key={role}>
               <input
                 type="checkbox"
@@ -2674,19 +2867,36 @@ function MemberDialog({
             </label>
           ))}
         </div>
-        <p className="privacy-caption">
-          <Shield /> Changing roles does not add the member to any content
-          audience.
-        </p>
-        <footer className="modal-footer">
+        <div className="role-picker capability-picker">
+          <span className="field-label">Capabilities</span>
+          <label className="choice-row">
+            <input type="checkbox" checked={vaultEnabled} onChange={(event) => setVaultEnabled(event.target.checked)} />
+            <span><strong>Vault</strong><small>Access encrypted workspace credentials. This is independent of roles and guide audiences.</small></span>
+          </label>
+        </div>
+        <PolicyNote icon={Shield}>
+          This member belongs to {countPhrase(member.groupIds.length, "group")} and may also receive workspace-wide or direct guide audiences.
+        </PolicyNote>
+        <section className="member-danger-zone">
+          <div><strong>{member.status === "suspended" ? "Restore workspace access" : "Suspend workspace access"}</strong><small>{member.status === "suspended" ? "The member can sign in again after restoration." : "The member loses workspace access immediately; their content remains."}</small></div>
           <button
-            className="button danger-button"
+            className={member.status === "suspended" ? "button secondary" : "button danger-button"}
             type="button"
             disabled={busy}
-            onClick={onSuspend}
+            onClick={() => {
+              void askToConfirm({
+                title: member.status === "suspended" ? `Restore ${member.name || member.email}?` : `Suspend ${member.name || member.email}?`,
+                description: member.status === "suspended" ? "Restore this member's workspace access?" : "They will lose workspace access immediately. Their guides and audit history remain.",
+                confirmLabel: member.status === "suspended" ? "Restore member" : "Suspend member",
+                tone: member.status === "suspended" ? "default" : "danger",
+              }).then((confirmed) => { if (confirmed) void onSuspend(); });
+            }}
           >
             {member.status === "suspended" ? "Restore" : "Suspend"}
           </button>
+        </section>
+        <footer className="modal-footer">
+          <span />
           <button className="button secondary" type="button" onClick={onClose}>
             Cancel
           </button>
@@ -2695,16 +2905,14 @@ function MemberDialog({
             type="button"
             disabled={busy || roles.length === 0}
             onClick={() =>
-              onSave(
-                roles,
-                member.capabilities?.includes("vault") ? ["vault"] : [],
-              )
+              onSave(roles, vaultEnabled ? ["vault"] : [])
             }
           >
             <Check /> Save
           </button>
         </footer>
       </div>
+      {confirmDialog}
     </Modal>
   );
 }
@@ -2712,13 +2920,11 @@ function MemberDialog({
 function InviteDialog({
   busy,
   origin,
-  showGovernanceRoles = false,
   onClose,
   onCreate,
 }: {
   busy: boolean;
   origin: string;
-  showGovernanceRoles?: boolean;
   onClose: () => void;
   onCreate: (payload: {
     emails: string[];
@@ -2740,7 +2946,7 @@ function InviteDialog({
   return (
     <Modal
       title="Invite a teammate"
-      eyebrow="Signed workspace access"
+      eyebrow="Workspace invitation"
       onClose={onClose}
       wide
     >
@@ -2848,10 +3054,13 @@ function InviteDialog({
                   Invite at most {MAX_BULK_INVITES} people at a time.
                 </small>
               ) : null}
+              {parsed.emails.length && !parsed.invalid.length ? (
+                <span className="invite-ready-chip"><Check /> {countPhrase(parsed.emails.length, "address")} ready</span>
+              ) : null}
             </label>
             <div className="invite-settings">
               <label className="field">
-                <span>Internal label</span>
+                <span>Batch label</span>
                 <input
                   value={label}
                   onChange={(event) => setLabel(event.target.value)}
@@ -2867,21 +3076,13 @@ function InviteDialog({
                   ariaLabel="Invitation access"
                   options={[
                     { value: "viewer", label: "Viewer — can view shared guides" },
-                    { value: "creator", label: "Creator — can create and share guides" },
-                    ...(showGovernanceRoles
-                      ? [
-                          { value: "reviewer", label: "Reviewer — governance" },
-                          { value: "publisher", label: "Publisher — governance" },
-                        ]
-                      : []),
+                    { value: "creator", label: "Creator — can create guides" },
+                    { value: "reviewer", label: "Reviewer — reviews assigned drafts" },
+                    { value: "publisher", label: "Publisher — publishes approved revisions" },
                   ]}
                 />
                 <small>
-                  Start with Viewer or Creator. Workspace admin is assigned after
-                  membership.
-                  {showGovernanceRoles
-                    ? " Reviewer and Publisher are for this workspace’s review workflow."
-                    : ""}
+                  Roles are additive. Administrator and Vault access are assigned after membership.
                 </small>
               </div>
               <div className="field">
@@ -2900,10 +3101,9 @@ function InviteDialog({
                 />
               </div>
             </div>
-            <p className="privacy-caption">
-              <LockKeyhole /> No generic links. Every invitation is scoped to
-              one verified email, single-use, expiring, and audited.
-            </p>
+            <PolicyNote icon={LockKeyhole}>
+              Every invitation is exact-email, single-use, expiring, and audited. There are no generic invite links.
+            </PolicyNote>
           </>
         )}
         <footer className="modal-footer">
@@ -3163,6 +3363,7 @@ function SettingsView({
   removeBrandingEnabled,
   onSave,
   onRefresh,
+  onRegisterNavigationGuard,
 }: {
   workspaceId: string;
   workspaceName: string;
@@ -3171,19 +3372,69 @@ function SettingsView({
   removeBrandingEnabled: boolean;
   onSave: (settings: WorkspaceSettings) => Promise<void>;
   onRefresh: () => Promise<BootstrapResponse>;
+  onRegisterNavigationGuard: (guard: NavigationGuard | null) => void;
 }) {
   const [settings, setSettings] = useState(initial);
+  const [baseline, setBaseline] = useState(initial);
+  const [section, setSection] = useState<"general" | "branding" | "publishing" | "exports">("general");
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState("");
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
+  const askToConfirmRef = useRef(askToConfirm);
+  const dirty = JSON.stringify(settings) !== JSON.stringify(baseline);
+  const dirtyRef = useRef(dirty);
+  const colorsValid =
+    isValidHexColor(settings.accentColor) &&
+    isValidHexColor(settings.clickTargetColor);
   const update = <K extends keyof WorkspaceSettings>(
     key: K,
     value: WorkspaceSettings[K],
   ) => setSettings((current) => ({ ...current, [key]: value }));
   const disabled = busy || logoBusy;
+  useEffect(() => {
+    askToConfirmRef.current = askToConfirm;
+  }, [askToConfirm]);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const guard: NavigationGuard = {
+      shouldBlock: () => dirtyRef.current,
+      requestConfirmation: ({ proceed }) => {
+        void askToConfirmRef.current({
+          title: "Discard unsaved settings?",
+          description: "Your workspace policy and branding changes have not been saved.",
+          confirmLabel: "Discard changes",
+          tone: "danger",
+        }).then((confirmed) => {
+          if (!confirmed) return;
+          dirtyRef.current = false;
+          proceed();
+        });
+      },
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    onRegisterNavigationGuard(guard);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      onRegisterNavigationGuard(null);
+    };
+  }, [onRegisterNavigationGuard]);
+
+  async function saveSettings() {
+    await onSave(settings);
+    setBaseline(settings);
+  }
   async function refreshLogoState() {
     const refreshed = await onRefresh();
     const logoUrl = refreshed.activeWorkspace?.workspace.settings.logoUrl;
     setSettings((current) => ({ ...current, logoUrl: logoUrl ?? null }));
+    setBaseline((current) => ({ ...current, logoUrl: logoUrl ?? null }));
   }
   return (
     <div className="view-stack">
@@ -3195,23 +3446,67 @@ function SettingsView({
             Control branding, sharing, and restricted exports for this workspace.
           </p>
         </div>
-        <button
-          className="button primary"
-          disabled={disabled}
-          onClick={() => void onSave(settings)}
-        >
-          <Check /> Save settings
-        </button>
+      </div>
+      <div className="settings-tabs" role="tablist" aria-label="Workspace settings sections">
+        {(["general", "branding", "publishing", "exports"] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            role="tab"
+            aria-selected={section === item}
+            className={section === item ? "active" : ""}
+            onClick={() => setSection(item)}
+          >
+            {titleCase(item)}
+          </button>
+        ))}
       </div>
       <div className="settings-grid">
-        <section className="card settings-card document-identity-card">
+        {section === "general" ? (
+          <section className="card settings-card settings-section-wide">
+            <div className="settings-title">
+              <span><Settings /></span>
+              <div>
+                <h2>Workspace safeguards</h2>
+                <p>{workspaceName} uses these enforced protections.</p>
+              </div>
+            </div>
+            <div className="safeguard-list">
+              <PolicyNote icon={ShieldCheck}>Captured screenshots require a recorded privacy review before publication.</PolicyNote>
+              <PolicyNote icon={LockKeyhole}>Administrator status does not grant guide access or bypass required review.</PolicyNote>
+              <PolicyNote icon={Archive}>Published revisions stay immutable; edits create a new working draft.</PolicyNote>
+            </div>
+            <label className="choice-row emphasized">
+              <input
+                type="checkbox"
+                checked={settings.desktopTypedTextPolicy === "allowed"}
+                onChange={(event) =>
+                  update(
+                    "desktopTypedTextPolicy",
+                    event.target.checked ? "allowed" : "disabled",
+                  )
+                }
+              />
+              <span>
+                <strong>Allow exact non-password text in Windows capture</strong>
+                <small>
+                  Authors still choose whether to capture typed text. Password
+                  and uncertain fields are always recorded as semantic actions
+                  without their value.
+                </small>
+              </span>
+            </label>
+          </section>
+        ) : null}
+        {section === "branding" ? (
+        <section className="card settings-card document-identity-card settings-section-wide">
           <div className="settings-title">
             <span>
               <Paintbrush />
             </span>
             <div>
               <h2>Document identity</h2>
-              <p>Applied to the app and generated guide exports.</p>
+              <p>Applied to the live guide experience and generated exports.</p>
             </div>
           </div>
           <div className="logo-upload">
@@ -3321,7 +3616,7 @@ function SettingsView({
               }
             />
             <span>
-              <strong>Remove KnowHow branding</strong>
+              <strong>Remove KnowHow branding {!removeBrandingEnabled ? <Badge variant="outline">Pro</Badge> : null}</strong>
               <small>
                 {removeBrandingEnabled
                   ? "KnowHow branding is hidden on exports for this workspace."
@@ -3329,15 +3624,21 @@ function SettingsView({
               </small>
             </span>
           </label>
+          <div className="brand-preview settings-live-preview" style={{ "--preview-accent": settings.accentColor, "--click-color": settings.clickTargetColor } as React.CSSProperties}>
+            <WorkspaceLogo workspaceId={workspaceId} workspaceName={workspaceName} logoKey={settings.logoUrl} size="md" />
+            <span><strong>{workspaceName}</strong><small>Live guide and export preview</small></span>
+          </div>
         </section>
-        <section className="card settings-card">
+        ) : null}
+        {section === "publishing" ? (
+        <section className="card settings-card settings-section-wide">
           <div className="settings-title">
             <span>
-              <FileDown />
+              <ShieldCheck />
             </span>
             <div>
-              <h2>Export controls</h2>
-              <p>Live links always retain audience checks.</p>
+              <h2>Publishing workflow</h2>
+              <p>Choose whether working drafts require an assigned reviewer.</p>
             </div>
           </div>
           <label className="choice-row emphasized">
@@ -3349,13 +3650,19 @@ function SettingsView({
               }
             />
             <span>
-              <strong>Require review before sharing</strong>
-              <small>
-                Creators send drafts for review. Administrators can still share
-                immediately.
-              </small>
+              <strong>Require review before publishing</strong>
+              <small>Creators submit drafts to an assigned Reviewer. An approved revision must be published by a Publisher.</small>
             </span>
           </label>
+          <PolicyNote icon={LockKeyhole}>Administrators cannot bypass required review.</PolicyNote>
+        </section>
+        ) : null}
+        {section === "exports" ? (
+        <section className="card settings-card settings-section-wide">
+          <div className="settings-title">
+            <span><FileDown /></span>
+            <div><h2>Export controls</h2><p>Exports are static copies. Live links keep audience checks.</p></div>
+          </div>
           <label className="choice-row emphasized">
             <input
               type="checkbox"
@@ -3387,7 +3694,20 @@ function SettingsView({
             </span>
           </label>
         </section>
+        ) : null}
       </div>
+      <footer className={`settings-save-bar${dirty ? " is-dirty" : ""}`}>
+        <span>{dirty ? "Unsaved changes" : "All settings saved"}</span>
+        {dirty ? (
+          <button className="button secondary" type="button" disabled={disabled} onClick={() => setSettings(baseline)}>
+            Discard
+          </button>
+        ) : null}
+        <button className="button primary" type="button" disabled={disabled || !dirty || !colorsValid} onClick={() => void saveSettings()}>
+          <Check /> Save changes
+        </button>
+      </footer>
+      {confirmDialog}
     </div>
   );
 }
@@ -4205,13 +4525,13 @@ const ORGANIZATION_ROLES: Array<{
 }> = [
     {
       value: "owner",
-      label: "Admin",
-      description: "Organization-wide administration, owners, and settings",
+      label: "Owner",
+      description: "Full organization authority, including owner appointments and settings",
     },
     {
       value: "administrator",
-      label: "Organization admin",
-      description: "Organization identity and workspace directory",
+      label: "Administrator",
+      description: "Organization identity, people, and workspace directory without guide access",
     },
     {
       value: "billing",
@@ -4256,6 +4576,9 @@ export function OrganizationView({
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const canManage = organization.roles.includes("owner");
+  const activeOwnerCount = organization.members.filter(
+    (member) => member.status === "active" && member.roles.includes("owner"),
+  ).length;
   const editingMember = organization.members.find(
     (member) => member.id === editingMemberId,
   );
@@ -4263,7 +4586,7 @@ export function OrganizationView({
     <div className="view-stack">
       <div className="page-heading">
         <div>
-          <p className="eyebrow">Organization governance</p>
+          <p className="eyebrow">Organization</p>
           <h1>{organization.displayName}</h1>
           <p>
             People and workspaces for this company. Organization roles do not
@@ -4277,7 +4600,7 @@ export function OrganizationView({
             disabled={busy || organization.workspaces.length === 0}
             onClick={() => setAppointing(true)}
           >
-            <UserPlus /> Appoint organization member
+            <UserPlus /> Add organization member
           </button>
         ) : null}
       </div>
@@ -4288,11 +4611,12 @@ export function OrganizationView({
           </span>
           <div>
             <h2>{organization.legalName || organization.displayName}</h2>
-            <p>
-              Legal name · {organization.country} ·{" "}
-              {titleCase(organization.status)} · your roles:{" "}
-              {organization.roles.map(organizationRoleLabel).join(", ")}
-            </p>
+            <div className="organization-metadata">
+              <span><small>Legal name</small><strong>{organization.legalName || "Not provided"}</strong></span>
+              <span><small>Country</small><strong>{organization.country}</strong></span>
+              <span><small>Status</small><strong>{titleCase(organization.status)}</strong></span>
+              <span><small>Your roles</small><strong>{organization.roles.map(organizationRoleLabel).join(", ")}</strong></span>
+            </div>
           </div>
         </div>
         <p className="privacy-caption">
@@ -4329,13 +4653,13 @@ export function OrganizationView({
         <section className="card table-card">
           <div className="section-heading compact">
             <div>
-              <p className="eyebrow">Governance roster</p>
+              <p className="eyebrow">Organization members</p>
               <h2>
                 {countPhrase(organization.members.length, "organization member")}
               </h2>
             </div>
-            <span className="privacy-caption">
-              <ShieldCheck /> Minimum two active owners
+            <span className={activeOwnerCount < 2 ? "privacy-caption owner-warning" : "privacy-caption"}>
+              <ShieldCheck /> {activeOwnerCount < 2 ? "Add a second owner" : `${activeOwnerCount} active owners · minimum two`}
             </span>
           </div>
           {organization.members.map((member) => (
@@ -4395,7 +4719,8 @@ export function OrganizationView({
                       !(await askToConfirm({
                         title: "Revoke appointment?",
                         description: `Revoke the appointment for ${appointment.email}?`,
-                        confirmLabel: "Revoke",
+                        confirmLabel: "Revoke appointment",
+                        tone: "danger",
                       }))
                     )
                       return;
@@ -4470,8 +4795,8 @@ function OrganizationAppointmentDialog({
 
   return (
     <Modal
-      title="Appoint organization member"
-      eyebrow="Email-bound governance role"
+      title="Add organization member"
+      eyebrow="Organization appointment"
       onClose={onClose}
       wide
     >
@@ -4620,7 +4945,7 @@ function OrganizationAppointmentDialog({
             ))}
           </div>
           <div className="field">
-            <span>Audit workspace</span>
+            <span>Record this change under</span>
             <SelectMenu
               className="form-select"
               value={workspaceId}
@@ -4693,6 +5018,7 @@ function OrganizationMemberDialog({
     member.status === "active" ? "active" : "revoked",
   );
   const [error, setError] = useState("");
+  const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   return (
     <Modal
       title={`Organization roles · ${member.name || member.email}`}
@@ -4705,6 +5031,15 @@ function OrganizationMemberDialog({
           event.preventDefault();
           setError("");
           try {
+            if (member.status === "active" && status === "revoked") {
+              const confirmed = await askToConfirm({
+                title: `Revoke ${member.name || member.email}'s organization membership?`,
+                description: "Organization governance access ends immediately. Workspace memberships remain separate.",
+                confirmLabel: "Revoke membership",
+                tone: "danger",
+              });
+              if (!confirmed) return;
+            }
             await onSave(roles, status);
           } catch (nextError) {
             setError(messageFromError(nextError));
@@ -4770,6 +5105,7 @@ function OrganizationMemberDialog({
           </button>
         </footer>
       </form>
+      {confirmDialog}
     </Modal>
   );
 }
@@ -5490,6 +5826,7 @@ export function KnowHowWorkspaceApp({
     maximumCreators: 1,
     storageBytes: 1_000_000_000,
     extensionEnabled: false,
+    desktopCaptureEnabled: false,
     supportEnabled: false,
     removeBranding: false,
     privacyToolsEnabled: false,
@@ -5501,6 +5838,9 @@ export function KnowHowWorkspaceApp({
     workspace.subscription?.access !== "read_only";
   const canCapture =
     canCreate && workspaceMutable && entitlements.extensionEnabled;
+  const canDesktopCapture =
+    canCreate && workspaceMutable && entitlements.desktopCaptureEnabled;
+  const canAnyCapture = canCapture || canDesktopCapture;
   const canOpenSupport = entitlements.supportEnabled;
   const canCreateSupportTicket =
     canOpenSupport &&
@@ -5677,7 +6017,7 @@ export function KnowHowWorkspaceApp({
         audiences: payload.audiences,
         privacyReviewed: payload.privacyReviewed,
       },
-      "Guide shared",
+      `Guide published — ${audienceSuccessMessage(payload.audiences)}`,
     );
     return saved;
   }
@@ -5685,18 +6025,15 @@ export function KnowHowWorkspaceApp({
   function openShareGuide(guide: Guide) {
     const revision = guide.workingRevision ?? guide.publishedRevision;
     const current = revision?.audiences ?? [];
-    const authorOnlyDraft =
-      !guide.publishedRevision &&
-      current.length === 1 &&
-      current[0]?.kind === "user";
     setShareDraft({
-      audiences:
-        !current.length || authorOnlyDraft
-          ? [workspaceAudience()]
-          : current,
+      audiences: current,
       privacyReviewed: Boolean(revision?.privacyReviewedAt),
     });
     setDialog({ type: "share-guide", guide });
+  }
+
+  function openExportGuide(guide: Guide) {
+    setDialog({ type: "export-guide", guide });
   }
 
   function navigateToView(nextView: View) {
@@ -5733,8 +6070,8 @@ export function KnowHowWorkspaceApp({
   const canRestoreRouteGuide = Boolean(
     workspaceMutable &&
     routeGuide &&
-    (isAdmin ||
-      (roles.includes("creator") && routeGuideAuthor === data.viewer.id)),
+    routeGuideAuthor === data.viewer.id &&
+    (isAdmin || roles.includes("creator")),
   );
   const publishedViewKey = useRef("");
   const missingGuideRefreshKey = useRef("");
@@ -5810,16 +6147,20 @@ export function KnowHowWorkspaceApp({
       : []),
   ];
   const workspaceNavigation = visibleNav.filter(({ view: item }) =>
-    ["Overview", "Guides", "Capture", "Support"].includes(item),
+    ["Overview", "Guides", "Capture"].includes(item),
+  );
+  const peopleNavigation = visibleNav.filter(({ view: item }) =>
+    ["Groups", "Members"].includes(item),
   );
   const governanceNavigation = visibleNav.filter(
     ({ view: item }) =>
-      !["Overview", "Guides", "Capture", "Support", "Platform"].includes(item),
+      ["Settings", "Organization", "Vault"].includes(item),
   );
+  const supportNavigation = visibleNav.filter(({ view: item }) => item === "Support");
   const platformNavigation = visibleNav.filter(
     ({ view: item }) => item === "Platform",
   );
-  const onboardingAudience = isAdmin || canCapture;
+  const onboardingAudience = isAdmin || canAnyCapture;
   const onboardingRemaining = active.onboarding.steps.filter(
     (step) => !step.completed,
   ).length;
@@ -5881,6 +6222,7 @@ export function KnowHowWorkspaceApp({
   }
   const PrimaryActionIcon = primaryAction?.icon;
   const sharingGuide = dialog?.type === "share-guide" ? dialog.guide : null;
+  const exportingGuide = dialog?.type === "export-guide" ? dialog.guide : null;
   const shareDialog =
     sharingGuide && shareDraft ? (
       <GuideShareDialog
@@ -5901,8 +6243,10 @@ export function KnowHowWorkspaceApp({
         groups={groups}
         members={members}
         captured={
-          (sharingGuide.workingRevision ?? sharingGuide.publishedRevision)
-            ?.source === "browser-capture"
+          isCapturedGuideSource(
+            (sharingGuide.workingRevision ?? sharingGuide.publishedRevision)
+              ?.source,
+          )
         }
         privacyReviewed={shareDraft.privacyReviewed}
         canShare={sharingGuide.canShare}
@@ -5913,14 +6257,6 @@ export function KnowHowWorkspaceApp({
             sharingGuide.workingRevision.status === "draft",
         )}
         busy={busy || !workspaceMutable}
-        fileExportsEnabled={entitlements.fileExportsEnabled}
-        canExport={
-          Boolean(sharingGuide.publishedRevision) &&
-          (sharingGuide.publishedRevision?.audiences.some(
-            (item) => item.kind === "workspace",
-          ) ||
-            workspace.settings.allowRestrictedExports)
-        }
         onClose={() => {
           setDialog(null);
           setShareDraft(null);
@@ -5943,7 +6279,7 @@ export function KnowHowWorkspaceApp({
               audiences: shareDraft.audiences,
               privacyReviewed: shareDraft.privacyReviewed,
             },
-            "Guide shared",
+            `${sharingGuide.publishedRevision ? "Audience updated" : "Guide published"} — ${audienceSuccessMessage(shareDraft.audiences)}`,
           );
           setDialog(null);
           setShareDraft(null);
@@ -5975,17 +6311,36 @@ export function KnowHowWorkspaceApp({
               }
             : undefined
         }
-        onExport={async (format) => {
-          await downloadAuthorizedExport(
-            workspace.id,
-            sharingGuide.id,
-            format,
-          );
-          toast.success("Export ready");
-        }}
-        onStartTrial={isAdmin ? () => setDialog({ type: "plan" }) : undefined}
       />
     ) : null;
+  const exportDialog = exportingGuide ? (
+    <GuideExportDialog
+      open
+      title={
+        exportingGuide.workingRevision?.title ??
+        exportingGuide.publishedRevision?.title ??
+        exportingGuide.title
+      }
+      isLive={Boolean(exportingGuide.publishedRevision)}
+      restricted={Boolean(
+        exportingGuide.publishedRevision &&
+          !exportingGuide.publishedRevision.audiences.some((audience) => audience.kind === "workspace"),
+      )}
+      fileExportsEnabled={entitlements.fileExportsEnabled}
+      canExport={Boolean(
+        exportingGuide.publishedRevision &&
+          (exportingGuide.publishedRevision.audiences.some((audience) => audience.kind === "workspace") ||
+            workspace.settings.allowRestrictedExports),
+      )}
+      busy={busy || !workspaceMutable}
+      onClose={() => setDialog(null)}
+      onExport={async (format: GuideExportFormatChoice) => {
+        await downloadAuthorizedExport(workspace.id, exportingGuide.id, format);
+        toast.success("Export ready");
+      }}
+      onStartTrial={isAdmin ? () => setDialog({ type: "plan" }) : undefined}
+    />
+  ) : null;
 
   if (!canAccessCurrentView) {
     return (
@@ -6224,6 +6579,7 @@ export function KnowHowWorkspaceApp({
           }}
         />
         {shareDialog}
+        {exportDialog}
         {busy ? (
           <div className="busy-indicator" role="status">
             <LoaderCircle className="spin" /> Working securely…
@@ -6288,7 +6644,7 @@ export function KnowHowWorkspaceApp({
           <SidebarContent>
             <>
                 <SidebarGroup className="workspace-nav-group">
-                  <p className="sidebar-section-label">Workspace</p>
+                  <p className="sidebar-section-label">Daily work</p>
                   <nav className="main-nav" aria-label="Workspace navigation">
                     <SidebarMenu>
                       {workspaceNavigation.map(({ view: item, icon: Icon }) => (
@@ -6323,9 +6679,26 @@ export function KnowHowWorkspaceApp({
                     </SidebarMenu>
                   </nav>
                 </SidebarGroup>
+                {peopleNavigation.length ? (
+                  <SidebarGroup className="workspace-nav-group people-nav-group">
+                    <p className="sidebar-section-label">People & access</p>
+                    <nav className="main-nav" aria-label="People and access navigation">
+                      <SidebarMenu>
+                        {peopleNavigation.map(({ view: item, icon: Icon }) => (
+                          <SidebarMenuItem key={item}>
+                            <SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}>
+                              <Icon /><span>{NAV_LABELS[item]}</span>
+                            </SidebarMenuButton>
+                            {item === "Members" && pendingSupportCount ? <SidebarMenuBadge className="nav-badge">{pendingSupportCount}</SidebarMenuBadge> : null}
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </nav>
+                  </SidebarGroup>
+                ) : null}
                 {governanceNavigation.length ? (
                   <SidebarGroup className="workspace-nav-group governance-nav-group">
-                    <p className="sidebar-section-label">Manage workspace</p>
+                    <p className="sidebar-section-label">Workspace</p>
                     <nav
                       className="main-nav"
                       aria-label="Workspace administration navigation"
@@ -6341,11 +6714,21 @@ export function KnowHowWorkspaceApp({
                               <Icon />
                               <span>{NAV_LABELS[item]}</span>
                             </SidebarMenuButton>
-                            {item === "Members" && pendingSupportCount ? (
-                              <SidebarMenuBadge className="nav-badge">
-                                {pendingSupportCount}
-                              </SidebarMenuBadge>
-                            ) : null}
+                          </SidebarMenuItem>
+                        ))}
+                      </SidebarMenu>
+                    </nav>
+                  </SidebarGroup>
+                ) : null}
+                {supportNavigation.length ? (
+                  <SidebarGroup className="workspace-nav-group support-nav-group">
+                    <nav className="main-nav" aria-label="Help navigation">
+                      <SidebarMenu>
+                        {supportNavigation.map(({ view: item, icon: Icon }) => (
+                          <SidebarMenuItem key={item}>
+                            <SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}>
+                              <Icon /><span>Help & support</span>
+                            </SidebarMenuButton>
                           </SidebarMenuItem>
                         ))}
                       </SidebarMenu>
@@ -6375,44 +6758,6 @@ export function KnowHowWorkspaceApp({
                 ) : null}
             </>
           </SidebarContent>
-          {canCapture || isAdmin ? (
-            <SidebarFooter>
-              <div className="workspace-sidebar-cta">
-              {isAdmin ? (
-                <button
-                  className="capture-shortcut"
-                  type="button"
-                  onClick={() => setDialog({ type: "invite" })}
-                >
-                  <span>
-                    <UserPlus />
-                  </span>
-                  <span>
-                    <strong>Invite teammates</strong>
-                    <small>Viewer or Creator access</small>
-                  </span>
-                  <ArrowRight />
-                </button>
-              ) : null}
-              {canCapture ? (
-              <button
-                className="capture-shortcut"
-                type="button"
-                onClick={() => setDialog({ type: "extension" })}
-              >
-                <span>
-                  <Sparkles />
-                </span>
-                <span>
-                  <strong>Capture workflow</strong>
-                  <small>Chrome & Edge extension</small>
-                </span>
-                <ArrowRight />
-              </button>
-              ) : null}
-              </div>
-            </SidebarFooter>
-          ) : null}
         </Sidebar>
 
         <div className="app-main">
@@ -6557,7 +6902,10 @@ export function KnowHowWorkspaceApp({
                 viewerName={data.viewer.name}
                 canCreate={canCreate && workspaceMutable}
                 canCapture={canCapture}
-                captureLockedByPlan={!entitlements.extensionEnabled}
+                captureLockedByPlan={
+                  !entitlements.extensionEnabled &&
+                  !entitlements.desktopCaptureEnabled
+                }
                 canManageAccess={isAdmin}
                 busy={busy}
                 onNewGuide={() => onNavigate(newGuideHref(workspace.slug))}
@@ -6592,14 +6940,42 @@ export function KnowHowWorkspaceApp({
                   onNavigate(guideEditorHref(workspace.slug, guide.id))
                 }
                 onShare={openShareGuide}
+                onExport={openExportGuide}
                 onAction={command}
                 busy={busy || !workspaceMutable}
               />
             ) : null}
             {view === "Capture" ? (
               <CaptureView
-                canCapture={canCapture}
-                planLocked={!entitlements.extensionEnabled}
+                browserAvailable={canCapture}
+                desktopAvailable={canDesktopCapture}
+                browserPlanEnabled={entitlements.extensionEnabled}
+                desktopPlanEnabled={entitlements.desktopCaptureEnabled}
+                desktopDevices={active.desktopCaptureDevices ?? []}
+                typedTextPolicy={workspace.settings.desktopTypedTextPolicy}
+                busy={busy || !workspaceMutable}
+                onOpenExtension={() => setDialog({ type: "extension" })}
+                onRevokeDesktopDevice={async (deviceRecordId) => {
+                  if (
+                    !(await askToConfirm({
+                      title: "Revoke this Windows device?",
+                      description:
+                        "The app will be disconnected immediately and must be approved again before another capture.",
+                      confirmLabel: "Revoke device",
+                      tone: "danger",
+                    }))
+                  )
+                    return;
+                  await command(
+                    "revokeDesktopDevice",
+                    { deviceRecordId },
+                    "Windows capture device revoked",
+                  );
+                }}
+                planLocked={
+                  !entitlements.extensionEnabled &&
+                  !entitlements.desktopCaptureEnabled
+                }
                 onOpenPlan={
                   isAdmin ? () => setDialog({ type: "plan" }) : undefined
                 }
@@ -6620,14 +6996,21 @@ export function KnowHowWorkspaceApp({
                 supportRequests={supportRequests}
                 supportGrants={supportGrants}
                 busy={busy || !workspaceMutable}
-                onInvite={() => setDialog({ type: "invite" })}
                 onEdit={(member) => setDialog({ type: "member", member })}
                 onRevoke={(invitationId) => {
-                  void command(
-                    "revokeInvite",
-                    { invitationId },
-                    "Invitation revoked",
-                  ).catch(() => undefined);
+                  void askToConfirm({
+                    title: "Revoke this invitation?",
+                    description: "The signed link will stop working immediately. Existing membership is unaffected.",
+                    confirmLabel: "Revoke invitation",
+                    tone: "danger",
+                  }).then((confirmed) => {
+                    if (!confirmed) return;
+                    void command(
+                      "revokeInvite",
+                      { invitationId },
+                      "Invitation revoked",
+                    ).catch(() => undefined);
+                  });
                 }}
                 onResolveSupport={(request) =>
                   setDialog({ type: "support-decision", request })
@@ -6801,11 +7184,12 @@ export function KnowHowWorkspaceApp({
                 busy={busy || !workspaceMutable}
                 removeBrandingEnabled={entitlements.removeBranding}
                 onRefresh={onRefresh}
+                onRegisterNavigationGuard={onRegisterNavigationGuard}
                 onSave={async (settings) => {
                   await command(
                     "updateWorkspaceSettings",
                     { settings },
-                    "Workspace settings saved",
+                    "Workspace policies and branding updated",
                   );
                 }}
               />
@@ -6837,7 +7221,6 @@ export function KnowHowWorkspaceApp({
           <MemberDialog
             member={dialog.member}
             busy={busy}
-            showGovernanceRoles={workspace.settings.requireReviewBeforePublish}
             onClose={() => setDialog(null)}
             onSave={async (nextRoles, capabilities) => {
               await command(
@@ -6890,7 +7273,7 @@ export function KnowHowWorkspaceApp({
               await command(
                 "selectProPlan",
                 { workspaceId: workspace.id },
-                "Pro selected. We will invoice offline.",
+                "Pro request sent — we will contact you",
               );
               setDialog(null);
             }}
@@ -6908,7 +7291,6 @@ export function KnowHowWorkspaceApp({
           <InviteDialog
             busy={busy}
             origin={window.location.origin}
-            showGovernanceRoles={workspace.settings.requireReviewBeforePublish}
             onClose={() => setDialog(null)}
             onCreate={async (payload) => {
               onBusyChange(true);
@@ -6970,6 +7352,7 @@ export function KnowHowWorkspaceApp({
           />
         ) : null}
         {shareDialog}
+        {exportDialog}
         {dialog?.type === "support-decision" && isAdmin ? (
           <SupportDecisionDialog
             request={dialog.request}

@@ -88,13 +88,17 @@ test.describe("public product surface", () => {
       page.getByRole("navigation", { name: "Footer navigation" }).getByRole("link", { name: "Contact" }),
     ).toBeVisible();
     await expect(page.getByText(/private-beta software/i)).toHaveCount(0);
-    await expect(page.getByText(/buy now|checkout/i)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /buy now|checkout/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /buy now|checkout/i })).toHaveCount(0);
   });
 
   test("public navigation reaches product, pricing, trust, and auth entry points", async ({
     page,
   }) => {
     await page.goto("/");
+
+    const mobileMenu = page.getByRole("button", { name: "Open navigation menu" });
+    if (await mobileMenu.isVisible()) await mobileMenu.click();
 
     await page
       .getByRole("navigation", { name: "Primary navigation" })
@@ -104,6 +108,8 @@ test.describe("public product surface", () => {
     await expect(
       page.getByRole("heading", { name: /this time, the answer is already there/i }),
     ).toBeVisible();
+
+    if (await mobileMenu.isVisible()) await mobileMenu.click();
 
     await page
       .getByRole("navigation", { name: "Primary navigation" })

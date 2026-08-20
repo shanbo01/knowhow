@@ -1,4 +1,5 @@
 import { AccessService } from "../../../../lib/server/access-service";
+import { isCapturedGuideSource } from "../../../../lib/guide-contracts";
 import { appendAudit } from "../../../../lib/server/audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -289,7 +290,7 @@ export async function POST(request: Request) {
         };
         await transaction.create(TABLES.privateMedia, mediaId, rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, subject_id: revisionId, user_id: identity.userId, status: "ready", kind: validated.contentType, created_by: identity.userId }, media));
         await transaction.update(TABLES.guideSteps, stepRow.$id, rowData({ updated_by: identity.userId }, { ...currentStep, screenshotMediaId: mediaId }));
-        if (authorized.revision.source === "browser-capture") {
+        if (isCapturedGuideSource(authorized.revision.source)) {
           const nextRevision: RevisionRecord = { ...authorized.revision, updatedAt: timestamp };
           delete nextRevision.privacyReviewedAt;
           delete nextRevision.privacyReviewedBy;

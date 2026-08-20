@@ -1,4 +1,5 @@
 import {
+  isCapturedGuideSource,
   parsePublishedGuideRevision,
   type GuideActionMedia,
   type GuideAudience,
@@ -153,7 +154,7 @@ export async function buildPublishedExport(
     throw new HttpError(404, "PUBLISHED_GUIDE_NOT_FOUND", "The published guide is unavailable.");
   }
   if (
-    revision.source === "browser-capture" &&
+    isCapturedGuideSource(revision.source) &&
     (!revision.privacyReviewedAt || !revision.privacyReviewedBy)
   ) {
     throw new HttpError(409, "PRIVACY_REVIEW_REQUIRED", "The captured guide has no privacy review receipt.");
@@ -228,7 +229,7 @@ export async function buildPublishedExport(
     blocks: blocks(stepRows, media, settings),
     audience,
     privacyReview:
-      revision.source === "browser-capture"
+      isCapturedGuideSource(revision.source)
         ? {
             required: true,
             status: "approved",

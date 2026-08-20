@@ -203,7 +203,7 @@ test("session secrets are accepted only from the HTTP-only Appwrite cookie bound
   }
 });
 
-test("runtime configuration accepts only local Appwrite endpoints and origins", () => {
+test("development configuration accepts only local Appwrite endpoints and origins", () => {
   const restore = withEnvironment({
     KNOWHOW_ENVIRONMENT: "development",
     NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "development",
@@ -213,6 +213,7 @@ test("runtime configuration accepts only local Appwrite endpoints and origins", 
     APPWRITE_INTERNAL_ENDPOINT: "http://appwrite-internal/v1",
     APPWRITE_PROJECT_ID: "knowhow-local",
     APPWRITE_API_KEY: "local-api-key-with-at-least-twenty-characters",
+    KNOWHOW_APPWRITE_HOSTS: undefined,
     KNOWHOW_ALLOWED_ORIGINS: "http://localhost:3001",
     KNOWHOW_SITE_ORIGIN: "http://localhost:3001",
     KNOWHOW_EXTENSION_ORIGINS:
@@ -253,7 +254,58 @@ test("runtime configuration accepts only local Appwrite endpoints and origins", 
     process.env.KNOWHOW_ALLOWED_ORIGINS = "https://example.invalid";
     assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));
     process.env.KNOWHOW_ALLOWED_ORIGINS = "http://localhost:3001";
-    process.env.APPWRITE_DATABASE_ID = "other_database";
+    process.env.APPWRITE_DATABASE_ID = "bad database id";
+    assert.throws(() => getAppwriteServerConfig(), /APPWRITE_DATABASE_ID is invalid/);
+  } finally {
+    restore();
+  }
+});
+
+test("controlled configuration requires HTTPS, allowlisted hosts, and release services", () => {
+  const restore = withEnvironment({
+    KNOWHOW_ENVIRONMENT: "staging",
+    NEXT_PUBLIC_KNOWHOW_ENVIRONMENT: "staging",
+    KNOWHOW_RELEASE: "release-2026-08-20",
+    NEXT_PUBLIC_KNOWHOW_RELEASE: "release-2026-08-20",
+    APPWRITE_ENDPOINT: "https://appwrite.staging.example/v1",
+    APPWRITE_INTERNAL_ENDPOINT: "https://appwrite-internal.staging.example/v1",
+    KNOWHOW_APPWRITE_HOSTS:
+      "appwrite.staging.example,appwrite-internal.staging.example",
+    APPWRITE_PROJECT_ID: "knowhow-staging",
+    APPWRITE_API_KEY: "s".repeat(40),
+    APPWRITE_DATABASE_ID: "knowhow_core_staging",
+    APPWRITE_PRIVATE_MEDIA_BUCKET_ID: "knowhow_private_media_staging",
+    APPWRITE_EXPORTS_BUCKET_ID: "knowhow_exports_staging",
+    KNOWHOW_ALLOWED_ORIGINS: "https://staging.knowhow.example",
+    KNOWHOW_SITE_ORIGIN: "https://staging.knowhow.example",
+    KNOWHOW_EXTENSION_ORIGINS:
+      "chrome-extension://phbofjenfnnnnndghhinoldlfbpaedpo",
+    KNOWHOW_RATE_LIMIT_PEPPER: "r".repeat(32),
+    KNOWHOW_TOKEN_KEYS_JSON: JSON.stringify({ v1: "t".repeat(32) }),
+    KNOWHOW_TOKEN_ACTIVE_KID: "v1",
+    KNOWHOW_EXPORT_WORKER_SECRET: "e".repeat(32),
+    RESEND_API_KEY: "resend-staging-key",
+    SENTRY_DSN: "https://public@sentry.example/1",
+  });
+  try {
+    const config = getAppwriteServerConfig();
+    assert.equal(config.environment, "staging");
+    assert.equal(config.endpoint, "https://appwrite.staging.example/v1");
+    assert.deepEqual(deploymentConfigurationIssues(config), []);
+
+    process.env.APPWRITE_ENDPOINT = "http://appwrite.staging.example/v1";
+    assert.throws(() => getAppwriteServerConfig(), /exact HTTPS Appwrite/);
+    process.env.APPWRITE_ENDPOINT = "https://unlisted.example/v1";
+    assert.throws(() => getAppwriteServerConfig(), /allowlisted host/);
+
+    process.env.APPWRITE_ENDPOINT = "https://appwrite.staging.example/v1";
+    process.env.KNOWHOW_ALLOWED_ORIGINS = "http://localhost:3001";
+    assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));
+    process.env.KNOWHOW_ALLOWED_ORIGINS =
+      "https://staging.knowhow.example,not-a-url";
+    assert.ok(deploymentConfigurationIssues().includes("allowed_origins"));
+    process.env.KNOWHOW_ALLOWED_ORIGINS = "https://staging.knowhow.example";
+    delete process.env.APPWRITE_DATABASE_ID;
     assert.ok(deploymentConfigurationIssues().includes("resource_ids"));
   } finally {
     restore();

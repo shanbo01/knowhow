@@ -76,6 +76,7 @@ const PENDING_INVITE_KEY = "knowhow-pending-invite";
 const PENDING_APPOINTMENT_KEY = "knowhow-pending-appointment";
 const PENDING_BETA_ACCESS_KEY = "knowhow-pending-beta-access";
 const PENDING_SIGNUP_PLAN_KEY = "knowhow-pending-signup-plan";
+const RETURN_TO_AFTER_AUTH_KEY = "knowhow:return-to-after-auth";
 
 function locationKeyFromWindow() {
   if (typeof window === "undefined") return "/";
@@ -913,6 +914,17 @@ export default function Home() {
 
   useEffect(() => {
     if (!user?.emailVerification || !bootstrap) return;
+    const returnTo = window.sessionStorage.getItem(RETURN_TO_AFTER_AUTH_KEY);
+    if (
+      returnTo &&
+      /^\/desktop\/authorize\/[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/.test(
+        returnTo,
+      )
+    ) {
+      window.sessionStorage.removeItem(RETURN_TO_AFTER_AUTH_KEY);
+      window.location.assign(returnTo);
+      return;
+    }
     const token = rememberInviteFromLocation();
     if (!token || inviteAttempted.current === token) return;
     inviteAttempted.current = token;

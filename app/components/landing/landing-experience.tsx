@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { BrandMarkGlyph } from "@/app/components/brand-mark-glyph";
 import { getAuthSession } from "../../../lib/auth-client";
 import "./landing.css";
 
@@ -29,9 +30,9 @@ const pricingPlans = (
       <div className="plan-foot">No card. Upgrade only when the team needs capture.</div>
     </article>
     <article className="plan pro reveal">
-      <div className="plan-top"><h2 className="plan-name">Pro</h2><div className="plan-badge">Self-serve</div></div>
+      <div className="plan-top"><h2 className="plan-name">Pro</h2><div className="plan-badge">14-day trial</div></div>
       <div className="plan-price">14-day<small>trial, no card</small></div>
-      <div className="plan-sub">Capture, Smart Blur, redact, annotate, custom subdomain preview, unbranding, and in-app support. After the trial, stay on Free or continue Pro.</div>
+      <div className="plan-sub">Capture, Smart Blur, redact, annotate, custom subdomain preview, unbranding, and in-app support. After the trial, stay on Free or contact us to continue Pro.</div>
       <Link className="plan-action" href="/start-trial">Start free trial</Link>
       <div className="plan-rule"></div>
       <ul className="plan-list">
@@ -41,7 +42,7 @@ const pricingPlans = (
         <li>Custom subdomain preview and unbranding</li>
         <li>In-app support</li>
       </ul>
-      <div className="plan-foot">Authorization never depends on a pricing tier.</div>
+      <div className="plan-foot">No checkout is active yet. Authorization never depends on client-side billing state.</div>
     </article>
     <article className="plan enterprise reveal">
       <div className="plan-top"><h2 className="plan-name">Enterprise</h2><div className="plan-badge">Usage</div></div>
@@ -66,6 +67,24 @@ const pricingPlans = (
     </article>
   </div>
 );
+
+const captureDemoSteps = [
+  {
+    title: "Open People",
+    sub: "Navigate to workspace members",
+    hint: "click + Add member",
+  },
+  {
+    title: "Choose Add member",
+    sub: "Start the member creation flow",
+    hint: "choose the Member role",
+  },
+  {
+    title: "Set workspace role",
+    sub: "Assign access before saving",
+    hint: "finish the guide",
+  },
+] as const;
 
 function particleField(canvas: HTMLCanvasElement, dark: boolean, density: number) {
   const maybeCtx = canvas.getContext("2d");
@@ -136,6 +155,12 @@ function particleField(canvas: HTMLCanvasElement, dark: boolean, density: number
 
 export function LandingExperience() {
   const [signedIn, setSignedIn] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [bootCount, setBootCount] = useState(0);
+  const [bootDone, setBootDone] = useState(false);
+  const [demoStep, setDemoStep] = useState(1);
+  const [demoDone, setDemoDone] = useState(false);
+  const navigationRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     void getAuthSession()
@@ -144,17 +169,147 @@ export function LandingExperience() {
   }, []);
 
   useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const reducedFrame = requestAnimationFrame(() => {
+        setBootCount(100);
+        setBootDone(true);
+      });
+      return () => cancelAnimationFrame(reducedFrame);
+    }
+
+    const startedAt = performance.now();
+    let frame = 0;
+    const tick = (time: number) => {
+      const progress = Math.min(1, (time - startedAt) / 950);
+      setBootCount(Math.round(progress * 100));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    const finish = window.setTimeout(() => setBootDone(true), 1120);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(finish);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (demoStep !== 4) return;
+    const finish = window.setTimeout(() => setDemoDone(true), 620);
+    return () => window.clearTimeout(finish);
+  }, [demoStep]);
+
+  useEffect(() => {
     const root = document.querySelector(".kh-landing");
     if (!root) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const cleanups: Array<() => void> = [];
 
+    const hero = root.querySelector<HTMLElement>(".hero");
+    const stage = root.querySelector<HTMLElement>(".product-stage");
+    const rail = root.querySelector<HTMLElement>("#scrollRail");
+    const cursor = root.querySelector<HTMLElement>("#khCursor");
+    let cursorX = -100;
+    let cursorY = -100;
+    let targetX = -100;
+    let targetY = -100;
+    let cursorFrame = 0;
+
     const onMove = (event: PointerEvent) => {
       window.__khMx = event.clientX / window.innerWidth;
       window.__khMy = event.clientY / window.innerHeight;
+      targetX = event.clientX;
+      targetY = event.clientY;
+
+      if (cursor && event.target instanceof Element) {
+        const darkSurface = event.target.closest(
+          ".story, .playground, .pricing-story, .final-panel, .narrative-bridge, .card.two, .capture-console",
+        );
+        cursor.classList.toggle("on-dark", Boolean(darkSurface));
+      }
+
+      if (hero) {
+        const rect = hero.getBoundingClientRect();
+        if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
+          hero.style.setProperty("--hx", `${(event.clientX / window.innerWidth) * 100}%`);
+          hero.style.setProperty("--hy", `${((event.clientY - rect.top) / rect.height) * 100}%`);
+        }
+      }
+
+      if (stage && window.innerWidth >= 700) {
+        const x = (event.clientX / window.innerWidth - 0.5) * 4;
+        const y = (event.clientY / window.innerHeight - 0.5) * 2;
+        stage.style.transform = `translateX(-50%) perspective(1400px) rotateX(${5 - y}deg) rotateY(${x * 0.25}deg)`;
+      }
     };
     window.addEventListener("pointermove", onMove, { passive: true });
     cleanups.push(() => window.removeEventListener("pointermove", onMove));
+
+    if (!reduced && window.matchMedia("(pointer: fine)").matches && cursor) {
+      const cursorLoop = () => {
+        cursorX += (targetX - cursorX) * 0.22;
+        cursorY += (targetY - cursorY) * 0.22;
+        cursor.style.transform = `translate(${cursorX}px, ${cursorY}px) translate(-50%, -50%)`;
+        cursorFrame = requestAnimationFrame(cursorLoop);
+      };
+      cursorFrame = requestAnimationFrame(cursorLoop);
+      cleanups.push(() => cancelAnimationFrame(cursorFrame));
+
+      const cursorTargets = [...root.querySelectorAll<HTMLElement>("a, button, [data-cursor], .demo-hotspot")];
+      const enterCursor = (event: Event) => {
+        const target = event.currentTarget as HTMLElement;
+        cursor.classList.add("active");
+        if (target.dataset.label) {
+          cursor.classList.add("label");
+          const label = cursor.querySelector("span");
+          if (label) label.textContent = target.dataset.label;
+        }
+      };
+      const leaveCursor = () => cursor.classList.remove("active", "label");
+      cursorTargets.forEach((target) => {
+        target.addEventListener("pointerenter", enterCursor);
+        target.addEventListener("pointerleave", leaveCursor);
+      });
+      cleanups.push(() => cursorTargets.forEach((target) => {
+        target.removeEventListener("pointerenter", enterCursor);
+        target.removeEventListener("pointerleave", leaveCursor);
+      }));
+    }
+
+    const pageProgress = () => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      rail?.style.setProperty("transform", `scaleY(${max > 0 ? window.scrollY / max : 0})`);
+    };
+    window.addEventListener("scroll", pageProgress, { passive: true });
+    pageProgress();
+    cleanups.push(() => window.removeEventListener("scroll", pageProgress));
+
+    if (!reduced && hero) {
+      let heroClicks = 12;
+      const heroCount = hero.querySelector(".capture-chip em");
+      const captureClick = (event: Event) => {
+        if (!(event instanceof PointerEvent) || !(event.target instanceof Element)) return;
+        if (event.target.closest("a, button, .product-stage")) return;
+        const rect = hero.getBoundingClientRect();
+        if (event.clientY - rect.top > 690) return;
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const ring = document.createElement("i");
+        const card = document.createElement("i");
+        ring.className = "hero-click-ring";
+        card.className = "hero-click-card";
+        ring.style.left = card.style.left = `${x}px`;
+        ring.style.top = card.style.top = `${y}px`;
+        hero.append(ring, card);
+        heroClicks += 1;
+        if (heroCount) heroCount.textContent = String(heroClicks);
+        window.setTimeout(() => {
+          ring.remove();
+          card.remove();
+        }, 900);
+      };
+      hero.addEventListener("pointerdown", captureClick);
+      cleanups.push(() => hero.removeEventListener("pointerdown", captureClick));
+    }
 
     if (!reduced) {
       const gravity = root.querySelector("#gravityCanvas");
@@ -170,7 +325,7 @@ export function LandingExperience() {
       if (!(story instanceof HTMLElement)) return;
       const total = story.offsetHeight - window.innerHeight;
       const p = Math.max(0, Math.min(1, -story.getBoundingClientRect().top / Math.max(total, 1)));
-      const centers = [0.16, 0.5, 0.84];
+      const centers = [0.08, 0.5, 0.92];
       scenes.forEach((el, i) => {
         if (!(el instanceof HTMLElement)) return;
         const dist = Math.abs(p - centers[i]);
@@ -278,6 +433,40 @@ export function LandingExperience() {
       }, { threshold: 0.13 });
       root.querySelectorAll(".reveal").forEach((el) => io.observe(el));
       cleanups.push(() => io.disconnect());
+
+      const spotlightCards = [...root.querySelectorAll<HTMLElement>(".card")];
+      const moveSpotlight = (event: Event) => {
+        if (!(event instanceof PointerEvent)) return;
+        const card = event.currentTarget as HTMLElement;
+        const rect = card.getBoundingClientRect();
+        card.style.setProperty("--gx", `${event.clientX - rect.left}px`);
+        card.style.setProperty("--gy", `${event.clientY - rect.top}px`);
+      };
+      spotlightCards.forEach((card) => card.addEventListener("pointermove", moveSpotlight));
+      cleanups.push(() => spotlightCards.forEach((card) => card.removeEventListener("pointermove", moveSpotlight)));
+
+      if (window.matchMedia("(pointer: fine)").matches) {
+        const magneticButtons = [...root.querySelectorAll<HTMLElement>(".magnetic")];
+        const moveMagnet = (event: Event) => {
+          if (!(event instanceof PointerEvent)) return;
+          const button = event.currentTarget as HTMLElement;
+          const rect = button.getBoundingClientRect();
+          const x = event.clientX - (rect.left + rect.width / 2);
+          const y = event.clientY - (rect.top + rect.height / 2);
+          button.style.transform = `translate(${x * 0.11}px, ${y * 0.16}px) translateY(-2px)`;
+        };
+        const resetMagnet = (event: Event) => {
+          (event.currentTarget as HTMLElement).style.transform = "";
+        };
+        magneticButtons.forEach((button) => {
+          button.addEventListener("pointermove", moveMagnet);
+          button.addEventListener("pointerleave", resetMagnet);
+        });
+        cleanups.push(() => magneticButtons.forEach((button) => {
+          button.removeEventListener("pointermove", moveMagnet);
+          button.removeEventListener("pointerleave", resetMagnet);
+        }));
+      }
     } else {
       root.querySelectorAll(".reveal").forEach((el) => el.classList.add("in"));
     }
@@ -316,12 +505,59 @@ export function LandingExperience() {
     return () => cleanups.forEach((fn) => fn());
   }, []);
 
+  const captureDemo = (step: number) => {
+    if (step !== demoStep || step > captureDemoSteps.length) return;
+    setDemoStep(step + 1);
+  };
+
+  const resetCaptureDemo = () => {
+    setDemoStep(1);
+    setDemoDone(false);
+  };
+
+  const scrollToSection = (event: ReactMouseEvent<HTMLAnchorElement>, selector: string) => {
+    const section = document.querySelector(selector);
+    if (!(section instanceof HTMLElement)) return;
+    event.preventDefault();
+    setMobileNavOpen(false);
+    section.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+    window.history.replaceState(null, "", selector);
+  };
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const closeMenu = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !navigationRef.current?.contains(event.target)
+      ) {
+        setMobileNavOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileNavOpen]);
+
   return (
     <div className="kh-landing">
-<div className="nav-wrap"><nav className="nav shell" aria-label="Primary navigation">
-  <a className="logo" href="#top"><span className="logo-mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 5v14M6 12h5.1M11.1 12l5-6M11.1 12l6 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>knowhow</a>
-  <div className="nav-links"><a href="#how">How it works</a><a href="#product">Product</a><a href="#pricing">Pricing</a><a href="#security">Security</a></div>
+<div className={`boot${bootDone ? " done" : ""}`} onPointerDown={() => setBootDone(true)} aria-hidden="true"><div className="boot-word">knowhow</div><div className="boot-count">{String(bootCount).padStart(2, "0")}</div><div className="boot-line"></div></div>
+<div className="kh-cursor" id="khCursor" aria-hidden="true"><i></i><span>capture</span></div>
+<div className="scroll-rail" aria-hidden="true"><i id="scrollRail"></i></div>
+<div className="nav-wrap"><nav ref={navigationRef} className="nav shell" aria-label="Primary navigation">
+  <a className="logo" href="#top"><span className="logo-mark"><BrandMarkGlyph /></span>knowhow</a>
+  <div id="landing-primary-links" className={`nav-links${mobileNavOpen ? " open" : ""}`}><a href="#how" onClick={(event) => scrollToSection(event, "#how")}>How it works</a><a href="#product" onClick={(event) => scrollToSection(event, "#product")}>Product</a><a href="#pricing" onClick={(event) => scrollToSection(event, "#pricing")}>Pricing</a><a href="#security" onClick={(event) => scrollToSection(event, "#security")}>Security</a></div>
   <div className="nav-actions">
+        <button className="mobile-nav-trigger" type="button" aria-label={mobileNavOpen ? "Close navigation menu" : "Open navigation menu"} aria-expanded={mobileNavOpen} aria-controls="landing-primary-links" onClick={() => setMobileNavOpen((open) => !open)}><span aria-hidden="true">{mobileNavOpen ? "×" : "☰"}</span></button>
         {signedIn ? (
           <Link className="btn btn-dark" href="/app">Open workspace</Link>
         ) : (
@@ -413,7 +649,7 @@ export function LandingExperience() {
   <div className="morph-copy"><small>Chapter 03 · The work leaves a trail</small><h2>Six ordinary clicks.<br /><span id="morphWord">One teachable answer.</span></h2></div>
   <div className="morph-stage">
     <div className="morph-guide" id="morphGuide"><div className="mg-top"><b>New employee onboarding</b><span>Ready to publish</span></div><div className="mg-body"><div className="mg-eyebrow">Generated guide · 6 captured actions</div><h3>Create a Microsoft 365 user</h3>
-      <div className="mg-step"><em>01</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>02</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>03</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>04</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>05</em><div><i></i><i></i></div><span className="mg-thumb"></span></div>
+      <div className="mg-step"><em>01</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>02</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>03</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>04</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>05</em><div><i></i><i></i></div><span className="mg-thumb"></span></div><div className="mg-step"><em>06</em><div><i></i><i></i></div><span className="mg-thumb"></span></div>
     </div></div>
     <div className="raw-shot" data-sx="-34" data-sy="-7" data-r="-15"><div className="shotbar"><i></i><i></i><i></i></div><div className="shotbody"><div className="shot-title"></div><div className="shot-line"></div><div className="shot-line"></div><div className="shot-btn"></div></div><span className="shot-pulse"></span></div>
     <div className="raw-shot" data-sx="-27" data-sy="19" data-r="9"><div className="shotbar"><i></i><i></i><i></i></div><div className="shotbody"><div className="shot-title"></div><div className="shot-line"></div><div className="shot-line"></div><div className="shot-btn"></div></div><span className="shot-pulse"></span></div>
@@ -438,11 +674,28 @@ export function LandingExperience() {
   <div className="story-progress"><i></i><i></i><i></i></div>
 </div></section>
 
+<section className="playground" id="demo"><div className="shell">
+  <div className="play-head reveal"><div><div className="play-kicker">Chapter 05 · Now you&apos;re the expert</div><h2>Do the task.<br />Don&apos;t write the guide.</h2></div><div className="play-intro"><p>You&apos;re about to answer one tiny operational question. Follow the orange target and work normally. Watch what the next person receives.</p><div className="try-indicator"><i></i><span><b>Interactive demo</b> Click the pulsing target to begin</span><em>↘</em></div></div></div>
+  <div className="play-shell reveal"><div className="play-grid">
+    <div className="demo-browser"><div className="demo-chrome"><div className="demo-dots"><i></i><i></i><i></i></div><div className="demo-url">admin.acme.local / workspace / people</div><div className="demo-live"><i></i>CAPTURING</div></div>
+      <div className="demo-app"><aside className="demo-side"><div className="demo-brand">ACME / admin</div><div className="demo-nav">Overview</div><button type="button" className={`demo-nav current demo-hotspot${demoStep === 1 ? " ready" : ""}`} data-label="capture" onClick={() => captureDemo(1)}>People<span className="hotspot-label">Click me</span></button><div className="demo-nav">Devices</div><div className="demo-nav">Security</div><div className="demo-nav">Settings</div></aside>
+        <div className="demo-main"><div className="demo-bread">Workspace / People</div><h3>People</h3><p>Manage members, groups and access.</p><div className="demo-toolbar"><div className="demo-search">⌕ &nbsp; Search people</div><button type="button" className={`demo-add demo-hotspot${demoStep === 2 ? " ready" : ""}`} data-label="capture" onClick={() => captureDemo(2)}>+ Add member<span className="hotspot-label">Try this</span></button></div>
+          <div className="demo-table"><div className="demo-row"><span>Name</span><span>Role</span><span>Status</span></div><div className="demo-row"><span className="person"><i></i>Yara Hassan</span><span className="role-pill">Admin</span><span>Active</span></div><div className="demo-row"><span className="person"><i></i>Omar Ali</span><span className="role-pill">Member</span><span>Active</span></div><div className="demo-row"><span className="person"><i></i>Nadia Karim</span><span className="role-pill">Member</span><span>Active</span></div></div>
+          <div className={`demo-modal${demoStep >= 3 ? " show" : ""}`}><h4>Add a new member</h4><div className="demo-field">name@company.com</div><div className="demo-field">Full name</div><div className="demo-role">Workspace role <button type="button" className={`role-pill demo-hotspot${demoStep === 3 ? " ready" : ""}`} data-label="capture" onClick={() => captureDemo(3)}>Member ▾<span className="hotspot-label">Pick a role</span></button></div><button className="demo-save" type="button" onClick={() => demoStep > 3 && setDemoDone(true)}>Add member</button></div>
+        </div>
+      </div>
+    </div>
+    <aside className="capture-console"><div className="console-head"><div className="console-title"><b>Knowhow Capture</b><span>ACME admin · live session</span></div><div className="console-rec"><i></i></div></div><div className="console-status"><strong>{Math.min(demoStep - 1, 3)}</strong><span>meaningful actions<br />captured</span></div><div className="console-list">{captureDemoSteps.slice(0, Math.max(0, demoStep - 1)).map((step, index) => <div className="captured-step in" key={step.title}><em>0{index + 1}</em><div><b>{step.title}</b><small>{step.sub}</small></div></div>)}</div><div className="console-hint"><span>Next: <b>{demoStep <= 3 ? captureDemoSteps[demoStep - 1].hint : "finish the guide"}</b></span><button className="demo-reset" type="button" onClick={resetCaptureDemo}>Reset demo ↺</button></div>
+      <div className={`console-done${demoDone ? " show" : ""}`}><div><div className="done-orbit"><div className="done-check">✓</div></div><h3>You just taught the next person.</h3><p>Three ordinary clicks became a reusable answer—without opening a document.</p><button type="button" onClick={resetCaptureDemo}>Run it again ↺</button></div></div>
+    </aside>
+  </div></div>
+</div></section>
+
 <section className="features" id="product"><div className="shell">
   <div className="section-head reveal"><div><div className="section-tag">Chapter 05 · The next morning</div><h2>This time, the answer is already there.</h2></div><p>What changed? Not the work. The interruption disappeared. The knowledge now belongs to the team instead of living in one person’s head.</p></div>
   <div className="bento">
     <article className="card one reveal"><h3>The expert keeps working.</h3><p>Capture preserves the actions that matter while the person who knows stays focused on solving the real problem.</p><div className="extension"><div className="site-mini"><div className="site-wires"><div className="wire-title"></div><div className="wire-copy"></div><div className="wire-copy" style={{ width: "62%" }}></div><div className="wire-button"></div><div className="wire-grid"><i></i><i></i></div></div></div><div className="click-target"></div><div className="ext-pop"><div className="ext-top"><b>Knowhow Capture</b><i className="live"></i></div><div className="ext-count">12</div><small>actions captured</small><div className="ext-btn">Finish & review</div></div></div></article>
-    <article className="card two reveal" id="security"><h3>Private things stay private.</h3><p>The answer can travel without the secrets. Blur sensitive details before the guide becomes part of team memory.</p><div className="private-stage"><div><b>Blur passwords</b><span>Detect sensitive input fields</span><div className="privacy-toggle"><i></i></div></div><div><b>Blur account data</b><span>Apply before the first save</span><div className="blur-box"></div></div></div></article>
+        <article className="card two reveal" id="security"><h3>Private things stay private.</h3><p>The answer can travel without the secrets. Blur sensitive details before the guide becomes part of team memory.</p><div className="private-stage" role="region" aria-label="Privacy protection examples" tabIndex={0}><div className="privacy-panel"><div className="privacy-panel-head"><span className="privacy-icon">•••</span><em>ON</em></div><b>Password fields</b><span>Detected and hidden automatically</span><div className="privacy-field"><i></i><i></i><i></i><strong>Protected</strong></div><div className="privacy-status"><i></i>Live protection</div></div><div className="privacy-panel"><div className="privacy-panel-head"><span className="privacy-icon">Aa</span><em>READY</em></div><b>Account details</b><span>Choose anything sensitive before saving</span><div className="privacy-preview"><i></i><i></i><i></i><div className="privacy-mask">Blurred</div></div><div className="privacy-status"><i></i>Preview secured</div></div></div></article>
     <article className="card three reveal"><h3>The next person asks Knowhow.</h3><p>They search the question in their own words and land on the exact guide or step—without finding the expert first.</p><div className="search-ui"><div className="searchbar">⌕ &nbsp; how do I reset a VPN profile?</div><div className="result"><i></i><div><b>Reset a GlobalProtect VPN profile</b><span>Network Operations · 8 steps</span></div></div><div className="result"><i></i><div><b>Renew VPN certificate</b><span>Security · 5 steps</span></div></div><div className="result"><i></i><div><b>Offboard remote access</b><span>IT Onboarding · 6 steps</span></div></div></div></article>
     <article className="card four reveal"><h3>The answer survives the person.</h3><p>People change teams. Vendors rotate. Clients hand over. The operating memory stays available to whoever comes next.</p><div className="team-stage"><div className="orbit-team"><div className="avatar a1">L1</div><div className="avatar a2">OPS</div><div className="avatar a3">NOC</div><div className="avatar a4">MSP</div><div className="team-core">knowhow<i></i></div></div></div></article>
   </div>
@@ -475,7 +728,7 @@ export function LandingExperience() {
 
 <footer>
       <div className="footer-inner">
-        <a className="logo" href="#top"><span className="logo-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5v14M6 12h5.1M11.1 12l5-6M11.1 12l6 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg></span>knowhow</a>
+        <a className="logo" href="#top"><span className="logo-mark"><BrandMarkGlyph size={16} /></span>knowhow</a>
         <nav className="footer-links" aria-label="Footer navigation">
           <Link href="/#how">How it works</Link>
           <Link href="/#product">Product</Link>

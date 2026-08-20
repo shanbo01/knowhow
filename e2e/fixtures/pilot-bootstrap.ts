@@ -194,6 +194,7 @@ export function pilotBootstrap(): BootstrapResponse {
           allowRestrictedExports: false,
           watermarkExports: true,
           requireReviewBeforePublish: false,
+          desktopTypedTextPolicy: "allowed",
         },
       },
       entitlements: {
@@ -201,6 +202,7 @@ export function pilotBootstrap(): BootstrapResponse {
         maximumCreators: 25,
         storageBytes: 50_000_000_000,
         extensionEnabled: true,
+        desktopCaptureEnabled: true,
         supportEnabled: true,
         removeBranding: true,
         privacyToolsEnabled: true,

@@ -26,6 +26,12 @@ const DEFAULT_FEATURES: CatalogEntitlementItem[] = [
     note: "Capture, redact, review, and pair managed devices.",
   },
   {
+    key: "desktop_capture",
+    label: "Windows desktop capture",
+    included: true,
+    note: "Capture governed screenshot workflows across Windows applications.",
+  },
+  {
     key: "privacy_tools",
     label: "Smart Blur, redact, and annotate",
     included: true,
@@ -455,11 +461,17 @@ export function normalizePricingCatalog(
 export function catalogEntitlements(catalog: PricingCatalogRecord) {
   const included = (items: CatalogEntitlementItem[], key: string) =>
     items.some((item) => item.key === key && item.included);
+  const hasDesktopCaptureSetting = catalog.features.some(
+    (item) => item.key === "desktop_capture",
+  );
   return {
     maximumUsers: catalog.baseWorkspace.includedActiveUsers,
     maximumCreators: catalog.baseWorkspace.includedActiveCreators,
     storageBytes: catalog.baseWorkspace.includedStorageBytes,
     extensionEnabled: included(catalog.features, "browser_extension"),
+    desktopCaptureEnabled: hasDesktopCaptureSetting
+      ? included(catalog.features, "desktop_capture")
+      : included(catalog.features, "browser_extension"),
     supportEnabled: included(catalog.services, "in_app_support"),
     removeBranding: included(catalog.features, "remove_branding"),
     privacyToolsEnabled: included(catalog.features, "privacy_tools"),

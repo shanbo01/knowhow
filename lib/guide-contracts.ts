@@ -18,7 +18,19 @@ export type GuideLifecycleState =
   | "published"
   | "archived";
 
-export type GuideSource = "manual" | "browser-capture";
+export const GUIDE_SOURCES = [
+  "manual",
+  "browser-capture",
+  "desktop-capture",
+] as const;
+
+export type GuideSource = (typeof GUIDE_SOURCES)[number];
+
+export function isCapturedGuideSource(
+  source: unknown,
+): source is Extract<GuideSource, `${string}-capture`> {
+  return source === "browser-capture" || source === "desktop-capture";
+}
 
 export interface GuideActor {
   readonly userId: string;
@@ -271,6 +283,12 @@ export interface CapturePrivacyPolicy {
   readonly captureClipboard: false;
   readonly captureIncognito: false;
   readonly retainUnredactedScreenshots: false;
+  /**
+   * Contract v2 declares whether a recorder may derive an exact value from
+   * before/after accessibility state. It never permits raw key or clipboard
+   * capture and password controls remain fail-closed.
+   */
+  readonly textInputCapture?: "none" | "exact-non-password";
   readonly autoRedactionCategories: readonly Exclude<
     RedactionCategory,
     "common-name" | "long-text"
@@ -286,6 +304,54 @@ export interface CaptureScope {
   readonly startedUrl: string;
   readonly excludedOrigins: readonly string[];
 }
+
+export interface DesktopCoordinateRectangle {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface DesktopCoordinatePoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+interface DesktopCaptureScopeBase {
+  readonly excludedWindowIds: readonly string[];
+}
+
+export interface DesktopApplicationScope extends DesktopCaptureScopeBase {
+  readonly kind: "application";
+  readonly applicationName: string;
+  readonly processId: number;
+}
+
+export interface DesktopWindowScope extends DesktopCaptureScopeBase {
+  readonly kind: "window";
+  readonly windowId: string;
+  readonly applicationName: string;
+  readonly windowTitle?: string;
+  readonly includeOwnedDialogs: true;
+}
+
+export interface DesktopMonitorScope extends DesktopCaptureScopeBase {
+  readonly kind: "monitor";
+  readonly monitorId: string;
+  readonly monitorName?: string;
+  readonly bounds: DesktopCoordinateRectangle;
+}
+
+export interface DesktopAllDisplaysScope extends DesktopCaptureScopeBase {
+  readonly kind: "all-displays";
+  readonly monitorIds: readonly string[];
+}
+
+export type DesktopCaptureScope =
+  | DesktopApplicationScope
+  | DesktopWindowScope
+  | DesktopMonitorScope
+  | DesktopAllDisplaysScope;
 
 export interface CapturePauseInterval {
   readonly pausedAt: string;
@@ -322,7 +388,44 @@ export type CaptureEvent =
   | CaptureClickEvent
   | CaptureFormInteractionEvent;
 
-export interface CaptureSession {
+export type DesktopInteractionKind =
+  | "left-click"
+  | "right-click"
+  | "double-click"
+  | "drag"
+  | "text-entry"
+  | "enter"
+  | "tab"
+  | "shortcut"
+  | "app-switch";
+
+export interface DesktopInteractionTarget {
+  readonly applicationName: string;
+  readonly windowTitle?: string;
+  readonly controlRole?: string;
+  readonly controlLabel?: string;
+  readonly bounds?: DesktopCoordinateRectangle;
+  readonly passwordStatus: "not-password" | "password" | "unknown";
+}
+
+export interface DesktopCaptureInteraction {
+  readonly id: string;
+  readonly type: "desktop-interaction";
+  readonly kind: DesktopInteractionKind;
+  readonly occurredAt: string;
+  readonly target: DesktopInteractionTarget;
+  readonly displayId?: string;
+  readonly windowId?: string;
+  readonly point?: DesktopCoordinatePoint;
+  readonly destination?: DesktopCoordinatePoint;
+  readonly shortcut?: string;
+  /** Present only for exact, non-password UIA value changes. */
+  readonly text?: string;
+  readonly instruction: string;
+  readonly media?: GuideActionMedia;
+}
+
+export interface CaptureSessionV1 {
   readonly schemaVersion: 1;
   readonly captureId: string;
   readonly workspaceId: string;
@@ -337,6 +440,27 @@ export interface CaptureSession {
   readonly events: readonly CaptureEvent[];
   readonly draftBlocks: readonly GuideBlock[];
 }
+
+export interface CaptureSessionV2 {
+  readonly schemaVersion: 2;
+  readonly source: "desktop-capture";
+  readonly captureId: string;
+  readonly workspaceId: string;
+  readonly entityId?: string;
+  readonly state: "recording" | "paused" | "finished" | "discarded";
+  readonly startedAt: string;
+  readonly finishedAt?: string;
+  readonly discardedAt?: string;
+  readonly scope: DesktopCaptureScope;
+  readonly privacyPolicy: CapturePrivacyPolicy & {
+    readonly textInputCapture: "none" | "exact-non-password";
+  };
+  readonly pauses: readonly CapturePauseInterval[];
+  readonly events: readonly DesktopCaptureInteraction[];
+  readonly draftBlocks: readonly GuideBlock[];
+}
+
+export type CaptureSession = CaptureSessionV1 | CaptureSessionV2;
 
 export interface GuideExportViewer {
   readonly userId: string;
@@ -1211,7 +1335,7 @@ function revision(
     min: 1,
     integer: true,
   });
-  enumeration(value.source, ["manual", "browser-capture"] as const, `${path}.source`, issues);
+  enumeration(value.source, GUIDE_SOURCES, `${path}.source`, issues);
   text(value.title, `${path}.title`, issues, { max: SHORT_TEXT_MAX });
   text(value.summary, `${path}.summary`, issues, { optional: true, max: LONG_TEXT_MAX });
   isoDate(value.createdAt, `${path}.createdAt`, issues);
@@ -1252,7 +1376,7 @@ function revision(
     isoDate(value.publishedAt, `${path}.publishedAt`, issues);
     actor(value.publishedBy, `${path}.publishedBy`, issues);
     if (
-      value.source === "browser-capture" &&
+      isCapturedGuideSource(value.source) &&
       (!isRecord(value.privacyReview) ||
         value.privacyReview.required !== true ||
         value.privacyReview.status !== "approved")
@@ -1370,6 +1494,7 @@ function privacyPolicy(
       "captureClipboard",
       "captureIncognito",
       "retainUnredactedScreenshots",
+      "textInputCapture",
       "autoRedactionCategories",
       "assistedRedactionCategories",
     ],
@@ -1381,6 +1506,14 @@ function privacyPolicy(
   if (value.captureClipboard !== false) issue(issues, `${path}.captureClipboard`, "Clipboard contents must never be captured.");
   if (value.captureIncognito !== false) issue(issues, `${path}.captureIncognito`, "Incognito capture must remain disabled.");
   if (value.retainUnredactedScreenshots !== false) issue(issues, `${path}.retainUnredactedScreenshots`, "Unredacted screenshots must not be retained.");
+  if (value.textInputCapture !== undefined) {
+    enumeration(
+      value.textInputCapture,
+      ["none", "exact-non-password"] as const,
+      `${path}.textInputCapture`,
+      issues,
+    );
+  }
   if (!Array.isArray(value.autoRedactionCategories)) {
     issue(issues, `${path}.autoRedactionCategories`, "Expected a redaction category array.");
   } else {
@@ -1459,11 +1592,11 @@ function captureEvent(
   return true;
 }
 
-function captureSession(
+function captureSessionV1(
   value: unknown,
   path: string,
   issues: ValidationIssue[],
-): value is CaptureSession {
+): value is CaptureSessionV1 {
   if (!isRecord(value)) {
     issue(issues, path, "Expected a capture session object.");
     return false;
@@ -1690,6 +1823,387 @@ function captureSession(
     );
   }
   return true;
+}
+
+function desktopRectangle(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is DesktopCoordinateRectangle {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a desktop rectangle.");
+    return false;
+  }
+  exactKeys(value, ["x", "y", "width", "height"], path, issues);
+  finiteNumber(value.x, `${path}.x`, issues);
+  finiteNumber(value.y, `${path}.y`, issues);
+  finiteNumber(value.width, `${path}.width`, issues, { min: 1 });
+  finiteNumber(value.height, `${path}.height`, issues, { min: 1 });
+  return true;
+}
+
+function desktopPoint(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is DesktopCoordinatePoint {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a desktop point.");
+    return false;
+  }
+  exactKeys(value, ["x", "y"], path, issues);
+  finiteNumber(value.x, `${path}.x`, issues);
+  finiteNumber(value.y, `${path}.y`, issues);
+  return true;
+}
+
+function desktopIdArray(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+  options: { nonEmpty?: boolean } = {},
+) {
+  if (!Array.isArray(value)) {
+    issue(issues, path, "Expected an identifier array.");
+    return;
+  }
+  if (options.nonEmpty && value.length === 0) {
+    issue(issues, path, "At least one identifier is required.");
+  }
+  const seen = new Set<string>();
+  value.forEach((entry, index) => {
+    identifier(entry, `${path}[${index}]`, issues);
+    if (typeof entry === "string") {
+      if (seen.has(entry)) issue(issues, `${path}[${index}]`, "Duplicate identifier.");
+      seen.add(entry);
+    }
+  });
+}
+
+function desktopScope(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is DesktopCaptureScope {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a desktop capture scope.");
+    return false;
+  }
+  if (value.kind === "application") {
+    exactKeys(
+      value,
+      ["kind", "applicationName", "processId", "excludedWindowIds"],
+      path,
+      issues,
+    );
+    text(value.applicationName, `${path}.applicationName`, issues, { max: 500 });
+    finiteNumber(value.processId, `${path}.processId`, issues, {
+      min: 1,
+      integer: true,
+    });
+  } else if (value.kind === "window") {
+    exactKeys(
+      value,
+      [
+        "kind",
+        "windowId",
+        "applicationName",
+        "windowTitle",
+        "includeOwnedDialogs",
+        "excludedWindowIds",
+      ],
+      path,
+      issues,
+    );
+    identifier(value.windowId, `${path}.windowId`, issues);
+    text(value.applicationName, `${path}.applicationName`, issues, { max: 500 });
+    text(value.windowTitle, `${path}.windowTitle`, issues, {
+      optional: true,
+      max: 2_000,
+    });
+    if (value.includeOwnedDialogs !== true) {
+      issue(
+        issues,
+        `${path}.includeOwnedDialogs`,
+        "Window capture must include owned dialogs.",
+      );
+    }
+  } else if (value.kind === "monitor") {
+    exactKeys(
+      value,
+      ["kind", "monitorId", "monitorName", "bounds", "excludedWindowIds"],
+      path,
+      issues,
+    );
+    identifier(value.monitorId, `${path}.monitorId`, issues);
+    text(value.monitorName, `${path}.monitorName`, issues, {
+      optional: true,
+      max: 500,
+    });
+    desktopRectangle(value.bounds, `${path}.bounds`, issues);
+  } else if (value.kind === "all-displays") {
+    exactKeys(
+      value,
+      ["kind", "monitorIds", "excludedWindowIds"],
+      path,
+      issues,
+    );
+    desktopIdArray(value.monitorIds, `${path}.monitorIds`, issues, {
+      nonEmpty: true,
+    });
+  } else {
+    issue(
+      issues,
+      `${path}.kind`,
+      "Expected one of: application, window, monitor, all-displays.",
+    );
+  }
+  desktopIdArray(value.excludedWindowIds, `${path}.excludedWindowIds`, issues);
+  return true;
+}
+
+function desktopInteraction(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is DesktopCaptureInteraction {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a desktop interaction.");
+    return false;
+  }
+  exactKeys(
+    value,
+    [
+      "id",
+      "type",
+      "kind",
+      "occurredAt",
+      "target",
+      "displayId",
+      "windowId",
+      "point",
+      "destination",
+      "shortcut",
+      "text",
+      "instruction",
+      "media",
+    ],
+    path,
+    issues,
+  );
+  identifier(value.id, `${path}.id`, issues);
+  if (value.type !== "desktop-interaction") {
+    issue(issues, `${path}.type`, "Desktop events must use desktop-interaction.");
+  }
+  enumeration(
+    value.kind,
+    [
+      "left-click",
+      "right-click",
+      "double-click",
+      "drag",
+      "text-entry",
+      "enter",
+      "tab",
+      "shortcut",
+      "app-switch",
+    ] as const,
+    `${path}.kind`,
+    issues,
+  );
+  isoDate(value.occurredAt, `${path}.occurredAt`, issues);
+  text(value.displayId, `${path}.displayId`, issues, { optional: true, max: ID_MAX });
+  text(value.windowId, `${path}.windowId`, issues, { optional: true, max: ID_MAX });
+  if (value.point !== undefined) desktopPoint(value.point, `${path}.point`, issues);
+  if (value.destination !== undefined) {
+    desktopPoint(value.destination, `${path}.destination`, issues);
+  }
+  text(value.shortcut, `${path}.shortcut`, issues, { optional: true, max: 200 });
+  text(value.text, `${path}.text`, issues, {
+    optional: true,
+    max: LONG_TEXT_MAX,
+    nonEmpty: false,
+  });
+  text(value.instruction, `${path}.instruction`, issues, { max: 2_000 });
+  media(value.media, `${path}.media`, issues, true);
+  if (!isRecord(value.target)) {
+    issue(issues, `${path}.target`, "Expected desktop UI metadata.");
+  } else {
+    exactKeys(
+      value.target,
+      [
+        "applicationName",
+        "windowTitle",
+        "controlRole",
+        "controlLabel",
+        "bounds",
+        "passwordStatus",
+      ],
+      `${path}.target`,
+      issues,
+    );
+    text(value.target.applicationName, `${path}.target.applicationName`, issues, {
+      max: 500,
+    });
+    text(value.target.windowTitle, `${path}.target.windowTitle`, issues, {
+      optional: true,
+      max: 2_000,
+    });
+    text(value.target.controlRole, `${path}.target.controlRole`, issues, {
+      optional: true,
+      max: 200,
+    });
+    text(value.target.controlLabel, `${path}.target.controlLabel`, issues, {
+      optional: true,
+      max: 2_000,
+    });
+    if (value.target.bounds !== undefined) {
+      desktopRectangle(value.target.bounds, `${path}.target.bounds`, issues);
+    }
+    enumeration(
+      value.target.passwordStatus,
+      ["not-password", "password", "unknown"] as const,
+      `${path}.target.passwordStatus`,
+      issues,
+    );
+    if (
+      value.text !== undefined &&
+      value.target.passwordStatus !== "not-password"
+    ) {
+      issue(
+        issues,
+        `${path}.text`,
+        "Exact text is forbidden when password status is password or unknown.",
+      );
+    }
+  }
+  if (value.text !== undefined && value.kind !== "text-entry") {
+    issue(issues, `${path}.text`, "Only a text-entry event may include text.");
+  }
+  if (value.kind === "shortcut" && value.shortcut === undefined) {
+    issue(issues, `${path}.shortcut`, "Shortcut events require a named shortcut.");
+  }
+  if (value.kind === "drag" && value.destination === undefined) {
+    issue(issues, `${path}.destination`, "Drag events require a destination.");
+  }
+  return true;
+}
+
+function captureSessionV2(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is CaptureSessionV2 {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a capture session object.");
+    return false;
+  }
+  exactKeys(
+    value,
+    [
+      "schemaVersion",
+      "source",
+      "captureId",
+      "workspaceId",
+      "entityId",
+      "state",
+      "startedAt",
+      "finishedAt",
+      "discardedAt",
+      "scope",
+      "privacyPolicy",
+      "pauses",
+      "events",
+      "draftBlocks",
+    ],
+    path,
+    issues,
+  );
+  if (value.schemaVersion !== 2) {
+    issue(issues, `${path}.schemaVersion`, "Schema version must be 2.");
+  }
+  if (value.source !== "desktop-capture") {
+    issue(issues, `${path}.source`, "Contract v2 is for desktop capture.");
+  }
+  desktopScope(value.scope, `${path}.scope`, issues);
+  privacyPolicy(value.privacyPolicy, `${path}.privacyPolicy`, issues);
+  const textInputCapture = isRecord(value.privacyPolicy)
+    ? value.privacyPolicy.textInputCapture
+    : undefined;
+  enumeration(
+    textInputCapture,
+    ["none", "exact-non-password"] as const,
+    `${path}.privacyPolicy.textInputCapture`,
+    issues,
+  );
+  if (Array.isArray(value.events)) {
+    value.events.forEach((event, index) => {
+      desktopInteraction(event, `${path}.events[${index}]`, issues);
+      if (
+        textInputCapture === "none" &&
+        isRecord(event) &&
+        event.text !== undefined
+      ) {
+        issue(
+          issues,
+          `${path}.events[${index}].text`,
+          "Text is disabled by this capture privacy policy.",
+        );
+      }
+    });
+  }
+
+  // Reuse the mature v1 lifecycle validator for time ordering, pauses,
+  // terminal-state rules, duplicate event IDs, and draft block validation.
+  const lifecycleCandidate = {
+    schemaVersion: 1,
+    captureId: value.captureId,
+    workspaceId: value.workspaceId,
+    ...(value.entityId === undefined ? {} : { entityId: value.entityId }),
+    state: value.state,
+    startedAt: value.startedAt,
+    ...(value.finishedAt === undefined ? {} : { finishedAt: value.finishedAt }),
+    ...(value.discardedAt === undefined
+      ? {}
+      : { discardedAt: value.discardedAt }),
+    scope: {
+      origin: "https://desktop.capture.invalid",
+      startedUrl: "https://desktop.capture.invalid/",
+      excludedOrigins: [],
+    },
+    privacyPolicy: value.privacyPolicy,
+    pauses: value.pauses,
+    events: Array.isArray(value.events)
+      ? value.events.map((event) =>
+          isRecord(event)
+            ? {
+                id: event.id,
+                type: "click",
+                occurredAt: event.occurredAt,
+                targetLabel:
+                  isRecord(event.target) &&
+                  typeof event.target.applicationName === "string"
+                    ? event.target.applicationName
+                    : "Desktop action",
+              }
+            : event,
+        )
+      : value.events,
+    draftBlocks: value.draftBlocks,
+  };
+  captureSessionV1(lifecycleCandidate, path, issues);
+  return true;
+}
+
+function captureSession(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is CaptureSession {
+  if (isRecord(value) && value.schemaVersion === 2) {
+    return captureSessionV2(value, path, issues);
+  }
+  return captureSessionV1(value, path, issues);
 }
 
 function exportRequest(
@@ -1955,6 +2469,24 @@ export function validatePublishedGuideRevision(
 
 export function validateCaptureSession(value: unknown): ValidationResult<CaptureSession> {
   return validationResult(value, captureSession);
+}
+
+export function validateDesktopCaptureSession(
+  value: unknown,
+): ValidationResult<CaptureSessionV2> {
+  return validationResult(value, captureSessionV2);
+}
+
+export function validateDesktopCaptureScope(
+  value: unknown,
+): ValidationResult<DesktopCaptureScope> {
+  return validationResult(value, desktopScope);
+}
+
+export function validateDesktopCaptureInteraction(
+  value: unknown,
+): ValidationResult<DesktopCaptureInteraction> {
+  return validationResult(value, desktopInteraction);
 }
 
 export function validateCapturePrivacyPolicy(

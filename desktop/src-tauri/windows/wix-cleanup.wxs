@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
+      <Directory Id="AppDataFolder">
+        <Directory Id="KnowHowRoamingData" Name="com.knowhow.capture">
+          <Component Id="KnowHowRoamingDataCleanup" Guid="826F5244-76B3-47A9-809A-2162658C44BB">
+            <RegistryValue
+              Root="HKCU"
+              Key="Software\KnowHow\Capture"
+              Name="RoamingCleanup"
+              Type="integer"
+              Value="1"
+              KeyPath="yes"
+            />
+            <RemoveFile Id="RemoveKnowHowRoamingFiles" Name="*" On="uninstall" />
+            <RemoveFolder Id="RemoveKnowHowRoamingFolder" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="KnowHowLocalData" Name="com.knowhow.capture">
+          <Component Id="KnowHowLocalDataCleanup" Guid="58BE46DA-32D0-48AB-91D5-9A6530381318">
+            <RegistryValue
+              Root="HKCU"
+              Key="Software\KnowHow\Capture"
+              Name="LocalCleanup"
+              Type="integer"
+              Value="1"
+              KeyPath="yes"
+            />
+            <RemoveFile Id="RemoveKnowHowLocalFiles" Name="*" On="uninstall" />
+            <RemoveFolder Id="RemoveKnowHowLocalFolder" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <ComponentGroup Id="KnowHowCaptureDataCleanup">
+      <ComponentRef Id="KnowHowRoamingDataCleanup" />
+      <ComponentRef Id="KnowHowLocalDataCleanup" />
+    </ComponentGroup>
+  </Fragment>
+</Wix>

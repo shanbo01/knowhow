@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Download, Link2, LoaderCircle, Send, Share2 } from "lucide-react";
+import { Check, Link2, Send, Share2 } from "lucide-react";
 import { useState } from "react";
 import type {
   Audience,
@@ -15,21 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-
-export type GuideExportFormatChoice = "pdf" | "pptx" | "html" | "markdown";
-
-const FILE_EXPORTS: Array<[GuideExportFormatChoice, string]> = [
-  ["pdf", "PDF"],
-  ["pptx", "PowerPoint"],
-  ["html", "HTML"],
-];
-
-const EXPORT_LABELS: Record<GuideExportFormatChoice, string> = {
-  pdf: "PDF",
-  pptx: "PowerPoint",
-  html: "HTML",
-  markdown: "Markdown",
-};
+import { PolicyNote } from "./workspace-patterns";
 
 export function GuideShareDialog({
   open,
@@ -45,15 +31,11 @@ export function GuideShareDialog({
   canShare,
   canRequestReview,
   busy,
-  fileExportsEnabled,
-  canExport,
   onClose,
   onAudiencesChange,
   onPrivacyReviewedChange,
   onShare,
   onRequestReview,
-  onExport,
-  onStartTrial,
 }: {
   open: boolean;
   title: string;
@@ -68,27 +50,19 @@ export function GuideShareDialog({
   canShare: boolean;
   canRequestReview: boolean;
   busy: boolean;
-  fileExportsEnabled: boolean;
-  canExport: boolean;
   onClose: () => void;
   onAudiencesChange: (audiences: Audience[]) => void;
   onPrivacyReviewedChange: (value: boolean) => void;
   onShare: () => Promise<void>;
   onRequestReview?: () => Promise<void>;
-  onExport?: (format: GuideExportFormatChoice) => Promise<void>;
-  onStartTrial?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
-  const [exporting, setExporting] = useState<GuideExportFormatChoice | null>(
-    null,
-  );
   const shareBlocked =
     busy ||
     !audiences.length ||
     (captured && !privacyReviewed) ||
     !canShare;
-  const exportBlocked = busy || !isLive || !onExport || Boolean(exporting);
 
   async function copyLink() {
     if (!liveUrl) return;
@@ -106,33 +80,23 @@ export function GuideShareDialog({
     }
   }
 
-  async function exportGuide(format: GuideExportFormatChoice) {
-    if (!onExport) return;
-    setError("");
-    setExporting(format);
-    try {
-      await onExport(format);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Export failed.");
-    } finally {
-      setExporting(null);
-    }
-  }
-
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <DialogContent className="kh-dialog-content kh-dialog-wide sm:max-w-xl">
         <DialogHeader className="kh-dialog-header">
           <div>
-            <p className="eyebrow">Share</p>
-            <DialogTitle>{title || "Untitled guide"}</DialogTitle>
+            <p className="eyebrow">Audience & live link</p>
+            <DialogTitle>Who can follow {title || "this guide"}?</DialogTitle>
           </div>
         </DialogHeader>
         <div className="share-dialog-body">
           <p className="share-dialog-lead">
-            Share the live link over email or chat. Recipients must be signed
-            in and included in this audience.
+            Choose who can open the live guide. Recipients must be signed in
+            and included in this audience.
           </p>
+          <PolicyNote icon={Link2}>
+            Copying the link does not grant access.
+          </PolicyNote>
           <GuideAudiencePicker
             workspaceName={workspaceName}
             audiences={audiences}
@@ -187,88 +151,10 @@ export function GuideShareDialog({
                 disabled={shareBlocked}
                 onClick={() => void run(onShare)}
               >
-                <Share2 /> {isLive ? "Update sharing" : "Share"}
+                <Share2 /> {isLive ? "Update audience" : "Publish"}
               </Button>
             </div>
           </footer>
-          <section className="share-dialog-section" aria-label="Export">
-            <h3>Export</h3>
-            {fileExportsEnabled && canExport ? (
-              <>
-                <p className="share-dialog-lead">
-                  Download a file copy of the published guide. Live links keep
-                  audience checks.
-                </p>
-                {exporting ? (
-                  <p className="share-dialog-lead" role="status">
-                    Preparing {EXPORT_LABELS[exporting]}…
-                  </p>
-                ) : null}
-                <div className="share-export-grid">
-                  {FILE_EXPORTS.map(([format, label]) => (
-                    <Button
-                      key={format}
-                      variant="outline"
-                      type="button"
-                      disabled={exportBlocked}
-                      onClick={() => void exportGuide(format)}
-                    >
-                      {exporting === format ? (
-                        <LoaderCircle className="spin" />
-                      ) : (
-                        <Download />
-                      )}{" "}
-                      {label}
-                    </Button>
-                  ))}
-                  <Button
-                    variant="outline"
-                    type="button"
-                    disabled={exportBlocked}
-                    onClick={() => void exportGuide("markdown")}
-                  >
-                    {exporting === "markdown" ? (
-                      <LoaderCircle className="spin" />
-                    ) : (
-                      <Download />
-                    )}{" "}
-                    Markdown
-                  </Button>
-                </div>
-              </>
-            ) : fileExportsEnabled ? (
-              <p className="share-dialog-lead">
-                Export is turned off for this restricted guide.
-              </p>
-            ) : (
-              <div className="share-export-paywall">
-                <p className="share-dialog-lead">
-                  PDF, PowerPoint, and HTML exports are included on Pro. Copy
-                  the live link on Free, or download Markdown.
-                </p>
-                {onExport ? (
-                  <Button
-                    variant="outline"
-                    type="button"
-                    disabled={exportBlocked}
-                    onClick={() => void exportGuide("markdown")}
-                  >
-                    {exporting === "markdown" ? (
-                      <LoaderCircle className="spin" />
-                    ) : (
-                      <Download />
-                    )}{" "}
-                    Markdown
-                  </Button>
-                ) : null}
-                {onStartTrial ? (
-                  <Button type="button" onClick={onStartTrial}>
-                    Start Pro trial
-                  </Button>
-                ) : null}
-              </div>
-            )}
-          </section>
         </div>
       </DialogContent>
     </Dialog>

@@ -34,6 +34,10 @@ function normalizeHex(value: string) {
   return null;
 }
 
+export function isValidHexColor(value: string) {
+  return normalizeHex(value) !== null;
+}
+
 function hexToHsv(hex: string): Hsv {
   const value = parseInt(hex.slice(1), 16);
   const r = ((value >> 16) & 255) / 255;
@@ -227,9 +231,15 @@ export function HexColorPicker({
           autoComplete="off"
           maxLength={7}
           aria-label={`${label} hex`}
+          aria-invalid={!parsed}
+          aria-describedby={!parsed ? `${ariaLabel.replace(/\s+/g, "-").toLowerCase()}-error` : undefined}
           onChange={(event) => onChange(event.target.value)}
         />
-        {hint ? <small>{hint}</small> : null}
+        {!parsed ? (
+          <small className="form-error" id={`${ariaLabel.replace(/\s+/g, "-").toLowerCase()}-error`}>
+            Enter a 3- or 6-digit hex color.
+          </small>
+        ) : hint ? <small>{hint}</small> : null}
       </span>
     </div>
   );

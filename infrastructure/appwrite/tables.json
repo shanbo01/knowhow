@@ -1323,6 +1323,13 @@
           "user_id",
           "status"
         ]
+      },
+      {
+        "key": "by_email",
+        "type": "key",
+        "columns": [
+          "email"
+        ]
       }
     ]
   },
@@ -3060,6 +3067,14 @@
           "workspace_id",
           "idempotency_key"
         ]
+      },
+      {
+        "key": "by_status_expiry",
+        "type": "key",
+        "columns": [
+          "status",
+          "expires_at"
+        ]
       }
     ]
   },
@@ -4661,6 +4676,16 @@
           "workspace_id",
           "user_id",
           "status"
+        ]
+      },
+      {
+        "key": "by_workspace_user_status_kind",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "user_id",
+          "status",
+          "kind"
         ]
       },
       {
@@ -6462,6 +6487,13 @@
         "columns": [
           "request_id"
         ]
+      },
+      {
+        "key": "by_kind",
+        "type": "key",
+        "columns": [
+          "kind"
+        ]
       }
     ]
   },
@@ -7100,6 +7132,13 @@
           "kind",
           "occurred_at"
         ]
+      },
+      {
+        "key": "by_status",
+        "type": "key",
+        "columns": [
+          "status"
+        ]
       }
     ]
   },
@@ -7313,6 +7352,13 @@
         "type": "key",
         "columns": [
           "user_id",
+          "status"
+        ]
+      },
+      {
+        "key": "by_status",
+        "type": "key",
+        "columns": [
           "status"
         ]
       }
@@ -7965,6 +8011,13 @@
         "columns": [
           "kind",
           "scheduled_at"
+        ]
+      },
+      {
+        "key": "by_status",
+        "type": "key",
+        "columns": [
+          "status"
         ]
       }
     ]

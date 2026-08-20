@@ -17,6 +17,11 @@ Status: operational draft subject to legal approval, provider capabilities, exec
 | Rate-limit/idempotency records | Until their explicit expiry, then scheduled cleanup | Hard delete expired technical record |
 | Provisioning drafts | 30 days after abandoned staged run | Worker deletes staged metadata/files; completed provisioning follows tenant lifecycle |
 | Appwrite sessions/device credentials | Session policy / device refresh up to 30 days; access tokens 5 minutes | Revoke/delete on logout, membership/device revoke, expiry, reuse detection, or tenant purge |
+| Windows device authorizations | 10 minutes from creation | Denied/expired requests become unusable; remove on scheduled technical-record cleanup after the approved evidence window |
+| Windows recoverable local capture | Maximum 24 hours from capture start | Source frames never persist; delete the DPAPI-wrapped session key and encrypted processed media/metadata on discard, successful commit, expiry, or uninstall |
+| Abandoned server capture draft | 24 hours from capture start while recording/paused | Operations cleanup discards the capture, removes private step media, and deletes its uncommitted guide/revision data; failures remain visible for retry |
+| Paired Windows refresh credential | Rotating credential up to 30 days; access token 5 minutes | DPAPI-protected on device; rotate on use, revoke on reuse/device action/membership or entitlement loss, and erase locally on disconnect/uninstall |
+| Desktop release artifacts, SBOMs, hashes, malware/signing evidence | Release lifetime plus `[security/legal period]` | Retain immutable evidence; never include screenshots, guide text, refresh credentials, or updater private keys |
 | Sentry events/logs | Minimum useful provider period, target `[30–90 days]` | Provider expiry/deletion; events must already be scrubbed |
 | Database backups | Daily Appwrite Pro policy and provider retention `[record actual]` | Provider-managed expiry; restored copies destroyed after rehearsal/evidence approval |
 | Build/test evidence | Release plus `[security/legal period]`; synthetic/content-free only | Delete per evidence policy; never store secrets/customer screenshots |

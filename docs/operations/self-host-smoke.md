@@ -1,6 +1,6 @@
-# Local Appwrite contract smoke
+# Appwrite contract smoke
 
-The contract smoke is intentionally restricted to the local project. It creates disposable rows, a private file, a user, a session, and transactions, then proves that each fixture is removed.
+The contract smoke creates disposable rows, a private file, a user, a session, and transactions, then proves that each fixture is removed. Local mode is the default. Controlled mode must run only against an isolated staging project because it exercises real create/update/delete paths.
 
 ## Prepare
 
@@ -26,4 +26,14 @@ The smoke verifies:
 - Optional Mailpit/provider visibility and local Next.js readiness.
 - Exact cleanup of every smoke-owned row, file, user, session, and transaction.
 
-The command refuses a non-local endpoint or any project other than `knowhow-local`.
+Local mode refuses a non-local endpoint or any project other than `knowhow-local`.
+
+## Controlled staging
+
+Populate the controlled environment profile, including `KNOWHOW_SMOKE_MODE=controlled`, `KNOWHOW_APPWRITE_HOSTS`, a non-local project ID, and `KNOWHOW_SMOKE_SITE_ORIGIN`, then run:
+
+```text
+npm run appwrite:smoke:controlled
+```
+
+Controlled mode accepts only an exact allowlisted HTTPS Appwrite `/v1` endpoint and an exact non-local HTTPS Site origin. It refuses `knowhow-local`, requires a real API key, and uses the same exact-cleanup proof. Never run it against production customer data.

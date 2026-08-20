@@ -18,6 +18,8 @@ import type {
   WorkspaceSettings,
   WorkspaceSummary,
 } from "../knowhow-types";
+import { isCapturedGuideSource } from "../guide-contracts";
+import type { DesktopDeviceDetails } from "./desktop-auth-service";
 import {
   AccessService,
   type PlatformRole,
@@ -309,7 +311,7 @@ function hydrateGuides(
       const facts = {
         revisionStatus: revision.status,
         sourceType:
-          revision.source === "browser-capture"
+          isCapturedGuideSource(revision.source)
             ? ("capture" as const)
             : ("manual" as const),
         isAuthor: revision.authorId === identity.userId,
@@ -356,10 +358,9 @@ function hydrateGuides(
       : false;
     const canChangeLiveAudience =
       Boolean(published) &&
-      (access.roles.includes("administrator") ||
-        access.roles.includes("publisher") ||
-        (access.roles.includes("creator") &&
-          source.authorUserId === identity.userId &&
+      (access.roles.includes("publisher") ||
+        (source.authorUserId === identity.userId &&
+          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
           !requireReviewBeforePublish));
     guides.push({
       id: row.$id,
@@ -386,10 +387,9 @@ function hydrateGuides(
       canShare: canPublishWorking || canChangeLiveAudience,
       canArchive: authorize("guide.archive", accessServiceContext).allowed,
       canDelete:
-        access.roles.includes("administrator") ||
         access.roles.includes("publisher") ||
         (source.authorUserId === identity.userId &&
-          access.roles.includes("creator") &&
+          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
           !source.publishedRevisionId),
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
@@ -474,6 +474,7 @@ export class BootstrapService {
       mediaRows,
       onboardingRows,
       extensionDeviceRows,
+      desktopDeviceRows,
     ] = await Promise.all([
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
       this.store.list(TABLES.workspaceMembers, { filters }),
@@ -509,12 +510,35 @@ export class BootstrapService {
           { field: "workspace_id", value: workspaceId },
           { field: "user_id", value: identity.userId },
           { field: "status", value: "active" },
+          { field: "kind", value: "browser-extension" },
         ],
+        limit: 20,
+      }),
+      this.store.list(TABLES.extensionDevices, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "user_id", value: identity.userId },
+          { field: "status", value: "active" },
+          { field: "kind", value: "desktop-windows" },
+        ],
+        order: "desc",
         limit: 20,
       }),
     ]);
     const members = memberRows.map(memberView);
     const groups = groupRows.map((row) => groupView(row, groupMembershipRows));
+    const publishedRevisionIds = new Set(
+      guideRows.guides
+        .map((row) => decodePayload<GuideRecord>(row, null as never)?.publishedRevisionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    for (const group of groups) {
+      group.publishedGuideCount = guideRows.audiences.filter((row) => {
+        if (!publishedRevisionIds.has(stringValue(row.subject_id))) return false;
+        const audience = decodePayload<GuideAudienceRecord>(row, null as never);
+        return audience?.kind === "group" && audience.subjectId === group.id;
+      }).length;
+    }
     for (const member of members) {
       member.groupIds = groupMembershipRows
         .filter((row) => row.user_id === member.userId)
@@ -763,11 +787,30 @@ export class BootstrapService {
 
     return {
       workspace: { ...workspace, settings },
+      desktopCaptureDevices: desktopDeviceRows.flatMap((row) => {
+        const details = decodePayload<DesktopDeviceDetails>(row, null as never);
+        if (!details?.deviceId) return [];
+        return [
+          {
+            id: row.$id,
+            deviceId: details.deviceId,
+            name: details.deviceName,
+            architecture: details.architecture,
+            version: details.desktopVersion,
+            minimumVersion: details.minimumVersion,
+            status: "active" as const,
+            pairedAt: details.pairedAt ?? null,
+            lastUsedAt: details.lastUsedAt ?? null,
+            refreshExpiresAt: details.refreshExpiresAt ?? null,
+          },
+        ];
+      }),
       entitlements: {
         maximumUsers: entitlements.maximumUsers,
         maximumCreators: entitlements.maximumCreators,
         storageBytes: entitlements.storageBytes,
         extensionEnabled: entitlements.extensionEnabled,
+        desktopCaptureEnabled: entitlements.desktopCaptureEnabled,
         supportEnabled: entitlements.supportEnabled,
         removeBranding: entitlements.removeBranding,
         privacyToolsEnabled: entitlements.privacyToolsEnabled,

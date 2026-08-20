@@ -12,13 +12,13 @@ KnowHow is an invitation-only SOP service offered to selected design partners fo
 
 ## 3. Information processed
 
-- Account: name, work email, verification/MFA/session status, memberships, roles, device inventory, and security events.
+- Account: name, work email, verification/MFA/session status, memberships, roles, paired Windows device name/architecture/version/last-used state, and security events.
 - Organization/workspace: legal/display details, contacts, branding, policy, subscription/pilot dates, entitlements, usage counts, and administrator-issued invitations.
-- Customer content: guide titles/text, revisions, audiences, reviews, completions, approved support messages, and private locally redacted screenshots.
+- Customer content: guide titles/text, revisions, audiences, reviews, completions, approved support messages, private locally redacted screenshots, and—only when the creator enables it and workspace policy permits it—exact text derived from before/after changes in non-password desktop controls.
 - Operations: content-free audit records, request/correlation IDs, error codes, lifecycle/deletion state, notification delivery metadata, support cases, backup/restore evidence, and private expiring exports.
 - Leads: information voluntarily submitted through demo/pilot/contact forms and related follow-up status.
 
-KnowHow is designed not to retain raw screenshots, captured form values, clipboard content, raw keystrokes, full captured paths/query strings/fragments, or content inside analytics and telemetry.
+The Windows recorder keeps source frames in GPU/RAM only. Before local persistence it permanently rasterizes password, protected-surface, excluded-window, and enabled Smart Blur masks, then encrypts the processed screenshot and step metadata with a per-session key protected by Windows DPAPI. KnowHow is designed not to retain source frames, password values, clipboard content, raw scan codes/keystrokes, full captured paths/query strings/fragments, or customer content in logs, crash reports, analytics, or telemetry.
 
 ## 4. Purposes
 
@@ -44,7 +44,7 @@ Backup frequency, observed recovery time, and media coverage must be stated from
 
 ## 8. Security
 
-Controls include verified email, administrator TOTP, secure HTTP-only sessions, exact origin/CSRF checks, rate and size limits, server-only product data, default-deny authorization, private Storage, short-lived rotating extension credentials, local screenshot redaction and privacy review, transaction-backed invariants, hash-chained audits, optional scrubbed telemetry, versioned key rotation, operator-owned encrypted backups, and incident response.
+Controls include verified email, administrator TOTP, secure HTTP-only sessions, exact origin/CSRF checks, rate and size limits, server-only product data, default-deny authorization, private Storage, short-lived rotating browser and Windows device credentials with reuse revocation, local screenshot redaction and privacy review, Windows UI Automation password fail-closed behavior, DPAPI-wrapped per-session encryption, signed updates/installers, transaction-backed invariants, hash-chained audits, optional scrubbed telemetry, versioned key rotation, operator-owned encrypted backups, and incident response.
 
 No system is risk-free. Pilot users must follow the acceptable-use/data-classification policy and report suspected incidents promptly.
 

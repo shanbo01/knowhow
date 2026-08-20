@@ -1898,6 +1898,7 @@ async function processPreparedFrame({
   deadlineRequired = false,
   hideLiveBlur = true,
 }) {
+  if (deadlineRequired) return null;
   const latest = await getCaptureState();
   if (
     latest.sessionId !== state.sessionId ||

@@ -22,12 +22,17 @@
     "workers:local:watch": "node --env-file-if-exists=.env.local scripts/run-local-workers.mjs --watch",
     "workers:local:notifications": "node --env-file-if-exists=.env.local scripts/run-local-workers.mjs --notifications-only",
     "appwrite:smoke:local": "node scripts/appwrite-contract-smoke.mjs",
+    "appwrite:smoke:controlled": "node scripts/appwrite-contract-smoke.mjs",
     "extension:build": "npm --prefix extension run build",
     "extension:build:store": "npm --prefix extension run build:store",
+    "desktop:dev": "npm --prefix desktop run tauri dev",
+    "desktop:check": "npm --prefix desktop run check && cargo test --manifest-path desktop/src-tauri/Cargo.toml",
+    "desktop:build": "npm --prefix desktop run tauri build",
     "load:boundary": "node --conditions react-server --import tsx scripts/load-boundary.ts",
     "security:audit": "npm audit --audit-level=high",
     "security:secrets": "node scripts/secret-scan.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern extension/dist --ignore-pattern .next --max-warnings=0",
+    "release:check": "npm test && npm run test:e2e && npm run load:boundary"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

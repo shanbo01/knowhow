@@ -1064,7 +1064,6 @@
   let liveOverlayScrollTimer = null;
   let smartBlurUiRoot = null;
   let smartBlurPanelOpen = false;
-  let lastMaskCount = 0;
   let lastSerializableMasks = [];
   let lastOverlaySignature = "";
   const scrollerIds = new WeakMap();
@@ -1446,7 +1445,6 @@
       clearElementBlurs();
       blurPreviewRoot?.replaceChildren();
       globalThis.CSS?.highlights?.delete("knowhow-blur");
-      if (state.policy.smartBlurEnabled !== true) lastMaskCount = 0;
       lastSerializableMasks = [];
       lastOverlaySignature = "";
       hidePrivacyVeil();
@@ -1484,7 +1482,6 @@
       hostsAttached &&
       overlayHostsAreAttached(groups)
     ) {
-      lastMaskCount = masks.length;
       syncBlurCoverageCopy();
       updateBlurReveal(reveal ? lastPointerPoint : null);
       hidePrivacyVeil();
@@ -1529,7 +1526,6 @@
       scrollerOverlayHosts.delete(scroller);
     }
     rememberOverflowScrollers();
-    lastMaskCount = masks.length;
     syncBlurCoverageCopy();
     updateBlurReveal(reveal ? lastPointerPoint : null);
     hidePrivacyVeil();
@@ -2184,7 +2180,7 @@
   function noteVisualChange(delay = 180) {
     visualEpoch += 1;
     occluderBoxes = null;
-    scheduleBlurPreview();
+    refreshLiveBlur();
     schedulePreparedFrame(delay);
   }
 

@@ -6,6 +6,7 @@ import type {
 } from "../knowhow-types";
 import { AccessService, type PlatformRole } from "./access-service";
 import { BetaAccessService } from "./beta-access-service";
+import { DesktopAuthService } from "./desktop-auth-service";
 import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -24,7 +25,6 @@ import {
   entitlementsForPlan,
   inferredCommercialPlan,
   isCommercialPlan,
-  PRO_INVOICE_DAYS,
   PRO_TRIAL_DAYS,
   subscriptionKindForPlan,
   trialConsumed,
@@ -1578,6 +1578,7 @@ export class CommandService {
             Number.MAX_SAFE_INTEGER,
           ),
           extensionEnabled: true,
+          desktopCaptureEnabled: true,
           supportEnabled: true,
           removeBranding: false,
           privacyToolsEnabled: true,
@@ -3359,6 +3360,7 @@ export class CommandService {
         "recordGuideReaction",
         "revokeSupportAccess",
         "revokeCaptureDevices",
+        "revokeDesktopDevice",
       ].includes(action)
     ) {
       throw new HttpError(
@@ -3371,7 +3373,11 @@ export class CommandService {
       ["suspended", "deletion_pending", "deleting", "deleted"].includes(
         workspaceAccess.lifecycleAccess,
       ) &&
-      !["revokeSupportAccess", "revokeCaptureDevices"].includes(action)
+      ![
+        "revokeSupportAccess",
+        "revokeCaptureDevices",
+        "revokeDesktopDevice",
+      ].includes(action)
     ) {
       throw new HttpError(
         403,
@@ -3640,7 +3646,11 @@ export class CommandService {
       const current = subscription.value;
       const storedPlan = inferredCommercialPlan(current);
       const changedAt = nowIso();
-      if (action === "requestEnterprisePlan") {
+      if (action === "requestEnterprisePlan" || action === "selectProPlan") {
+        const requestedPlan =
+          action === "requestEnterprisePlan" ? "enterprise" : "pro";
+        const requestedPlanLabel =
+          requestedPlan === "enterprise" ? "Enterprise" : "Pro";
         const leadId = resourceId("lead");
         const existing = (
           await this.store.list(TABLES.leads, {
@@ -3655,10 +3665,12 @@ export class CommandService {
           const details = decodePayload<{
             kind?: string;
             workspaceId?: string;
+            requestedPlan?: string;
           }>(row, {});
           return (
             details.kind === "pricing" &&
             details.workspaceId === workspaceId &&
+            details.requestedPlan === requestedPlan &&
             Date.parse(row.$createdAt) > Date.now() - 24 * 60 * 60 * 1_000
           );
         });
@@ -3688,51 +3700,42 @@ export class CommandService {
               role: "administrator",
               teamSize: null,
               country: "",
-              workflow: "Enterprise plan request",
-              notes: `In-app Enterprise request for ${workspaceAccess.workspace.name}`,
+              workflow: `${requestedPlanLabel} plan request`,
+              notes: `In-app ${requestedPlanLabel} request for ${workspaceAccess.workspace.name}`,
               ordinaryDataOnly: true,
               workspaceId,
+              requestedPlan,
               occurredAt: changedAt,
             },
           ),
         );
         await appendAudit(this.store, identity, workspaceId, {
-          action: "plan.enterprise-requested",
+          action: `plan.${requestedPlan}-requested`,
           targetType: "subscription",
           targetId: subscription.row.$id,
-          summary: "Enterprise plan requested",
+          summary: `${requestedPlanLabel} plan requested`,
         });
         return { requested: true, leadId, duplicate: false };
       }
 
-      const nextPlan: CommercialPlan =
-        action === "startProTrial" ? "pro_trial" : "pro";
-      if (action === "startProTrial") {
-        if (storedPlan !== "free") {
-          throw new HttpError(
-            409,
-            "PRO_TRIAL_NOT_AVAILABLE",
-            "A Pro trial can only be started from the Free plan.",
-          );
-        }
-        if (trialConsumed(current)) {
-          throw new HttpError(
-            409,
-            "PRO_TRIAL_USED",
-            "This workspace already used its Pro trial.",
-          );
-        }
-      } else if (storedPlan !== "free" && storedPlan !== "pro_trial") {
+      const nextPlan: CommercialPlan = "pro_trial";
+      if (storedPlan !== "free") {
         throw new HttpError(
           409,
-          "PRO_PLAN_NOT_AVAILABLE",
-          "Choose Pro from Free or an active Pro trial.",
+          "PRO_TRIAL_NOT_AVAILABLE",
+          "A Pro trial can only be started from the Free plan.",
+        );
+      }
+      if (trialConsumed(current)) {
+        throw new HttpError(
+          409,
+          "PRO_TRIAL_USED",
+          "This workspace already used its Pro trial.",
         );
       }
 
-      const trialDays = action === "startProTrial" ? PRO_TRIAL_DAYS : PRO_INVOICE_DAYS;
       const expiresAt = new Date(
-        Date.now() + trialDays * 86_400_000,
+        Date.now() + PRO_TRIAL_DAYS * 86_400_000,
       ).toISOString();
       const next: SubscriptionRecord = {
         ...current,
@@ -3741,11 +3744,10 @@ export class CommandService {
         status: "active",
         startsAt: current.startsAt,
         expiresAt,
-        graceDays: action === "startProTrial" ? 0 : 7,
+        graceDays: 0,
         publicTrial: false,
-        manualContract: action === "selectProPlan",
+        manualContract: false,
         trialConsumed: true,
-        ...(action === "selectProPlan" ? { convertedAt: changedAt } : {}),
       };
       await this.store.update(
         TABLES.subscriptions,
@@ -3768,16 +3770,10 @@ export class CommandService {
         entitlements: entitlementsForPlan(nextPlan),
       });
       await appendAudit(this.store, identity, workspaceId, {
-        action:
-          action === "startProTrial"
-            ? "plan.pro-trial-started"
-            : "plan.pro-selected",
+        action: "plan.pro-trial-started",
         targetType: "subscription",
         targetId: subscription.row.$id,
-        summary:
-          action === "startProTrial"
-            ? "14-day Pro trial started"
-            : "Pro plan selected for offline invoice",
+        summary: "14-day Pro trial started",
         metadata: { plan: nextPlan, expiresAt },
       });
       return {
@@ -4203,6 +4199,31 @@ export class CommandService {
     if (action === "updateWorkspaceSettings") {
       requireAuthorized("workspace.settings.manage", context);
       const input = inputObject(payload.settings, "Settings");
+      const rows = await this.store.list(TABLES.workspaceSettings, {
+        filters: [{ field: "workspace_id", value: workspaceId }],
+        limit: 1,
+      });
+      const current = rows[0]
+        ? {
+            ...DEFAULT_WORKSPACE_SETTINGS,
+            ...decodePayload<Partial<WorkspaceSettings>>(rows[0], {}),
+          }
+        : DEFAULT_WORKSPACE_SETTINGS;
+      const desktopTypedTextPolicy = inputText(
+        input.desktopTypedTextPolicy ?? current.desktopTypedTextPolicy,
+        "Desktop typed-text policy",
+        { min: 7, max: 8 },
+      );
+      if (
+        desktopTypedTextPolicy !== "allowed" &&
+        desktopTypedTextPolicy !== "disabled"
+      ) {
+        throw new HttpError(
+          400,
+          "INPUT_INVALID",
+          "Desktop typed-text policy must be allowed or disabled.",
+        );
+      }
       const settings: WorkspaceSettings = {
         logoUrl: null,
         accentColor: inputText(input.accentColor, "Accent color", {
@@ -4227,19 +4248,13 @@ export class CommandService {
           input.requireReviewBeforePublish,
           "Require review before publish",
         ),
+        desktopTypedTextPolicy,
       };
       if (settings.removeBranding) {
         await new EntitlementService(this.store, workspaceId).requireFeature(
           "removeBranding",
         );
       }
-      const rows = await this.store.list(TABLES.workspaceSettings, {
-        filters: [{ field: "workspace_id", value: workspaceId }],
-        limit: 1,
-      });
-      const current = rows[0]
-        ? decodePayload<WorkspaceSettings>(rows[0], DEFAULT_WORKSPACE_SETTINGS)
-        : DEFAULT_WORKSPACE_SETTINGS;
       const next: WorkspaceSettings = {
         logoUrl: current.logoUrl,
         accentColor: settings.accentColor,
@@ -4248,6 +4263,7 @@ export class CommandService {
         allowRestrictedExports: settings.allowRestrictedExports,
         watermarkExports: settings.watermarkExports,
         requireReviewBeforePublish: settings.requireReviewBeforePublish,
+        desktopTypedTextPolicy: settings.desktopTypedTextPolicy,
       };
       if (rows[0])
         await this.store.update(
@@ -4759,6 +4775,50 @@ export class CommandService {
         ),
       );
       return { reaction };
+    }
+
+    if (action === "inspectDesktopAuthorization") {
+      return new DesktopAuthService(this.store).inspectAuthorization(
+        identity,
+        workspaceId,
+        inputText(payload.authorizationId, "Desktop authorization", {
+          min: 1,
+          max: 36,
+        }),
+      );
+    }
+
+    if (action === "approveDesktopAuthorization") {
+      return new DesktopAuthService(this.store).approveAuthorization(
+        identity,
+        workspaceId,
+        inputText(payload.authorizationId, "Desktop authorization", {
+          min: 1,
+          max: 36,
+        }),
+      );
+    }
+
+    if (action === "denyDesktopAuthorization") {
+      return new DesktopAuthService(this.store).denyAuthorization(
+        identity,
+        workspaceId,
+        inputText(payload.authorizationId, "Desktop authorization", {
+          min: 1,
+          max: 36,
+        }),
+      );
+    }
+
+    if (action === "revokeDesktopDevice") {
+      return new DesktopAuthService(this.store).revokeDevice(
+        identity,
+        workspaceId,
+        inputText(payload.deviceRecordId, "Desktop device", {
+          min: 1,
+          max: 36,
+        }),
+      );
     }
 
     if (action === "createPairingCode") {

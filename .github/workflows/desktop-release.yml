@@ -1,0 +1,300 @@
+name: desktop-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing desktop-vX.Y.Z tag to build
+        required: true
+        type: string
+      publish:
+        description: Publish signed assets to the stable GitHub release
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "desktop-v*"
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+      - name: Install desktop dependencies
+        run: npm ci --prefix desktop
+      - name: Verify web and API
+        run: npm test
+      - name: Verify desktop renderer and native core
+        run: npm run desktop:check
+      - name: Enforce native formatting and lints
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
+          cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Audit desktop JavaScript dependencies
+        run: npm audit --prefix desktop --audit-level=high
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file desktop/src-tauri/Cargo.lock
+
+  build-sign:
+    needs: quality
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: desktop-production
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            target: x86_64-pc-windows-msvc
+          - architecture: arm64
+            target: aarch64-pc-windows-msvc
+    env:
+      KNOWHOW_PUBLIC_APP_ORIGIN: ${{ vars.KNOWHOW_PUBLIC_APP_ORIGIN }}
+      KNOWHOW_DESKTOP_UPDATE_ENDPOINT: ${{ vars.KNOWHOW_DESKTOP_UPDATE_ENDPOINT }}
+      KNOWHOW_DESKTOP_UPDATER_PUBKEY: ${{ vars.KNOWHOW_DESKTOP_UPDATER_PUBKEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Validate release tag and protected configuration
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          AZURE_CLIENT_ID_VALUE: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID_VALUE: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID_VALUE: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARTIFACT_SIGNING_ENDPOINT_VALUE: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT_VALUE: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE_VALUE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_TAG -ne "desktop-v$version") {
+            throw "Release tag must equal desktop-v$version."
+          }
+          $required = @(
+            "AZURE_CLIENT_ID_VALUE",
+            "AZURE_TENANT_ID_VALUE",
+            "AZURE_SUBSCRIPTION_ID_VALUE",
+            "ARTIFACT_SIGNING_ENDPOINT_VALUE",
+            "ARTIFACT_SIGNING_ACCOUNT_VALUE",
+            "ARTIFACT_SIGNING_PROFILE_VALUE",
+            "KNOWHOW_PUBLIC_APP_ORIGIN",
+            "KNOWHOW_DESKTOP_UPDATE_ENDPOINT",
+            "KNOWHOW_DESKTOP_UPDATER_PUBKEY",
+            "TAURI_SIGNING_PRIVATE_KEY"
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Protected release value $name is missing. Publication remains blocked."
+            }
+          }
+      - name: Install desktop dependencies and Rust target
+        shell: pwsh
+        run: |
+          npm ci --prefix desktop
+          rustup target add ${{ matrix.target }}
+      - name: Generate production-only Tauri configuration
+        id: release-config
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "tauri.release.${{ matrix.architecture }}.json"
+          desktop/scripts/write-release-config.ps1 -OutputPath $path
+          "path=$path" >> $env:GITHUB_OUTPUT
+      - name: Build unsigned outer package and native binary
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          .\node_modules\.bin\tauri.cmd build `
+            --target ${{ matrix.target }} `
+            --no-bundle `
+            --config '${{ steps.release-config.outputs.path }}'
+      - name: Authenticate to Azure with GitHub workload identity
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Prepare installer-specific native binaries
+        id: bundle-binaries
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "bundle-binaries-${{ matrix.architecture }}"
+          desktop/scripts/prepare-bundle-binaries.ps1 `
+            -BinaryPath 'desktop/src-tauri/target/${{ matrix.target }}/release/knowhow-capture.exe' `
+            -OutputDirectory $output
+          "path=$output" >> $env:GITHUB_OUTPUT
+      - name: Authenticode-sign installer-specific native applications
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ steps.bundle-binaries.outputs.path }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: KnowHow Capture
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+      - name: Build NSIS and MSI around correctly marked signed applications
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $binary = 'src-tauri/target/${{ matrix.target }}/release/knowhow-capture.exe'
+          Copy-Item `
+            -LiteralPath '${{ steps.bundle-binaries.outputs.path }}\knowhow-capture-nsis.exe' `
+            -Destination $binary `
+            -Force
+          .\node_modules\.bin\tauri.cmd bundle `
+            --target ${{ matrix.target }} `
+            --bundles nsis `
+            --no-sign `
+            --ci `
+            --config '${{ steps.release-config.outputs.path }}'
+          if ((Get-AuthenticodeSignature -LiteralPath $binary).Status -ne 'Valid') {
+            throw 'NSIS bundling changed the signed native application.'
+          }
+          Copy-Item `
+            -LiteralPath '${{ steps.bundle-binaries.outputs.path }}\knowhow-capture-msi.exe' `
+            -Destination $binary `
+            -Force
+          .\node_modules\.bin\tauri.cmd bundle `
+            --target ${{ matrix.target }} `
+            --bundles msi `
+            --no-sign `
+            --ci `
+            --config '${{ steps.release-config.outputs.path }}'
+          if ((Get-AuthenticodeSignature -LiteralPath $binary).Status -ne 'Valid') {
+            throw 'MSI bundling changed the signed native application.'
+          }
+      - name: Authenticode-sign installers
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\desktop\src-tauri\target\${{ matrix.target }}\release\bundle
+          files-folder-filter: exe,msi
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: KnowHow Capture
+          description-url: ${{ github.server_url }}/${{ github.repository }}
+      - name: Create updater signatures and normalized release assets
+        id: package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "knowhow-capture-${{ matrix.architecture }}"
+          desktop/scripts/package-release.ps1 `
+            -Architecture '${{ matrix.architecture }}' `
+            -Target '${{ matrix.target }}' `
+            -OutputDirectory $stage
+          "path=$stage" >> $env:GITHUB_OUTPUT
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: ./desktop
+          format: cyclonedx-json
+          output-file: ${{ steps.package.outputs.path }}\KnowHow-Capture-${{ matrix.architecture }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Scan signed release with Windows Defender
+        shell: pwsh
+        run: |
+          $defender = Join-Path $env:ProgramFiles "Windows Defender\MpCmdRun.exe"
+          if (-not (Test-Path -LiteralPath $defender)) {
+            $defender = Get-ChildItem `
+              -LiteralPath (Join-Path $env:ProgramData "Microsoft\Windows Defender\Platform") `
+              -Filter MpCmdRun.exe `
+              -File `
+              -Recurse |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          & $defender -Scan -ScanType 3 -File '${{ steps.package.outputs.path }}' -DisableRemediation
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows Defender rejected the release directory with exit code $LASTEXITCODE."
+          }
+      - name: Upload signed architecture artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: knowhow-capture-${{ matrix.architecture }}
+          path: ${{ steps.package.outputs.path }}\*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build-sign
+    if: github.event_name == 'push' || inputs.publish == true
+    runs-on: windows-2025
+    timeout-minutes: 20
+    environment: desktop-production
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: knowhow-capture-*
+          path: release
+          merge-multiple: true
+      - name: Build signed stable updater manifest and hashes
+        shell: pwsh
+        run: |
+          $base = "${{ github.server_url }}/${{ github.repository }}/releases/download/$env:RELEASE_TAG"
+          desktop/scripts/new-updater-manifest.ps1 `
+            -ReleaseDirectory release `
+            -ReleaseBaseUrl $base
+      - name: Publish protected stable release
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $assets = Get-ChildItem -LiteralPath release -File | ForEach-Object FullName
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG `
+              --verify-tag `
+              --title "KnowHow Capture $version" `
+              --notes "Signed stable Windows x64 and ARM64 installers, updater metadata, hashes, and SBOMs." `
+              --latest
+          }
+          gh release upload $env:RELEASE_TAG $assets --clobber
+          gh release edit $env:RELEASE_TAG --latest

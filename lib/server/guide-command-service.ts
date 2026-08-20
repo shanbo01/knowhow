@@ -4,6 +4,7 @@ import type {
   WorkspaceSettings,
 } from "../knowhow-types";
 import {
+  isCapturedGuideSource,
   parseGuideRevision,
   type GuideActor,
   type GuideAudience,
@@ -130,7 +131,7 @@ function validateCanonicalRevision(input: {
     blocks: canonicalBlocks(input.blocks),
     audience: canonicalAudience(input.audiences, input.workspaceId),
     privacyReview:
-      input.source === "browser-capture"
+      isCapturedGuideSource(input.source)
         ? {
             required: true as const,
             status: input.privacyReviewed ? ("approved" as const) : ("pending" as const),
@@ -262,7 +263,7 @@ export class GuideCommandService {
       : DEFAULT_WORKSPACE_SETTINGS;
     return {
       revisionStatus: revision.value.status,
-      sourceType: revision.value.source === "browser-capture" ? "capture" : "manual",
+      sourceType: isCapturedGuideSource(revision.value.source) ? "capture" : "manual",
       isAuthor: guide.authorUserId === identity.userId,
       isAssignedReviewer: assignmentRows.some((row) => row.user_id === identity.userId),
       isAudienceMember,
@@ -394,10 +395,13 @@ export class GuideCommandService {
     let steps = normalizeGuideSteps(payload.steps);
     const audiences = normalizeGuideAudiences(payload.audiences, workspaceId);
     await this.validateAudiences(audiences, workspaceId);
-    const source: RevisionRecord["source"] = payload.source === "browser-capture" ? "browser-capture" : "manual";
+    const source: RevisionRecord["source"] =
+      payload.source === "browser-capture" || payload.source === "desktop-capture"
+        ? payload.source
+        : "manual";
     const privacyReviewed = inputBoolean(payload.privacyReviewed ?? false, "Privacy review");
     const transition = payload.transition === "review" ? "review" : "draft";
-    if (source === "browser-capture" && transition === "review" && !privacyReviewed) {
+    if (isCapturedGuideSource(source) && transition === "review" && !privacyReviewed) {
       throw new HttpError(409, "PRIVACY_REVIEW_REQUIRED", "Complete the capture privacy review before requesting review.");
     }
 
@@ -431,8 +435,8 @@ export class GuideCommandService {
       createRevision = false;
     } else {
       const mayCreateDraft =
-        workspaceAccess.roles.includes("administrator") ||
-        (workspaceAccess.roles.includes("creator") && existing.authorUserId === identity.userId);
+        existing.authorUserId === identity.userId &&
+        (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator"));
       if (!mayCreateDraft) {
         throw new HttpError(403, "DRAFT_EDITOR_REQUIRED", "You cannot create a draft for this guide.");
       }
@@ -534,13 +538,13 @@ export class GuideCommandService {
     const reviewerIds = reviewerRows
       .filter((row) => {
         const member = decodePayload<WorkspaceMemberRecord>(row, null as never);
-        return member?.roles.some((role) => role === "reviewer" || role === "administrator");
+        return member?.roles.includes("reviewer");
       })
       .map((row) => stringValue(row.user_id))
       .filter(Boolean);
     if (transition === "review" && !reviewerIds.length) {
       await Promise.all(createdFiles.map((id) => this.objects!.delete(id).catch(() => undefined)));
-      throw new HttpError(409, "REVIEWER_REQUIRED", "Assign an active reviewer or administrator first.");
+      throw new HttpError(409, "REVIEWER_REQUIRED", "Assign an active reviewer first.");
     }
     const mutationEstimate =
       oldSteps.length + oldAudiences.length + oldReviews.length +
@@ -615,7 +619,7 @@ export class GuideCommandService {
         : working?.value.submittedAt
           ? { submittedAt: working.value.submittedAt, submittedBy: working.value.submittedBy }
           : {}),
-      ...(privacyReviewed && source === "browser-capture"
+      ...(privacyReviewed && isCapturedGuideSource(source)
         ? { privacyReviewedAt: updatedAt, privacyReviewedBy: identity.userId }
         : {}),
       source,
@@ -1003,11 +1007,11 @@ export class GuideCommandService {
     const privacyReviewed = inputBoolean(payload.privacyReviewed ?? false, "Privacy review");
     const settings = await this.settings(workspaceId);
     const requireReview = settings.requireReviewBeforePublish;
-    const isAdmin = workspaceAccess.roles.includes("administrator");
     const isPublisher = workspaceAccess.roles.includes("publisher");
     const isAuthorCreator =
-      workspaceAccess.roles.includes("creator") && guide.authorUserId === identity.userId;
-    const mayUpdateLive = isAdmin || isPublisher || (isAuthorCreator && !requireReview);
+      guide.authorUserId === identity.userId &&
+      (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator"));
+    const mayUpdateLive = isPublisher || (isAuthorCreator && !requireReview);
 
     if (guide.workingRevisionId) {
       const working = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
@@ -1016,7 +1020,7 @@ export class GuideCommandService {
         requireAuthorized("guide.update", { ...context, guide: facts });
         await this.replaceAudiences(identity, workspaceAccess, working.row.$id, audiences);
         const updatedAt = nowIso();
-        if (privacyReviewed && working.value.source === "browser-capture") {
+        if (privacyReviewed && isCapturedGuideSource(working.value.source)) {
           await this.store.update(
             TABLES.guideRevisions,
             working.row.$id,
@@ -1112,9 +1116,10 @@ export class GuideCommandService {
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) return { deleted: true };
     const mayDelete =
-      workspaceAccess.roles.includes("administrator") ||
       workspaceAccess.roles.includes("publisher") ||
-      (workspaceAccess.roles.includes("creator") && guide.authorUserId === identity.userId && !guide.publishedRevisionId);
+      (guide.authorUserId === identity.userId &&
+        (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator")) &&
+        !guide.publishedRevisionId);
     if (!mayDelete) {
       throw new HttpError(403, "GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
     }
@@ -1162,8 +1167,8 @@ export class GuideCommandService {
     if (guide.deletedAt) throw new HttpError(409, "GUIDE_QUARANTINED", "A quarantined guide requires a lifecycle recovery case.");
     if (guide.workingRevisionId) throw new HttpError(409, "WORKING_DRAFT_EXISTS", "Finish or archive the current draft first.");
     const mayRestore =
-      workspaceAccess.roles.includes("administrator") ||
-      (workspaceAccess.roles.includes("creator") && guide.authorUserId === identity.userId);
+      guide.authorUserId === identity.userId &&
+      (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator"));
     if (!mayRestore) throw new HttpError(403, "DRAFT_EDITOR_REQUIRED", "You cannot restore this guide.");
     requireAuthorized("guide.create", context);
     const source = await this.loadRevision(sourceRevisionId, guideId, workspaceId);

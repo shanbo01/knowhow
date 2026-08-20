@@ -36,7 +36,58 @@ function exactLocalUrl(raw, pathname) {
   return normalized;
 }
 
-export function resolveSmokeTarget(raw) {
+function exactControlledUrl(raw, pathname, allowedHosts) {
+  if (typeof raw !== "string" || raw !== raw.trim()) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const normalized = url.toString().replace(/\/$/, "");
+  const exactRaw = raw === normalized || raw === `${normalized}/`;
+  if (
+    url.protocol !== "https:" ||
+    !allowedHosts.has(url.host.toLowerCase()) ||
+    ["localhost", "127.0.0.1", "host.docker.internal"].includes(url.hostname) ||
+    url.pathname.replace(/\/$/, "") !== pathname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    !exactRaw
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function controlledHosts(raw) {
+  const hosts = String(raw ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  requireCondition(
+    hosts.length > 0 &&
+      hosts.every((host) => /^[a-z0-9.-]+(?::\d{1,5})?$/.test(host)),
+    "Controlled smoke requires exact KNOWHOW_APPWRITE_HOSTS entries.",
+  );
+  return new Set(hosts);
+}
+
+export function resolveSmokeTarget(raw, options = {}) {
+  if (options.mode === "controlled") {
+    const endpoint = exactControlledUrl(
+      raw,
+      "/v1",
+      controlledHosts(options.allowedHosts),
+    );
+    requireCondition(
+      endpoint,
+      "The controlled contract smoke accepts only an exact allowlisted HTTPS Appwrite endpoint.",
+    );
+    return { endpoint, target: "controlled" };
+  }
   const endpoint = exactLocalUrl(raw, "/v1");
   requireCondition(
     endpoint,
@@ -45,14 +96,32 @@ export function resolveSmokeTarget(raw) {
   return { endpoint, target: "local" };
 }
 
-export function localSiteOrigin(raw) {
-  const origin = exactLocalUrl(raw, "");
+export function smokeSiteOrigin(raw, options = {}) {
+  let origin = null;
+  if (options.mode === "controlled") {
+    try {
+      const parsed = new URL(raw);
+      origin = exactControlledUrl(
+        raw,
+        "",
+        new Set([parsed.host.toLowerCase()]),
+      );
+    } catch {
+      origin = null;
+    }
+  } else {
+    origin = exactLocalUrl(raw, "");
+  }
   requireCondition(
     origin,
-    "The smoke Site origin must be an exact local origin.",
+    options.mode === "controlled"
+      ? "The controlled smoke Site origin must be an exact non-local HTTPS origin."
+      : "The smoke Site origin must be an exact local origin.",
   );
   return new URL(origin).origin;
 }
+
+export const localSiteOrigin = smokeSiteOrigin;
 
 function columnContract(column) {
   const normalized = {

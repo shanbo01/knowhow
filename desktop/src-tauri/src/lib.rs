@@ -1,0 +1,262 @@
+mod api;
+mod coordinator;
+mod engine;
+mod model;
+mod platform;
+mod secure_store;
+
+use std::sync::Arc;
+
+use coordinator::{AuthorizationLaunch, Coordinator};
+use model::{AppSnapshot, CaptureTarget, RecorderSettings, RecorderStatus, StartCaptureInput};
+use tauri::{Manager, State, WindowEvent, menu::MenuBuilder, tray::TrayIconBuilder};
+
+type CommandResult<T> = Result<T, String>;
+
+#[tauri::command]
+fn app_snapshot(state: State<'_, Arc<Coordinator>>) -> AppSnapshot {
+    state.snapshot()
+}
+
+#[tauri::command]
+async fn begin_authorization(
+    state: State<'_, Arc<Coordinator>>,
+) -> CommandResult<AuthorizationLaunch> {
+    state.begin_authorization().await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn poll_authorization(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.poll_authorization().await.map_err(command_error)
+}
+
+#[tauri::command]
+fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
+    state.targets().map_err(command_error)
+}
+
+#[tauri::command]
+async fn start_capture(
+    state: State<'_, Arc<Coordinator>>,
+    input: StartCaptureInput,
+) -> CommandResult<AppSnapshot> {
+    state
+        .inner()
+        .clone()
+        .start_capture(input)
+        .await
+        .map_err(command_error)
+}
+
+#[tauri::command]
+async fn cancel_countdown(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.cancel_countdown().await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn pause_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.pause_capture().await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn resume_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.resume_capture().await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn finish_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.finish_capture().await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn discard_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.discard_capture().await.map_err(command_error)
+}
+
+#[tauri::command]
+fn delete_capture_step(
+    state: State<'_, Arc<Coordinator>>,
+    step_id: String,
+) -> CommandResult<AppSnapshot> {
+    state.delete_step(&step_id).map_err(command_error)
+}
+
+#[tauri::command]
+fn retry_capture_step(
+    state: State<'_, Arc<Coordinator>>,
+    step_id: String,
+) -> CommandResult<AppSnapshot> {
+    state.retry_step(&step_id).map_err(command_error)
+}
+
+#[tauri::command]
+fn update_recorder_settings(
+    state: State<'_, Arc<Coordinator>>,
+    settings: RecorderSettings,
+) -> CommandResult<AppSnapshot> {
+    state.update_settings(settings).map_err(command_error)
+}
+
+#[tauri::command]
+fn show_main_window(state: State<'_, Arc<Coordinator>>) -> CommandResult<()> {
+    state.show_main().map_err(command_error)
+}
+
+#[tauri::command]
+fn set_hud_expanded(state: State<'_, Arc<Coordinator>>, expanded: bool) -> CommandResult<()> {
+    state.show_hud(expanded).map_err(command_error)
+}
+
+#[tauri::command]
+fn open_knowhow(state: State<'_, Arc<Coordinator>>) -> CommandResult<()> {
+    state.open_knowhow().map_err(command_error)
+}
+
+#[tauri::command]
+async fn check_for_updates(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.check_update(true).await.map_err(command_error)
+}
+
+#[tauri::command]
+async fn request_quit(state: State<'_, Arc<Coordinator>>) -> CommandResult<()> {
+    state.request_quit().await.map_err(command_error)
+}
+
+pub fn run() {
+    let updater_key = option_env!("KNOWHOW_DESKTOP_UPDATER_PUBKEY")
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let updater = if updater_key.is_empty() {
+        tauri_plugin_updater::Builder::new().build()
+    } else {
+        tauri_plugin_updater::Builder::new()
+            .pubkey(updater_key)
+            .build()
+    };
+    tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(updater)
+        .setup(|app| {
+            // Tauri can set DPI awareness before setup; an already-set context is safe.
+            let _ = platform::initialize_process();
+            let coordinator = Coordinator::new(app.handle().clone())?;
+            app.manage(Arc::clone(&coordinator));
+            setup_tray(app.handle())?;
+            coordinator.start_background_tasks();
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let coordinator = window.state::<Arc<Coordinator>>();
+                if !coordinator.is_quitting() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_snapshot,
+            begin_authorization,
+            poll_authorization,
+            capture_targets,
+            start_capture,
+            cancel_countdown,
+            pause_capture,
+            resume_capture,
+            finish_capture,
+            discard_capture,
+            delete_capture_step,
+            retry_capture_step,
+            update_recorder_settings,
+            show_main_window,
+            set_hud_expanded,
+            open_knowhow,
+            check_for_updates,
+            request_quit,
+        ])
+        .run(tauri::generate_context!())
+        .unwrap_or_else(|_error| {
+            #[cfg(debug_assertions)]
+            eprintln!("KnowHow Capture failed to start: {_error}");
+            std::process::exit(1);
+        });
+}
+
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let menu = MenuBuilder::new(app)
+        .text("new-capture", "New Capture")
+        .separator()
+        .text("pause-resume", "Pause / Resume")
+        .text("finish", "Finish")
+        .separator()
+        .text("open-knowhow", "Open KnowHow")
+        .text("settings", "Settings")
+        .separator()
+        .text("quit", "Quit")
+        .build()?;
+    let mut tray = TrayIconBuilder::with_id("knowhow-capture")
+        .menu(&menu)
+        .tooltip("KnowHow Capture")
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            let coordinator = app.state::<Arc<Coordinator>>().inner().clone();
+            match event.id().as_ref() {
+                "new-capture" | "settings" => {
+                    if let Err(error) = coordinator.show_main() {
+                        coordinator.set_status_message(command_error(error));
+                    }
+                }
+                "pause-resume" => {
+                    tauri::async_runtime::spawn(async move {
+                        let status = coordinator.snapshot().recorder.status;
+                        let result = if status == RecorderStatus::Paused {
+                            coordinator.resume_capture().await
+                        } else {
+                            coordinator.pause_capture().await
+                        };
+                        if let Err(error) = result {
+                            coordinator.set_status_message(command_error(error));
+                        }
+                    });
+                }
+                "finish" => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = coordinator.finish_capture().await {
+                            coordinator.set_status_message(command_error(error));
+                        }
+                    });
+                }
+                "open-knowhow" => {
+                    if let Err(error) = coordinator.open_knowhow() {
+                        coordinator.set_status_message(command_error(error));
+                    }
+                }
+                "quit" => {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = coordinator.request_quit().await {
+                            coordinator.set_status_message(command_error(error));
+                        }
+                    });
+                }
+                _ => {}
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray = tray.icon(icon);
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+fn command_error(error: anyhow::Error) -> String {
+    error
+        .downcast_ref::<api::ApiError>()
+        .map_or_else(|| error.to_string(), |api| api.message.clone())
+}

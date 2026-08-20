@@ -7,6 +7,7 @@ import {
   assertTableContract,
   localSiteOrigin,
   resolveSmokeTarget,
+  smokeSiteOrigin,
 } from "../scripts/appwrite-contract-guards.mjs";
 
 const root = new URL("../", import.meta.url);
@@ -40,6 +41,36 @@ test("smoke endpoints and application origins stay local", () => {
     () => localSiteOrigin("http://localhost:3001/path"),
     /exact local origin/,
   );
+});
+
+test("controlled smoke endpoints require exact HTTPS hosts", () => {
+  assert.deepEqual(
+    resolveSmokeTarget("https://appwrite.staging.example.com/v1", {
+      mode: "controlled",
+      allowedHosts: "appwrite.staging.example.com",
+    }),
+    {
+      endpoint: "https://appwrite.staging.example.com/v1",
+      target: "controlled",
+    },
+  );
+  assert.equal(
+    smokeSiteOrigin("https://staging.example.com", { mode: "controlled" }),
+    "https://staging.example.com",
+  );
+  for (const endpoint of [
+    "http://appwrite.staging.example.com/v1",
+    "https://other.example.com/v1",
+    "https://localhost/v1",
+    "https://appwrite.staging.example.com/v1?admin=1",
+  ]) {
+    assert.throws(() =>
+      resolveSmokeTarget(endpoint, {
+        mode: "controlled",
+        allowedHosts: "appwrite.staging.example.com",
+      }),
+    );
+  }
 });
 
 test("local contracts reject database, table, column, index, and bucket drift", async () => {

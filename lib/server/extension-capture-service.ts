@@ -1,4 +1,9 @@
 import { companionGuidesFromWorkspace } from "../extension-bridge";
+import {
+  validateDesktopCaptureScope,
+  type DesktopCaptureScope,
+  type GuideSource,
+} from "../guide-contracts";
 import type { Audience, EditorBlock, WorkspaceSettings } from "../knowhow-types";
 import { BootstrapService } from "./bootstrap-service";
 import { appendAudit } from "./audit-service";
@@ -13,6 +18,7 @@ import {
 } from "./domain-records";
 import type { ExtensionCredential } from "./extension-auth-service";
 import { ExtensionAuthService } from "./extension-auth-service";
+import type { DesktopCredential } from "./desktop-auth-service";
 import { GuideAccessService } from "./guide-access-service";
 import { normalizeGuideSteps } from "./guide-input";
 import { HttpError, readJsonObject } from "./http-security";
@@ -25,6 +31,7 @@ import type { PrivateObjectStore } from "./private-object-store";
 import type { RecordStore } from "./record-store";
 
 export const CAPTURE_POLICY_VERSION = "privacy-v2-redacted";
+export const DESKTOP_CAPTURE_POLICY_VERSION = "desktop-v2-redacted";
 const MAX_CAPTURE_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const SAFE_CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -39,6 +46,10 @@ export type CaptureRecord = {
   revisionId: string;
   title: string;
   policyVersion: string;
+  source?: Extract<GuideSource, `${string}-capture`>;
+  captureKind?: "browser" | "desktop";
+  desktopScope?: DesktopCaptureScope;
+  textInputCapture?: "none" | "exact-non-password";
   sanitizedOrigin?: string;
   expectedSteps: number;
   status: "recording" | "paused" | "finished" | "discarded";
@@ -46,6 +57,21 @@ export type CaptureRecord = {
   updatedAt: string;
   pausedAt?: string;
   finishedAt?: string;
+};
+
+type CaptureCredential = ExtensionCredential | DesktopCredential;
+
+type CaptureAuthenticator = {
+  authenticate(
+    request: Request,
+    requiredScopes: readonly ("capture:write" | "media:write")[],
+  ): Promise<CaptureCredential>;
+};
+
+export type CaptureServiceOptions = {
+  source: Extract<GuideSource, `${string}-capture`>;
+  kind: "browser" | "desktop";
+  auth: CaptureAuthenticator;
 };
 
 async function stableId(prefix: string, input: string) {
@@ -77,6 +103,85 @@ function region(input: unknown, label: string) {
     throw new HttpError(400, "CAPTURE_STEPS_INVALID", `${label} is outside the screenshot.`);
   }
   return { x, y, width, height };
+}
+
+function captureAnnotations(
+  input: unknown,
+  label: string,
+): NonNullable<EditorBlock["annotations"]> {
+  if (!Array.isArray(input) || input.length > 100) {
+    throw new HttpError(400, "CAPTURE_STEPS_INVALID", `${label} is invalid.`);
+  }
+  const ids = new Set<string>();
+  return input.map((candidate, index) => {
+    const item = inputObject(candidate, `${label} ${index + 1}`);
+    const id = clientId(item.id, `${label} ID`);
+    if (ids.has(id)) {
+      throw new HttpError(
+        400,
+        "CAPTURE_STEPS_INVALID",
+        "Annotation IDs must be unique.",
+      );
+    }
+    ids.add(id);
+    if (
+      item.kind !== "click" &&
+      item.kind !== "arrow" &&
+      item.kind !== "box" &&
+      item.kind !== "text"
+    ) {
+      throw new HttpError(
+        400,
+        "CAPTURE_STEPS_INVALID",
+        "An annotation kind is invalid.",
+      );
+    }
+    const color =
+      item.color === undefined
+        ? undefined
+        : inputText(item.color, "Annotation color", { min: 4, max: 9 });
+    if (color && !/^#[0-9a-f]{3,8}$/i.test(color)) {
+      throw new HttpError(
+        400,
+        "CAPTURE_STEPS_INVALID",
+        "An annotation color is invalid.",
+      );
+    }
+    const x2 =
+      item.x2 === undefined ? undefined : coordinate(item.x2, "Arrow end x");
+    const y2 =
+      item.y2 === undefined ? undefined : coordinate(item.y2, "Arrow end y");
+    if (item.kind === "arrow" && (x2 === undefined || y2 === undefined)) {
+      throw new HttpError(
+        400,
+        "CAPTURE_STEPS_INVALID",
+        "Drag arrows require an end point.",
+      );
+    }
+    return {
+      id,
+      kind: item.kind,
+      x: coordinate(item.x, "Annotation x"),
+      y: coordinate(item.y, "Annotation y"),
+      ...(item.width === undefined
+        ? {}
+        : { width: coordinate(item.width, "Annotation width") }),
+      ...(item.height === undefined
+        ? {}
+        : { height: coordinate(item.height, "Annotation height") }),
+      ...(x2 === undefined ? {} : { x2 }),
+      ...(y2 === undefined ? {} : { y2 }),
+      ...(item.text === undefined
+        ? {}
+        : {
+            text: inputText(item.text, "Annotation text", {
+              min: 1,
+              max: 500,
+            }),
+          }),
+      ...(color ? { color } : {}),
+    };
+  });
 }
 
 function safeOrigin(input: unknown) {
@@ -130,13 +235,24 @@ function assertFresh(capture: CaptureRecord) {
 }
 
 export class ExtensionCaptureService {
-  private readonly auth: ExtensionAuthService;
+  private readonly auth: CaptureAuthenticator;
+  private readonly source: CaptureServiceOptions["source"];
+  private readonly kind: CaptureServiceOptions["kind"];
 
   constructor(
     private readonly store: RecordStore,
     private readonly objects: PrivateObjectStore,
+    options?: CaptureServiceOptions,
   ) {
-    this.auth = new ExtensionAuthService(store);
+    this.auth = options?.auth ?? new ExtensionAuthService(store);
+    this.source = options?.source ?? "browser-capture";
+    this.kind = options?.kind ?? "browser";
+  }
+
+  private policyVersion() {
+    return this.kind === "desktop"
+      ? DESKTOP_CAPTURE_POLICY_VERSION
+      : CAPTURE_POLICY_VERSION;
   }
 
   private async credential(request: Request, media = false) {
@@ -175,16 +291,33 @@ export class ExtensionCaptureService {
       workspaceId,
       workspaceName: workspace?.name ?? "KnowHow workspace",
       themePreference: preference.theme ?? "system",
-      policyVersion: CAPTURE_POLICY_VERSION,
+      policyVersion: this.policyVersion(),
+      captureSource: this.source,
       excludedOrigins: [],
       clickTargetColor: settings.clickTargetColor,
       minimumVersion: credential.details.minimumVersion,
+      ...(this.kind === "desktop"
+        ? {
+            desktopTypedTextPolicy: settings.desktopTypedTextPolicy,
+            supportedScopes: [
+              "application",
+              "window",
+              "monitor",
+              "all-displays",
+            ],
+          }
+        : {}),
       privacy: {
         excludePasswordFields: true,
         captureClipboard: false,
         captureRawKeystrokes: false,
         captureIncognito: false,
         retainUnredactedScreenshots: false,
+        textInputCapture:
+          this.kind === "desktop" &&
+          settings.desktopTypedTextPolicy === "allowed"
+            ? "exact-non-password"
+            : "none",
         requireFlattenedRedactions: true,
         automatic: ["email", "phone-number", "financial-number", "identifier", "form-field"],
         assisted: ["common-name", "long-text"],
@@ -270,12 +403,57 @@ export class ExtensionCaptureService {
       throw new HttpError(403, "WORKSPACE_TOKEN_MISMATCH", "The capture belongs to another workspace.");
     }
     const policyVersion = inputText(payload.policyVersion, "Policy version", { min: 1, max: 100 });
-    if (policyVersion !== CAPTURE_POLICY_VERSION) {
+    if (policyVersion !== this.policyVersion()) {
       throw new HttpError(409, "CAPTURE_POLICY_STALE", "Refresh the workspace capture policy before recording.");
+    }
+    if (payload.source !== undefined && payload.source !== this.source) {
+      throw new HttpError(
+        403,
+        "CAPTURE_SOURCE_MISMATCH",
+        "The device credential cannot create this capture source.",
+      );
     }
     const title = inputText(payload.title ?? "Captured workflow", "Guide title", { min: 2, max: 500 });
     const expectedSteps = inputInteger(payload.stepCount ?? 0, "Step count", 0, 100);
-    const sanitizedOrigin = safeOrigin(payload.sanitizedUrl ?? payload.origin);
+    const sanitizedOrigin =
+      this.kind === "browser"
+        ? safeOrigin(payload.sanitizedUrl ?? payload.origin)
+        : undefined;
+    let desktopScope: DesktopCaptureScope | undefined;
+    let textInputCapture: "none" | "exact-non-password" | undefined;
+    if (this.kind === "desktop") {
+      const validatedScope = validateDesktopCaptureScope(payload.scope);
+      if (!validatedScope.success) {
+        throw new HttpError(
+          400,
+          "DESKTOP_SCOPE_INVALID",
+          validatedScope.issues[0]?.message ?? "The desktop capture scope is invalid.",
+        );
+      }
+      desktopScope = validatedScope.value;
+      if (
+        payload.textInputCapture !== "none" &&
+        payload.textInputCapture !== "exact-non-password"
+      ) {
+        throw new HttpError(
+          400,
+          "DESKTOP_TEXT_CAPTURE_INVALID",
+          "Choose whether exact non-password text may be captured.",
+        );
+      }
+      const settings = await this.settings(workspaceId);
+      if (
+        payload.textInputCapture === "exact-non-password" &&
+        settings.desktopTypedTextPolicy !== "allowed"
+      ) {
+        throw new HttpError(
+          403,
+          "DESKTOP_TEXT_CAPTURE_DISABLED",
+          "Workspace policy disables exact typed-text capture.",
+        );
+      }
+      textInputCapture = payload.textInputCapture;
+    }
     const captureId = await stableId("capture", `${workspaceId}:${credential.identity.userId}:${sessionId}`);
     const existingRow = await this.store.get(TABLES.captures, captureId);
     if (existingRow) {
@@ -310,14 +488,17 @@ export class ExtensionCaptureService {
       number: 1,
       status: "draft",
       title,
-      summary: "Captured browser workflow pending author review.",
+      summary:
+        this.kind === "desktop"
+          ? "Captured Windows workflow pending author privacy review."
+          : "Captured browser workflow pending author review.",
       category: "",
       tags: [],
       systemReferences: [],
       authorId: credential.identity.userId,
       createdAt: timestamp,
       updatedAt: timestamp,
-      source: "browser-capture",
+      source: this.source,
     };
     const capture: CaptureRecord = {
       workspaceId,
@@ -329,6 +510,10 @@ export class ExtensionCaptureService {
       revisionId,
       title,
       policyVersion,
+      source: this.source,
+      captureKind: this.kind,
+      ...(desktopScope ? { desktopScope } : {}),
+      ...(textInputCapture ? { textInputCapture } : {}),
       ...(sanitizedOrigin ? { sanitizedOrigin } : {}),
       expectedSteps,
       status: "recording",
@@ -340,18 +525,21 @@ export class ExtensionCaptureService {
       await transaction.create(TABLES.guideRevisions, revisionId, rowData({ organization_id: capture.organizationId, workspace_id: workspaceId, subject_id: guideId, status: "draft", version: 1, created_by: credential.identity.userId }, revision));
       const audience: Audience = { kind: "user", subjectId: credential.identity.userId, label: "Capture author" };
       await transaction.create(TABLES.guideAudiences, resourceId("audience"), rowData({ organization_id: capture.organizationId, workspace_id: workspaceId, subject_id: revisionId, user_id: credential.identity.userId, kind: "user", status: "active", created_by: credential.identity.userId }, audience));
-      await transaction.create(TABLES.captures, captureId, rowData({ organization_id: capture.organizationId, workspace_id: workspaceId, user_id: credential.identity.userId, subject_id: guideId, status: "recording", kind: "browser", idempotency_key: idempotency, created_by: credential.identity.userId }, capture));
-      await appendAudit(transaction, credential.identity, workspaceId, { action: "capture.started", targetType: "capture", targetId: captureId, targetLabel: title, summary: `${title} private capture upload started`, metadata: { expectedSteps } });
+      await transaction.create(TABLES.captures, captureId, rowData({ organization_id: capture.organizationId, workspace_id: workspaceId, user_id: credential.identity.userId, subject_id: guideId, status: "recording", kind: this.kind, idempotency_key: idempotency, expires_at: new Date(Date.now() + MAX_CAPTURE_AGE_MS).toISOString(), created_by: credential.identity.userId }, capture));
+      await appendAudit(transaction, credential.identity, workspaceId, { action: "capture.started", targetType: "capture", targetId: captureId, targetLabel: title, summary: `${title} private capture upload started`, metadata: { expectedSteps, source: this.source, ...(desktopScope ? { scope: desktopScope.kind, textInputCapture } : {}) } });
     });
     return { captureId, guideId, revisionId, status: "recording", expectedSteps };
   }
 
-  private async capture(captureId: string, credential: ExtensionCredential) {
+  private async capture(captureId: string, credential: CaptureCredential) {
     const row = await this.store.get(TABLES.captures, captureId);
     const capture = row ? decodePayload<CaptureRecord>(row, null as never) : null;
     if (
       !row || !capture || capture.workspaceId !== credential.row.workspace_id ||
-      capture.userId !== credential.identity.userId || capture.deviceRecordId !== credential.row.$id
+      capture.userId !== credential.identity.userId ||
+      capture.deviceRecordId !== credential.row.$id ||
+      (capture.source ?? "browser-capture") !== this.source ||
+      (capture.captureKind ?? "browser") !== this.kind
     ) {
       throw new HttpError(404, "CAPTURE_NOT_FOUND", "Capture not found.");
     }
@@ -510,7 +698,7 @@ export class ExtensionCaptureService {
     const credential = await this.credential(request);
     const current = await this.capture(captureId, credential);
     if (current.capture.status === "finished") {
-      return { guideId: current.capture.guideId, revisionId: current.capture.revisionId, editUrl: await this.editUrl(request, current.capture) };
+      return { guideId: current.capture.guideId, revisionId: current.capture.revisionId, editUrl: await this.editUrl(request, current.capture), privacyReviewPending: this.kind === "desktop" };
     }
     if (current.capture.status !== "recording") throw new HttpError(409, "CAPTURE_NOT_RECORDING", "This capture cannot be committed.");
     assertFresh(current.capture);
@@ -520,22 +708,72 @@ export class ExtensionCaptureService {
     }
     const mediaRows = await this.captureMedia(current.capture);
     const mediaByStep = new Map(mediaRows.map((row) => [decodePayload<PrivateMediaRecord>(row, null as never).stepId, row]));
+    const desktopInteractions = new Set([
+      "left-click",
+      "right-click",
+      "double-click",
+      "drag",
+      "text-entry",
+      "enter",
+      "tab",
+      "shortcut",
+      "app-switch",
+    ]);
     const editorSteps: EditorBlock[] = payload.steps.map((candidate, index) => {
       const step = inputObject(candidate, `Step ${index + 1}`);
       const id = clientId(step.id, `Step ${index + 1} ID`);
       const sourceEvent = typeof step.sourceEvent === "string" ? step.sourceEvent : "";
+      if (this.kind === "desktop" && !desktopInteractions.has(sourceEvent)) {
+        throw new HttpError(
+          400,
+          "DESKTOP_INTERACTION_INVALID",
+          "A desktop interaction kind is invalid.",
+        );
+      }
+      if (step.text !== undefined) {
+        if (
+          this.kind !== "desktop" ||
+          current.capture.textInputCapture !== "exact-non-password" ||
+          sourceEvent !== "text-entry" ||
+          step.passwordStatus !== "not-password"
+        ) {
+          throw new HttpError(
+            400,
+            "DESKTOP_TEXT_CAPTURE_FORBIDDEN",
+            "Exact text is allowed only for confirmed non-password text changes.",
+          );
+        }
+        inputText(step.text, "Captured text", { max: 50_000 });
+      }
       const mediaRow = mediaByStep.get(id);
       if (step.order !== index) throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Capture step ordering is invalid.");
       if (!mediaRow && sourceEvent !== "navigation") {
         throw new HttpError(409, "CAPTURE_MEDIA_INCOMPLETE", "Every illustrated capture step needs one redacted screenshot.");
       }
       const click = step.clickTarget === undefined ? null : inputObject(step.clickTarget, "Click target");
+      const suppliedAnnotations =
+        step.annotations === undefined
+          ? []
+          : captureAnnotations(step.annotations, "Annotations");
       const redactions = step.redactions === undefined
         ? []
         : Array.isArray(step.redactions)
           ? step.redactions.map((item, redactionIndex) => ({ id: clientId(inputObject(item, "Redaction").id ?? `redaction_${redactionIndex}`, "Redaction ID"), ...region(item, "Redaction"), applied: true }))
           : (() => { throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Redactions are invalid."); })();
       const mediaId = mediaRow?.$id;
+      const annotations: NonNullable<EditorBlock["annotations"]> = [
+        ...suppliedAnnotations,
+        ...(click
+          ? [{
+              id: `click_${index}`,
+              kind: "click" as const,
+              x: coordinate(click.x, "Click x"),
+              y: coordinate(click.y, "Click y"),
+              width: typeof click.radius === "number" ? Math.min(0.25, Math.max(0.001, click.radius)) : 0.035,
+              color: typeof click.color === "string" && /^#[0-9a-f]{6}$/i.test(click.color) ? click.color : undefined,
+            }]
+          : []),
+      ];
       return {
         id,
         kind: "action",
@@ -543,26 +781,32 @@ export class ExtensionCaptureService {
         description: inputText(step.instructions, "Step instructions", { min: 1, max: 2_000 }),
         ...(mediaId ? { screenshotMediaId: mediaId } : {}),
         ...(step.crop === undefined ? {} : { crop: region(step.crop, "Crop") }),
-        ...(click
-          ? {
-              annotations: [{
-                id: `click_${index}`,
-                kind: "click" as const,
-                x: coordinate(click.x, "Click x"),
-                y: coordinate(click.y, "Click y"),
-                width: typeof click.radius === "number" ? Math.min(0.25, Math.max(0.001, click.radius)) : 0.035,
-                color: typeof click.color === "string" && /^#[0-9a-f]{6}$/i.test(click.color) ? click.color : undefined,
-              }],
-            }
-          : {}),
+        ...(annotations.length ? { annotations } : {}),
         ...(redactions.length ? { redactions } : {}),
       };
     });
     const normalizedSteps = normalizeGuideSteps(editorSteps);
-    const privacy = inputObject(payload.privacyReview, "Privacy review");
-    if (privacy.policyVersion !== CAPTURE_POLICY_VERSION) throw new HttpError(409, "CAPTURE_POLICY_STALE", "Refresh the capture policy before finishing.");
-    const completedAt = inputText(privacy.completedAt, "Privacy review time", { min: 20, max: 40 });
-    if (Number.isNaN(Date.parse(completedAt))) throw new HttpError(400, "PRIVACY_REVIEW_INVALID", "The privacy review receipt is invalid.");
+    const privacy = inputObject(
+      this.kind === "desktop"
+        ? payload.privacyAttestation
+        : payload.privacyReview,
+      this.kind === "desktop" ? "Privacy attestation" : "Privacy review",
+    );
+    if (privacy.policyVersion !== this.policyVersion()) throw new HttpError(409, "CAPTURE_POLICY_STALE", "Refresh the capture policy before finishing.");
+    if (this.kind === "browser") {
+      const completedAt = inputText(privacy.completedAt, "Privacy review time", { min: 20, max: 40 });
+      if (Number.isNaN(Date.parse(completedAt))) throw new HttpError(400, "PRIVACY_REVIEW_INVALID", "The privacy review receipt is invalid.");
+    } else if (
+      privacy.sourceRasterized !== true ||
+      privacy.passwordMasksApplied !== true ||
+      privacy.excludedWindowMasksApplied !== true
+    ) {
+      throw new HttpError(
+        400,
+        "REDACTION_ATTESTATION_REQUIRED",
+        "Desktop screenshots must have password and excluded-window masks rasterized before commit.",
+      );
+    }
     const automaticMaskCount = inputInteger(privacy.automaticMaskCount ?? 0, "Automatic mask count", 0, 100_000);
     const manualMaskCount = inputInteger(privacy.manualMaskCount ?? 0, "Manual mask count", 0, 100_000);
     const timestamp = new Date().toISOString();
@@ -578,16 +822,37 @@ export class ExtensionCaptureService {
       const revisionRow = await transaction.get(TABLES.guideRevisions, current.capture.revisionId);
       const revision = revisionRow ? decodePayload<RevisionRecord>(revisionRow, null as never) : null;
       if (!revisionRow || !revision || revision.status !== "draft") throw new HttpError(409, "CAPTURE_REVISION_UNAVAILABLE", "The capture draft is unavailable.");
-      await transaction.update(TABLES.guideRevisions, revisionRow.$id, rowData({ updated_by: credential.identity.userId }, { ...revision, title: current.capture.title, summary: "Captured browser workflow ready for editing.", privacyReviewedAt: timestamp, privacyReviewedBy: credential.identity.userId, updatedAt: timestamp }));
+      await transaction.update(
+        TABLES.guideRevisions,
+        revisionRow.$id,
+        rowData(
+          { updated_by: credential.identity.userId },
+          {
+            ...revision,
+            title: current.capture.title,
+            summary:
+              this.kind === "desktop"
+                ? "Captured Windows workflow ready for privacy review and editing."
+                : "Captured browser workflow ready for editing.",
+            ...(this.kind === "browser"
+              ? {
+                  privacyReviewedAt: timestamp,
+                  privacyReviewedBy: credential.identity.userId,
+                }
+              : {}),
+            updatedAt: timestamp,
+          },
+        ),
+      );
       const guideRow = await transaction.get(TABLES.guides, current.capture.guideId);
       if (!guideRow) throw new HttpError(409, "CAPTURE_GUIDE_UNAVAILABLE", "The capture guide is unavailable.");
       const guide = decodePayload<GuideRecord>(guideRow, null as never);
       await transaction.update(TABLES.guides, guideRow.$id, rowData({ status: "draft", updated_by: credential.identity.userId }, { ...guide, title: current.capture.title, updatedAt: timestamp }));
       await transaction.update(TABLES.captures, captureId, rowData({ status: "finished", updated_by: credential.identity.userId }, { ...current.capture, status: "finished", finishedAt: timestamp, updatedAt: timestamp }));
-      await transaction.create(TABLES.usageEvents, resourceId("usage"), rowData({ organization_id: current.capture.organizationId, workspace_id: current.capture.workspaceId, user_id: credential.identity.userId, subject_id: current.capture.guideId, kind: "capture.completed", status: "recorded", occurred_at: timestamp, created_by: credential.identity.userId }, { stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount }));
-      await appendAudit(transaction, credential.identity, current.capture.workspaceId, { action: "capture.finished", targetType: "guide", targetId: current.capture.guideId, targetLabel: current.capture.title, summary: `${current.capture.title} saved as a private redacted draft`, metadata: { revisionId: current.capture.revisionId, stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount, originalMediaRetained: false } });
+      await transaction.create(TABLES.usageEvents, resourceId("usage"), rowData({ organization_id: current.capture.organizationId, workspace_id: current.capture.workspaceId, user_id: credential.identity.userId, subject_id: current.capture.guideId, kind: "capture.completed", status: "recorded", occurred_at: timestamp, created_by: credential.identity.userId }, { stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount, source: this.source, privacyReviewPending: this.kind === "desktop" }));
+      await appendAudit(transaction, credential.identity, current.capture.workspaceId, { action: "capture.finished", targetType: "guide", targetId: current.capture.guideId, targetLabel: current.capture.title, summary: `${current.capture.title} saved as a private redacted draft`, metadata: { revisionId: current.capture.revisionId, stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount, originalMediaRetained: false, source: this.source, privacyReviewPending: this.kind === "desktop" } });
     });
-    return { guideId: current.capture.guideId, revisionId: current.capture.revisionId, editUrl: await this.editUrl(request, current.capture) };
+    return { guideId: current.capture.guideId, revisionId: current.capture.revisionId, editUrl: await this.editUrl(request, current.capture), privacyReviewPending: this.kind === "desktop" };
   }
 
   private async editUrl(request: Request, capture: CaptureRecord) {
