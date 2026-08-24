@@ -5,6 +5,7 @@ import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
 import "./auth-experience.css";
 import "./workspace-experience.css";
+import "./administration-experience.css";
 import "./ui-system.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";

@@ -1,20 +1,38 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
+    collections::{HashMap, HashSet},
     ffi::c_void,
+    io::Cursor,
     mem::size_of,
     path::Path,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, SyncSender},
+    },
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{DynamicImage, ImageBuffer, Rgba, codecs::jpeg::JpegEncoder, imageops::FilterType};
+use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
-            MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
+        Foundation::{
+            CloseHandle, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HANDLE, HINSTANCE, HWND, LPARAM,
+            LRESULT, POINT, RECT, WPARAM,
+        },
+        Graphics::{
+            Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+            Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
+                CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors,
+                GetDC, GetDIBits, GetMonitorInfoW, HDC, HGDIOBJ, HMONITOR,
+                MONITOR_DEFAULTTONEAREST, MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
+                ReleaseDC, SRCCOPY, SelectObject,
+            },
         },
         Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
         System::{
@@ -38,13 +56,14 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationValuePattern,
-                UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
-                UIA_DataGridControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-                UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_ListControlTypeId,
-                UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId, UIA_PaneControlTypeId,
-                UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId,
-                UIA_TextControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
+                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+                IUIAutomationValuePattern, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
+                UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DocumentControlTypeId,
+                UIA_EditControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+                UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId,
+                UIA_PaneControlTypeId, UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId,
+                UIA_TableControlTypeId, UIA_TextControlTypeId, UIA_TextPatternId,
+                UIA_TreeItemControlTypeId, UIA_ValuePatternId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::{
@@ -61,25 +80,36 @@ use windows::{
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-                GA_ROOTOWNER, GetAncestor, GetCursorPos, GetForegroundWindow, GetMessageW,
-                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-                HWND_MESSAGE, IDNO, IDYES, IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION,
-                MB_YESNOCANCEL, MSG, MessageBoxW, PostThreadMessageW, RI_KEY_BREAK,
-                RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN,
-                RI_MOUSE_RIGHT_BUTTON_UP, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_INPUT, WM_QUIT,
-                WM_WTSSESSION_CHANGE, WNDCLASSW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+                GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetCursorPos,
+                GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
+                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HWND_MESSAGE, IDNO,
+                IDYES, IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION, MB_YESNOCANCEL, MSG,
+                MessageBoxW, PostThreadMessageW, RI_KEY_BREAK, RI_MOUSE_LEFT_BUTTON_DOWN,
+                RI_MOUSE_LEFT_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP,
+                RIM_INPUT, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_INPUT, WM_QUIT, WM_WTSSESSION_CHANGE,
+                WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
             },
         },
     },
     core::{BOOL, PWSTR, w},
 };
+use windows_capture::{
+    capture::{Context as CaptureContext, GraphicsCaptureApiHandler},
+    frame::Frame,
+    graphics_capture_api::InternalCaptureControl,
+    settings::{
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+    },
+    window::Window as CaptureWindow,
+};
 
 use super::{
     ElementMetadata, ExcludedRegion, ForegroundContext, MonitorDescriptor, PasswordStatus,
-    PointerButton, QuitChoice, RawEvent, RawInputRegistration, UiAutomationClient,
+    PointerButton, PrivacyRegion, QuitChoice, RawEvent, RawInputRegistration, UiAutomationClient,
 };
-use crate::model::{Bounds, CaptureTarget, DesktopScope, ScopeKind};
+use crate::model::{Bounds, CaptureTarget, CaptureTargetPreview, DesktopScope, ScopeKind};
 
 const PROTECTED_PROCESSES: &[&str] = &[
     "1password",
@@ -99,6 +129,10 @@ const PROTECTED_PROCESSES: &[&str] = &[
     "windowssecurity",
 ];
 
+const PREVIEW_WIDTH: u32 = 320;
+const PREVIEW_HEIGHT: u32 = 180;
+const PREVIEW_TIMEOUT: Duration = Duration::from_millis(1_250);
+
 #[derive(Clone, Debug)]
 struct WindowRecord {
     id: String,
@@ -109,6 +143,49 @@ struct WindowRecord {
     bounds: Bounds,
     protected: bool,
     elevated: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewFrame {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+struct PreviewCapture {
+    output: Arc<Mutex<Option<PreviewFrame>>>,
+}
+
+impl GraphicsCaptureApiHandler for PreviewCapture {
+    type Flags = Arc<Mutex<Option<PreviewFrame>>>;
+    type Error = anyhow::Error;
+
+    fn new(context: CaptureContext<Self::Flags>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            output: context.flags,
+        })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut Frame,
+        capture_control: InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        let buffer = frame
+            .buffer()
+            .context("read Windows Graphics Capture frame")?;
+        let width = buffer.width();
+        let height = buffer.height();
+        let mut scratch = Vec::new();
+        let pixels = buffer.as_nopadding_buffer(&mut scratch).to_vec();
+        *self.output.lock() = Some(PreviewFrame {
+            width,
+            height,
+            pixels,
+        });
+        capture_control.stop();
+        Ok(())
+    }
 }
 
 pub fn initialize_process() -> Result<()> {
@@ -147,21 +224,24 @@ pub fn quit_capture_choice() -> QuitChoice {
 
 pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
     let windows = enumerate_windows()?;
-    let mut applications = BTreeMap::<u32, &WindowRecord>::new();
+    let mut seen_processes = HashSet::new();
+    let mut applications = Vec::new();
     for window in &windows {
         if window.process_id == std::process::id() || window.protected || window.elevated {
             continue;
         }
-        applications.entry(window.process_id).or_insert(window);
+        if seen_processes.insert(window.process_id) {
+            applications.push(window);
+        }
     }
     let mut targets = applications
         .into_iter()
-        .map(|(process_id, window)| CaptureTarget {
-            id: format!("process:{process_id}"),
+        .map(|window| CaptureTarget {
+            id: format!("process:{}", window.process_id),
             kind: ScopeKind::Application,
             label: window.application_name.clone(),
             detail: window.title.clone(),
-            process_id: Some(process_id),
+            process_id: Some(window.process_id),
             bounds: Some(window.bounds),
             protected: false,
         })
@@ -189,6 +269,218 @@ pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
             }),
     );
     Ok(targets)
+}
+
+pub fn capture_target_previews(target_ids: &[String]) -> Result<Vec<CaptureTargetPreview>> {
+    #[derive(Clone, Copy)]
+    enum PreviewSource {
+        Window(usize),
+        Monitor(Bounds),
+    }
+
+    let windows = enumerate_windows()?;
+    let monitors = monitor_descriptors()?;
+    let targets = capture_targets()?;
+    let mut jobs = Vec::new();
+    for target_id in target_ids {
+        let Some(target) = targets
+            .iter()
+            .find(|target| target.id == *target_id && !target.protected)
+        else {
+            continue;
+        };
+        let source = match target.kind {
+            ScopeKind::Application => target.process_id.and_then(|process_id| {
+                windows
+                    .iter()
+                    .find(|window| {
+                        window.process_id == process_id && !window.protected && !window.elevated
+                    })
+                    .and_then(|window| hwnd_from_id(&window.id))
+                    .map(|hwnd| PreviewSource::Window(hwnd.0 as usize))
+            }),
+            ScopeKind::Window => {
+                hwnd_from_id(&target.id).map(|hwnd| PreviewSource::Window(hwnd.0 as usize))
+            }
+            ScopeKind::Monitor => monitors
+                .iter()
+                .find(|monitor| monitor.id == target.id)
+                .map(|monitor| PreviewSource::Monitor(monitor.bounds)),
+            ScopeKind::AllDisplays => None,
+        };
+        if let Some(source) = source {
+            jobs.push((target.id.clone(), source));
+        }
+    }
+    Ok(thread::scope(|scope| {
+        let handles = jobs
+            .into_iter()
+            .map(|(target_id, source)| {
+                scope.spawn(move || {
+                    let data_url = match source {
+                        PreviewSource::Window(raw) => {
+                            capture_window_preview(HWND(raw as *mut c_void)).ok()
+                        }
+                        PreviewSource::Monitor(bounds) => capture_monitor_preview(bounds).ok(),
+                    }?;
+                    Some(CaptureTargetPreview {
+                        target_id,
+                        data_url,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok().flatten())
+            .collect()
+    }))
+}
+
+fn capture_window_preview(hwnd: HWND) -> Result<String> {
+    let output = Arc::new(Mutex::new(None));
+    let settings = Settings::new(
+        CaptureWindow::from_raw_hwnd(hwnd.0),
+        CursorCaptureSettings::WithoutCursor,
+        DrawBorderSettings::WithoutBorder,
+        SecondaryWindowSettings::Include,
+        MinimumUpdateIntervalSettings::Default,
+        DirtyRegionSettings::Default,
+        ColorFormat::Bgra8,
+        Arc::clone(&output),
+    );
+    let control = PreviewCapture::start_free_threaded(settings)
+        .context("start Windows Graphics Capture preview")?;
+    let deadline = Instant::now() + PREVIEW_TIMEOUT;
+    while output.lock().is_none() && !control.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(8));
+    }
+    control
+        .stop()
+        .context("stop Windows Graphics Capture preview")?;
+    let mut frame = output
+        .lock()
+        .take()
+        .ok_or_else(|| anyhow!("Windows did not provide a preview for this window"))?;
+    for pixel in frame.pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+        pixel[3] = 255;
+    }
+    encode_preview_pixels(frame.width, frame.height, frame.pixels)
+}
+
+fn capture_monitor_preview(bounds: Bounds) -> Result<String> {
+    let width = i32::try_from(bounds.width)?;
+    let height = i32::try_from(bounds.height)?;
+    capture_preview_bitmap(width, height, |destination, source| {
+        // SAFETY: both DCs are valid and the monitor bounds were returned by Windows.
+        unsafe {
+            BitBlt(
+                destination,
+                0,
+                0,
+                width,
+                height,
+                Some(source),
+                bounds.x,
+                bounds.y,
+                SRCCOPY | CAPTUREBLT,
+            )
+        }
+        .context("capture display preview")
+    })
+}
+
+fn capture_preview_bitmap(
+    width: i32,
+    height: i32,
+    render: impl FnOnce(HDC, HDC) -> Result<()>,
+) -> Result<String> {
+    if width < 2 || height < 2 {
+        bail!("preview bounds are empty");
+    }
+    // SAFETY: the desktop DC is borrowed only for this synchronous preview capture.
+    let source = unsafe { GetDC(None) };
+    if source.0.is_null() {
+        bail!("desktop graphics context is unavailable");
+    }
+    // SAFETY: the source DC remains valid until ReleaseDC below.
+    let destination = unsafe { CreateCompatibleDC(Some(source)) };
+    // SAFETY: the source DC remains valid and dimensions were checked above.
+    let bitmap = unsafe { CreateCompatibleBitmap(source, width, height) };
+    if destination.0.is_null() || bitmap.0.is_null() {
+        if !destination.0.is_null() {
+            // SAFETY: destination was created by CreateCompatibleDC.
+            let _ = unsafe { DeleteDC(destination) };
+        }
+        // SAFETY: source was returned by GetDC(None).
+        let _ = unsafe { ReleaseDC(None, source) };
+        bail!("preview bitmap allocation failed");
+    }
+    // SAFETY: bitmap and destination are compatible GDI objects.
+    let previous = unsafe { SelectObject(destination, HGDIOBJ(bitmap.0)) };
+    let result = (|| {
+        render(destination, source)?;
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: u32::try_from(size_of::<BITMAPINFOHEADER>())?,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let byte_count = usize::try_from(width)?
+            .checked_mul(usize::try_from(height)?)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| anyhow!("preview is too large"))?;
+        let mut pixels = vec![0_u8; byte_count];
+        // SAFETY: pixels and bitmap info advertise matching 32-bit top-down storage.
+        let scanlines = unsafe {
+            GetDIBits(
+                destination,
+                bitmap,
+                0,
+                u32::try_from(height)?,
+                Some(pixels.as_mut_ptr().cast()),
+                &raw mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        if scanlines == 0 {
+            bail!("read preview pixels failed");
+        }
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+        encode_preview_pixels(u32::try_from(width)?, u32::try_from(height)?, pixels)
+    })();
+    // SAFETY: restore the original object before deleting our compatible bitmap and DC.
+    let _ = unsafe { SelectObject(destination, previous) };
+    // SAFETY: bitmap and destination were allocated above and are no longer selected.
+    let _ = unsafe { DeleteObject(HGDIOBJ(bitmap.0)) };
+    let _ = unsafe { DeleteDC(destination) };
+    // SAFETY: source was returned by GetDC(None).
+    let _ = unsafe { ReleaseDC(None, source) };
+    result
+}
+
+fn encode_preview_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Result<String> {
+    let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)
+        .ok_or_else(|| anyhow!("preview pixel layout is invalid"))?;
+    let resized =
+        DynamicImage::ImageRgba8(image).resize(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Triangle);
+    let mut encoded = Cursor::new(Vec::new());
+    JpegEncoder::new_with_quality(&mut encoded, 52)
+        .encode_image(&DynamicImage::ImageRgb8(resized.to_rgb8()))?;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(encoded.into_inner())
+    ))
 }
 
 pub fn new_scope(kind: ScopeKind, target: Option<&CaptureTarget>) -> Result<DesktopScope> {
@@ -264,15 +556,12 @@ pub fn monitor_descriptors() -> Result<Vec<MonitorDescriptor>> {
         if unsafe { GetMonitorInfoW(monitor, (&raw mut info).cast::<MONITORINFO>()).as_bool() } {
             let rect = info.monitorInfo.rcMonitor;
             let index = monitors.len();
-            let name = utf16_z(&info.szDevice);
+            let device_name = utf16_z(&info.szDevice);
             monitors.push(MonitorDescriptor {
                 id: monitor_id(monitor),
-                name: if name.is_empty() {
-                    format!("Display {}", index + 1)
-                } else {
-                    name
-                },
+                name: friendly_monitor_name(&device_name, index),
                 bounds: rect_bounds(rect),
+                work_area: rect_bounds(info.monitorInfo.rcWork),
                 index,
             });
         }
@@ -342,8 +631,7 @@ fn enumerate_windows() -> Result<Vec<WindowRecord>> {
     unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
         // SAFETY: data is a valid Vec pointer during synchronous EnumWindows.
         let windows = unsafe { &mut *(data.0 as *mut Vec<WindowRecord>) };
-        // SAFETY: hwnd is supplied by EnumWindows.
-        if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+        if !is_shareable_app_window(hwnd) {
             return BOOL(1);
         }
         if let Ok(record) = window_record(hwnd)
@@ -365,6 +653,45 @@ fn enumerate_windows() -> Result<Vec<WindowRecord>> {
         )?;
     }
     Ok(windows)
+}
+
+fn is_shareable_app_window(hwnd: HWND) -> bool {
+    // SAFETY: hwnd is supplied by EnumWindows and remains valid for this callback.
+    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+        return false;
+    }
+    let mut cloaked = 0_u32;
+    // A failed DWM query is treated as not cloaked so classic Win32 windows remain available.
+    let is_cloaked = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            u32::try_from(size_of::<u32>()).unwrap_or(4),
+        )
+    }
+    .is_ok()
+        && cloaked != 0;
+    // SAFETY: reading styles and ownership does not mutate the enumerated window.
+    let extended_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
+    let has_owner = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok();
+    is_shareable_window_properties(true, is_cloaked, extended_style, has_owner)
+}
+
+fn is_shareable_window_properties(
+    visible: bool,
+    cloaked: bool,
+    extended_style: u32,
+    has_owner: bool,
+) -> bool {
+    // Minimized top-level windows are intentionally included: they still represent open
+    // taskbar applications and are valid capture targets even though they are not on-screen.
+    if !visible || cloaked {
+        return false;
+    }
+    let app_window = extended_style & WS_EX_APPWINDOW.0 != 0;
+    let tool_window = extended_style & WS_EX_TOOLWINDOW.0 != 0;
+    app_window || (!tool_window && !has_owner)
 }
 
 fn window_record(hwnd: HWND) -> Result<WindowRecord> {
@@ -435,14 +762,29 @@ fn process_application_name(process_id: u32) -> Option<String> {
 
 fn friendly_process_name(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
+        "chrome" => "Google Chrome".to_owned(),
         "explorer" => "File Explorer".to_owned(),
         "applicationframehost" => "Windows application".to_owned(),
         "msedge" => "Microsoft Edge".to_owned(),
         "winword" => "Microsoft Word".to_owned(),
         "excel" => "Microsoft Excel".to_owned(),
         "powerpnt" => "Microsoft PowerPoint".to_owned(),
+        "snippingtool" => "Snipping Tool".to_owned(),
+        "steamwebhelper" => "Steam".to_owned(),
+        "sublime_text" => "Sublime Text".to_owned(),
+        "windowsterminal" => "Windows Terminal".to_owned(),
         _ => name.to_owned(),
     }
+}
+
+fn friendly_monitor_name(device_name: &str, fallback_index: usize) -> String {
+    let display_number = device_name
+        .to_ascii_uppercase()
+        .strip_prefix(r"\\.\DISPLAY")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(fallback_index + 1);
+    format!("Display {display_number}")
 }
 
 fn process_is_elevated(process_id: u32) -> Result<bool> {
@@ -543,6 +885,11 @@ fn window_id(hwnd: HWND) -> String {
     format!("hwnd:{:x}", hwnd.0 as usize)
 }
 
+fn hwnd_from_id(id: &str) -> Option<HWND> {
+    let value = usize::from_str_radix(id.strip_prefix("hwnd:")?, 16).ok()?;
+    (value != 0).then_some(HWND(value as *mut c_void))
+}
+
 fn monitor_id(monitor: HMONITOR) -> String {
     format!("monitor:{:x}", monitor.0 as usize)
 }
@@ -558,6 +905,16 @@ fn utf16_z(buffer: &[u16]) -> String {
 pub struct WindowsUia {
     automation: IUIAutomation,
     initialized: bool,
+    privacy_requests: SyncSender<String>,
+    privacy_cache: Arc<Mutex<HashMap<String, PrivacyCacheEntry>>>,
+    privacy_stop: Arc<AtomicBool>,
+    privacy_join: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct PrivacyCacheEntry {
+    regions: Vec<PrivacyRegion>,
+    captured_at: Instant,
 }
 
 impl WindowsUia {
@@ -569,13 +926,30 @@ impl WindowsUia {
         // SAFETY: CUIAutomation is an in-process COM class and IUIAutomation is its interface.
         let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
             .context("create Windows UI Automation client")?;
+        let (privacy_requests, privacy_receiver) = mpsc::sync_channel::<String>(8);
+        let privacy_cache = Arc::new(Mutex::new(HashMap::new()));
+        let privacy_stop = Arc::new(AtomicBool::new(false));
+        let worker_cache = Arc::clone(&privacy_cache);
+        let worker_stop = Arc::clone(&privacy_stop);
+        let privacy_join = thread::Builder::new()
+            .name("knowhow-uia-privacy".to_owned())
+            .spawn(move || privacy_worker(privacy_receiver, worker_cache, worker_stop))
+            .context("start UI Automation privacy worker")?;
         Ok(Self {
             automation,
             initialized: true,
+            privacy_requests,
+            privacy_cache,
+            privacy_stop,
+            privacy_join: Some(privacy_join),
         })
     }
 
-    fn metadata(&self, element: &IUIAutomationElement) -> Result<ElementMetadata> {
+    fn metadata(
+        &self,
+        element: &IUIAutomationElement,
+        allow_text_pattern: bool,
+    ) -> Result<ElementMetadata> {
         // Every UIA provider call is individually fallible. Password status fails closed.
         let password_status = match unsafe { element.CurrentIsPassword() } {
             Ok(value) if value.as_bool() => PasswordStatus::Password,
@@ -609,13 +983,12 @@ impl WindowsUia {
         let record =
             window_record(hwnd).or_else(|_| window_record(unsafe { GetForegroundWindow() }))?;
         let value = if password_status == PasswordStatus::NotPassword {
-            unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                    .and_then(|pattern| pattern.CurrentValue())
-            }
-            .ok()
-            .map(|value| value.to_string())
+            self.read_non_password_value(
+                element,
+                &record.application_name,
+                role.as_deref(),
+                allow_text_pattern,
+            )
         } else {
             None
         };
@@ -631,6 +1004,62 @@ impl WindowsUia {
             process_id: record.process_id,
         })
     }
+
+    fn read_non_password_value(
+        &self,
+        element: &IUIAutomationElement,
+        application_name: &str,
+        role: Option<&str>,
+        allow_text_pattern: bool,
+    ) -> Option<String> {
+        const MAX_TEXT_CHARS: i32 = 65_536;
+
+        let value = unsafe {
+            element
+                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .and_then(|pattern| pattern.CurrentValue())
+        }
+        .ok()
+        .map(|value| value.to_string());
+        if value.is_some() {
+            return value;
+        }
+
+        // TextPattern document walks are useful for native editors and terminals, but browser
+        // document providers can take seconds (or never return). Browser fields expose
+        // ValuePattern directly, so never enter their document tree on the action thread.
+        let supports_bounded_document_text = allow_text_pattern
+            && role == Some("document")
+            && matches!(
+                application_name,
+                "Windows Terminal" | "Notepad" | "Microsoft Word"
+            );
+        if !supports_bounded_document_text {
+            return None;
+        }
+
+        // Document surfaces such as Windows Terminal expose TextPattern instead of
+        // ValuePattern. Walk a few provider parents so a focused text child can still yield
+        // the document's before/after value without collecting or persisting raw keystrokes.
+        let walker = unsafe { self.automation.RawViewWalker() }.ok()?;
+        let mut current = Some(element.clone());
+        for _ in 0..5 {
+            let candidate = current.take()?;
+            let text = unsafe {
+                candidate
+                    .GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+                    .and_then(|pattern| pattern.DocumentRange())
+                    .and_then(|range| range.GetText(MAX_TEXT_CHARS))
+            }
+            .ok()
+            .map(|value| value.to_string());
+            if text.is_some() {
+                return text;
+            }
+            current = unsafe { walker.GetParentElement(&candidate) }.ok();
+        }
+        None
+    }
 }
 
 impl UiAutomationClient for WindowsUia {
@@ -638,24 +1067,184 @@ impl UiAutomationClient for WindowsUia {
         // SAFETY: automation and returned element remain on this COM worker thread.
         let element = unsafe { self.automation.ElementFromPoint(POINT { x, y }) }
             .context("look up UI Automation element at pointer")?;
-        self.metadata(&element)
+        self.metadata(&element, true)
     }
 
     fn focused_element(&self) -> Result<ElementMetadata> {
         // SAFETY: automation and returned element remain on this COM worker thread.
         let element = unsafe { self.automation.GetFocusedElement() }
             .context("look up focused UI Automation element")?;
-        self.metadata(&element)
+        self.metadata(&element, true)
+    }
+
+    fn focused_element_semantic(&self) -> Result<ElementMetadata> {
+        // SAFETY: automation and returned element remain on this COM worker thread.
+        let element = unsafe { self.automation.GetFocusedElement() }
+            .context("look up focused UI Automation element")?;
+        self.metadata(&element, false)
+    }
+
+    fn privacy_regions(&self, window_id: &str) -> Result<Vec<PrivacyRegion>> {
+        const CACHE_MAX_AGE: Duration = Duration::from_secs(2);
+        const FIRST_SNAPSHOT_BUDGET: Duration = Duration::from_millis(120);
+
+        let cached = || {
+            self.privacy_cache
+                .lock()
+                .get(window_id)
+                .filter(|entry| entry.captured_at.elapsed() <= CACHE_MAX_AGE)
+                .map(|entry| entry.regions.clone())
+        };
+        if let Some(regions) = cached() {
+            let _ = self.privacy_requests.try_send(window_id.to_owned());
+            return Ok(regions);
+        }
+        let _ = self.privacy_requests.try_send(window_id.to_owned());
+        let deadline = Instant::now() + FIRST_SNAPSHOT_BUDGET;
+        while Instant::now() < deadline {
+            if let Some(regions) = cached() {
+                return Ok(regions);
+            }
+            thread::sleep(Duration::from_millis(8));
+        }
+        bail!("UI Automation privacy snapshot is still preparing")
     }
 }
 
 impl Drop for WindowsUia {
     fn drop(&mut self) {
+        self.privacy_stop.store(true, Ordering::Release);
+        if let Some(join) = self.privacy_join.take()
+            && join.is_finished()
+        {
+            let _ = join.join();
+        }
         if self.initialized {
             // SAFETY: balances CoInitializeEx on the same worker thread.
             unsafe { CoUninitialize() };
         }
     }
+}
+
+fn privacy_worker(
+    requests: mpsc::Receiver<String>,
+    cache: Arc<Mutex<HashMap<String, PrivacyCacheEntry>>>,
+    stop: Arc<AtomicBool>,
+) {
+    // SAFETY: the automation client and every provider object remain on this worker thread.
+    if unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_err() {
+        return;
+    }
+    let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) };
+    let Ok(automation) = automation else {
+        // SAFETY: balances the successful initialization above.
+        unsafe { CoUninitialize() };
+        return;
+    };
+    while !stop.load(Ordering::Acquire) {
+        let requested = requests
+            .recv_timeout(Duration::from_millis(180))
+            .ok()
+            .or_else(|| foreground_context().ok().map(|context| context.window_id));
+        let Some(window_id) = requested else {
+            continue;
+        };
+        if cache
+            .lock()
+            .get(&window_id)
+            .is_some_and(|entry| entry.captured_at.elapsed() < Duration::from_millis(450))
+        {
+            continue;
+        }
+        if let Ok(regions) = collect_privacy_regions(&automation, &window_id) {
+            let mut cache = cache.lock();
+            cache.insert(
+                window_id,
+                PrivacyCacheEntry {
+                    regions,
+                    captured_at: Instant::now(),
+                },
+            );
+            cache.retain(|_, entry| entry.captured_at.elapsed() < Duration::from_secs(10));
+        }
+    }
+    // SAFETY: balances initialization on this worker thread.
+    unsafe { CoUninitialize() };
+}
+
+fn collect_privacy_regions(
+    automation: &IUIAutomation,
+    window_id: &str,
+) -> Result<Vec<PrivacyRegion>> {
+    const MAX_ELEMENTS: usize = 240;
+    let hwnd =
+        hwnd_from_id(window_id).ok_or_else(|| anyhow!("UI Automation window is unavailable"))?;
+    // SAFETY: HWND was resolved from a current window and COM is confined to this worker.
+    let root = unsafe { automation.ElementFromHandle(hwnd) }
+        .context("look up UI Automation privacy root")?;
+    let walker =
+        unsafe { automation.ControlViewWalker() }.context("create UI Automation privacy walker")?;
+    let mut pending = vec![root];
+    let mut regions = Vec::new();
+    let mut visited = 0_usize;
+    while let Some(element) = pending.pop() {
+        if visited >= MAX_ELEMENTS {
+            break;
+        }
+        visited += 1;
+        let offscreen = unsafe { element.CurrentIsOffscreen() }
+            .map(|value| value.as_bool())
+            .unwrap_or(false);
+        let bounds = unsafe { element.CurrentBoundingRectangle() }
+            .ok()
+            .map(rect_bounds)
+            .filter(|bounds| bounds.width > 0 && bounds.height > 0);
+        if !offscreen && let Some(bounds) = bounds {
+            let password_status = match unsafe { element.CurrentIsPassword() } {
+                Ok(value) if value.as_bool() => PasswordStatus::Password,
+                Ok(_) => PasswordStatus::NotPassword,
+                Err(_) => PasswordStatus::Unknown,
+            };
+            let control_role = unsafe { element.CurrentControlType() }
+                .ok()
+                .map(control_role);
+            let text = if password_status == PasswordStatus::NotPassword {
+                unsafe {
+                    element
+                        .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                        .and_then(|pattern| pattern.CurrentValue())
+                }
+                .ok()
+                .map(|value| value.to_string())
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    unsafe { element.CurrentName() }
+                        .ok()
+                        .map(|name| name.to_string())
+                        .filter(|name| !name.trim().is_empty())
+                })
+            } else {
+                None
+            };
+            regions.push(PrivacyRegion {
+                bounds,
+                control_role,
+                text,
+                password_status,
+            });
+        }
+        // SAFETY: walker and elements remain on this COM apartment. Provider failures prune
+        // only the unavailable branch instead of blocking the action processor.
+        let mut child = unsafe { walker.GetFirstChildElement(&element) }.ok();
+        while let Some(element) = child {
+            child = unsafe { walker.GetNextSiblingElement(&element) }.ok();
+            pending.push(element);
+            if pending.len() + visited >= MAX_ELEMENTS {
+                break;
+            }
+        }
+    }
+    Ok(regions)
 }
 
 fn control_role(control_type: windows::Win32::UI::Accessibility::UIA_CONTROLTYPE_ID) -> String {
@@ -772,7 +1361,7 @@ fn run_raw_input_thread() -> Result<u32> {
             lpszClassName: w!("KnowHowCaptureRawInput"),
             ..Default::default()
         };
-        if RegisterClassW(&raw const class) == 0 {
+        if RegisterClassW(&raw const class) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
             bail!("register raw input message class failed");
         }
         let hwnd = CreateWindowExW(
@@ -831,7 +1420,13 @@ unsafe extern "system" fn raw_window_proc(
         WM_INPUT => {
             // SAFETY: lparam is the HRAWINPUT provided for WM_INPUT.
             unsafe { handle_raw_input(HRAWINPUT(lparam.0 as *mut c_void)) };
-            LRESULT(0)
+            if wparam.0 == RIM_INPUT as usize {
+                // SAFETY: foreground WM_INPUT must reach DefWindowProc so Windows can release
+                // the raw-input handle after processing.
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            } else {
+                LRESULT(0)
+            }
         }
         WM_DISPLAYCHANGE => {
             send_raw_event(RawEvent::DisplayChanged);
@@ -962,7 +1557,12 @@ fn handle_keyboard(vkey: u16, released: bool) {
             send_raw_event(RawEvent::Enter);
         } else if vkey == VK_TAB.0 && !state.control && !state.alt && !state.windows {
             send_raw_event(RawEvent::Tab);
-        } else if state.control || state.alt || state.windows {
+        } else if state.control
+            || state.alt
+            || state.windows
+            || (state.shift
+                && matches!(vkey, value if value == VK_INSERT.0 || value == VK_DELETE.0))
+        {
             if let Some(shortcut) = shortcut_name(vkey, state) {
                 send_raw_event(RawEvent::Shortcut(shortcut));
             }
@@ -1031,4 +1631,36 @@ fn send_raw_event(event: RawEvent) {
             let _ = sender.try_send(event);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{friendly_monitor_name, is_shareable_window_properties};
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_APPWINDOW, WS_EX_TOOLWINDOW};
+
+    #[test]
+    fn alt_tab_filter_excludes_helper_and_cloaked_windows() {
+        assert!(is_shareable_window_properties(true, false, 0, false));
+        assert!(!is_shareable_window_properties(false, false, 0, false));
+        assert!(!is_shareable_window_properties(true, true, 0, false));
+        assert!(!is_shareable_window_properties(
+            true,
+            false,
+            WS_EX_TOOLWINDOW.0,
+            false
+        ));
+        assert!(!is_shareable_window_properties(true, false, 0, true));
+        assert!(is_shareable_window_properties(
+            true,
+            false,
+            WS_EX_TOOLWINDOW.0 | WS_EX_APPWINDOW.0,
+            true
+        ));
+    }
+
+    #[test]
+    fn physical_displays_never_leak_device_paths_into_the_picker() {
+        assert_eq!(friendly_monitor_name(r"\\.\DISPLAY1", 4), "Display 1");
+        assert_eq!(friendly_monitor_name("", 1), "Display 2");
+    }
 }

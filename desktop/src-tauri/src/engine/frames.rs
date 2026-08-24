@@ -15,6 +15,7 @@ use crate::{model::Bounds, platform::MonitorDescriptor};
 
 const RING_CAPACITY: usize = 4;
 const FRAME_MAX_AGE: Duration = Duration::from_millis(750);
+const FRAME_THROTTLE: Duration = Duration::from_millis(75);
 
 #[derive(Clone, Debug)]
 pub struct DesktopFrame {
@@ -146,13 +147,18 @@ fn capture_monitor(
             }
         };
         manager.set_capture_source_index(monitor.index);
+        let mut protected_content_notified = false;
         while !stop.load(Ordering::Acquire) {
             match manager.capture_frame_components_with_metadata() {
                 Ok((pixels, (width, height), metadata)) => {
                     if metadata.protected_content_masked_out {
-                        ring.lock().frames.clear();
-                        status("Protected display content is excluded.".to_owned());
-                        continue;
+                        // DXGI has already replaced protected pixels in this frame. Discarding
+                        // the whole frame here would let a content-protected KnowHow HUD starve
+                        // the pre-action ring and prevent every display click from being captured.
+                        if !protected_content_notified {
+                            status("Protected display content is masked.".to_owned());
+                            protected_content_notified = true;
+                        }
                     }
                     let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height))
                     else {
@@ -166,6 +172,10 @@ fn capture_monitor(
                         height,
                         bgra: Arc::new(pixels),
                     });
+                    // Keeping a short pre-action ring does not require copying the full desktop
+                    // at the display refresh rate. This caps CPU and memory bandwidth while still
+                    // leaving a recent frame available for every hardware input event.
+                    thread::sleep(FRAME_THROTTLE);
                 }
                 Err(CaptureError::Timeout) => {}
                 Err(CaptureError::AccessLost | CaptureError::RefreshFailure) => {

@@ -4,7 +4,6 @@ import {
   Archive,
   ArrowLeft,
   ArrowRight,
-  BarChart3,
   BookOpen,
   Building2,
   Check,
@@ -18,9 +17,8 @@ import {
   Download,
   Eye,
   FileDown,
-  FileText,
-  Filter,
   Globe2,
+  Grid2X2,
   Group,
   ImagePlus,
   KeyRound,
@@ -28,6 +26,7 @@ import {
   Laptop,
   LifeBuoy,
   Link2,
+  List,
   LoaderCircle,
   LockKeyhole,
   LogOut,
@@ -57,7 +56,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
@@ -95,7 +93,6 @@ import type {
   Invitation,
   OrganizationAdministration,
   OrganizationRole,
-  PlatformPricingCatalog,
   PlatformProvisioningResult,
   PlatformProvisioningRun,
   SupportAccessGrant,
@@ -112,7 +109,6 @@ import {
   guideEditorHref,
   guideHref,
   newGuideHref,
-  platformHref,
   workspaceHref,
   type AppRoute,
   type GuideRevisionMode,
@@ -135,6 +131,7 @@ import { ProductBrand } from "./product-brand";
 import { WorkspaceLogo } from "./workspace-logo";
 import { ExtensionInstallInstructions } from "./extension-install-instructions";
 import { PolicyNote } from "./workspace-patterns";
+import { AdministrationView } from "./administration/administration-view";
 import {
   Dialog,
   DialogContent,
@@ -151,18 +148,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarGroup,
-  AvatarGroupCount,
-} from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -189,7 +178,7 @@ type View =
   | "Organization"
   | "Vault"
   | "Settings"
-  | "Platform";
+  | "Administration";
 
 type DialogState =
   | null
@@ -212,8 +201,6 @@ const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
   { view: "Groups", icon: Group },
   { view: "Members", icon: Users },
   { view: "Support", icon: LifeBuoy },
-  { view: "Organization", icon: Building2 },
-  { view: "Vault", icon: KeyRound },
   { view: "Settings", icon: Settings },
 ];
 
@@ -227,10 +214,10 @@ const NAV_LABELS: Record<View, string> = {
   Organization: "Organization",
   Vault: "Vault",
   Settings: "Workspace settings",
-  Platform: "Platform console",
+  Administration: "KnowHow Administration",
 };
 
-const VIEW_TO_SECTION: Record<Exclude<View, "Platform">, WorkspaceSection> = {
+const VIEW_TO_SECTION: Record<View, WorkspaceSection> = {
   Overview: "overview",
   Guides: "guides",
   Capture: "capture",
@@ -240,9 +227,10 @@ const VIEW_TO_SECTION: Record<Exclude<View, "Platform">, WorkspaceSection> = {
   Organization: "organization",
   Vault: "vault",
   Settings: "settings",
+  Administration: "administration",
 };
 
-const SECTION_TO_VIEW: Record<WorkspaceSection, Exclude<View, "Platform">> = {
+const SECTION_TO_VIEW: Record<WorkspaceSection, View> = {
   overview: "Overview",
   guides: "Guides",
   capture: "Capture",
@@ -252,6 +240,7 @@ const SECTION_TO_VIEW: Record<WorkspaceSection, Exclude<View, "Platform">> = {
   organization: "Organization",
   vault: "Vault",
   settings: "Settings",
+  administration: "Administration",
 };
 
 const ROLE_COPY: Record<WorkspaceRole, string> = {
@@ -382,53 +371,19 @@ function workspaceOptionLabel(workspace: {
   return slug || workspace.id;
 }
 
-function daysUntil(value: string | null | undefined) {
-  if (!value) return null;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return null;
-  return Math.ceil((timestamp - Date.now()) / 86_400_000);
-}
-
-function TrialChip({
-  subscription,
-  onOpen,
-}: {
-  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"];
-  onOpen?: () => void;
-}) {
-  if (!subscription) return null;
-  const plan = subscription.plan ?? "free";
-  if (plan === "free" && !onOpen) return null;
-  const name =
-    plan === "pro_trial"
-      ? "Pro trial"
-      : plan === "enterprise"
-        ? "Enterprise"
-        : plan === "pro"
-          ? "Pro"
-          : "Free";
-  let label = name;
-  if (subscription.access === "read_only") {
-    label = `Read-only until ${formatDate(subscription.graceEndsAt ?? subscription.expiresAt ?? undefined)}`;
-  } else if (subscription.pastDue && subscription.graceEndsAt) {
-    label = `${name} past due · Free features after ${formatDate(subscription.graceEndsAt)}`;
-  } else if (plan === "pro_trial" && subscription.expiresAt) {
-    label = `${name} · Ends ${formatDate(subscription.expiresAt)}`;
-  } else if (
-    (plan === "pro" || plan === "enterprise") &&
-    subscription.expiresAt &&
-    (daysUntil(subscription.expiresAt) ?? 99) <= 14
-  ) {
-    label = `${name} · Ends ${formatDate(subscription.expiresAt)}`;
+function workspacePlanLabel(
+  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"],
+) {
+  switch (subscription?.plan) {
+    case "pro_trial":
+      return "Pro trial";
+    case "pro":
+      return "Pro";
+    case "enterprise":
+      return "Enterprise";
+    default:
+      return "Free";
   }
-  if (onOpen) {
-    return (
-      <button type="button" className="trial-chip" onClick={onOpen}>
-        {label}
-      </button>
-    );
-  }
-  return <span className="trial-chip">{label}</span>;
 }
 
 function PlanDialog({
@@ -585,35 +540,6 @@ function Modal({
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  hint,
-  icon: Icon,
-  tone = "default",
-}: {
-  label: string;
-  value: string | number;
-  hint: string;
-  icon: typeof Users;
-  tone?: "default" | "accent" | "warning";
-}) {
-  return (
-    <Card className={`metric-card metric-${tone}`} size="sm">
-      <CardHeader className="metric-card-header">
-        <CardDescription>{label}</CardDescription>
-        <span className="metric-icon">
-          <Icon />
-        </span>
-      </CardHeader>
-      <CardContent className="metric-card-content">
-        <strong>{value}</strong>
-        <small>{hint}</small>
-      </CardContent>
-    </Card>
-  );
-}
-
 function DashboardProgress({
   value,
   label,
@@ -636,49 +562,6 @@ function DashboardProgress({
     >
       <span style={{ width: `${normalized}%` }} />
     </div>
-  );
-}
-
-function GreetingCard({
-  name,
-  workspaceName,
-}: {
-  name: string;
-  workspaceName: string;
-}) {
-  const firstName = name.trim().split(/\s+/)[0] || "there";
-  const messages = useMemo(
-    () => [
-      `Let’s keep ${workspaceName} clear and current.`,
-      "Ready to make the next step obvious?",
-      "A small update can save someone hours.",
-      "Keep the team moving with trusted guidance.",
-    ],
-    [workspaceName],
-  );
-  const [messageIndex, setMessageIndex] = useState(0);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setMessageIndex((current) => (current + 1) % messages.length);
-    }, 9000);
-    return () => window.clearInterval(timer);
-  }, [messages.length]);
-
-  return (
-    <Card className="metric-card greeting-card" size="sm">
-      <CardContent className="greeting-card-content">
-        <span className="greeting-avatar">{initials(name)}</span>
-        <span className="greeting-copy">
-          <strong>
-            Hi, {firstName} <span aria-hidden="true">👋</span>
-          </strong>
-          <span className="greeting-message" key={messageIndex}>
-            {messages[messageIndex]}
-          </span>
-        </span>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -1017,87 +900,44 @@ function OverviewView({
   onPinExtension: () => Promise<void>;
   onDismiss: () => Promise<void>;
 }) {
-  const { metrics, guides, groups, members } = data;
+  const { guides } = data;
   const recent = [...guides]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 5);
-  const attention = [...guides]
-    .filter((guide) => guide.status === "review" || guide.status === "draft")
-    .sort((a, b) => {
-      if (a.status === b.status) return b.updatedAt.localeCompare(a.updatedAt);
-      return a.status === "review" ? -1 : 1;
-    })
-    .slice(0, 4);
-  const activeMembers = members.filter(
-    (item) => item.status === "active",
-  ).length;
-  const restrictedGuides = guides.filter((item) => item.restricted).length;
-  const lifecycleTotal = metrics.drafts + metrics.reviews + metrics.published;
-  const safeLifecycleTotal = Math.max(1, lifecycleTotal);
-  const publishedStop = (metrics.published / safeLifecycleTotal) * 100;
-  const reviewStop =
-    publishedStop + (metrics.reviews / safeLifecycleTotal) * 100;
-  const lifecycleBackground = `conic-gradient(var(--foreground) 0 ${publishedStop}%, var(--brand) ${publishedStop}% ${reviewStop}%, var(--chart-muted) ${reviewStop}% 100%)`;
-  const activityValues = [
-    {
-      label: "Views",
-      value: metrics.views,
-      icon: Eye,
-      tone: "neutral" as const,
-    },
-    {
-      label: "Completions",
-      value: metrics.completions,
-      icon: CheckCircle2,
-      tone: "accent" as const,
-    },
-    {
-      label: "Captures",
-      value: metrics.captures,
-      icon: Sparkles,
-      tone: "muted" as const,
-    },
-    {
-      label: "Exports",
-      value: metrics.exports,
-      icon: Download,
-      tone: "muted" as const,
-    },
-  ];
-  const maxActivity = Math.max(1, ...activityValues.map((item) => item.value));
-  const completionRate =
-    metrics.views > 0
-      ? Math.min(100, (metrics.completions / metrics.views) * 100)
-      : 0;
-  const audienceAssigned = guides.filter((guide) => {
-    const revision = guide.workingRevision ?? guide.publishedRevision;
-    return Boolean(revision?.audiences.length);
-  }).length;
-  const audienceCoverage =
-    guides.length > 0 ? (audienceAssigned / guides.length) * 100 : 0;
-  const visibleMembers = members
-    .filter((item) => item.status === "active")
-    .slice(0, 4);
-  const hasReviewWork = guides.some(
-    (guide) => guide.canReview || guide.canPublish,
-  );
+    .slice(0, 6);
+  const firstName = viewerName.trim().split(/\s+/)[0] || "there";
 
   return (
     <div className="workspace-overview">
-      <section className="overview-page-header">
-        <div className="overview-heading">
-          <h1>{guides.length === 0 ? "Welcome" : "Dashboard"}</h1>
-          <p>
-            {guides.length === 0
-              ? "Start with a capture, a written guide, or an invitation."
-              : canManageAccess
-                ? "Monitor knowledge, reviews, engagement, and audience coverage."
-                : canCreate
-                  ? "Continue your drafts, capture workflows, and share them with the people who need them."
-                  : hasReviewWork
-                    ? "Review work waiting for you, then share approved guidance with its audience."
-                    : "Find the published guidance available to you and continue where you left off."}
-          </p>
+      <section className="home-welcome">
+        <div className="home-welcome-copy">
+          <div>
+            <p className="eyebrow">{data.workspace.name}</p>
+            <h1>Welcome back, {firstName}</h1>
+            <p>Find what you need or pick up where you left off.</p>
+          </div>
+        </div>
+        <div className="home-quick-actions">
+          {canCreate ? (
+            <Button type="button" onClick={onNewGuide}>
+              <Plus /> New guide
+            </Button>
+          ) : null}
+          {canCapture ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onNavigate("Capture")}
+            >
+              <Sparkles /> Capture workflow
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onNavigate("Guides")}
+          >
+            Browse library <ArrowRight />
+          </Button>
         </div>
       </section>
 
@@ -1157,327 +997,56 @@ function OverviewView({
         ) : null
       ) : (
         <>
-          <section className="metric-grid overview-metric-grid">
-            <GreetingCard name={viewerName} workspaceName={data.workspace.name} />
-            <MetricCard
-              label="Published guides"
-              value={metrics.published}
-              hint="Available to assigned audiences"
-              icon={Globe2}
-              tone="accent"
-            />
-            <MetricCard
-              label="Review queue"
-              value={metrics.reviews}
-              hint={`${countPhrase(metrics.drafts, "private draft")} in progress`}
-              icon={ClipboardCheck}
-              tone="warning"
-            />
-            <MetricCard
-              label="Guide activity"
-              value={metrics.views}
-              hint={`${countPhrase(metrics.completions, "completion")} from ${countPhrase(metrics.views, "view")}`}
-              icon={BarChart3}
-            />
+          <section className="home-recents" aria-labelledby="recent-guides-title">
+            <div className="home-section-heading">
+              <div>
+                <h2 id="recent-guides-title">Recent guides</h2>
+                <p>Your latest workspace activity, all in one place.</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={() => onNavigate("Guides")}
+              >
+                See all <ArrowRight />
+              </Button>
+            </div>
+            <div className="home-guide-grid">
+              {recent.map((guide) => {
+                const revision = guide.workingRevision ?? guide.publishedRevision;
+                return (
+                  <button
+                    className="home-guide-card"
+                    type="button"
+                    key={guide.id}
+                    onClick={() => onOpenGuide(guide)}
+                  >
+                    <span className="home-guide-card-topline">
+                      <span className="home-guide-icon">
+                        <BookOpen />
+                      </span>
+                      <StatusBadge status={guide.status} />
+                    </span>
+                    <strong>{revision?.title ?? guide.title}</strong>
+                    <span className="home-guide-meta">
+                      Updated {formatDate(guide.updatedAt)}
+                      {revision?.authorName ? ` · ${revision.authorName}` : ""}
+                    </span>
+                    <span className="home-guide-footer">
+                      <span>Revision {revision?.number ?? "—"}</span>
+                      {guide.restricted ? (
+                        <LockKeyhole aria-label="Restricted" />
+                      ) : (
+                        <ArrowRight aria-hidden="true" />
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </section>
 
-          <section className="dashboard-insight-grid">
-            <Card className="lifecycle-card">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Knowledge lifecycle</CardTitle>
-                  <CardDescription>
-                    Current revision distribution across every release stage.
-                  </CardDescription>
-                </div>
-                <Badge variant="outline">{lifecycleTotal} total</Badge>
-              </CardHeader>
-              <CardContent className="lifecycle-card-content">
-                {lifecycleTotal >= 5 ? (
-                  <div
-                  className="lifecycle-donut"
-                  style={{ background: lifecycleBackground }}
-                  aria-label={`${metrics.published} published, ${metrics.reviews} in review, ${metrics.drafts} drafts`}
-                >
-                  <div>
-                    <strong>{lifecycleTotal}</strong>
-                    <span>revisions</span>
-                  </div>
-                  </div>
-                ) : (
-                  <div className="low-data-state">
-                    <BookOpen />
-                    <strong>Early lifecycle</strong>
-                    <span>Counts are clearer than a chart while this workspace has only {countPhrase(lifecycleTotal, "revision")}.</span>
-                  </div>
-                )}
-                <div className="lifecycle-legend">
-                  <button type="button" onClick={() => onNavigate("Guides")}>
-                    <i className="lifecycle-published" />
-                    <span>
-                      Published<small>Ready for audiences</small>
-                    </span>
-                    <strong>{metrics.published}</strong>
-                  </button>
-                  <button type="button" onClick={() => onNavigate("Guides")}>
-                    <i className="lifecycle-review" />
-                    <span>
-                      In review<small>Waiting on a decision</small>
-                    </span>
-                    <strong>{metrics.reviews}</strong>
-                  </button>
-                  <button type="button" onClick={() => onNavigate("Guides")}>
-                    <i className="lifecycle-draft" />
-                    <span>
-                      Drafts<small>Work still in progress</small>
-                    </span>
-                    <strong>{metrics.drafts}</strong>
-                  </button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="engagement-card">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Workspace activity</CardTitle>
-                  <CardDescription>
-                    Real usage totals from capture through completion.
-                  </CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent className="engagement-bars">
-                {activityValues.map(({ label, value, icon: Icon, tone }) => (
-                  <div className="engagement-bar-row" key={label}>
-                    <span className="engagement-bar-label">
-                      <Icon />
-                      <span>{label}</span>
-                    </span>
-                    <DashboardProgress
-                      value={(value / maxActivity) * 100}
-                      label={`${label}: ${value}`}
-                      tone={tone}
-                    />
-                    <strong>{value}</strong>
-                  </div>
-                ))}
-                {metrics.views >= 50 ? (
-                  <div className="completion-rate">
-                    <div><span>Completion rate</span><strong>{Math.round(completionRate)}%</strong></div>
-                    <DashboardProgress value={completionRate} label="Guide completion rate" tone="accent" />
-                  </div>
-                ) : (
-                  <div className="low-data-inline">
-                    <strong>Not enough data for a reliable rate yet</strong>
-                    <span>{countPhrase(metrics.completions, "completion")} from {countPhrase(metrics.views, "view")}; rates appear after 50 views.</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="review-queue-card">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Review queue</CardTitle>
-                  <CardDescription>
-                    Items that need the next action.
-                  </CardDescription>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  type="button"
-                  onClick={() => onNavigate("Guides")}
-                  aria-label="Open guide library"
-                >
-                  <ArrowRight />
-                </Button>
-              </CardHeader>
-              <CardContent className="review-queue-content">
-                {attention.length ? (
-                  attention.map((guide) => {
-                    const revision =
-                      guide.workingRevision ?? guide.publishedRevision;
-                    const isReview = guide.status === "review";
-                    return (
-                      <button
-                        className="review-queue-row"
-                        type="button"
-                        key={guide.id}
-                        onClick={() => onOpenGuide(guide)}
-                      >
-                        <span
-                          className={cn(
-                            "review-state-icon",
-                            isReview && "is-review",
-                          )}
-                        >
-                          {isReview ? <ClipboardCheck /> : <FileText />}
-                        </span>
-                        <span>
-                          <strong>{revision?.title ?? guide.title}</strong>
-                          <small>
-                            {isReview ? "Decision required" : "Draft in progress"}
-                          </small>
-                        </span>
-                        <ArrowRight />
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="queue-clear-state">
-                    <CheckCircle2 />
-                    <strong>Queue is clear</strong>
-                    <span>No drafts or reviews need attention.</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-
-          <div className="dashboard-work-grid">
-            <Card className="dashboard-guide-queue">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Recently changed guides</CardTitle>
-                  <CardDescription>
-                    Continue where the workspace last left off.
-                  </CardDescription>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  onClick={() => onNavigate("Guides")}
-                >
-                  View library <ArrowRight />
-                </Button>
-              </CardHeader>
-              <CardContent className="dashboard-queue-content">
-                {recent.length ? (
-                  <div className="dashboard-queue-list">
-                    {recent.map((guide) => {
-                      const revision =
-                        guide.workingRevision ?? guide.publishedRevision;
-                      return (
-                        <button
-                          className="dashboard-queue-row"
-                          type="button"
-                          key={guide.id}
-                          onClick={() => onOpenGuide(guide)}
-                        >
-                          <span className="queue-guide-icon">
-                            <BookOpen />
-                          </span>
-                          <span className="queue-guide-main">
-                            <strong>{revision?.title ?? guide.title}</strong>
-                            <small>
-                              Revision {revision?.number ?? "—"} · {revision?.authorName || "Former member"} · Updated {formatDate(guide.updatedAt)}
-                            </small>
-                          </span>
-                          <StatusBadge status={guide.status} />
-                          {guide.restricted ? (
-                            <LockKeyhole
-                              className="restricted-icon"
-                              aria-label="Restricted"
-                            />
-                          ) : null}
-                          <ArrowRight />
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={BookOpen}
-                    title="No guides yet"
-                    description="Create the first private draft for this workspace."
-                    action={
-                      canCreate ? (
-                        <Button onClick={onNewGuide}>
-                          <Plus /> Create guide
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="access-health-card">
-              <CardHeader className="dashboard-card-header">
-                <div>
-                  <CardTitle>Audience coverage</CardTitle>
-                  <CardDescription>
-                    People, groups, and publishing boundaries.
-                  </CardDescription>
-                </div>
-                <span className="access-shield">
-                  <ShieldCheck />
-                </span>
-              </CardHeader>
-              <CardContent className="access-health-content">
-                <div className="audience-people-row">
-                  <AvatarGroup>
-                    {visibleMembers.map((member) => (
-                      <Avatar size="sm" key={member.id}>
-                        <AvatarFallback>
-                          {initials(member.name, member.email)}
-                        </AvatarFallback>
-                      </Avatar>
-                    ))}
-                    {activeMembers > visibleMembers.length ? (
-                      <AvatarGroupCount>
-                        +{activeMembers - visibleMembers.length}
-                      </AvatarGroupCount>
-                    ) : null}
-                  </AvatarGroup>
-                  <div>
-                    <strong>{countPhrase(activeMembers, "active person", "active people")}</strong>
-                    <span>across {countPhrase(groups.length, "audience group")}</span>
-                  </div>
-                </div>
-                <div className="coverage-metric">
-                  <div>
-                    <span>Audience assignment</span>
-                    <strong>{guides.length >= 5 ? `${Math.round(audienceCoverage)}%` : `${audienceAssigned} of ${guides.length}`}</strong>
-                  </div>
-                  {guides.length >= 5 ? <DashboardProgress value={audienceCoverage} label="Guides assigned to an audience" tone="accent" /> : null}
-                </div>
-                <div className="access-health-stats">
-                  <button
-                    type="button"
-                    disabled={!canManageAccess}
-                    onClick={() => onNavigate("Members")}
-                  >
-                    <span>
-                      <Users /> Members
-                    </span>
-                    <strong>{members.length}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!canManageAccess}
-                    onClick={() => onNavigate("Groups")}
-                  >
-                    <span>
-                      <Group /> Groups
-                    </span>
-                    <strong>{groups.length}</strong>
-                  </button>
-                  <button type="button" onClick={() => onNavigate("Guides")}>
-                    <span>
-                      <LockKeyhole /> Restricted
-                    </span>
-                    <strong>{restrictedGuides}</strong>
-                  </button>
-                </div>
-                <p className="access-health-note">
-                  <Shield /> Roles grant actions. Audiences control delivery.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
         </>
       )}
     </div>
@@ -1510,21 +1079,31 @@ function GuidesView({
   canCreate: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
+  const [libraryTab, setLibraryTab] = useState<"shared" | "drafts">(() =>
+    guides.some((guide) => guide.publishedRevision) ? "shared" : "drafts",
+  );
+  const [viewMode, setViewMode] = useState<"cards" | "list">("list");
   const [sort, setSort] = useState("updated");
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
-  const filtered = guides
+  const sharedCount = guides.filter((guide) => guide.publishedRevision).length;
+  const draftCount = guides.filter((guide) => guide.workingRevision).length;
+  const scopedGuides = guides.filter((guide) =>
+    libraryTab === "shared"
+      ? Boolean(guide.publishedRevision)
+      : Boolean(guide.workingRevision),
+  );
+  const filtered = scopedGuides
     .filter((guide) => {
-      const revision = guide.workingRevision ?? guide.publishedRevision;
+      const revision =
+        libraryTab === "shared"
+          ? guide.publishedRevision
+          : guide.workingRevision;
       const text =
         `${guide.title} ${revision?.summary ?? ""} ${revision?.tags.join(" ") ?? ""}`.toLowerCase();
-      return (
-        text.includes(query.toLowerCase()) &&
-        (status === "all" || guide.status === status)
-      );
+      return text.includes(query.toLowerCase());
     })
     .sort((left, right) => {
       if (sort === "title") return left.title.localeCompare(right.title);
@@ -1549,7 +1128,55 @@ function GuidesView({
           </p>
         </div>
       </div>
-      <section className="card table-card">
+      <section className="card table-card library-card">
+        <div className="library-view-bar">
+          <div className="library-tabs" role="tablist" aria-label="Guide collections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={libraryTab === "shared"}
+              className={cn(libraryTab === "shared" && "is-active")}
+              onClick={() => {
+                setLibraryTab("shared");
+                setPage(0);
+              }}
+            >
+              Shared <span>{sharedCount}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={libraryTab === "drafts"}
+              className={cn(libraryTab === "drafts" && "is-active")}
+              onClick={() => {
+                setLibraryTab("drafts");
+                setPage(0);
+              }}
+            >
+              Drafts <span>{draftCount}</span>
+            </button>
+          </div>
+          <div className="library-layout-toggle" aria-label="Guide layout">
+            <button
+              type="button"
+              className={cn(viewMode === "cards" && "is-active")}
+              aria-label="Card view"
+              aria-pressed={viewMode === "cards"}
+              onClick={() => setViewMode("cards")}
+            >
+              <Grid2X2 />
+            </button>
+            <button
+              type="button"
+              className={cn(viewMode === "list" && "is-active")}
+              aria-label="List view"
+              aria-pressed={viewMode === "list"}
+              onClick={() => setViewMode("list")}
+            >
+              <List />
+            </button>
+          </div>
+        </div>
         {guides.length ? (
           <div className="filter-bar">
             <label className="search-field">
@@ -1563,23 +1190,6 @@ function GuidesView({
                 placeholder="Search guides"
               />
             </label>
-            <SelectMenu
-              className="filter-select"
-              leading={<Filter />}
-              value={status}
-              onChange={(value) => {
-                setStatus(value);
-                setPage(0);
-              }}
-              ariaLabel="Filter guides by lifecycle state"
-              options={[
-                { value: "all", label: "All lifecycle states" },
-                { value: "draft", label: "Draft" },
-                { value: "review", label: "In review" },
-                { value: "published", label: "Published" },
-                { value: "archived", label: "Archived" },
-              ]}
-            />
             <SelectMenu
               className="filter-select"
               value={sort}
@@ -1599,9 +1209,18 @@ function GuidesView({
           </div>
         ) : null}
         {filtered.length ? (
-          <div className="guide-table">
+          <div
+            className={cn(
+              "guide-table",
+              viewMode === "cards" ? "is-card-view" : "is-list-view",
+            )}
+            role="tabpanel"
+          >
             {visibleGuides.map((guide) => {
-              const revision = guide.workingRevision ?? guide.publishedRevision;
+              const revision =
+                libraryTab === "shared"
+                  ? guide.publishedRevision
+                  : guide.workingRevision;
               const live = guide.publishedRevision;
               return (
                 <article
@@ -1654,8 +1273,10 @@ function GuidesView({
                     </span>
                   </div>
                   <div className="guide-state-column">
-                    <StatusBadge status={guide.status} />
-                    {guide.workingRevision && live ? (
+                    <StatusBadge
+                      status={libraryTab === "shared" ? "published" : guide.status}
+                    />
+                    {libraryTab === "drafts" && guide.workingRevision && live ? (
                       <small>v{live.number} remains live</small>
                     ) : revision ? (
                       <small>Revision {revision.number}</small>
@@ -1818,14 +1439,22 @@ function GuidesView({
         ) : (
           <EmptyState
             icon={guides.length ? Search : BookOpen}
-            title={guides.length ? "No matching guides" : "No guides yet"}
+            title={
+              query.trim()
+                ? "No matching guides"
+                : libraryTab === "shared"
+                  ? "No shared guides yet"
+                  : "No drafts yet"
+            }
             description={
-              guides.length
-                ? "Try another search or lifecycle filter."
-                : "Create the first guide, then share it with the people who need it."
+              query.trim()
+                ? "Try another search."
+                : libraryTab === "shared"
+                  ? "Published guides will appear here for the workspace."
+                  : "Create a guide or capture a workflow to start a draft."
             }
             action={
-              !guides.length && canCreate ? (
+              libraryTab === "drafts" && !query.trim() && canCreate ? (
                 <Button onClick={onNew}>
                   <Plus /> Create guide
                 </Button>
@@ -1848,11 +1477,6 @@ function GuidesView({
       </section>
       {deleteTarget ? (
         <GuideDeleteDialog
-          title={
-            deleteTarget.workingRevision?.title ??
-            deleteTarget.publishedRevision?.title ??
-            deleteTarget.title
-          }
           busy={busy}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={async () => {
@@ -1958,7 +1582,6 @@ function GuideViewer({
       />
       {deletePromptOpen && onDelete ? (
         <GuideDeleteDialog
-          title={revision.title}
           busy={busy}
           onCancel={() => setDeletePromptOpen(false)}
           onConfirm={onDelete}
@@ -2219,34 +1842,84 @@ function GroupsView({
   onEdit: (group: WorkspaceGroup) => void;
 }) {
   const [query, setQuery] = useState("");
-  const visibleGroups = groups.filter((group) =>
-    `${group.name} ${group.description}`.toLowerCase().includes(query.trim().toLowerCase()),
+  const [scope, setScope] = useState<"all" | "standard" | "restricted">("all");
+  const visibleGroups = groups.filter((group) => {
+    const matchesQuery = `${group.name} ${group.description}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase());
+    const matchesScope =
+      scope === "all" ||
+      (scope === "restricted" ? group.sensitive : !group.sensitive);
+    return matchesQuery && matchesScope;
+  });
+  const restrictedCount = groups.filter((group) => group.sensitive).length;
+  const membershipCount = groups.reduce((total, group) => total + group.memberCount, 0);
+  const publishedGuideCount = groups.reduce(
+    (total, group) => total + (group.publishedGuideCount ?? 0),
+    0,
   );
   return (
-    <div className="view-stack">
-      <div className="page-heading">
+    <div className="view-stack audience-directory-page">
+      <div className="page-heading directory-page-heading">
         <div>
           <p className="eyebrow">Content audiences</p>
           <h1>Groups</h1>
           <p>
-            People can belong to several groups. Group membership never changes
-            their workspace role.
+            Organize who receives published guides without changing what they can do.
           </p>
         </div>
+        <span className="directory-context-pill"><ShieldCheck /> Audience controls</span>
       </div>
-      <section className="group-directory-card">
+      <section className="directory-summary-grid" aria-label="Group summary">
+        <article><span><Group /></span><div><strong>{groups.length}</strong><small>Total groups</small></div></article>
+        <article><span><Users /></span><div><strong>{membershipCount}</strong><small>Membership assignments</small></div></article>
+        <article><span><LockKeyhole /></span><div><strong>{restrictedCount}</strong><small>Restricted groups</small></div></article>
+        <article><span><BookOpen /></span><div><strong>{publishedGuideCount}</strong><small>Published guide links</small></div></article>
+      </section>
+      <section className="card group-directory-card directory-panel">
+        <header className="directory-panel-header">
+          <div>
+            <p className="eyebrow">Audience directory</p>
+            <h2>{countPhrase(groups.length, "workspace group")}</h2>
+          </div>
+          {groups.length ? <span className="result-count">{countPhrase(visibleGroups.length, "result")}</span> : null}
+        </header>
         {groups.length ? (
           <div className="filter-bar group-filter-bar">
             <label className="search-field">
               <Search />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search groups" aria-label="Search audience groups" />
             </label>
-            <span className="result-count">{countPhrase(visibleGroups.length, "group")}</span>
+            <div className="directory-filter-tabs" role="group" aria-label="Filter groups by access type">
+              {([
+                ["all", "All"],
+                ["standard", "Standard"],
+                ["restricted", "Restricted"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={scope === value ? "active" : ""}
+                  aria-pressed={scope === value}
+                  onClick={() => setScope(value)}
+                >
+                  {label}
+                  <span>
+                    {value === "all"
+                      ? groups.length
+                      : value === "restricted"
+                        ? restrictedCount
+                        : groups.length - restrictedCount}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         ) : null}
         {groups.length ? (
-          <div className="group-grid">
-            {visibleGroups.map((group) => (
+          visibleGroups.length ? (
+            <div className="group-grid audience-group-grid">
+              {visibleGroups.map((group) => (
               <button
                 className="group-card"
                 type="button"
@@ -2260,28 +1933,35 @@ function GroupsView({
                   {group.sensitive ? <LockKeyhole /> : <Group />}
                 </span>
                 <span>
-                  <strong>{group.name}</strong>
+                  <span className="group-card-title">
+                    <strong>{group.name}</strong>
+                    {group.kind === "all_members" ? <Badge variant="outline">Built in</Badge> : null}
+                  </span>
                   <small>
                     {group.kind === "all_members"
                       ? "Built-in audience for every active workspace member."
-                      : group.description || null}
+                      : group.description || "No description added yet."}
                   </small>
-                  <span className="group-card-meta">
-                    {countPhrase(group.memberCount, "member")} · {countPhrase(group.publishedGuideCount ?? 0, "published guide")}
+                  <span className="group-card-stats">
+                    <span><Users /> <strong>{group.memberCount}</strong> members</span>
+                    <span><BookOpen /> <strong>{group.publishedGuideCount ?? 0}</strong> guides</span>
                   </span>
                   {group.sensitive ? <span className="restricted-label"><LockKeyhole /> Restricted membership</span> : null}
                 </span>
-                <span className="group-count">
-                  <Users /> {group.memberCount || "—"}
+                <span className="group-card-action">
+                  {group.kind === "all_members" ? <ShieldCheck /> : <ArrowRight />}
                 </span>
-                {group.kind === "all_members" ? (
-                  <ShieldCheck />
-                ) : (
-                  <ArrowRight />
-                )}
               </button>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="directory-no-results">
+              <Search />
+              <strong>No groups found</strong>
+              <span>Try a different search or audience filter.</span>
+              <button type="button" className="button ghost small" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button>
+            </div>
+          )
         ) : (
           <EmptyState
             icon={Group}
@@ -2337,9 +2017,10 @@ function GroupDialog({
       title={group ? `Edit ${group.name}` : "Create audience group"}
       eyebrow="Workspace sharing"
       onClose={onClose}
+      wide
     >
       <form
-        className="modal-form"
+        className="modal-form group-editor-form"
         onSubmit={async (event) => {
           event.preventDefault();
           await onSave({
@@ -2351,6 +2032,11 @@ function GroupDialog({
           });
         }}
       >
+        <section className="group-details-panel">
+          <div className="form-section-heading">
+            <span className="form-section-icon"><Group /></span>
+            <div><strong>Group details</strong><small>Name the audience and describe who it is for.</small></div>
+          </div>
         <label className="field">
           <span>Group name</span>
           <input
@@ -2370,7 +2056,7 @@ function GroupDialog({
             placeholder="People who handle billing and financial operations"
           />
         </label>
-        <label className="choice-row emphasized">
+        <label className={`choice-row emphasized group-restriction-option${sensitive ? " selected" : ""}`}>
           <input
             type="checkbox"
             checked={sensitive}
@@ -2384,14 +2070,17 @@ function GroupDialog({
             </small>
           </span>
         </label>
+        </section>
         <div className="member-picker">
-          <div className="member-picker-heading">
-            <span className="field-label">Members · {memberIds.length} selected</span>
+          <div className="member-picker-heading form-section-heading">
+            <span className="form-section-icon"><Users /></span>
+            <div><span className="field-label">Members</span><small>{countPhrase(memberIds.length, "person")} selected</small></div>
             <label className="search-field compact"><Search /><input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="Search members" aria-label="Search members to add" /></label>
           </div>
-          <small className="field-help">Group membership controls audience delivery; it never changes workspace roles.</small>
+          <small className="field-help">Membership controls guide delivery, not workspace roles.</small>
+          <div className="group-member-options">
           {activeMembers.map((member) => (
-              <label className="choice-row" key={member.id}>
+              <label className={`choice-row group-member-option${memberIds.includes(member.userId) ? " selected" : ""}`} key={member.id}>
                 <input
                   type="checkbox"
                   checked={memberIds.includes(member.userId)}
@@ -2412,6 +2101,8 @@ function GroupDialog({
                 </span>
               </label>
             ))}
+          {!activeMembers.length ? <div className="group-member-empty"><Search /><span>No active members found.</span></div> : null}
+          </div>
         </div>
         {group && (group.publishedGuideCount ?? 0) > 0 ? (
           <PolicyNote icon={LockKeyhole}>
@@ -2485,30 +2176,53 @@ function MembersView({
   );
   const [renderedAt] = useState(() => Date.now());
   const [memberQuery, setMemberQuery] = useState("");
+  const [memberFilter, setMemberFilter] = useState<"all" | "active" | "admins" | "suspended">("all");
   const visibleMembers = useMemo(() => {
     const query = memberQuery.trim().toLocaleLowerCase();
-    if (!query) return members;
-    return members.filter((member) =>
-      `${member.name ?? ""} ${member.email} ${member.roles.join(" ")}`
-        .toLocaleLowerCase()
-        .includes(query),
-    );
-  }, [memberQuery, members]);
+    return members.filter((member) => {
+      const matchesQuery = !query ||
+        `${member.name ?? ""} ${member.email} ${member.roles.join(" ")}`
+          .toLocaleLowerCase()
+          .includes(query);
+      const matchesFilter =
+        memberFilter === "all" ||
+        (memberFilter === "active" && member.status === "active") ||
+        (memberFilter === "suspended" && member.status === "suspended") ||
+        (memberFilter === "admins" && member.roles.includes("administrator"));
+      return matchesQuery && matchesFilter;
+    });
+  }, [memberFilter, memberQuery, members]);
+  const activeMemberCount = members.filter((member) => member.status === "active").length;
+  const adminCount = members.filter((member) => member.roles.includes("administrator")).length;
+  const suspendedCount = members.filter((member) => member.status === "suspended").length;
+  const activeInvitationCount = invitations.filter((invite) =>
+    !invite.revokedAt &&
+    invite.useCount < invite.maxUses &&
+    Date.parse(invite.expiresAt) > renderedAt,
+  ).length;
   return (
-    <div className="view-stack">
-      <div className="page-heading">
+    <div className="view-stack access-directory-page">
+      <div className="page-heading directory-page-heading">
         <div>
           <p className="eyebrow">Workspace access</p>
           <h1>Members & invitations</h1>
           <p>
-            Roles grant actions. Groups decide which published guides each
-            person receives.
+            Manage workspace roles, audience membership, and secure invitations.
           </p>
         </div>
+        <span className="directory-context-pill"><Shield /> Role-based access</span>
       </div>
-      <PolicyNote icon={Shield}>
-        Roles grant actions. Audiences grant guide access. Vault is a separate capability.
-      </PolicyNote>
+      <section className="directory-summary-grid members-summary-grid" aria-label="Member summary">
+        <article><span><Users /></span><div><strong>{members.length}</strong><small>Total members</small></div></article>
+        <article><span><UserCheck /></span><div><strong>{activeMemberCount}</strong><small>Active members</small></div></article>
+        <article><span><ShieldCheck /></span><div><strong>{adminCount}</strong><small>Administrators</small></div></article>
+        <article><span><Mail /></span><div><strong>{activeInvitationCount}</strong><small>Pending invitations</small></div></article>
+      </section>
+      <div className="access-guidance directory-guidance">
+        <Shield />
+        <div><strong>Access has two layers</strong><p>Roles control actions. Groups and direct audiences control which published guides each person receives.</p></div>
+        <span>Vault access is assigned separately</span>
+      </div>
       {pendingSupport.length ? (
         <section className="card table-card">
           <div className="section-heading compact">
@@ -2546,25 +2260,35 @@ function MembersView({
           ))}
         </section>
       ) : null}
-      <section className="card table-card members-directory">
-        <div className="section-heading compact">
+      <section className="card table-card members-directory directory-panel">
+        <div className="section-heading compact directory-panel-header">
           <div>
-            <p className="eyebrow">People</p>
+            <p className="eyebrow">People directory</p>
             <h2>
-              {visibleMembers.length === members.length
-                ? countPhrase(members.length, "workspace member")
-                : `${visibleMembers.length} of ${members.length} members`}
+              {countPhrase(members.length, "workspace member")}
             </h2>
+          </div>
+        </div>
+        <div className="member-directory-toolbar">
+          <div className="directory-filter-tabs" role="group" aria-label="Filter members">
+            {([
+              ["all", "All", members.length],
+              ["active", "Active", activeMemberCount],
+              ["admins", "Admins", adminCount],
+              ["suspended", "Suspended", suspendedCount],
+            ] as const).map(([value, label, count]) => (
+              <button key={value} type="button" className={memberFilter === value ? "active" : ""} aria-pressed={memberFilter === value} onClick={() => setMemberFilter(value)}>
+                {label}<span>{count}</span>
+              </button>
+            ))}
           </div>
           <label className="search-field member-search">
             <Search />
-            <input
-              value={memberQuery}
-              onChange={(event) => setMemberQuery(event.target.value)}
-              placeholder="Search members"
-              aria-label="Search workspace members"
-            />
+            <input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="Search people or roles" aria-label="Search workspace members" />
           </label>
+        </div>
+        <div className="member-table-heading" aria-hidden="true">
+          <span>Person</span><span>Status</span><span>Workspace roles</span><span>Groups</span><span />
         </div>
         <div className="member-table">
           {visibleMembers.length ? (
@@ -2583,7 +2307,7 @@ function MembersView({
                   <strong>{member.name || member.email}</strong>
                   <small>{member.email}</small>
                 </span>
-                <StatusBadge status={member.status} />
+                <span className="member-status-cell"><StatusBadge status={member.status} /></span>
                 <span className="role-list">
                   {member.roles.map((role) => (
                     <span key={role}>{workspaceRoleLabel(role)}</span>
@@ -2598,7 +2322,9 @@ function MembersView({
           ) : (
             <div className="member-search-empty">
               <Search />
-              <span>No members match “{memberQuery.trim()}”.</span>
+              <strong>No members found</strong>
+              <span>Try a different search or status filter.</span>
+              <button type="button" className="button ghost small" onClick={() => { setMemberQuery(""); setMemberFilter("all"); }}>Clear filters</button>
             </div>
           )}
         </div>
@@ -2642,12 +2368,13 @@ function MembersView({
           ))}
         </section>
       ) : null}
-      <section className="card table-card">
-        <div className="section-heading compact">
+      <section className="card table-card invitations-directory directory-panel">
+        <div className="section-heading compact directory-panel-header">
           <div>
-            <p className="eyebrow">Signed links</p>
+            <p className="eyebrow">Invitation lifecycle</p>
             <h2>Invitations</h2>
           </div>
+          <span className="result-count">{activeInvitationCount} pending</span>
         </div>
         {invitations.length ? (
           invitations.map((invite) => {
@@ -2833,6 +2560,7 @@ function MemberDialog({
       title={member.name || member.email}
       eyebrow="Member permissions"
       onClose={onClose}
+      wide
     >
       <div className="modal-form member-permissions-form">
         <div className="identity-card">
@@ -2845,10 +2573,13 @@ function MemberDialog({
           </span>
           <StatusBadge status={member.status} />
         </div>
-        <div className="role-picker">
-          <span className="field-label">Workspace roles</span>
+        <section className="role-picker permission-section">
+          <div className="permission-section-heading">
+            <div><span className="field-label">Workspace roles</span><small>Select every role this person needs.</small></div>
+            <span>{countPhrase(roles.length, "role")} selected</span>
+          </div>
           {WORKSPACE_ROLES.map((role) => (
-            <label className="choice-row" key={role}>
+            <label className={`choice-row permission-option${roles.includes(role) ? " selected" : ""}`} key={role}>
               <input
                 type="checkbox"
                 checked={roles.includes(role)}
@@ -2866,15 +2597,17 @@ function MemberDialog({
               </span>
             </label>
           ))}
-        </div>
-        <div className="role-picker capability-picker">
-          <span className="field-label">Capabilities</span>
-          <label className="choice-row">
+        </section>
+        <section className="role-picker capability-picker permission-section">
+          <div className="permission-section-heading">
+            <div><span className="field-label">Capabilities</span><small>Independent access outside workspace roles.</small></div>
+          </div>
+          <label className={`choice-row permission-option${vaultEnabled ? " selected" : ""}`}>
             <input type="checkbox" checked={vaultEnabled} onChange={(event) => setVaultEnabled(event.target.checked)} />
             <span><strong>Vault</strong><small>Access encrypted workspace credentials. This is independent of roles and guide audiences.</small></span>
           </label>
-        </div>
-        <PolicyNote icon={Shield}>
+        </section>
+        <PolicyNote icon={Shield} className="member-access-note">
           This member belongs to {countPhrase(member.groupIds.length, "group")} and may also receive workspace-wide or direct guide audiences.
         </PolicyNote>
         <section className="member-danger-zone">
@@ -3023,8 +2756,13 @@ function InviteDialog({
           </div>
         ) : (
           <>
-            <label className="field">
-              <span>Invitee emails</span>
+            <section className="invite-composer-section invite-recipients-section">
+              <div className="form-section-heading">
+                <span className="form-section-icon"><Mail /></span>
+                <div><strong>Who are you inviting?</strong><small>Add up to {MAX_BULK_INVITES} exact email addresses.</small></div>
+              </div>
+            <label className="field invite-email-field">
+              <span>Email addresses</span>
               <textarea
                 required
                 className="invite-emails"
@@ -3058,9 +2796,15 @@ function InviteDialog({
                 <span className="invite-ready-chip"><Check /> {countPhrase(parsed.emails.length, "address")} ready</span>
               ) : null}
             </label>
+            </section>
+            <section className="invite-composer-section invite-access-section">
+              <div className="form-section-heading">
+                <span className="form-section-icon"><UserCog /></span>
+                <div><strong>Invitation access</strong><small>Choose the initial role, expiry, and an optional internal label.</small></div>
+              </div>
             <div className="invite-settings">
               <label className="field">
-                <span>Batch label</span>
+                <span>Internal label <small>Optional</small></span>
                 <input
                   value={label}
                   onChange={(event) => setLabel(event.target.value)}
@@ -3068,7 +2812,7 @@ function InviteDialog({
                 />
               </label>
               <div className="field">
-                <span>Access</span>
+                <span>Starting role</span>
                 <SelectMenu
                   className="form-select"
                   value={role}
@@ -3101,7 +2845,8 @@ function InviteDialog({
                 />
               </div>
             </div>
-            <PolicyNote icon={LockKeyhole}>
+            </section>
+            <PolicyNote icon={LockKeyhole} className="invite-security-note">
               Every invitation is exact-email, single-use, expiring, and audited. There are no generic invite links.
             </PolicyNote>
           </>
@@ -3153,32 +2898,34 @@ function SupportView({
   const [creating, setCreating] = useState(false);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
+  const [confirmingCloseId, setConfirmingCloseId] = useState("");
   const selected =
     tickets.find((ticket) => ticket.id === selectedId) ?? tickets[0];
   return (
-    <div className="view-stack">
-      <div className="page-heading">
+    <div className="view-stack support-page">
+      <div className="page-heading support-page-heading">
         <div>
           <p className="eyebrow">In-app support</p>
           <h1>Support</h1>
           <p>
-            Start a private support thread with a one-business-day response
-            target. Email notices never include message content.
+            Get help from the KnowHow team through a private, workspace-scoped thread.
           </p>
         </div>
-        {canCreate ? (
-          <button
-            className="button primary"
-            type="button"
-            disabled={busy}
-            onClick={() => setCreating(true)}
-          >
-            <Plus /> New ticket
-          </button>
-        ) : null}
+        <div className="support-heading-actions">
+          <span className="support-response-pill"><CheckCircle2 /> One-business-day target</span>
+          {canCreate ? (
+            <button className="button primary" type="button" disabled={busy || creating} onClick={() => setCreating(true)}>
+              <Plus /> New request
+            </button>
+          ) : null}
+        </div>
       </div>
-      <div className="support-layout">
+      <div className={["support-layout", !tickets.length ? "is-empty" : "", creating ? "is-creating" : ""].filter(Boolean).join(" ")}>
         <aside className="card support-list" aria-label="Support tickets">
+          <header className="support-list-header">
+            <div><p className="eyebrow">Your requests</p><h2>{countPhrase(tickets.length, "conversation")}</h2></div>
+            {tickets.length ? <span>{tickets.filter((ticket) => ticket.status !== "closed").length} active</span> : null}
+          </header>
           {tickets.map((ticket) => (
             <button
               type="button"
@@ -3191,6 +2938,7 @@ function SupportView({
               onClick={() => {
                 setSelectedId(ticket.id);
                 setCreating(false);
+                setConfirmingCloseId("");
               }}
             >
               <strong>{ticket.subject}</strong>
@@ -3201,13 +2949,17 @@ function SupportView({
             </button>
           ))}
           {!tickets.length ? (
-            <p className="empty-copy">No support tickets yet.</p>
+            <div className="support-list-empty">
+              <LifeBuoy />
+              <strong>No requests yet</strong>
+              <small>Your support history will stay organized here.</small>
+            </div>
           ) : null}
         </aside>
         <section className="card support-thread">
           {creating ? (
             <form
-              className="modal-form"
+              className="modal-form support-composer"
               onSubmit={async (event) => {
                 event.preventDefault();
                 await onCreate(subject.trim(), message.trim());
@@ -3216,27 +2968,33 @@ function SupportView({
                 setCreating(false);
               }}
             >
-              <div>
-                <p className="eyebrow">New request</p>
-                <h2>How can we help?</h2>
-                <p className="modal-copy">
-                  Do not paste guide text, screenshots, credentials, secrets,
-                  payment details, health data, or national IDs. Attachments and
-                  inbound-email replies are not supported.
-                </p>
+              <header className="support-composer-header">
+                <span><LifeBuoy /></span>
+                <div>
+                  <p className="eyebrow">New support request</p>
+                  <h2>How can we help?</h2>
+                  <p>Describe the issue and what you expected to happen.</p>
+                </div>
+              </header>
+              <div className="support-privacy-note">
+                <ShieldCheck />
+                <div><strong>Keep sensitive data out</strong><p>Don’t include guide content, screenshots, credentials, secrets, payment information, health data, or national IDs.</p></div>
+                <span>No attachments</span>
               </div>
-              <label className="field">
-                <span>Subject</span>
+              <div className="support-composer-fields">
+              <label className="field support-subject-field">
+                <span>Subject <small>Summarize the problem</small></span>
                 <input
                   required
                   minLength={4}
                   maxLength={160}
                   value={subject}
                   onChange={(event) => setSubject(event.target.value)}
+                  placeholder="What do you need help with?"
                 />
               </label>
               <label className="field">
-                <span>Message</span>
+                <span>Details <small>Include steps to reproduce and any error text</small></span>
                 <textarea
                   required
                   minLength={10}
@@ -3244,8 +3002,10 @@ function SupportView({
                   rows={8}
                   value={message}
                   onChange={(event) => setMessage(event.target.value)}
+                  placeholder="Tell us what happened, what you tried, and the outcome you expected."
                 />
               </label>
+              </div>
               <footer className="modal-footer">
                 <button
                   className="button secondary"
@@ -3281,17 +3041,45 @@ function SupportView({
                     {formatDate(selected.responseTargetAt, true)}
                   </small>
                 </div>
-                {selected.status !== "closed" ? (
-                  <button
-                    className="button ghost small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onClose(selected.id)}
-                  >
-                    Close ticket
-                  </button>
+                {selected.status === "closed" ? (
+                  <span className="support-closed-pill">
+                    <CheckCircle2 />
+                    {selected.closureConfirmedAt ? "Closed with customer confirmation" : "Closed"}
+                  </span>
                 ) : null}
               </header>
+              {selected.status === "resolved" ? (
+                <div className="support-resolution-banner">
+                  <CheckCircle2 />
+                  <div>
+                    <strong>KnowHow Support marked this resolved</strong>
+                    <p>Confirm closure if the issue is fixed. If you still need help, reply below and the ticket will reopen.</p>
+                  </div>
+                  {confirmingCloseId === selected.id ? (
+                    <div className="support-resolution-confirm">
+                      <strong>Close this ticket permanently?</strong>
+                      <button className="button secondary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId("")}>
+                        Not yet
+                      </button>
+                      <button
+                        className="button primary small"
+                        type="button"
+                        disabled={busy}
+                        onClick={async () => {
+                          await onClose(selected.id);
+                          setConfirmingCloseId("");
+                        }}
+                      >
+                        {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />} Confirm & close
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="button primary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId(selected.id)}>
+                      Confirm resolution
+                    </button>
+                  )}
+                </div>
+              ) : null}
               <div className="support-messages">
                 {selected.messages.map((item) => (
                   <article
@@ -3326,7 +3114,7 @@ function SupportView({
                   }}
                 >
                   <label className="field">
-                    <span>Reply</span>
+                    <span>{selected.status === "resolved" ? "Still need help? Reply to reopen" : "Reply"}</span>
                     <textarea
                       rows={4}
                       minLength={2}
@@ -3348,7 +3136,19 @@ function SupportView({
                 </form>
               ) : null}
             </>
-          ) : null}
+          ) : (
+            <div className="support-welcome">
+              <span className="support-welcome-icon"><LifeBuoy /></span>
+              <p className="eyebrow">Private workspace support</p>
+              <h2>Get help without leaving KnowHow</h2>
+              <p>Start a private conversation with our support team. We target an initial response within one business day.</p>
+              <div className="support-assurance-grid">
+                <span><ShieldCheck /><strong>Workspace private</strong><small>Only authorized support staff can respond.</small></span>
+                <span><Mail /><strong>Safe notifications</strong><small>Email notices never include message content.</small></span>
+              </div>
+              {canCreate ? <button className="button primary" type="button" disabled={busy} onClick={() => setCreating(true)}><Plus /> Start a support request</button> : null}
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -3436,47 +3236,126 @@ function SettingsView({
     setSettings((current) => ({ ...current, logoUrl: logoUrl ?? null }));
     setBaseline((current) => ({ ...current, logoUrl: logoUrl ?? null }));
   }
+  const settingsSections = [
+    {
+      id: "general" as const,
+      label: "General",
+      description: "Privacy and capture safeguards",
+      icon: Settings,
+      status: "3 enforced",
+    },
+    {
+      id: "branding" as const,
+      label: "Branding",
+      description: "Logo, colors, and exports",
+      icon: Paintbrush,
+      status: settings.logoUrl ? "Logo added" : "Logo needed",
+    },
+    {
+      id: "publishing" as const,
+      label: "Publishing",
+      description: "Reviews and approvals",
+      icon: ShieldCheck,
+      status: settings.requireReviewBeforePublish ? "Review required" : "Direct publish",
+    },
+    {
+      id: "exports" as const,
+      label: "Exports",
+      description: "Downloads and watermarks",
+      icon: FileDown,
+      status: settings.allowRestrictedExports ? "Restricted allowed" : "Restricted blocked",
+    },
+  ];
+  const activeSection = settingsSections.find((item) => item.id === section)!;
   return (
-    <div className="view-stack">
-      <div className="page-heading">
+    <div className="view-stack settings-page">
+      <div className="page-heading settings-page-heading">
         <div>
           <p className="eyebrow">Workspace administration</p>
           <h1>Settings & policies</h1>
           <p>
-            Control branding, sharing, and restricted exports for this workspace.
+            Manage how {workspaceName} looks, publishes, and protects its content.
           </p>
         </div>
+        <span className="settings-workspace-pill">
+          <ShieldCheck /> Workspace controls
+        </span>
       </div>
-      <div className="settings-tabs" role="tablist" aria-label="Workspace settings sections">
-        {(["general", "branding", "publishing", "exports"] as const).map((item) => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            aria-selected={section === item}
-            className={section === item ? "active" : ""}
-            onClick={() => setSection(item)}
+      <div className="settings-console">
+        <aside className="settings-section-nav" aria-label="Workspace settings sections">
+          <div className="settings-nav-heading">
+            <span>Workspace</span>
+            <small>4 sections</small>
+          </div>
+          <div className="settings-tabs" role="tablist" aria-orientation="vertical">
+            {settingsSections.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={section === item.id}
+                  aria-controls={`settings-panel-${item.id}`}
+                  className={section === item.id ? "active" : ""}
+                  onClick={() => setSection(item.id)}
+                >
+                  <span className="settings-nav-icon"><Icon /></span>
+                  <span className="settings-nav-copy">
+                    <strong>{item.label}</strong>
+                    <small>{item.description}</small>
+                  </span>
+                  <span className="settings-nav-status">{item.status}</span>
+                  <ChevronRight className="settings-nav-chevron" />
+                </button>
+              );
+            })}
+          </div>
+          <div className="settings-nav-note">
+            <ShieldCheck />
+            <span>
+              <strong>Admin only</strong>
+              <small>Changes apply workspace-wide.</small>
+            </span>
+          </div>
+        </aside>
+
+        <div className="settings-main">
+          <header className="settings-section-header">
+            <div>
+              <p className="eyebrow">{activeSection.label} settings</p>
+              <h2>{activeSection.description}</h2>
+            </div>
+            <span>{activeSection.status}</span>
+          </header>
+          <div
+            className="settings-grid"
+            id={`settings-panel-${section}`}
+            role="tabpanel"
           >
-            {titleCase(item)}
-          </button>
-        ))}
-      </div>
-      <div className="settings-grid">
         {section === "general" ? (
           <section className="card settings-card settings-section-wide">
             <div className="settings-title">
               <span><Settings /></span>
               <div>
                 <h2>Workspace safeguards</h2>
-                <p>{workspaceName} uses these enforced protections.</p>
+                <p>Built-in protections that keep published knowledge controlled and auditable.</p>
               </div>
+              <Badge variant="outline">Always on</Badge>
             </div>
             <div className="safeguard-list">
               <PolicyNote icon={ShieldCheck}>Captured screenshots require a recorded privacy review before publication.</PolicyNote>
               <PolicyNote icon={LockKeyhole}>Administrator status does not grant guide access or bypass required review.</PolicyNote>
               <PolicyNote icon={Archive}>Published revisions stay immutable; edits create a new working draft.</PolicyNote>
             </div>
-            <label className="choice-row emphasized">
+            <div className="settings-divider" />
+            <label className="choice-row emphasized settings-toggle-row">
+              <span className="settings-toggle-copy">
+                <strong>Allow exact non-password text in Windows capture</strong>
+                <small>
+                  Authors still choose whether to capture typed text. Password and uncertain fields are saved as actions without their value.
+                </small>
+              </span>
               <input
                 type="checkbox"
                 checked={settings.desktopTypedTextPolicy === "allowed"}
@@ -3487,14 +3366,7 @@ function SettingsView({
                   )
                 }
               />
-              <span>
-                <strong>Allow exact non-password text in Windows capture</strong>
-                <small>
-                  Authors still choose whether to capture typed text. Password
-                  and uncertain fields are always recorded as semantic actions
-                  without their value.
-                </small>
-              </span>
+              <span className="settings-switch" aria-hidden="true" />
             </label>
           </section>
         ) : null}
@@ -3606,7 +3478,15 @@ function SettingsView({
               hint="Marks the next click in recorded guide steps."
             />
           </div>
-          <label className={`choice-row emphasized${removeBrandingEnabled ? "" : " locked-choice"}`}>
+          <label className={`choice-row emphasized settings-toggle-row${removeBrandingEnabled ? "" : " locked-choice"}`}>
+            <span className="settings-toggle-copy">
+              <strong>Remove KnowHow branding {!removeBrandingEnabled ? <Badge variant="outline">Pro</Badge> : null}</strong>
+              <small>
+                {removeBrandingEnabled
+                  ? "KnowHow branding is hidden on exports for this workspace."
+                  : "Locked on Free. Included on Pro trial, Pro, and Enterprise."}
+              </small>
+            </span>
             <input
               type="checkbox"
               checked={settings.removeBranding}
@@ -3615,14 +3495,7 @@ function SettingsView({
                 update("removeBranding", event.target.checked)
               }
             />
-            <span>
-              <strong>Remove KnowHow branding {!removeBrandingEnabled ? <Badge variant="outline">Pro</Badge> : null}</strong>
-              <small>
-                {removeBrandingEnabled
-                  ? "KnowHow branding is hidden on exports for this workspace."
-                  : "Locked on Free. Included on Pro trial, Pro, and Enterprise."}
-              </small>
-            </span>
+            <span className="settings-switch" aria-hidden="true" />
           </label>
           <div className="brand-preview settings-live-preview" style={{ "--preview-accent": settings.accentColor, "--click-color": settings.clickTargetColor } as React.CSSProperties}>
             <WorkspaceLogo workspaceId={workspaceId} workspaceName={workspaceName} logoKey={settings.logoUrl} size="md" />
@@ -3641,7 +3514,11 @@ function SettingsView({
               <p>Choose whether working drafts require an assigned reviewer.</p>
             </div>
           </div>
-          <label className="choice-row emphasized">
+          <label className="choice-row emphasized settings-toggle-row">
+            <span className="settings-toggle-copy">
+              <strong>Require review before publishing</strong>
+              <small>Creators submit drafts to a Reviewer. Approved revisions are published by a Publisher.</small>
+            </span>
             <input
               type="checkbox"
               checked={settings.requireReviewBeforePublish}
@@ -3649,10 +3526,7 @@ function SettingsView({
                 update("requireReviewBeforePublish", event.target.checked)
               }
             />
-            <span>
-              <strong>Require review before publishing</strong>
-              <small>Creators submit drafts to an assigned Reviewer. An approved revision must be published by a Publisher.</small>
-            </span>
+            <span className="settings-switch" aria-hidden="true" />
           </label>
           <PolicyNote icon={LockKeyhole}>Administrators cannot bypass required review.</PolicyNote>
         </section>
@@ -3663,7 +3537,11 @@ function SettingsView({
             <span><FileDown /></span>
             <div><h2>Export controls</h2><p>Exports are static copies. Live links keep audience checks.</p></div>
           </div>
-          <label className="choice-row emphasized">
+          <label className="choice-row emphasized settings-toggle-row">
+            <span className="settings-toggle-copy">
+              <strong>Allow restricted-guide exports</strong>
+              <small>Each permitted export is recorded in the audit history.</small>
+            </span>
             <input
               type="checkbox"
               checked={settings.allowRestrictedExports}
@@ -3671,14 +3549,13 @@ function SettingsView({
                 update("allowRestrictedExports", event.target.checked)
               }
             />
-            <span>
-              <strong>Allow restricted-guide exports</strong>
-              <small>
-                Each permitted export is recorded in the audit history.
-              </small>
-            </span>
+            <span className="settings-switch" aria-hidden="true" />
           </label>
-          <label className="choice-row emphasized">
+          <label className="choice-row emphasized settings-toggle-row">
+            <span className="settings-toggle-copy">
+              <strong>Watermark exports</strong>
+              <small>Add viewer, workspace, and export date to generated files.</small>
+            </span>
             <input
               type="checkbox"
               checked={settings.watermarkExports}
@@ -3686,15 +3563,12 @@ function SettingsView({
                 update("watermarkExports", event.target.checked)
               }
             />
-            <span>
-              <strong>Watermark exports</strong>
-              <small>
-                Add viewer, workspace, and export date to generated files.
-              </small>
-            </span>
+            <span className="settings-switch" aria-hidden="true" />
           </label>
         </section>
         ) : null}
+          </div>
+        </div>
       </div>
       <footer className={`settings-save-bar${dirty ? " is-dirty" : ""}`}>
         <span>{dirty ? "Unsaved changes" : "All settings saved"}</span>
@@ -4072,448 +3946,6 @@ function VaultRevealDialog({
           </button>
         </footer>
       </div>
-    </Modal>
-  );
-}
-
-export function PricingCatalogDialog({
-  busy,
-  catalog,
-  generatedAt,
-  onClose,
-  onSave,
-}: {
-  busy: boolean;
-  catalog: PlatformPricingCatalog | null;
-  generatedAt: string;
-  onClose: () => void;
-  onSave: (
-    catalog: PlatformPricingCatalog | null,
-    input: Record<string, unknown>,
-  ) => Promise<void>;
-}) {
-  const [slug, setSlug] = useState(catalog?.slug ?? "current-trial");
-  const [version, setVersion] = useState(
-    catalog?.catalogVersion ?? "trial-v1",
-  );
-  const [name, setName] = useState(catalog?.name ?? "KnowHow trial");
-  const [description, setDescription] = useState(
-    catalog?.description ??
-    "No-card trial with governed capture and support.",
-  );
-  const [status, setStatus] = useState<"draft" | "scheduled" | "active">(
-    catalog?.status === "draft" ||
-      catalog?.status === "scheduled" ||
-      catalog?.status === "active"
-      ? catalog.status
-      : "draft",
-  );
-  const [currency, setCurrency] = useState(catalog?.currency ?? "USD");
-  const [effectiveFrom, setEffectiveFrom] = useState(
-    (catalog?.effectiveFrom ?? generatedAt).slice(0, 10),
-  );
-  const [effectiveUntil, setEffectiveUntil] = useState(
-    catalog?.effectiveUntil?.slice(0, 10) ?? "",
-  );
-  const [trialDays, setTrialDays] = useState(catalog?.trial.days ?? 14);
-  const [graceDays, setGraceDays] = useState(catalog?.trial.graceDays ?? 7);
-  const [retentionDays, setRetentionDays] = useState(
-    catalog?.trial.retentionDays ?? 90,
-  );
-  const [creators, setCreators] = useState(
-    catalog?.baseWorkspace.includedActiveCreators ?? 25,
-  );
-  const [users, setUsers] = useState(
-    catalog?.baseWorkspace.includedActiveUsers ?? 100,
-  );
-  const [storageGb, setStorageGb] = useState(
-    (catalog?.baseWorkspace.includedStorageBytes ?? 5_000_000_000) /
-    1_000_000_000,
-  );
-  const amountValue = (value: number | null | undefined) =>
-    value === null || value === undefined ? "" : String(value / 100);
-  const [baseAmount, setBaseAmount] = useState(
-    amountValue(catalog?.baseWorkspace.amountMinor),
-  );
-  const [creatorAmount, setCreatorAmount] = useState(
-    amountValue(catalog?.additionalUsage.creator.amountMinor),
-  );
-  const [userAmount, setUserAmount] = useState(
-    amountValue(catalog?.additionalUsage.user.amountMinor),
-  );
-  const [storageAmount, setStorageAmount] = useState(
-    amountValue(catalog?.additionalUsage.storage.amountMinor),
-  );
-  const [extensionIncluded, setExtensionIncluded] = useState(
-    catalog?.features.some(
-      (item) => item.key === "browser_extension" && item.included,
-    ) ?? true,
-  );
-  const [exportsIncluded, setExportsIncluded] = useState(
-    catalog?.features.some(
-      (item) => item.key === "governed_exports" && item.included,
-    ) ?? true,
-  );
-  const [supportIncluded, setSupportIncluded] = useState(
-    catalog?.services.some(
-      (item) => item.key === "in_app_support" && item.included,
-    ) ?? true,
-  );
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-
-  const parseMinorAmount = (value: string, label: string) => {
-    if (!value.trim()) return null;
-    const amount = Number(value);
-    if (!Number.isFinite(amount) || amount < 0) {
-      throw new Error(`${label} must be a positive amount or blank.`);
-    }
-    return Math.round(amount * 100);
-  };
-  const mergeItem = (
-    items: PlatformPricingCatalog["features"],
-    item: PlatformPricingCatalog["features"][number],
-  ) => [...items.filter((candidate) => candidate.key !== item.key), item];
-
-  return (
-    <Modal
-      title={catalog ? "Edit pricing catalog" : "Create pricing catalog"}
-      eyebrow="MFA-protected commercial control"
-      onClose={onClose}
-      wide
-    >
-      <form
-        className="modal-form pricing-catalog-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setWorking(true);
-          setError("");
-          try {
-            const existingFeatures = catalog?.features ?? [];
-            const existingServices = catalog?.services ?? [];
-            const features = mergeItem(
-              mergeItem(existingFeatures, {
-                key: "browser_extension",
-                label: "Browser capture extension",
-                included: extensionIncluded,
-                note: "Capture, redact, review, and pair managed devices.",
-              }),
-              {
-                key: "governed_exports",
-                label: "Governed exports",
-                included: exportsIncluded,
-                note: "Policy-controlled PDF, HTML, and Markdown exports.",
-              },
-            );
-            const services = mergeItem(existingServices, {
-              key: "in_app_support",
-              label: "In-app support",
-              included: supportIncluded,
-              note: "One-business-day response target.",
-            });
-            const input = {
-              ...(!catalog ? { slug: slug.trim() } : {}),
-              catalogVersion: version.trim(),
-              name: name.trim(),
-              description: description.trim(),
-              status,
-              currency: currency.trim().toUpperCase(),
-              effectiveFrom: new Date(
-                `${effectiveFrom}T00:00:00.000Z`,
-              ).toISOString(),
-              effectiveUntil: effectiveUntil
-                ? new Date(`${effectiveUntil}T23:59:59.999Z`).toISOString()
-                : null,
-              selfServiceTrial: true,
-              trial: { days: trialDays, graceDays, retentionDays },
-              baseWorkspace: {
-                amountMinor: parseMinorAmount(baseAmount, "Base price"),
-                includedActiveCreators: creators,
-                includedActiveUsers: users,
-                includedStorageBytes: Math.round(storageGb * 1_000_000_000),
-              },
-              additionalUsage: {
-                creator: {
-                  amountMinor: parseMinorAmount(
-                    creatorAmount,
-                    "Creator price",
-                  ),
-                },
-                user: {
-                  amountMinor: parseMinorAmount(userAmount, "User price"),
-                },
-                storage: {
-                  amountMinor: parseMinorAmount(
-                    storageAmount,
-                    "Storage price",
-                  ),
-                },
-              },
-              features,
-              services,
-            };
-            void onSave(catalog, input)
-              .catch((nextError) => setError(messageFromError(nextError)))
-              .finally(() => setWorking(false));
-          } catch (nextError) {
-            setError(messageFromError(nextError));
-            setWorking(false);
-          }
-        }}
-      >
-        <div className="settings-grid compact-settings-grid">
-          {!catalog ? (
-            <label>
-              <span>Internal slug</span>
-              <input
-                value={slug}
-                onChange={(event) => setSlug(event.target.value)}
-                required
-              />
-            </label>
-          ) : null}
-          <label>
-            <span>Version</span>
-            <input
-              value={version}
-              onChange={(event) => setVersion(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            <span>Name</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            <span>Status</span>
-            <SelectMenu
-              className="form-select"
-              value={status}
-              onChange={(value) =>
-                setStatus(
-                  value as "draft" | "scheduled" | "active",
-                )
-              }
-              ariaLabel="Catalog status"
-              options={[
-                { value: "draft", label: "Draft" },
-                { value: "scheduled", label: "Scheduled" },
-                { value: "active", label: "Active" },
-              ]}
-            />
-          </label>
-        </div>
-        <label>
-          <span>Description</span>
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            rows={2}
-          />
-        </label>
-        <div className="settings-grid compact-settings-grid">
-          <label>
-            <span>Currency</span>
-            <input
-              value={currency}
-              onChange={(event) => setCurrency(event.target.value)}
-              maxLength={3}
-              required
-            />
-          </label>
-          <label>
-            <span>Effective from</span>
-            <input
-              type="date"
-              value={effectiveFrom}
-              onChange={(event) => setEffectiveFrom(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            <span>Effective until</span>
-            <input
-              type="date"
-              value={effectiveUntil}
-              onChange={(event) => setEffectiveUntil(event.target.value)}
-            />
-          </label>
-        </div>
-        <div className="settings-grid compact-settings-grid">
-          <label>
-            <span>Trial days</span>
-            <input
-              type="number"
-              min={1}
-              max={90}
-              value={trialDays}
-              onChange={(event) => setTrialDays(Number(event.target.value))}
-              required
-            />
-          </label>
-          <label>
-            <span>Grace days</span>
-            <input
-              type="number"
-              min={0}
-              max={30}
-              value={graceDays}
-              onChange={(event) => setGraceDays(Number(event.target.value))}
-              required
-            />
-          </label>
-          <label>
-            <span>Retention days</span>
-            <input
-              type="number"
-              min={30}
-              max={365}
-              value={retentionDays}
-              onChange={(event) =>
-                setRetentionDays(Number(event.target.value))
-              }
-              required
-            />
-          </label>
-        </div>
-        <div className="settings-grid compact-settings-grid">
-          <label>
-            <span>Included creators</span>
-            <input
-              type="number"
-              min={1}
-              value={creators}
-              onChange={(event) => setCreators(Number(event.target.value))}
-              required
-            />
-          </label>
-          <label>
-            <span>Included users</span>
-            <input
-              type="number"
-              min={1}
-              value={users}
-              onChange={(event) => setUsers(Number(event.target.value))}
-              required
-            />
-          </label>
-          <label>
-            <span>Included storage (GB)</span>
-            <input
-              type="number"
-              min={0.001}
-              step={0.1}
-              value={storageGb}
-              onChange={(event) => setStorageGb(Number(event.target.value))}
-              required
-            />
-          </label>
-        </div>
-        <div className="settings-grid compact-settings-grid">
-          <label>
-            <span>Base monthly price</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={baseAmount}
-              onChange={(event) => setBaseAmount(event.target.value)}
-              placeholder="Not published"
-            />
-          </label>
-          <label>
-            <span>Additional creator</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={creatorAmount}
-              onChange={(event) => setCreatorAmount(event.target.value)}
-              placeholder="Not published"
-            />
-          </label>
-          <label>
-            <span>Additional user</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={userAmount}
-              onChange={(event) => setUserAmount(event.target.value)}
-              placeholder="Not published"
-            />
-          </label>
-          <label>
-            <span>Storage per GB</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={storageAmount}
-              onChange={(event) => setStorageAmount(event.target.value)}
-              placeholder="Not published"
-            />
-          </label>
-        </div>
-        <div className="checkbox-stack">
-          <label>
-            <input
-              type="checkbox"
-              checked={extensionIncluded}
-              onChange={(event) => setExtensionIncluded(event.target.checked)}
-            />
-            Browser capture extension included
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={exportsIncluded}
-              onChange={(event) => setExportsIncluded(event.target.checked)}
-            />
-            Governed exports included
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={supportIncluded}
-              onChange={(event) => setSupportIncluded(event.target.checked)}
-            />
-            In-app support included
-          </label>
-        </div>
-        <div className="empty-inline">
-          <ShieldCheck />
-          <span>
-            <strong>Security is never an add-on.</strong>
-            <small>
-              Tenant isolation, MFA, encryption, audit, backup, and retention
-              controls stay included. Clients are invoiced offline.
-            </small>
-          </span>
-        </div>
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <div className="modal-actions">
-          <button className="button ghost" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || working}
-          >
-            {working ? <LoaderCircle className="spin" /> : <ShieldCheck />}
-            {catalog ? "Save catalog" : "Create catalog"}
-          </button>
-        </div>
-      </form>
     </Modal>
   );
 }
@@ -5820,6 +5252,11 @@ export function KnowHowWorkspaceApp({
   const { resolvedTheme, setPreference } = useTheme();
   const roles = workspace.roles;
   const isAdmin = roles.includes("administrator");
+  const canOpenAdministration = Boolean(
+    data.viewer.platformRoles?.some((role) =>
+      ["owner", "operations", "support"].includes(role),
+    ),
+  );
   const canCreate = isAdmin || roles.includes("creator");
   const entitlements = active.entitlements ?? {
     maximumUsers: 3,
@@ -5853,7 +5290,7 @@ export function KnowHowWorkspaceApp({
   const organization = data.organizations?.find(
     (item) => item.id === workspace.organizationId,
   );
-  const view: View =
+  const requestedView: View =
     route.kind === "workspace-section"
       ? SECTION_TO_VIEW[route.section]
       : route.kind === "guide-new" ||
@@ -5861,6 +5298,15 @@ export function KnowHowWorkspaceApp({
         route.kind === "guide-edit"
         ? "Guides"
         : "Overview";
+  const view =
+    requestedView === "Administration" && !canOpenAdministration
+      ? "Overview"
+      : requestedView;
+
+  useEffect(() => {
+    if (requestedView !== "Administration" || canOpenAdministration) return;
+    onNavigate(workspaceHref(workspace.slug), { replace: true });
+  }, [canOpenAdministration, onNavigate, requestedView, workspace.slug]);
 
   const [extensionLink, setExtensionLink] = useState<
     "checking" | "missing" | "error" | "unavailable" | "connected"
@@ -6037,11 +5483,7 @@ export function KnowHowWorkspaceApp({
   }
 
   function navigateToView(nextView: View) {
-    const href =
-      nextView === "Platform"
-        ? platformHref()
-        : workspaceHref(workspace.slug, VIEW_TO_SECTION[nextView]);
-    onNavigate(href);
+    onNavigate(workspaceHref(workspace.slug, VIEW_TO_SECTION[nextView]));
   }
 
   const routeGuideId =
@@ -6133,19 +5575,12 @@ export function KnowHowWorkspaceApp({
     workspace.id,
   ]);
 
-  const visibleNav = [
-    ...NAV_ITEMS.filter((item) => {
+  const visibleNav = NAV_ITEMS.filter((item) => {
       if (item.view === "Capture") return canCapture;
       if (item.view === "Support") return canOpenSupport;
-      if (item.view === "Vault") return canUseVault;
-      if (item.view === "Organization") return Boolean(organization);
       if (["Groups", "Members", "Settings"].includes(item.view)) return isAdmin;
       return true;
-    }),
-    ...(data.viewer.platformAdministrator
-      ? [{ view: "Platform" as const, icon: Shield }]
-      : []),
-  ];
+    });
   const workspaceNavigation = visibleNav.filter(({ view: item }) =>
     ["Overview", "Guides", "Capture"].includes(item),
   );
@@ -6153,13 +5588,9 @@ export function KnowHowWorkspaceApp({
     ["Groups", "Members"].includes(item),
   );
   const governanceNavigation = visibleNav.filter(
-    ({ view: item }) =>
-      ["Settings", "Organization", "Vault"].includes(item),
+    ({ view: item }) => item === "Settings",
   );
   const supportNavigation = visibleNav.filter(({ view: item }) => item === "Support");
-  const platformNavigation = visibleNav.filter(
-    ({ view: item }) => item === "Platform",
-  );
   const onboardingAudience = isAdmin || canAnyCapture;
   const onboardingRemaining = active.onboarding.steps.filter(
     (step) => !step.completed,
@@ -6634,7 +6065,12 @@ export function KnowHowWorkspaceApp({
                         size="md"
                       />
                       <span className="workspace-menu-copy">
-                        <strong>{workspace.name}</strong>
+                        <span className="workspace-menu-title">
+                          <strong>{workspace.name}</strong>
+                          <span className="workspace-plan-chip">
+                            {workspacePlanLabel(workspace.subscription)}
+                          </span>
+                        </span>
                         <small>{workspaceAccessLabel(roles)}</small>
                       </span>
                     </>
@@ -6720,6 +6156,32 @@ export function KnowHowWorkspaceApp({
                     </nav>
                   </SidebarGroup>
                 ) : null}
+                {canOpenAdministration ? (
+                  <SidebarGroup className="workspace-nav-group administration-nav-group">
+                    <p className="sidebar-section-label">Administration</p>
+                    <nav
+                      className="main-nav"
+                      aria-label="KnowHow administration navigation"
+                    >
+                      <SidebarMenu>
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            isActive={view === "Administration"}
+                            type="button"
+                            onClick={() =>
+                              onNavigate(
+                                workspaceHref(workspace.slug, "administration"),
+                              )
+                            }
+                          >
+                            <ShieldCheck />
+                            <span>KnowHow Administration</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </SidebarMenu>
+                    </nav>
+                  </SidebarGroup>
+                ) : null}
                 {supportNavigation.length ? (
                   <SidebarGroup className="workspace-nav-group support-nav-group">
                     <nav className="main-nav" aria-label="Help navigation">
@@ -6735,27 +6197,6 @@ export function KnowHowWorkspaceApp({
                     </nav>
                   </SidebarGroup>
                 ) : null}
-                {platformNavigation.length ? (
-                  <SidebarGroup className="workspace-nav-group admin-nav-group">
-                    <p className="sidebar-section-label">Administration</p>
-                    <nav className="main-nav" aria-label="Platform navigation">
-                      <SidebarMenu>
-                        {platformNavigation.map(({ view: item, icon: Icon }) => (
-                          <SidebarMenuItem key={item}>
-                            <SidebarMenuButton
-                              isActive={view === item}
-                              type="button"
-                              onClick={() => navigateToView(item)}
-                            >
-                              <Icon />
-                              <span>{NAV_LABELS[item]}</span>
-                            </SidebarMenuButton>
-                          </SidebarMenuItem>
-                        ))}
-                      </SidebarMenu>
-                    </nav>
-                  </SidebarGroup>
-                ) : null}
             </>
           </SidebarContent>
         </Sidebar>
@@ -6764,32 +6205,11 @@ export function KnowHowWorkspaceApp({
           <header className="topbar">
             <div className="topbar-start">
               <SidebarTrigger className="mobile-menu" />
-              <div className="topbar-workspace">
-                  <WorkspaceLogo
-                    workspaceId={workspace.id}
-                    workspaceName={workspace.name}
-                    logoKey={workspace.settings.logoUrl}
-                    size="sm"
-                  />
-                <span className="topbar-context-copy">
-                  <small>
-                    {NAV_LABELS[view]}
-                  </small>
-                  <strong>
-                    {workspace.name}
-                  </strong>
-                    <TrialChip
-                      subscription={workspace.subscription}
-                      onOpen={
-                        isAdmin ? () => setDialog({ type: "plan" }) : undefined
-                      }
-                    />
-                </span>
-              </div>
+              <strong className="topbar-page-title">{NAV_LABELS[view]}</strong>
             </div>
             <div className="topbar-search-slot">
               {guides.length &&
-                !["Organization", "Settings", "Support"].includes(view) ? (
+                !["Organization", "Settings", "Support", "Administration"].includes(view) ? (
                 <GlobalGuideSearch guides={guides} onOpen={openGuide} />
               ) : null}
             </div>
@@ -7086,7 +6506,7 @@ export function KnowHowWorkspaceApp({
                   await command(
                     "closeSupportTicket",
                     { ticketId },
-                    "Support ticket closed",
+                    "Resolution confirmed — ticket closed",
                   );
                 }}
               />
@@ -7174,6 +6594,9 @@ export function KnowHowWorkspaceApp({
                   )
                 }
               />
+            ) : null}
+            {view === "Administration" && canOpenAdministration ? (
+              <AdministrationView viewer={data.viewer} />
             ) : null}
             {view === "Settings" && isAdmin ? (
               <SettingsView
@@ -8347,167 +7770,6 @@ export function PlatformProvisioningDialog({
               <ArrowRight />
             )}
             {step === 6 ? "Provision organization" : "Save & continue"}
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-
-export function SupportRequestDialog({
-  workspace,
-  busy,
-  onClose,
-  onRequest,
-}: {
-  workspace: { id: string; name: string };
-  busy: boolean;
-  onClose: () => void;
-  onRequest: (
-    role: WorkspaceRole,
-    reason: string,
-    hours: number,
-  ) => Promise<void>;
-}) {
-  const [role, setRole] = useState<WorkspaceRole>("viewer");
-  const [reason, setReason] = useState("");
-  const [hours, setHours] = useState("4");
-  const parsedHours = Number(hours);
-  const validHours =
-    hours.trim() !== "" &&
-    Number.isInteger(parsedHours) &&
-    parsedHours >= 1 &&
-    parsedHours <= 24;
-  return (
-    <Modal
-      title={`Request support access · ${workspace.name}`}
-      eyebrow="Customer approval required"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form"
-        onSubmit={async (event: FormEvent) => {
-          event.preventDefault();
-          if (!validHours) return;
-          await onRequest(role, reason.trim(), parsedHours);
-        }}
-      >
-        <p className="modal-copy">
-          The workspace&apos;s administrator is notified in-app, reviews your
-          reason, and may adjust the granted role and duration. Access stays
-          denied until they approve, expires automatically, and every action
-          during access is recorded in the customer&apos;s audit history.
-        </p>
-        <div className="field">
-          <span>Requested role</span>
-          <SelectMenu
-            className="form-select"
-            value={role}
-            onChange={setRole}
-            ariaLabel="Requested role"
-            options={WORKSPACE_ROLES.map((item) => ({
-              value: item,
-              label: workspaceRoleLabel(item),
-            }))}
-          />
-          <small>
-            Administrator-level access only ever operates within the
-            customer&apos;s approval and remains locked out of membership,
-            invitations, groups, and support governance.
-          </small>
-        </div>
-        <label className="field">
-          <span>Why is access needed?</span>
-          <textarea
-            required
-            minLength={10}
-            maxLength={2000}
-            rows={4}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Investigating a capture failure on the onboarding guide…"
-          />
-        </label>
-        <div className="field">
-          <span>Requested duration (1–24 hours)</span>
-          <input
-            type="number"
-            min={1}
-            max={24}
-            required
-            value={hours}
-            onChange={(event) => setHours(event.target.value)}
-          />
-        </div>
-        <footer className="modal-footer">
-          <span />
-          <button className="button secondary" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || reason.trim().length < 10 || !validHours}
-          >
-            <ShieldCheck /> Request access
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-
-export function AssignAdminDialog({
-  workspace,
-  busy,
-  onClose,
-  onAssign,
-}: {
-  workspace: { id: string; name: string };
-  busy: boolean;
-  onClose: () => void;
-  onAssign: (email: string) => Promise<void>;
-}) {
-  const [email, setEmail] = useState("");
-  return (
-    <Modal
-      title={`Assign administrator · ${workspace.name}`}
-      eyebrow="Platform administration"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form"
-        onSubmit={async (event: FormEvent) => {
-          event.preventDefault();
-          await onAssign(email.trim().toLowerCase());
-        }}
-      >
-        <p className="modal-copy">
-          The account must already have a verified email. This action creates or
-          updates workspace membership and is audited without exposing document
-          contents.
-        </p>
-        <label className="field">
-          <span>Verified account email</span>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="admin@example.com"
-          />
-        </label>
-        <footer className="modal-footer">
-          <span />
-          <button className="button secondary" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || !email.includes("@")}
-          >
-            <UserCog /> Assign administrator
           </button>
         </footer>
       </form>

@@ -9,6 +9,23 @@ export type RevisionStatus = "draft" | "review" | "published" | "archived";
 export type AudienceKind = "workspace" | "group" | "user";
 export type ThemeMode = "light" | "dark" | "system";
 
+export type PlatformRole =
+  | "owner"
+  | "operations"
+  | "support"
+  | "billing"
+  | "auditor";
+
+export type AdministrationAccessMember = {
+  userId: string;
+  name: string;
+  email: string;
+  roles: PlatformRole[];
+  enabled: boolean;
+  emailVerified: boolean;
+  lastActiveAt: string | null;
+};
+
 export type OrganizationRole =
   "owner" | "administrator" | "billing" | "security_auditor";
 
@@ -282,12 +299,20 @@ export type SupportMessage = {
 export type SupportTicket = {
   id: string;
   subject: string;
-  status: "open" | "waiting_customer" | "waiting_support" | "closed";
+  status:
+    | "open"
+    | "waiting_customer"
+    | "waiting_support"
+    | "resolved"
+    | "closed";
   requesterUserId: string;
   requesterName: string;
   createdAt: string;
   updatedAt: string;
   responseTargetAt: string;
+  resolvedAt?: string | null;
+  closedAt?: string | null;
+  closureConfirmedAt?: string | null;
   messages: SupportMessage[];
 };
 
@@ -821,9 +846,7 @@ export type Viewer = {
   emailVerified: boolean;
   mfaEnabled: boolean;
   platformAdministrator: boolean;
-  platformRoles?: Array<
-    "owner" | "operations" | "support" | "billing" | "auditor"
-  >;
+  platformRoles?: PlatformRole[];
   themePreference?: ThemeMode;
   betaAdmission?: BetaAdmissionSummary;
   selfServiceSetup?: SelfServiceSetup;
@@ -901,11 +924,7 @@ export type BootstrapResponse = {
   organizations?: OrganizationAdministration[];
   platform?: {
     generatedAt: string;
-    settings: PlatformSettings;
-    queueCounts: PlatformQueueCounts;
-    appointments: AdminAppointment[];
     provisioningRuns: PlatformProvisioningRun[];
-    pricingCatalogs?: PlatformPricingCatalog[];
   };
 };
 

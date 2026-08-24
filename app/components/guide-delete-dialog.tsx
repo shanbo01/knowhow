@@ -15,18 +15,16 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export function GuideDeleteDialog({
-  title,
   busy,
   onCancel,
   onConfirm,
 }: {
-  title: string;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }) {
   const [confirmation, setConfirmation] = useState("");
-  const confirmed = confirmation === title;
+  const confirmed = confirmation.trim().toLowerCase() === "delete";
 
   return (
     <AlertDialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
@@ -40,7 +38,7 @@ export function GuideDeleteDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <label className="field danger-confirm-field">
-          <span>Type <strong>{title}</strong> to confirm</span>
+          <span>Type <strong>delete</strong> to confirm</span>
           <input
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}

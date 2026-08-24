@@ -8,7 +8,10 @@ import "./styles.css";
 const root = document.getElementById("root");
 if (!root) throw new Error("KnowHow Capture could not initialize.");
 
-const WindowApp = getCurrentWindow().label === "hud" ? Hud : App;
+const windowLabel = getCurrentWindow().label;
+document.documentElement.dataset.window = windowLabel;
+document.body.dataset.window = windowLabel;
+const WindowApp = windowLabel === "hud" ? Hud : App;
 
 createRoot(root).render(
   <StrictMode>

@@ -77,6 +77,7 @@ pub struct MonitorDescriptor {
     pub id: String,
     pub name: String,
     pub bounds: Bounds,
+    pub work_area: Bounds,
     pub index: usize,
 }
 
@@ -86,9 +87,21 @@ pub struct ExcludedRegion {
     pub reason: &'static str,
 }
 
+#[derive(Clone, Debug)]
+pub struct PrivacyRegion {
+    pub bounds: Bounds,
+    pub control_role: Option<String>,
+    pub text: Option<String>,
+    pub password_status: PasswordStatus,
+}
+
 pub trait UiAutomationClient {
     fn element_at(&self, x: i32, y: i32) -> Result<ElementMetadata>;
     fn focused_element(&self) -> Result<ElementMetadata>;
+    fn focused_element_semantic(&self) -> Result<ElementMetadata> {
+        self.focused_element()
+    }
+    fn privacy_regions(&self, window_id: &str) -> Result<Vec<PrivacyRegion>>;
 }
 
 pub trait RawInputRegistration: Send {
@@ -107,9 +120,9 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    WindowsRawInput as NativeRawInput, WindowsUia as NativeUia, capture_targets, excluded_regions,
-    foreground_context, initialize_process, monitor_descriptors, new_scope, quit_capture_choice,
-    windows_device_name,
+    WindowsRawInput as NativeRawInput, WindowsUia as NativeUia, capture_target_previews,
+    capture_targets, excluded_regions, foreground_context, initialize_process, monitor_descriptors,
+    new_scope, quit_capture_choice, windows_device_name,
 };
 
 #[cfg(not(windows))]
@@ -145,12 +158,23 @@ mod unsupported {
         fn focused_element(&self) -> Result<ElementMetadata> {
             anyhow::bail!("KnowHow Capture supports Windows only")
         }
+        fn focused_element_semantic(&self) -> Result<ElementMetadata> {
+            anyhow::bail!("KnowHow Capture supports Windows only")
+        }
+        fn privacy_regions(&self, _window_id: &str) -> Result<Vec<PrivacyRegion>> {
+            anyhow::bail!("KnowHow Capture supports Windows only")
+        }
     }
 
     pub fn initialize_process() -> Result<()> {
         anyhow::bail!("KnowHow Capture supports Windows only")
     }
     pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
+        Ok(Vec::new())
+    }
+    pub fn capture_target_previews(
+        _target_ids: &[String],
+    ) -> Result<Vec<crate::model::CaptureTargetPreview>> {
         Ok(Vec::new())
     }
     pub fn monitor_descriptors() -> Result<Vec<MonitorDescriptor>> {

@@ -40,8 +40,10 @@ zeroize = { version = "=1.9.0", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 dxgi-capture-rs = "=1.2.2"
+windows-capture = "=2.0.1"
 windows = { version = "=0.62.2", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Cryptography",

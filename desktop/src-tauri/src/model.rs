@@ -102,7 +102,7 @@ pub enum ScopeKind {
     AllDisplays,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bounds {
     pub x: i32,
@@ -154,6 +154,13 @@ pub struct CaptureTarget {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
     pub protected: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureTargetPreview {
+    pub target_id: String,
+    pub data_url: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -351,6 +358,15 @@ pub struct ServerAnnotation {
     pub color: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerCrop {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapturedStep {
@@ -361,6 +377,8 @@ pub struct CapturedStep {
     pub source_event: String,
     pub password_status: String,
     pub annotations: Vec<ServerAnnotation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ServerCrop>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     pub image_width: u32,

@@ -27,7 +27,10 @@ use crate::{
         RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput, StepStatus,
         TypedTextPolicy, UpdateState, UpdateStatus,
     },
-    platform::{QuitChoice, capture_targets, new_scope, quit_capture_choice, windows_device_name},
+    platform::{
+        QuitChoice, capture_targets, monitor_descriptors, new_scope, quit_capture_choice,
+        windows_device_name,
+    },
     secure_store::{RecoveredSession, SecureStore},
 };
 
@@ -368,18 +371,30 @@ impl Coordinator {
             if coordinator.countdown_generation.load(Ordering::Acquire) != generation {
                 return;
             }
-            if let Some(engine) = coordinator.engine.lock().as_ref() {
-                engine.resume();
+            // Put Tauri's windows into their final recording state before reclaiming the
+            // process-wide mouse and keyboard Raw Input registrations.
+            let _ = coordinator.show_hud("compact");
+            if let Some(main) = coordinator.app.get_webview_window("main") {
+                let _ = main.hide();
             }
+            let input_ready = {
+                let mut engine = coordinator.engine.lock();
+                engine.as_mut().is_some_and(|engine| {
+                    engine.rebind_raw_input().is_ok_and(|()| {
+                        engine.resume();
+                        true
+                    })
+                })
+            };
             {
                 let mut inner = coordinator.inner.lock();
                 inner.recorder.status = RecorderStatus::Recording;
                 inner.recorder.countdown_remaining = None;
-                inner.recorder.status_message = Some("Recording meaningful actions".to_owned());
-            }
-            let _ = coordinator.show_hud(false);
-            if let Some(main) = coordinator.app.get_webview_window("main") {
-                let _ = main.hide();
+                inner.recorder.status_message = Some(if input_ready {
+                    "Recording clicks, typing, shortcuts, and drags".to_owned()
+                } else {
+                    "Input capture could not start. Pause and resume to retry.".to_owned()
+                });
             }
             coordinator.emit();
         });
@@ -435,12 +450,22 @@ impl Coordinator {
                 .clone()
                 .ok_or_else(|| anyhow!("active capture is unavailable"))?;
             inner.recorder.status = RecorderStatus::Recording;
-            inner.recorder.status_message = Some("Recording meaningful actions".to_owned());
             active
         };
-        if let Some(engine) = self.engine.lock().as_ref() {
-            engine.resume();
-        }
+        let input_ready = {
+            let mut engine = self.engine.lock();
+            engine.as_mut().is_some_and(|engine| {
+                engine.rebind_raw_input().is_ok_and(|()| {
+                    engine.resume();
+                    true
+                })
+            })
+        };
+        self.inner.lock().recorder.status_message = Some(if input_ready {
+            "Recording clicks, typing, shortcuts, and drags".to_owned()
+        } else {
+            "Input capture could not resume. Pause and resume to retry.".to_owned()
+        });
         self.store
             .set_session_state(&active.session_id, "recording")?;
         if self
@@ -755,35 +780,118 @@ impl Coordinator {
         Ok(())
     }
 
-    pub fn show_hud(&self, expanded: bool) -> Result<()> {
+    pub fn show_hud(&self, mode: &str) -> Result<()> {
+        self.layout_hud(mode, true)
+    }
+
+    pub fn set_hud_mode(&self, mode: &str) -> Result<()> {
+        self.layout_hud(mode, false)
+    }
+
+    fn layout_hud(&self, mode: &str, show: bool) -> Result<()> {
         let window = self
             .app
             .get_webview_window("hud")
             .ok_or_else(|| anyhow!("capture controls are unavailable"))?;
         let scale = window.scale_factor().unwrap_or(1.0);
-        let logical_width = 520.0;
-        let logical_height = if expanded { 345.0 } else { 78.0 };
-        window.set_size(Size::Physical(PhysicalSize::new(
-            (logical_width * scale) as u32,
-            (logical_height * scale) as u32,
-        )))?;
-        if !expanded
-            && let Ok(Some(monitor)) = window
-                .current_monitor()
-                .or_else(|_| window.primary_monitor())
+        let (logical_width, logical_height) = match mode {
+            "retracted" => (238.0, 72.0),
+            "compact" => (520.0, 72.0),
+            "expanded" => (520.0, 345.0),
+            _ => bail!("unsupported recorder control mode"),
+        };
+        let was_visible = window.is_visible().unwrap_or(false);
+        let old_position = window.outer_position().ok();
+        let old_size = window.outer_size().ok();
+        let width = (logical_width * scale) as i32;
+        let height = (logical_height * scale) as i32;
+        let mut next_position = None;
+        if let Ok(Some(monitor)) = window
+            .current_monitor()
+            .or_else(|_| window.primary_monitor())
         {
             let size = monitor.size();
             let origin = monitor.position();
-            let width = (logical_width * scale) as i32;
-            let height = (logical_height * scale) as i32;
-            window.set_position(Position::Physical(PhysicalPosition::new(
-                origin.x + (i32::try_from(size.width).unwrap_or(width) - width) / 2,
-                origin.y + i32::try_from(size.height).unwrap_or(height)
-                    - height
-                    - (24.0 * scale) as i32,
-            )))?;
+            let monitor_width = i32::try_from(size.width).unwrap_or(width);
+            let monitor_height = i32::try_from(size.height).unwrap_or(height);
+            let (work_origin, work_size) =
+                monitor_work_area((origin.x, origin.y), (monitor_width, monitor_height));
+            let gap = (8.0 * scale) as i32;
+            if !was_visible {
+                let bottom_gap = (24.0 * scale) as i32;
+                next_position = Some(clamp_hud_position(
+                    (
+                        work_origin.0 + (work_size.0 - width) / 2,
+                        work_origin.1 + work_size.1 - height - bottom_gap,
+                    ),
+                    (width, height),
+                    work_origin,
+                    work_size,
+                    gap,
+                ));
+            } else if let (Some(position), Some(old_size)) = (old_position, old_size) {
+                next_position = Some(resize_hud_position(
+                    (position.x, position.y),
+                    (
+                        i32::try_from(old_size.width).unwrap_or(width),
+                        i32::try_from(old_size.height).unwrap_or(height),
+                    ),
+                    (width, height),
+                    work_origin,
+                    work_size,
+                    gap,
+                    (24.0 * scale) as i32,
+                ));
+            }
         }
-        window.show()?;
+        window.set_size(Size::Physical(PhysicalSize::new(
+            u32::try_from(width.max(1))?,
+            u32::try_from(height.max(1))?,
+        )))?;
+        if let Some((x, y)) = next_position {
+            window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
+        }
+        if show {
+            window.show()?;
+        }
+        Ok(())
+    }
+
+    pub fn constrain_hud_to_screen(&self) -> Result<()> {
+        let window = self
+            .app
+            .get_webview_window("hud")
+            .ok_or_else(|| anyhow!("capture controls are unavailable"))?;
+        let Some(monitor) = window
+            .current_monitor()
+            .or_else(|_| window.primary_monitor())?
+        else {
+            return Ok(());
+        };
+        let position = window.outer_position()?;
+        let size = window.outer_size()?;
+        let origin = monitor.position();
+        let monitor_size = monitor.size();
+        let width = i32::try_from(size.width).unwrap_or(i32::MAX);
+        let height = i32::try_from(size.height).unwrap_or(i32::MAX);
+        let monitor_width = i32::try_from(monitor_size.width).unwrap_or(width);
+        let monitor_height = i32::try_from(monitor_size.height).unwrap_or(height);
+        let (work_origin, work_size) =
+            monitor_work_area((origin.x, origin.y), (monitor_width, monitor_height));
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let gap = (8.0 * scale) as i32;
+        let (x, y) = snap_hud_position(
+            (position.x, position.y),
+            (width, height),
+            work_origin,
+            work_size,
+            gap,
+            (24.0 * scale) as i32,
+        );
+        let constrained = PhysicalPosition::new(x, y);
+        if constrained != position {
+            window.set_position(Position::Physical(constrained))?;
+        }
         Ok(())
     }
 
@@ -865,6 +973,123 @@ impl Coordinator {
     }
 }
 
+fn monitor_work_area(
+    monitor_origin: (i32, i32),
+    monitor_size: (i32, i32),
+) -> ((i32, i32), (i32, i32)) {
+    monitor_descriptors()
+        .ok()
+        .and_then(|monitors| {
+            monitors.into_iter().find(|monitor| {
+                monitor.bounds.x == monitor_origin.0
+                    && monitor.bounds.y == monitor_origin.1
+                    && i32::try_from(monitor.bounds.width).ok() == Some(monitor_size.0)
+                    && i32::try_from(monitor.bounds.height).ok() == Some(monitor_size.1)
+            })
+        })
+        .and_then(|monitor| {
+            Some((
+                (monitor.work_area.x, monitor.work_area.y),
+                (
+                    i32::try_from(monitor.work_area.width).ok()?,
+                    i32::try_from(monitor.work_area.height).ok()?,
+                ),
+            ))
+        })
+        .unwrap_or((monitor_origin, monitor_size))
+}
+
+fn resize_hud_position(
+    position: (i32, i32),
+    old_size: (i32, i32),
+    new_size: (i32, i32),
+    work_origin: (i32, i32),
+    work_size: (i32, i32),
+    gap: i32,
+    snap_threshold: i32,
+) -> (i32, i32) {
+    let (old_min_x, old_max_x, old_min_y, old_max_y) =
+        hud_limits(old_size, work_origin, work_size, gap);
+    let (new_min_x, new_max_x, new_min_y, new_max_y) =
+        hud_limits(new_size, work_origin, work_size, gap);
+    let x = if (position.0 - old_max_x).abs() <= snap_threshold {
+        new_max_x
+    } else if (position.0 - old_min_x).abs() <= snap_threshold {
+        new_min_x
+    } else {
+        position.0
+    };
+    let y = if (position.1 - old_max_y).abs() <= snap_threshold {
+        new_max_y
+    } else if (position.1 - old_min_y).abs() <= snap_threshold {
+        new_min_y
+    } else {
+        position.1
+    };
+    snap_hud_position(
+        (x, y),
+        new_size,
+        work_origin,
+        work_size,
+        gap,
+        snap_threshold,
+    )
+}
+
+fn snap_hud_position(
+    position: (i32, i32),
+    window_size: (i32, i32),
+    work_origin: (i32, i32),
+    work_size: (i32, i32),
+    gap: i32,
+    snap_threshold: i32,
+) -> (i32, i32) {
+    let clamped = clamp_hud_position(position, window_size, work_origin, work_size, gap);
+    let (min_x, max_x, min_y, max_y) = hud_limits(window_size, work_origin, work_size, gap);
+    let x = if (clamped.0 - min_x).abs() <= snap_threshold {
+        min_x
+    } else if (clamped.0 - max_x).abs() <= snap_threshold {
+        max_x
+    } else {
+        clamped.0
+    };
+    let y = if (clamped.1 - min_y).abs() <= snap_threshold {
+        min_y
+    } else if (clamped.1 - max_y).abs() <= snap_threshold {
+        max_y
+    } else {
+        clamped.1
+    };
+    (x, y)
+}
+
+fn hud_limits(
+    window_size: (i32, i32),
+    work_origin: (i32, i32),
+    work_size: (i32, i32),
+    gap: i32,
+) -> (i32, i32, i32, i32) {
+    let min_x = work_origin.0 + gap;
+    let min_y = work_origin.1 + gap;
+    let max_x = (work_origin.0 + work_size.0 - window_size.0 - gap).max(min_x);
+    let max_y = (work_origin.1 + work_size.1 - window_size.1 - gap).max(min_y);
+    (min_x, max_x, min_y, max_y)
+}
+
+fn clamp_hud_position(
+    position: (i32, i32),
+    window_size: (i32, i32),
+    monitor_origin: (i32, i32),
+    monitor_size: (i32, i32),
+    gap: i32,
+) -> (i32, i32) {
+    let (min_x, max_x, min_y, max_y) = hud_limits(window_size, monitor_origin, monitor_size, gap);
+    (
+        position.0.clamp(min_x, max_x),
+        position.1.clamp(min_y, max_y),
+    )
+}
+
 fn device_identity(store: &SecureStore) -> Result<DeviceIdentity> {
     if let Some(identity) = store.device_identity()? {
         return Ok(identity);
@@ -939,4 +1164,65 @@ fn update_endpoint() -> Result<Url> {
         bail!("the signed updater endpoint must be an HTTPS URL");
     }
     Ok(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_hud_position, resize_hud_position};
+
+    #[test]
+    fn keeps_the_hud_inside_the_lower_right_screen_edge() {
+        assert_eq!(
+            clamp_hud_position((1_700, 1_050), (520, 72), (0, 0), (1_920, 1_080), 8),
+            (1_392, 1_000)
+        );
+    }
+
+    #[test]
+    fn clamps_against_negative_coordinate_monitors() {
+        assert_eq!(
+            clamp_hud_position((-2_500, -20), (520, 72), (-1_920, 0), (1_920, 1_080), 8),
+            (-1_912, 8)
+        );
+    }
+
+    #[test]
+    fn pins_oversized_hud_to_the_safe_origin() {
+        assert_eq!(
+            clamp_hud_position((900, 700), (1_200, 900), (0, 0), (1_000, 800), 8),
+            (8, 8)
+        );
+    }
+
+    #[test]
+    fn taskbar_work_area_keeps_the_hud_above_the_taskbar() {
+        assert_eq!(
+            clamp_hud_position((1_300, 1_020), (520, 72), (0, 0), (1_920, 1_040), 8),
+            (1_300, 960)
+        );
+    }
+
+    #[test]
+    fn right_and_bottom_edge_snaps_survive_retract_and_expand() {
+        let expanded = resize_hud_position(
+            (1_674, 960),
+            (238, 72),
+            (520, 345),
+            (0, 0),
+            (1_920, 1_040),
+            8,
+            24,
+        );
+        assert_eq!(expanded, (1_392, 687));
+        let retracted = resize_hud_position(
+            expanded,
+            (520, 345),
+            (238, 72),
+            (0, 0),
+            (1_920, 1_040),
+            8,
+            24,
+        );
+        assert_eq!(retracted, (1_674, 960));
+    }
 }

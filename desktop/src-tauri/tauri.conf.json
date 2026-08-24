@@ -21,7 +21,7 @@
         "center": true,
         "resizable": true,
         "fullscreen": false,
-        "contentProtected": true
+        "contentProtected": false
       },
       {
         "label": "hud",
@@ -29,7 +29,7 @@
         "url": "index.html",
         "width": 520,
         "height": 345,
-        "minWidth": 460,
+        "minWidth": 220,
         "minHeight": 68,
         "visible": false,
         "resizable": false,
@@ -38,7 +38,7 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "contentProtected": true
+        "contentProtected": false
       }
     ],
     "security": {

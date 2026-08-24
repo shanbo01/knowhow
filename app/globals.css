@@ -3265,7 +3265,7 @@ button.member-row:hover {
   color: var(--purple);
 }
 
-/* Settings/platform */
+/* Settings */
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3378,195 +3378,6 @@ button.member-row:hover {
 .choice-row small {
   color: var(--muted);
   line-height: 1.4;
-}
-
-.platform-shield {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
-  border-radius: 9px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 650;
-}
-
-.platform-metrics {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.platform-queue {
-  display: grid;
-  gap: 0;
-}
-
-.platform-queue>button {
-  width: 100%;
-  min-height: 4.25rem;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.85rem;
-  padding: 0.85rem 1rem;
-  border: 0;
-  border-top: 1px solid var(--line);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.platform-queue>button:first-child {
-  border-top: 0;
-}
-
-.platform-queue>button span {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.platform-queue>button small {
-  color: var(--muted);
-}
-
-.platform-queue>button b {
-  font-size: 1.15rem;
-}
-
-.platform-queue svg {
-  width: 1rem;
-  height: 1rem;
-  color: var(--muted);
-}
-
-.platform-table {
-  min-width: 980px;
-  overflow: visible;
-}
-
-.table-card:has(.platform-table) {
-  overflow-x: auto;
-}
-
-.platform-row {
-  min-height: 82px;
-  display: grid;
-  grid-template-columns: minmax(240px, 1.4fr) minmax(180px,
-      1fr) 100px 110px 100px 100px 40px;
-  align-items: center;
-  gap: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.platform-head {
-  min-height: 42px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.workspace-cell {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.workspace-cell>span:last-child,
-.platform-row>span {
-  min-width: 0;
-  display: grid;
-}
-
-.platform-row small {
-  color: var(--muted);
-}
-
-.operational-metrics {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin-bottom: 14px;
-}
-
-.policy-lock-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface-soft);
-}
-
-.policy-lock-row>span:last-child {
-  display: grid;
-}
-
-.policy-lock-row small {
-  color: var(--muted);
-}
-
-.platform-ops-row {
-  min-height: 78px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 4px;
-  border-top: 1px solid var(--line);
-}
-
-.platform-ops-row .member-main small {
-  white-space: normal;
-  line-height: 1.45;
-}
-
-.platform-compact-row {
-  min-height: 64px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 4px;
-  border-top: 1px solid var(--line);
-}
-
-button.platform-compact-row,
-button.member-main.text-button {
-  width: 100%;
-  margin: 0;
-  border-left: 0;
-  border-right: 0;
-  border-bottom: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-}
-
-.platform-compact-row small {
-  color: var(--muted);
-  white-space: normal;
-  line-height: 1.45;
-}
-
-.platform-compact-row time {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.platform-operations-grid>.table-card {
-  min-width: 0;
 }
 
 .compact-actions {
@@ -5612,10 +5423,6 @@ button.member-main.text-button {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .platform-metrics {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
   .overview-grid {
     grid-template-columns: 1fr;
   }
@@ -5788,7 +5595,6 @@ button.member-main.text-button {
   }
 
   .metric-grid,
-  .platform-metrics,
   .privacy-grid {
     grid-template-columns: 1fr;
   }
@@ -7895,8 +7701,7 @@ select {
 .group-card,
 .member-row,
 .vault-row,
-.audit-row,
-.platform-row {
+.audit-row {
   transition:
     background-color 140ms ease,
     border-color 140ms ease;
@@ -8949,8 +8754,6 @@ body::before {
 
 .table-card>.member-row,
 .table-card>.invite-row,
-.table-card>.platform-compact-row,
-.table-card>.platform-ops-row,
 .table-card>.vault-row,
 .table-card>.empty-copy {
   padding-inline: 0;
@@ -9009,8 +8812,7 @@ body::before {
 .guide-row,
 .member-row,
 .vault-row,
-.audit-row,
-.platform-row {
+.audit-row {
   border-color: var(--border);
 }
 
@@ -9122,13 +8924,6 @@ body::before {
 .created-invite {
   border-color: var(--border);
   border-radius: 0.625rem;
-  background: var(--surface-soft);
-  color: var(--foreground);
-}
-
-.platform-shield {
-  border-color: var(--border);
-  border-radius: 0.5rem;
   background: var(--surface-soft);
   color: var(--foreground);
 }
@@ -11507,8 +11302,7 @@ select:focus-visible {
 .invite-icon,
 .vault-icon,
 .settings-title>span,
-.empty-icon,
-.platform-shield {
+.empty-icon {
   border-color: var(--border);
   border-radius: 0.4rem;
   background: var(--surface-soft);
@@ -11518,8 +11312,7 @@ select:focus-visible {
 .guide-row:hover,
 .member-row:hover,
 .vault-row:hover,
-.audit-row:hover,
-.platform-row:hover {
+.audit-row:hover {
   background: var(--surface-soft);
 }
 

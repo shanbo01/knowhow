@@ -7,27 +7,20 @@ export type WorkspaceSection =
   | "support"
   | "organization"
   | "vault"
-  | "settings";
-
-export type PlatformSection =
-  | "overview"
-  | "customers"
-  | "leads"
-  | "support"
-  | "tools";
+  | "settings"
+  | "administration";
 
 export type GuideRevisionMode = "published" | "working";
 
 export type AppRoute =
   | { kind: "root" }
-  | { kind: "platform"; section: PlatformSection; workspaceId?: string; entityId?: string }
   | { kind: "workspace-section"; workspaceSlug: string; section: WorkspaceSection }
   | { kind: "guide-new"; workspaceSlug: string }
   | { kind: "guide-view"; workspaceSlug: string; guideId: string; revision: GuideRevisionMode }
   | { kind: "guide-edit"; workspaceSlug: string; guideId: string }
   | { kind: "invalid" };
 
-export type WorkspaceRoute = Exclude<AppRoute, { kind: "root" | "platform" | "invalid" }>;
+export type WorkspaceRoute = Exclude<AppRoute, { kind: "root" | "invalid" }>;
 
 const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
   "overview",
@@ -36,24 +29,9 @@ const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
   "groups",
   "members",
   "support",
-  "organization",
-  "vault",
   "settings",
+  "administration",
 ];
-
-const PLATFORM_SECTIONS: readonly PlatformSection[] = [
-  "overview",
-  "customers",
-  "leads",
-  "support",
-  "tools",
-];
-
-const LEGACY_PLATFORM_SECTIONS: Record<string, PlatformSection> = {
-  accounts: "customers",
-  billing: "tools",
-  ops: "tools",
-};
 
 function safeSegment(value: string) {
   return encodeURIComponent(value);
@@ -79,15 +57,6 @@ function isWorkspaceSection(value: string): value is WorkspaceSection {
   return WORKSPACE_SECTIONS.includes(value as WorkspaceSection);
 }
 
-function isPlatformSection(value: string): value is PlatformSection {
-  return PLATFORM_SECTIONS.includes(value as PlatformSection);
-}
-
-function mapPlatformSection(value: string): PlatformSection | null {
-  if (isPlatformSection(value)) return value;
-  return LEGACY_PLATFORM_SECTIONS[value] ?? null;
-}
-
 export function workspaceHref(workspaceSlug: string, section: WorkspaceSection = "overview") {
   const base = `/w/${safeSegment(workspaceSlug)}`;
   return section === "overview" ? base : `${base}/${section}`;
@@ -109,27 +78,6 @@ export function guideEditorHref(workspaceSlug: string, guideId: string) {
   return `${workspaceHref(workspaceSlug, "guides")}/${safeSegment(guideId)}/edit`;
 }
 
-export function platformHref(
-  section: PlatformSection = "overview",
-  entityId?: string,
-) {
-  if (section === "overview") return "/platform";
-  if (
-    entityId &&
-    (section === "customers" || section === "leads" || section === "support")
-  ) {
-    return `/platform/${section}/${safeSegment(entityId)}`;
-  }
-  return `/platform/${section}`;
-}
-
-export function platformCanonicalPath(pathname: string) {
-  const route = parseAppRoute(pathname);
-  if (route.kind !== "platform") return null;
-  const canonical = platformHref(route.section, route.entityId);
-  return cleanPathname(pathname) === canonical ? null : canonical;
-}
-
 export function routeWorkspaceSlug(route: AppRoute) {
   return "workspaceSlug" in route ? route.workspaceSlug : null;
 }
@@ -142,25 +90,6 @@ export function parseAppRoute(pathname: string, search = ""): AppRoute {
   const segments = rawSegments.map(decodeSegment);
   if (!segments.every(isSafeRouteSegment)) return { kind: "invalid" };
   const [scope, ...rest] = segments as string[];
-
-  if (scope === "platform") {
-    if (rest.length === 0) return { kind: "platform", section: "overview" };
-    const section = mapPlatformSection(rest[0]);
-    if (!section) return { kind: "invalid" };
-    if (
-      rest.length === 2 &&
-      (section === "customers" || section === "leads" || section === "support")
-    ) {
-      return {
-        kind: "platform",
-        section,
-        workspaceId: section === "customers" ? rest[1] : undefined,
-        entityId: rest[1],
-      };
-    }
-    if (rest.length === 1) return { kind: "platform", section };
-    return { kind: "invalid" };
-  }
 
   if (scope !== "w" || !rest[0]) return { kind: "invalid" };
   const workspaceSlug = rest[0];

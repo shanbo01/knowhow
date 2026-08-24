@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import { withSentryConfig } from "@sentry/nextjs";
 
 function configuredOrigin(value: string | undefined) {
   try {
@@ -12,7 +11,6 @@ function configuredOrigin(value: string | undefined) {
 const connectSources = [
   "'self'",
   configuredOrigin(process.env.APPWRITE_ENDPOINT),
-  configuredOrigin(process.env.NEXT_PUBLIC_SENTRY_DSN),
 ].filter((value): value is string => Boolean(value));
 
 const contentSecurityPolicy = [
@@ -89,14 +87,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withSentryConfig(nextConfig, {
-  silent: true,
-  sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
-  webpack: {
-    treeshake: {
-      removeDebugLogging: true,
-      excludeReplayIframe: true,
-      excludeReplayShadowDOM: true,
-    },
-  },
-});
+export default nextConfig;

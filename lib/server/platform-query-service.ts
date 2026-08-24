@@ -18,7 +18,6 @@ import type {
   PlatformTicketSummary,
   WorkspaceRole,
 } from "../knowhow-types";
-import { platformHref } from "../workspace-routes";
 import { AccessService } from "./access-service";
 import { TABLES } from "./appwrite-resources";
 import {
@@ -59,6 +58,12 @@ const COUNT_CAP = 201;
 const PAGE_DEFAULT = 20;
 const PAGE_MAX = 50;
 const DAY = 86_400_000;
+
+function administrationReference(section: string, entityId?: string) {
+  const params = new URLSearchParams({ section });
+  if (entityId) params.set("entity", entityId);
+  return `?${params.toString()}`;
+}
 
 function stringValue(value: unknown, fallback = "") {
   return typeof value === "string" ? value : fallback;
@@ -435,7 +440,7 @@ export class PlatformQueryService {
       plan: signals.plan,
       reason: extra?.reason ?? decision.reason,
       nextAction: extra?.nextAction ?? decision.action,
-      href: platformHref("customers", signals.workspaceId),
+      href: administrationReference("clients", signals.workspaceId),
       daysRemaining: daysUntil(signals.expiresAt, Date.now()) ?? undefined,
       intentScore: score.score,
       ...extra,
@@ -539,7 +544,7 @@ export class PlatformQueryService {
           plan: signals?.plan ?? "free",
           reason: `${users} people across ${workspaces.size} workspaces.`,
           nextAction: "enterprise_lead" as const,
-          href: platformHref("customers", firstId),
+          href: administrationReference("clients", firstId),
         };
       });
     const atRisk = activeSignals
@@ -647,7 +652,7 @@ export class PlatformQueryService {
               plan: facts.signals.get(ticket.workspaceId)?.plan ?? "free",
               reason: "Response target missed.",
               nextAction: "none" as const,
-              href: platformHref("support", ticket.id),
+              href: administrationReference("support", ticket.id),
             };
           }),
         },
@@ -662,7 +667,7 @@ export class PlatformQueryService {
             plan: "enterprise",
             reason: "Retention ended. Confirm or restore.",
             nextAction: "none" as const,
-            href: platformHref("tools"),
+            href: administrationReference("activity"),
           })),
         },
       ],
@@ -1444,6 +1449,9 @@ export class PlatformQueryService {
       createdAt: details.createdAt ?? row.$createdAt,
       updatedAt: details.updatedAt ?? row.$updatedAt,
       responseTargetAt: details.responseTargetAt ?? row.$createdAt,
+      resolvedAt: details.resolvedAt ?? null,
+      closedAt: details.closedAt ?? null,
+      closureConfirmedAt: details.closureConfirmedAt ?? null,
       messages: messages.map((message) => {
         const content = decodePayload<{
           authorName?: string;
@@ -1608,7 +1616,7 @@ export class PlatformQueryService {
         label,
         description:
           section === "overview" ? "Founder home" : `Open ${label.toLowerCase()}`,
-        href: platformHref(section),
+        href: administrationReference(section),
       }));
     if (!phrase) return { results: sections.slice(0, 8) };
 
@@ -1630,28 +1638,28 @@ export class PlatformQueryService {
           ? `${account.organizationName} · ${account.name}`
           : account.name,
         description: `${account.slug} · ${account.status}`,
-        href: platformHref("customers", account.id),
+        href: administrationReference("clients", account.id),
       })),
       ...leads.items.map((lead) => ({
         kind: "lead" as const,
         id: lead.id,
         label: lead.organization || lead.contactName || lead.email,
         description: `${lead.email} · ${lead.status}`,
-        href: platformHref("leads", lead.id),
+        href: administrationReference("leads", lead.id),
       })),
       ...tickets.items.map((ticket) => ({
         kind: "ticket" as const,
         id: ticket.id,
         label: ticket.subject,
         description: `${ticket.workspaceName} · ${ticket.requesterName}`,
-        href: platformHref("support", ticket.id),
+        href: administrationReference("support", ticket.id),
       })),
       ...people.map((row) => ({
         kind: "person" as const,
         id: row.$id,
         label: personFromMember(row).name || stringValue(row.email),
         description: `${stringValue(row.email)} · ${names.get(stringValue(row.workspace_id)) ?? "Workspace"}`,
-        href: platformHref("customers", stringValue(row.workspace_id)),
+        href: administrationReference("clients", stringValue(row.workspace_id)),
       })),
       ...sections,
     ];

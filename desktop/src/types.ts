@@ -25,6 +25,11 @@ export type CaptureTarget = {
   protected: boolean;
 };
 
+export type CaptureTargetPreview = {
+  targetId: string;
+  dataUrl: string;
+};
+
 export type SmartBlurSettings = {
   emails: boolean;
   phoneNumbers: boolean;

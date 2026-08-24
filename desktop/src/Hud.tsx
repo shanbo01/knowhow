@@ -1,7 +1,10 @@
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
+  GripVertical,
   LoaderCircle,
   Pause,
   Play,
@@ -11,18 +14,19 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { desktop } from "./ipc";
 import type { AppSnapshot } from "./types";
 
 export default function Hud() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [mode, setMode] = useState<"retracted" | "compact" | "expanded">("compact");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    void desktop.setHudExpanded(expanded);
-  }, [expanded]);
+    void desktop.setHudMode(mode);
+  }, [mode]);
 
   useEffect(() => {
     void desktop.snapshot().then(setSnapshot);
@@ -40,19 +44,32 @@ export default function Hud() {
   const recorder = snapshot.recorder;
   const paused = recorder.status === "paused";
   const working = recorder.status === "finishing" || recorder.status === "uploading";
+  const retracted = mode === "retracted";
+  const expanded = mode === "expanded";
   return (
-    <main className={`hud${expanded ? " expanded" : ""}`}>
+    <main className={`hud ${mode}`}>
       <section className="hud-pill" data-tauri-drag-region>
+        <span
+          className="hud-grip"
+          data-tauri-drag-region
+          title="Drag recorder"
+          onPointerDown={(event) => {
+            if (event.button === 0) void getCurrentWindow().startDragging();
+          }}
+        ><GripVertical data-tauri-drag-region /></span>
         <span className={`record-dot${paused ? " paused" : ""}`} />
-        <div className="hud-scope" data-tauri-drag-region><strong>{paused ? "Paused" : working ? "Finishing" : "Recording"}</strong><small>{recorder.scopeLabel}</small></div>
+        {retracted ? <strong className="hud-mini-state" data-tauri-drag-region>{paused ? "Paused" : "Recording"}</strong> : <div className="hud-scope" data-tauri-drag-region><strong>{paused ? "Paused" : working ? "Finishing" : "Recording"}</strong><small>{recorder.scopeLabel}</small></div>}
         <span className="step-count"><Check /> {recorder.steps.length}</span>
-        <button className="hud-button" disabled={busy || working} title={paused ? "Resume" : "Pause"} onClick={() => void act(paused ? desktop.resume : desktop.pause)}>{paused ? <Play /> : <Pause />}</button>
-        <button className="hud-button finish" disabled={busy || working || recorder.steps.length === 0} title="Finish capture" onClick={() => void act(desktop.finish)}>{working ? <LoaderCircle className="spin" /> : <Square />}</button>
-        <button className="hud-button" title="Show recent steps" onClick={() => setExpanded((open) => !open)}><ChevronDown className={expanded ? "open" : ""} /></button>
+        {retracted ? <button className="hud-button reveal" title="Expand recorder" onClick={() => setMode("compact")}><ChevronRight /></button> : <>
+          <button className="hud-button" disabled={busy || working} title={paused ? "Resume" : "Pause"} onClick={() => void act(paused ? desktop.resume : desktop.pause)}>{paused ? <Play /> : <Pause />}</button>
+          <button className="hud-button finish" disabled={busy || working || recorder.steps.length === 0} title="Finish capture" onClick={() => void act(desktop.finish)}>{working ? <LoaderCircle className="spin" /> : <Square />}</button>
+          <button className="hud-button" title="Retract recorder" onClick={() => setMode("retracted")}><ChevronLeft /></button>
+          <button className="hud-button" title={expanded ? "Hide recent steps" : "Show recent steps"} onClick={() => setMode(expanded ? "compact" : "expanded")}><ChevronDown className={expanded ? "open" : ""} /></button>
+        </>}
       </section>
       {expanded ? (
         <section className="hud-feed">
-          <header><div><strong>Recent steps</strong><small>Delete or retry immediately</small></div><button onClick={() => setExpanded(false)}><X /></button></header>
+          <header><div><strong>Recent steps</strong><small>Captured and privacy-processed live</small></div><button title="Close recent steps" onClick={() => setMode("compact")}><X /></button></header>
           {recorder.statusMessage ? <p className="hud-status"><CircleAlert /> {recorder.statusMessage}</p> : null}
           <div className="hud-steps">
             {[...recorder.steps].reverse().slice(0, 8).map((step) => (

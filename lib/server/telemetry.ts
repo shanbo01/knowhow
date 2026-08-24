@@ -1,7 +1,5 @@
 import "server-only";
 
-import * as Sentry from "@sentry/nextjs";
-
 type FailureFields = {
   requestId?: string;
   errorCode: string;
@@ -27,20 +25,5 @@ export function recordHttpFailure(error: unknown, fields: FailureFields) {
   if (fields.status >= 500) console.error(JSON.stringify(entry));
   else if (fields.status === 429 || fields.status === 401 || fields.status === 403) {
     console.warn(JSON.stringify(entry));
-  }
-  if (fields.status >= 500) {
-    Sentry.captureException(error, {
-      tags: {
-        error_code: fields.errorCode,
-        status: String(fields.status),
-        ...(fields.operation ? { operation: fields.operation } : {}),
-      },
-      extra: {
-        ...(fields.requestId ? { requestId: fields.requestId } : {}),
-        errorCode: fields.errorCode,
-        status: fields.status,
-        ...(fields.operation ? { operation: fields.operation } : {}),
-      },
-    });
   }
 }

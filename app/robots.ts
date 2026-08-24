@@ -11,7 +11,6 @@ export default function robots(): MetadataRoute.Robots {
       disallow: [
         "/app",
         "/w/",
-        "/platform",
         "/api/",
         "/login",
         "/register",

@@ -159,6 +159,7 @@ export type SubscriptionRecord = {
   retentionDays: number;
   publicTrial: false;
   manualContract: boolean;
+  manualReference?: string | null;
   status: SubscriptionStatus;
   trialConsumed?: boolean;
   complimentary?: boolean;

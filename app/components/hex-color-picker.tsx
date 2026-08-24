@@ -1,5 +1,6 @@
 "use client";
 
+import { Palette } from "lucide-react";
 import { useMemo, useRef, type CSSProperties, type PointerEvent } from "react";
 import {
   Popover,
@@ -87,12 +88,16 @@ export function HexColorPicker({
   label,
   hint,
   ariaLabel,
+  compact = false,
+  onOpenChange,
 }: {
   value: string;
   onChange: (value: string) => void;
   label: string;
   hint?: string;
   ariaLabel: string;
+  compact?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const parsed = normalizeHex(value);
   const hsv = useMemo(() => hexToHsv(parsed ?? "#e85d24"), [parsed]);
@@ -145,18 +150,25 @@ export function HexColorPicker({
   }
 
   return (
-    <div className="color-picker">
+    <div className={compact ? "color-picker color-picker-compact" : "color-picker"}>
       <Popover
         onOpenChange={(open, details) => {
           if (!open && draggingRef.current) details.cancel();
+          onOpenChange?.(open);
         }}
       >
         <PopoverTrigger
           type="button"
-          className="color-picker-swatch"
+          className={
+            compact
+              ? "color-picker-swatch color-picker-compact-trigger"
+              : "color-picker-swatch"
+          }
           style={{ "--swatch": parsed ?? value } as CSSProperties}
           aria-label={ariaLabel}
-        />
+        >
+          {compact ? <Palette aria-hidden="true" /> : null}
+        </PopoverTrigger>
         <PopoverContent
           align="start"
           sideOffset={8}
@@ -222,7 +234,7 @@ export function HexColorPicker({
           </div>
         </PopoverContent>
       </Popover>
-      <span className="color-picker-meta">
+      {!compact ? <span className="color-picker-meta">
         <span className="color-picker-label">{label}</span>
         <input
           className="color-picker-hex"
@@ -240,7 +252,7 @@ export function HexColorPicker({
             Enter a 3- or 6-digit hex color.
           </small>
         ) : hint ? <small>{hint}</small> : null}
-      </span>
+      </span> : null}
     </div>
   );
 }

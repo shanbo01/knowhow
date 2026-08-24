@@ -1,0 +1,1918 @@
+/* Fresh, integrated KnowHow Administration surface. */
+
+.experience-shell[data-view="administration"] {
+  --experience-accent: var(--brand);
+}
+
+.experience-shell[data-view="administration"] .content-area {
+  --app-page-max-width: 104rem;
+}
+
+.administration-page {
+  width: min(100%, var(--app-page-max-width, 104rem));
+  margin: 0 auto;
+  color: var(--foreground);
+}
+
+.administration-page-header {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+  overflow: hidden;
+  min-height: 12rem;
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  border: 1px solid var(--experience-line);
+  border-radius: 1.35rem;
+  background:
+    radial-gradient(circle at 88% 14%, color-mix(in srgb, var(--brand) 15%, transparent), transparent 21rem),
+    linear-gradient(135deg, color-mix(in srgb, var(--experience-panel) 97%, transparent), color-mix(in srgb, var(--brand) 4%, var(--experience-panel)));
+  box-shadow: var(--experience-shadow);
+}
+
+.administration-page-header::after {
+  position: absolute;
+  right: -4rem;
+  bottom: -8rem;
+  width: 20rem;
+  height: 20rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 15%, transparent);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.administration-page-header > div:first-child {
+  position: relative;
+  z-index: 1;
+  max-width: 48rem;
+}
+
+.administration-overline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: color-mix(in srgb, var(--brand) 78%, var(--foreground));
+  font-size: 0.68rem;
+  font-weight: 780;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.administration-overline svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.administration-page-header h1 {
+  max-width: 44rem;
+  margin: 0.55rem 0 0;
+  font-size: clamp(2rem, 4.2vw, 3.75rem);
+  font-weight: 760;
+  letter-spacing: -0.06em;
+  line-height: 0.98;
+}
+
+.administration-page-header > div:first-child > p {
+  max-width: 42rem;
+  margin: 0.9rem 0 0;
+  color: var(--muted);
+  font-size: clamp(0.92rem, 1.2vw, 1.05rem);
+  line-height: 1.6;
+}
+
+.administration-sync {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+  min-width: 10rem;
+}
+
+.administration-sync > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  font-size: 0.76rem;
+  font-weight: 720;
+}
+
+.administration-sync > small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.administration-live-dot {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 0 0.22rem color-mix(in srgb, #22c55e 15%, transparent);
+}
+
+.administration-tabs {
+  position: sticky;
+  z-index: 12;
+  top: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  max-width: 100%;
+  margin: 1rem 0 1.15rem;
+  padding: 0.3rem;
+  overflow-x: auto;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.07);
+  backdrop-filter: blur(18px);
+}
+
+.administration-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.78rem;
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 690;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.administration-tabs button svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.administration-tabs button > span {
+  min-width: 1.25rem;
+  padding: 0.08rem 0.34rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  color: color-mix(in srgb, var(--brand) 80%, var(--foreground));
+  font-size: 0.62rem;
+  text-align: center;
+}
+
+.administration-tabs button:hover {
+  background: var(--surface-soft);
+  color: var(--foreground);
+}
+
+.administration-tabs button[aria-current="page"] {
+  background: var(--foreground);
+  color: var(--background);
+  box-shadow: 0 5px 14px rgb(0 0 0 / 0.14);
+}
+
+.administration-error {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--destructive) 28%, var(--border));
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--destructive) 7%, var(--card));
+  color: var(--destructive);
+  font-size: 0.8rem;
+}
+
+.administration-error svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.administration-error > span {
+  flex: 1;
+}
+
+.administration-error button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.administration-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.administration-metric {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  min-height: 8.5rem;
+  padding: 1rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 1rem;
+  background: var(--experience-panel);
+  box-shadow: 0 8px 26px rgb(0 0 0 / 0.035);
+}
+
+.administration-metric-icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--foreground) 6%, var(--card));
+  color: var(--foreground);
+}
+
+.administration-metric[data-tone="attention"] .administration-metric-icon {
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  color: var(--brand);
+}
+
+.administration-metric[data-tone="positive"] .administration-metric-icon {
+  background: color-mix(in srgb, #22c55e 11%, var(--card));
+  color: #16a34a;
+}
+
+.administration-metric-icon svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.administration-metric-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.administration-metric-copy small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 690;
+}
+
+.administration-metric-copy strong {
+  margin-top: 0.18rem;
+  font-size: clamp(1.65rem, 2.6vw, 2.3rem);
+  font-weight: 740;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+
+.administration-metric-copy > span {
+  margin-top: 0.48rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.administration-command-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(18rem, 0.75fr);
+  gap: 0.9rem;
+  margin-top: 0.9rem;
+}
+
+.administration-panel {
+  min-width: 0;
+  border: 1px solid var(--experience-line);
+  border-radius: 1.05rem;
+  background: var(--experience-panel);
+  box-shadow: var(--experience-shadow);
+}
+
+.administration-panel-header,
+.administration-directory-header,
+.administration-access-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.15rem 0.9rem;
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.administration-panel-header span {
+  color: var(--brand);
+  font-size: 0.63rem;
+  font-weight: 760;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.administration-panel-header h2,
+.administration-directory-header h2,
+.administration-access-header h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1.08rem;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+}
+
+.administration-panel-header > small {
+  max-width: 17rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.administration-priority-list {
+  padding: 0.3rem;
+}
+
+.administration-priority-list > button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(8rem, 0.42fr);
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.82rem;
+  border: 0;
+  border-bottom: 1px solid var(--experience-line);
+  border-radius: 0.72rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.administration-priority-list > button:last-of-type {
+  border-bottom-color: transparent;
+}
+
+.administration-priority-list > button:hover {
+  background: var(--experience-soft);
+}
+
+.administration-priority-mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.62rem;
+  background: color-mix(in srgb, var(--brand) 10%, var(--card));
+  color: var(--brand);
+}
+
+.administration-priority-mark svg {
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.administration-priority-copy,
+.administration-priority-copy > span {
+  min-width: 0;
+}
+
+.administration-priority-copy > span {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.administration-priority-copy strong {
+  overflow: hidden;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-priority-copy small,
+.administration-priority-copy p,
+.administration-priority-action {
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.administration-priority-copy small {
+  padding: 0.08rem 0.32rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  white-space: nowrap;
+}
+
+.administration-priority-copy p {
+  margin: 0.22rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-priority-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  color: var(--foreground);
+  font-weight: 660;
+  text-align: right;
+}
+
+.administration-priority-action svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.administration-funnel {
+  display: grid;
+  gap: 1rem;
+  padding: 1.15rem;
+}
+
+.administration-funnel > div > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.7rem;
+}
+
+.administration-funnel > div > span small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.administration-funnel > div > div {
+  height: 0.42rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+.administration-funnel i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), color-mix(in srgb, var(--brand) 55%, var(--foreground)));
+}
+
+.administration-panel-note {
+  margin: 0;
+  padding: 0 1.15rem 1.1rem;
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.administration-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 10rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.administration-loading svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.administration-empty {
+  display: grid;
+  justify-items: center;
+  max-width: 28rem;
+  margin: auto;
+  padding: 2.8rem 1.2rem;
+  text-align: center;
+}
+
+.administration-empty > span {
+  display: grid;
+  place-items: center;
+  width: 2.8rem;
+  height: 2.8rem;
+  margin-bottom: 0.8rem;
+  border-radius: 0.85rem;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.administration-empty svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.administration-empty strong {
+  font-size: 0.88rem;
+}
+
+.administration-empty p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.administration-workspaces-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.48fr);
+  align-items: start;
+  gap: 0.9rem;
+}
+
+.administration-directory {
+  overflow: hidden;
+}
+
+.administration-directory-header {
+  align-items: center;
+}
+
+.administration-directory-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.administration-search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: min(22rem, 32vw);
+  min-height: var(--kh-control-height);
+  padding: 0 0.68rem;
+  border: 1px solid var(--experience-line);
+  border-radius: var(--kh-control-radius);
+  background: var(--background);
+}
+
+.administration-search svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  color: var(--muted);
+}
+
+.administration-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.74rem;
+}
+
+.administration-directory-controls > select,
+.administration-form input,
+.administration-form select,
+.administration-form textarea {
+  min-height: var(--kh-control-height);
+  border: 1px solid var(--input);
+  border-radius: var(--kh-control-radius);
+  outline: none;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.administration-directory-controls > select {
+  padding: 0 2rem 0 0.7rem;
+}
+
+.administration-directory-table {
+  min-width: 0;
+}
+
+.administration-directory-row {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.25fr) minmax(7.5rem, 0.7fr) minmax(5.5rem, 0.5fr) minmax(11rem, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 4.6rem;
+  padding: 0.75rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--experience-line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.administration-directory-row {
+  cursor: pointer;
+}
+
+button.administration-directory-row:hover,
+button.administration-directory-row[data-selected] {
+  background: var(--experience-soft);
+}
+
+.administration-directory-row.is-header {
+  min-height: 2.25rem;
+  padding-block: 0.45rem;
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.administration-directory-row > span {
+  min-width: 0;
+}
+
+.administration-directory-row > span:not(.administration-directory-client) {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.administration-directory-row strong {
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-directory-row small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-directory-client {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.administration-directory-client > span:first-child,
+.administration-access-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: 0 0 auto;
+  border-radius: 0.68rem;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.administration-directory-client > span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.administration-directory-row > span:last-child svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--muted);
+}
+
+.administration-health {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.61rem;
+  font-style: normal;
+  font-weight: 720;
+}
+
+.administration-health[data-health="healthy"] {
+  background: color-mix(in srgb, #22c55e 11%, var(--card));
+  color: #15803d;
+}
+
+.administration-health[data-health="at_risk"],
+.administration-health[data-health="churning"] {
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  color: color-mix(in srgb, var(--brand) 80%, var(--foreground));
+}
+
+.administration-directory-footer {
+  display: flex;
+  justify-content: center;
+  padding: 0.8rem;
+}
+
+.administration-client-inspector {
+  position: sticky;
+  top: 5.2rem;
+  max-height: calc(100dvh - 7rem);
+  overflow: auto;
+  border: 1px solid var(--experience-line);
+  border-radius: 1.05rem;
+  background: var(--experience-panel);
+  box-shadow: var(--experience-shadow);
+}
+
+.administration-client-inspector.is-empty {
+  min-height: 24rem;
+  display: grid;
+  align-items: center;
+}
+
+.administration-inspector-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.15rem;
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.administration-inspector-header h2 {
+  margin: 0.22rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 740;
+  letter-spacing: -0.045em;
+}
+
+.administration-inspector-header p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.administration-inspector-badges,
+.administration-client-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  padding: 0.75rem 1.15rem 0;
+}
+
+.administration-inspector-badges > span:not(.administration-health) {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.61rem;
+  font-weight: 700;
+}
+
+.administration-recommendation {
+  display: flex;
+  gap: 0.7rem;
+  margin: 0.75rem 1.15rem 0;
+  padding: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--experience-line));
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--brand) 6%, var(--card));
+}
+
+.administration-recommendation > span {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: 0 0 auto;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  color: var(--brand);
+}
+
+.administration-recommendation svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.administration-recommendation div {
+  display: grid;
+  min-width: 0;
+}
+
+.administration-recommendation small {
+  color: var(--brand);
+  font-size: 0.58rem;
+  font-weight: 740;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.administration-recommendation strong {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+}
+
+.administration-recommendation p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.64rem;
+  line-height: 1.45;
+}
+
+.administration-inspector-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  padding: 0.8rem 1.15rem 0;
+}
+
+.administration-inspector-stats > div {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.65rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.7rem;
+  background: var(--background);
+}
+
+.administration-inspector-stats small {
+  color: var(--muted);
+  font-size: 0.58rem;
+}
+
+.administration-inspector-stats strong {
+  font-size: 0.95rem;
+}
+
+.administration-inspector-section {
+  margin: 0.85rem 1.15rem 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--experience-line);
+}
+
+.administration-inspector-section:last-child {
+  padding-bottom: 1.15rem;
+}
+
+.administration-inspector-section h3 {
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+
+.administration-checklist,
+.administration-timeline {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.administration-checklist > div {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.administration-checklist svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--muted);
+}
+
+.administration-checklist > div[data-complete] svg {
+  color: #16a34a;
+}
+
+.administration-checklist span,
+.administration-timeline > div > div {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.administration-checklist strong,
+.administration-timeline strong {
+  font-size: 0.66rem;
+}
+
+.administration-checklist small,
+.administration-timeline small,
+.administration-checklist p,
+.administration-timeline p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.58rem;
+}
+
+.administration-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.administration-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.48rem 0.55rem;
+  border-radius: 0.58rem;
+  background: var(--surface-soft);
+  font-size: 0.61rem;
+}
+
+.administration-facts span {
+  color: var(--muted);
+}
+
+.administration-definition-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.administration-definition-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.63rem;
+}
+
+.administration-definition-list dt {
+  color: var(--muted);
+}
+
+.administration-definition-list dd {
+  margin: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+
+.administration-internal-note {
+  margin: 0.65rem 0 0;
+  padding: 0.65rem;
+  border-radius: 0.62rem;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.administration-timeline > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.55rem;
+}
+
+.administration-timeline > div > span {
+  width: 0.46rem;
+  height: 0.46rem;
+  margin-top: 0.18rem;
+  border: 2px solid var(--brand);
+  border-radius: 999px;
+  background: var(--card);
+}
+
+.administration-support-list,
+.administration-access-list {
+  padding: 0.3rem;
+}
+
+.administration-support-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.administration-support-header-actions > small {
+  color: var(--muted);
+  font-size: 0.61rem;
+  white-space: nowrap;
+}
+
+.administration-support-header-actions > select {
+  min-height: 2rem;
+  padding: 0 1.85rem 0 0.58rem;
+  border: 1px solid var(--experience-line);
+  border-radius: var(--kh-control-radius);
+  outline: none;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 650;
+}
+
+.administration-support-header-actions > select:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 15%, transparent);
+}
+
+.administration-support-list > button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(11rem, auto);
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.85rem;
+  border: 0;
+  border-bottom: 1px solid var(--experience-line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+.administration-support-list > button:hover {
+  background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+}
+
+.administration-support-list > button:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.administration-support-icon {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.62rem;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.administration-support-icon svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.administration-support-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.administration-support-copy > span {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.administration-support-copy strong {
+  overflow: hidden;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-support-copy i {
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.57rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.administration-support-copy i[data-status="resolved"] {
+  background: color-mix(in srgb, #16a34a 10%, var(--surface-soft));
+  color: #16a34a;
+}
+
+.administration-support-copy i[data-status="closed"] {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.administration-support-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.63rem;
+}
+
+.administration-support-target {
+  display: grid;
+  justify-items: end;
+  gap: 0.15rem;
+}
+
+.administration-support-target small,
+.administration-support-target span {
+  color: var(--muted);
+  font-size: 0.57rem;
+}
+
+.administration-support-target strong {
+  font-size: 0.66rem;
+}
+
+.administration-support-target[data-overdue] small,
+.administration-support-target[data-overdue] strong {
+  color: var(--brand);
+}
+
+.administration-support-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.administration-support-open svg {
+  width: 0.68rem;
+  height: 0.68rem;
+  transition: transform 150ms ease;
+}
+
+.administration-support-list > button:hover .administration-support-open svg {
+  transform: translateX(0.15rem);
+}
+
+.administration-access-header {
+  align-items: center;
+}
+
+.administration-access-header p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.administration-access-list > article {
+  display: grid;
+  grid-template-columns: auto minmax(11rem, 1fr) minmax(12rem, 1fr) minmax(9rem, auto) auto;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem;
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.administration-access-person,
+.administration-access-state {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.administration-access-person strong {
+  font-size: 0.75rem;
+}
+
+.administration-access-person small,
+.administration-access-state small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.61rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-access-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.administration-access-roles i {
+  padding: 0.2rem 0.42rem;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.administration-access-state > :first-child,
+.administration-access-state:not(:has(> span)) {
+  font-size: 0.64rem;
+}
+
+.administration-access-state svg {
+  display: inline;
+  width: 0.78rem;
+  height: 0.78rem;
+  margin-right: 0.22rem;
+  color: #16a34a;
+  vertical-align: -0.12rem;
+}
+
+.administration-dialog {
+  width: min(94vw, 38rem) !important;
+  max-width: 38rem !important;
+  border-radius: 1.15rem !important;
+}
+
+.administration-dialog [data-slot="dialog-description"] {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.administration-ticket-dialog {
+  width: min(96vw, 58rem) !important;
+  max-width: 58rem !important;
+  max-height: 92dvh;
+  overflow-y: auto;
+}
+
+.administration-ticket-dialog [data-slot="dialog-header"] {
+  padding-right: 2.6rem;
+}
+
+.administration-ticket-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.administration-ticket-heading-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--experience-line));
+  border-radius: 0.72rem;
+  background: color-mix(in srgb, var(--brand) 9%, var(--surface-soft));
+  color: var(--brand);
+}
+
+.administration-ticket-heading-icon svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.administration-ticket-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.administration-ticket-heading [data-slot="dialog-title"] {
+  overflow: hidden;
+  font-size: 1rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-ticket-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--experience-line));
+  border-radius: var(--kh-surface-radius);
+  background: color-mix(in srgb, var(--destructive) 7%, var(--surface-soft));
+}
+
+.administration-ticket-error > svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  color: var(--destructive);
+}
+
+.administration-ticket-error strong,
+.administration-ticket-error p {
+  margin: 0;
+}
+
+.administration-ticket-error p {
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.administration-ticket-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--experience-line);
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.administration-ticket-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.administration-ticket-status > span {
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 10%, var(--surface-soft));
+  color: var(--brand);
+  font-size: 0.62rem;
+  font-weight: 750;
+}
+
+.administration-ticket-status > span[data-status="waiting_customer"] {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.administration-ticket-status > span[data-status="closed"] {
+  background: color-mix(in srgb, #16a34a 10%, var(--surface-soft));
+  color: #16a34a;
+}
+
+.administration-ticket-status > span[data-status="resolved"] {
+  background: color-mix(in srgb, #16a34a 10%, var(--surface-soft));
+  color: #16a34a;
+}
+
+.administration-ticket-status small {
+  color: var(--muted);
+  font-size: 0.62rem;
+}
+
+.administration-ticket-close-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.administration-ticket-close-confirm > strong {
+  margin-right: 0.2rem;
+  font-size: 0.65rem;
+}
+
+.administration-ticket-closed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #16a34a;
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+
+.administration-ticket-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #16a34a;
+  font-size: 0.66rem;
+  font-weight: 750;
+}
+
+.administration-ticket-pending svg {
+  width: 0.88rem;
+  height: 0.88rem;
+}
+
+.administration-ticket-closed svg {
+  width: 0.88rem;
+  height: 0.88rem;
+}
+
+.administration-ticket-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.administration-ticket-meta > span {
+  display: grid;
+  min-width: 0;
+  gap: 0.14rem;
+  padding: 0.62rem 0.68rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.72rem;
+  background: color-mix(in srgb, var(--surface-soft) 60%, transparent);
+}
+
+.administration-ticket-meta small,
+.administration-ticket-meta em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-ticket-meta strong {
+  overflow: hidden;
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-ticket-conversation {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--surface-soft) 35%, transparent);
+}
+
+.administration-ticket-conversation > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--experience-line);
+  background: var(--background);
+}
+
+.administration-ticket-conversation > header span {
+  color: var(--brand);
+  font-size: 0.57rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.administration-ticket-conversation > header h3 {
+  margin: 0.12rem 0 0;
+  font-size: 0.73rem;
+}
+
+.administration-ticket-conversation > header svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  color: var(--muted);
+}
+
+.administration-ticket-messages {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+  max-height: min(36dvh, 22rem);
+  padding: 0.75rem;
+  overflow-y: auto;
+}
+
+.administration-ticket-messages > article {
+  display: grid;
+  gap: 0.42rem;
+  width: min(82%, 42rem);
+  padding: 0.68rem 0.75rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.8rem 0.8rem 0.8rem 0.25rem;
+  background: var(--background);
+  box-shadow: 0 7px 18px rgb(0 0 0 / 0.035);
+}
+
+.administration-ticket-messages > article[data-author="support"] {
+  justify-self: end;
+  border-color: color-mix(in srgb, var(--brand) 22%, var(--experience-line));
+  border-radius: 0.8rem 0.8rem 0.25rem 0.8rem;
+  background: color-mix(in srgb, var(--brand) 6%, var(--background));
+}
+
+.administration-ticket-messages article > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.administration-ticket-messages article > header > div {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.administration-ticket-messages article strong {
+  font-size: 0.68rem;
+}
+
+.administration-ticket-messages article header span,
+.administration-ticket-messages article time {
+  color: var(--muted);
+  font-size: 0.56rem;
+}
+
+.administration-ticket-messages article p {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.71rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.administration-ticket-reply {
+  display: grid;
+  gap: 0.5rem;
+  padding-top: 0.15rem;
+}
+
+.administration-ticket-reply > label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.administration-ticket-reply label > span {
+  font-size: 0.68rem;
+  font-weight: 750;
+}
+
+.administration-ticket-reply textarea {
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.62rem 0.68rem;
+  resize: vertical;
+  border: 1px solid var(--input);
+  border-radius: var(--kh-control-radius);
+  outline: none;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.administration-ticket-reply textarea:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 15%, transparent);
+}
+
+.administration-ticket-reply > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.administration-ticket-reply > div > small {
+  color: var(--muted);
+  font-size: 0.59rem;
+}
+
+.administration-form {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+.administration-form > label,
+.administration-form-grid > label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.administration-form label > span,
+.administration-form fieldset > legend {
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.administration-form input,
+.administration-form select,
+.administration-form textarea {
+  width: 100%;
+  padding: 0.55rem 0.68rem;
+}
+
+.administration-form textarea {
+  min-height: 6.5rem;
+  resize: vertical;
+}
+
+.administration-form input:focus,
+.administration-form select:focus,
+.administration-form textarea:focus,
+.administration-search:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 15%, transparent);
+}
+
+.administration-form label > small,
+.administration-form-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.61rem;
+  line-height: 1.4;
+}
+
+.administration-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.administration-input-suffix {
+  position: relative;
+}
+
+.administration-input-suffix input {
+  padding-right: 3rem;
+}
+
+.administration-input-suffix small {
+  position: absolute;
+  top: 50%;
+  right: 0.7rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+  transform: translateY(-50%);
+}
+
+.administration-check-row {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 0.65rem !important;
+  padding: 0.72rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.72rem;
+  background: var(--surface-soft);
+}
+
+.administration-check-row > input,
+.administration-role-fieldset input,
+.administration-tag-fieldset input {
+  width: 1rem;
+  min-height: 1rem;
+  margin-top: 0.08rem;
+  accent-color: var(--brand);
+}
+
+.administration-check-row > span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.administration-check-row strong {
+  font-size: 0.68rem;
+}
+
+.administration-role-fieldset,
+.administration-tag-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.administration-role-fieldset > div {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.administration-role-fieldset label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.72rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.72rem;
+  cursor: pointer;
+}
+
+.administration-role-fieldset label[data-selected] {
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
+  background: color-mix(in srgb, var(--brand) 6%, var(--card));
+}
+
+.administration-role-fieldset label > span {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.administration-role-fieldset strong {
+  font-size: 0.7rem;
+}
+
+.administration-role-fieldset small {
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+.administration-tag-fieldset > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  margin-top: 0.42rem;
+}
+
+.administration-tag-fieldset label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.administration-tag-fieldset label span {
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.administration-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--experience-line);
+}
+
+@media (max-width: 1180px) {
+  .administration-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .administration-workspaces-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .administration-client-inspector {
+    position: fixed;
+    z-index: 50;
+    top: 0;
+    right: 0;
+    width: min(34rem, 92vw);
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    box-shadow: -24px 0 60px rgb(0 0 0 / 0.28);
+  }
+
+  .administration-client-inspector.is-empty {
+    display: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .administration-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .administration-directory-header,
+  .administration-access-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .administration-directory-controls {
+    width: 100%;
+  }
+
+  .administration-search {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .administration-directory-row {
+    grid-template-columns: minmax(10rem, 1.3fr) minmax(7rem, 0.7fr) minmax(5rem, 0.4fr) auto;
+  }
+
+  .administration-directory-row > span:nth-child(4) {
+    display: none;
+  }
+
+  .administration-access-list > article {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .administration-access-roles,
+  .administration-access-state {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (max-width: 700px) {
+  .administration-page-header {
+    min-height: auto;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 1.25rem;
+  }
+
+  .administration-page-header h1 {
+    font-size: 2.15rem;
+  }
+
+  .administration-sync {
+    width: 100%;
+    grid-template-columns: 1fr auto;
+    justify-items: start;
+    align-items: center;
+  }
+
+  .administration-sync > small {
+    display: none;
+  }
+
+  .administration-sync > button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .administration-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .administration-metric {
+    min-height: 6.5rem;
+  }
+
+  .administration-panel-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .administration-panel-header > small {
+    text-align: left;
+  }
+
+  .administration-support-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .administration-support-header-actions > select {
+    max-width: 70%;
+  }
+
+  .administration-priority-list > button {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .administration-priority-action {
+    font-size: 0;
+  }
+
+  .administration-directory-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .administration-directory-row.is-header {
+    display: none;
+  }
+
+  .administration-directory-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.5rem;
+    min-height: 0;
+    padding: 0.9rem;
+  }
+
+  .administration-directory-row > span:nth-child(2),
+  .administration-directory-row > span:nth-child(3),
+  .administration-directory-row > span:nth-child(4) {
+    display: none;
+  }
+
+  .administration-support-list > button {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .administration-support-target {
+    grid-column: 2;
+    justify-items: start;
+  }
+
+  .administration-ticket-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .administration-ticket-toolbar,
+  .administration-ticket-close-confirm,
+  .administration-ticket-reply > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .administration-ticket-close-confirm > strong {
+    margin: 0 0 0.15rem;
+  }
+
+  .administration-ticket-close-confirm > button,
+  .administration-ticket-reply > div > button {
+    width: 100%;
+  }
+
+  .administration-ticket-messages > article {
+    width: 92%;
+  }
+
+  .administration-inspector-stats,
+  .administration-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .administration-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .administration-dialog-actions > button {
+    width: 100%;
+  }
+}

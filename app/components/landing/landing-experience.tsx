@@ -733,8 +733,8 @@ export function LandingExperience() {
           <Link href="/#how">How it works</Link>
           <Link href="/#product">Product</Link>
           <Link href="/#pricing">Pricing</Link>
-          <Link href="/security">Security</Link>
-          <Link href="/contact">Contact</Link>
+          <Link href="/extension">Extension</Link>
+          <Link href="/contact">Support</Link>
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
         </nav>

@@ -8,8 +8,15 @@ mod secure_store;
 use std::sync::Arc;
 
 use coordinator::{AuthorizationLaunch, Coordinator};
-use model::{AppSnapshot, CaptureTarget, RecorderSettings, RecorderStatus, StartCaptureInput};
-use tauri::{Manager, State, WindowEvent, menu::MenuBuilder, tray::TrayIconBuilder};
+use model::{
+    AppSnapshot, CaptureTarget, CaptureTargetPreview, RecorderSettings, RecorderStatus,
+    StartCaptureInput,
+};
+use tauri::{
+    Manager, State, WindowEvent,
+    menu::MenuBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 
 type CommandResult<T> = Result<T, String>;
 
@@ -33,6 +40,11 @@ async fn poll_authorization(state: State<'_, Arc<Coordinator>>) -> CommandResult
 #[tauri::command]
 fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
     state.targets().map_err(command_error)
+}
+
+#[tauri::command]
+fn capture_target_previews(target_ids: Vec<String>) -> CommandResult<Vec<CaptureTargetPreview>> {
+    platform::capture_target_previews(&target_ids).map_err(command_error)
 }
 
 #[tauri::command]
@@ -103,8 +115,8 @@ fn show_main_window(state: State<'_, Arc<Coordinator>>) -> CommandResult<()> {
 }
 
 #[tauri::command]
-fn set_hud_expanded(state: State<'_, Arc<Coordinator>>, expanded: bool) -> CommandResult<()> {
-    state.show_hud(expanded).map_err(command_error)
+fn set_hud_mode(state: State<'_, Arc<Coordinator>>, mode: String) -> CommandResult<()> {
+    state.set_hud_mode(&mode).map_err(command_error)
 }
 
 #[tauri::command]
@@ -152,20 +164,26 @@ pub fn run() {
             coordinator.start_background_tasks();
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 let coordinator = window.state::<Arc<Coordinator>>();
                 if !coordinator.is_quitting() {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            WindowEvent::Moved(_) if window.label() == "hud" => {
+                let coordinator = window.state::<Arc<Coordinator>>();
+                let _ = coordinator.constrain_hud_to_screen();
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             begin_authorization,
             poll_authorization,
             capture_targets,
+            capture_target_previews,
             start_capture,
             cancel_countdown,
             pause_capture,
@@ -176,7 +194,7 @@ pub fn run() {
             retry_capture_step,
             update_recorder_settings,
             show_main_window,
-            set_hud_expanded,
+            set_hud_mode,
             open_knowhow,
             check_for_updates,
             request_quit,
@@ -203,8 +221,37 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build()?;
     let mut tray = TrayIconBuilder::with_id("knowhow-capture")
         .menu(&menu)
-        .tooltip("KnowHow Capture")
-        .show_menu_on_left_click(true)
+        .tooltip("KnowHow Capture — left-click to open")
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let coordinator = tray
+                    .app_handle()
+                    .state::<Arc<Coordinator>>()
+                    .inner()
+                    .clone();
+                let status = coordinator.snapshot().recorder.status;
+                let result = if matches!(
+                    status,
+                    RecorderStatus::Recording
+                        | RecorderStatus::Paused
+                        | RecorderStatus::Finishing
+                        | RecorderStatus::Uploading
+                ) {
+                    coordinator.show_hud("compact")
+                } else {
+                    coordinator.show_main()
+                };
+                if let Err(error) = result {
+                    coordinator.set_status_message(command_error(error));
+                }
+            }
+        })
         .on_menu_event(|app, event| {
             let coordinator = app.state::<Arc<Coordinator>>().inner().clone();
             match event.id().as_ref() {

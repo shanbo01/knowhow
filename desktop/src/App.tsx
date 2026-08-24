@@ -13,7 +13,6 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  Square,
   Type,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -121,7 +120,7 @@ function RecoveryScreen({
     <main className="recovery-screen">
       <span className="recovery-icon"><RefreshCw /></span>
       <p className="eyebrow">Recovered safely</p>
-      <h1>Finish your encrypted capture</h1>
+      <h1>Finish your private capture</h1>
       <p>{snapshot.recorder.statusMessage ?? "This unfinished capture stayed encrypted on this device."}</p>
       <div className="recovery-summary">
         <span><strong>{snapshot.recorder.steps.length}</strong> steps</span>
@@ -134,38 +133,6 @@ function RecoveryScreen({
     </main>
   );
 }
-
-const SCOPE_OPTIONS: Array<{
-  kind: CaptureScopeKind;
-  title: string;
-  description: string;
-  icon: typeof AppWindow;
-}> = [
-  {
-    kind: "application",
-    title: "Application",
-    description: "Follow foreground windows from one app",
-    icon: AppWindow,
-  },
-  {
-    kind: "window",
-    title: "Window",
-    description: "One window and its owned dialogs",
-    icon: Square,
-  },
-  {
-    kind: "monitor",
-    title: "Monitor",
-    description: "Actions on one physical display",
-    icon: Monitor,
-  },
-  {
-    kind: "all-displays",
-    title: "All displays",
-    description: "Store the display containing each action",
-    icon: Laptop,
-  },
-];
 
 function CaptureSetup({
   snapshot,
@@ -198,11 +165,59 @@ function CaptureSetup({
     () => targetsForScope(targets, scopeKind),
     [scopeKind, targets],
   );
-  const target =
-    scopeKind === "all-displays"
-      ? null
-      : selectedTarget(eligibleTargets, targetId);
+  const galleryTargets = eligibleTargets;
+  const target = selectedTarget(eligibleTargets, targetId);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const blurCount = Object.values(settings.smartBlur).filter(Boolean).length;
+  const surface = scopeKind === "monitor" ? "displays" : "applications";
+  const previewIds = useMemo(() => {
+    const prioritized = target
+      ? [target, ...galleryTargets.filter((candidate) => candidate.id !== target.id)]
+      : galleryTargets;
+    return prioritized.filter((candidate) => !candidate.protected).map((candidate) => candidate.id);
+  }, [galleryTargets, target]);
+  const previewKey = previewIds.join("|");
+
+  useEffect(() => {
+    let active = true;
+    let loading = false;
+    async function refreshPreviews() {
+      if (!previewIds.length || loading || document.visibilityState !== "visible") return;
+      loading = true;
+      try {
+        const rows = await desktop.previews(previewIds);
+        if (active) {
+          const refreshed = Object.fromEntries(rows.map((row) => [row.targetId, row.dataUrl]));
+          setPreviews((current) => ({ ...current, ...refreshed }));
+        }
+      } catch {
+        // A window can disappear between enumeration and preview capture; the next refresh retries.
+      } finally {
+        loading = false;
+      }
+    }
+    void refreshPreviews();
+    const timer = window.setInterval(() => void refreshPreviews(), 6_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshPreviews();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [previewKey]);
+
+  function chooseScope(kind: CaptureScopeKind) {
+    setScopeKind(kind);
+    setTargetId("");
+  }
+
+  function chooseTarget(nextTarget: CaptureTarget) {
+    if (nextTarget.protected) return;
+    setTargetId(nextTarget.id);
+  }
 
   function updateSettings(patch: Partial<RecorderSettings>) {
     onSettings({ ...settings, ...patch });
@@ -211,37 +226,39 @@ function CaptureSetup({
   return (
     <main className="capture-setup">
       <div className="setup-heading">
-        <div><p className="eyebrow">New capture</p><h1>What should KnowHow follow?</h1></div>
+        <div><p className="eyebrow">New capture</p><h1>Choose an application or display</h1><p className="setup-subtitle">Pick the source KnowHow should follow while you work.</p></div>
         <button className="icon-button" title="Refresh available targets" onClick={onRefreshTargets}>
           <RefreshCw className={busy ? "spin" : ""} />
         </button>
       </div>
-      <div className="scope-grid">
-        {SCOPE_OPTIONS.map(({ kind, title, description, icon: Icon }) => (
-          <button
-            className={`scope-card${scopeKind === kind ? " selected" : ""}`}
-            key={kind}
-            onClick={() => setScopeKind(kind)}
-          >
-            <span><Icon /></span><strong>{title}</strong><small>{description}</small>
-            {scopeKind === kind ? <i><Check /></i> : null}
-          </button>
-        ))}
+      <div className="source-tabs" role="tablist" aria-label="Capture source">
+        <button role="tab" aria-selected={surface === "applications"} className={surface === "applications" ? "selected" : ""} onClick={() => chooseScope("application")}><AppWindow /> Applications</button>
+        <button role="tab" aria-selected={surface === "displays"} className={surface === "displays" ? "selected" : ""} onClick={() => chooseScope("monitor")}><Monitor /> Displays</button>
       </div>
-      {scopeKind !== "all-displays" ? (
-        <label className="target-picker">
-          <span>{scopeKind === "monitor" ? "Choose a monitor" : `Choose ${scopeKind === "application" ? "an application" : "a window"}`}</span>
-          <select value={target?.id ?? ""} onChange={(event) => setTargetId(event.target.value)}>
-            {eligibleTargets.length ? eligibleTargets.map((target) => (
-              <option value={target.id} disabled={target.protected} key={target.id}>
-                {target.label}{target.detail ? ` — ${target.detail}` : ""}{target.protected ? " (protected)" : ""}
-              </option>
-            )) : <option value="">No eligible targets</option>}
-          </select>
-        </label>
-      ) : (
-        <div className="all-displays-note"><Monitor /> Each step keeps only the display or window where the action happened.</div>
-      )}
+      <section className="share-gallery" aria-label={surface === "applications" ? "Available applications" : "Available displays"}>
+        {galleryTargets.map((candidate, index) => {
+          const selected = target?.id === candidate.id;
+          const initial = candidate.label.trim().charAt(0).toUpperCase() || "K";
+          const preview = previews[candidate.id];
+          return (
+            <button
+              className={`share-tile${selected ? " selected" : ""}${candidate.protected ? " protected" : ""}`}
+              disabled={candidate.protected}
+              key={candidate.id}
+              onClick={() => chooseTarget(candidate)}
+            >
+              <span className={`share-preview ${candidate.kind}-preview`}>
+                {preview ? <img src={preview} alt={`Live preview of ${candidate.label}`} /> : candidate.kind === "monitor" ? <><span className="screen-number">{index + 1}</span><i className="screen-taskbar" /></> : <><span className="window-titlebar"><i /><i /><i /></span><span className="app-glyph">{initial}</span><span className="window-lines"><i /><i /><i /></span></>}
+                {preview ? <span className="live-badge"><i /> Live</span> : null}
+              </span>
+              <span className="share-tile-copy"><strong>{candidate.label}</strong><small>{candidate.protected ? "Protected source" : candidate.detail || (scopeKind === "monitor" ? "Display" : "Ready to capture")}</small></span>
+              <span className="selection-check"><Check /></span>
+            </button>
+          );
+        })}
+        {!galleryTargets.length ? <div className="share-empty">{surface === "applications" ? <AppWindow /> : <Monitor />}<strong>No {surface} found</strong><small>{surface === "applications" ? "Open an application, then refresh." : "Reconnect the display, then refresh."}</small></div> : null}
+      </section>
+      <p className="scope-explainer">{scopeKind === "application" ? "KnowHow follows every window opened by the selected application." : "KnowHow records actions performed on the selected display."}</p>
       <label className={`feature-toggle prominent${settings.desktopTypedTextPolicy === "disabled" ? " disabled" : ""}`}>
         <span className="feature-icon"><Type /></span>
         <span><strong>Capture typed text</strong><small>Exact text from confirmed non-password fields. Password and uncertain fields stay semantic.</small></span>
@@ -256,7 +273,7 @@ function CaptureSetup({
       <section className="blur-panel">
         <button className="blur-panel-trigger" onClick={() => setBlurOpen((open) => !open)}>
           <span className="feature-icon"><Sparkles /></span>
-          <span><strong>Smart Blur</strong><small>{blurCount ? `${blurCount} optional ${blurCount === 1 ? "rule" : "rules"} on` : "Off by default · password masks stay on"}</small></span>
+          <span><strong>Live Smart Blur</strong><small>{blurCount ? `${blurCount} ${blurCount === 1 ? "rule" : "rules"} applied before every step is saved` : "Off by default · password masks stay on"}</small></span>
           <ChevronDown className={blurOpen ? "open" : ""} />
         </button>
         {blurOpen ? (
@@ -291,7 +308,7 @@ function CaptureSetup({
       </section>
       <button
         className="primary-button start-button"
-        disabled={busy || (scopeKind !== "all-displays" && !target)}
+        disabled={busy || !target}
         onClick={() => onStart(scopeKind, target, settings)}
       >
         <MousePointer2 /> Start capture <kbd>3 sec</kbd>

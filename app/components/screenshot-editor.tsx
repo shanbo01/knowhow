@@ -8,7 +8,6 @@ import {
   ImagePlus,
   LoaderCircle,
   MousePointerClick,
-  Palette,
   PenLine,
   Redo2,
   RefreshCw,
@@ -38,6 +37,7 @@ import {
 import type { EditorBlock } from "../../lib/knowhow-types";
 import { paintRasterRedaction } from "../../lib/redaction-raster";
 import { useConfirmDialog } from "./confirm-dialog";
+import { HexColorPicker } from "./hex-color-picker";
 
 type Annotation = NonNullable<EditorBlock["annotations"]>[number];
 type Redaction = NonNullable<EditorBlock["redactions"]>[number];
@@ -1433,15 +1433,22 @@ export function ScreenshotEditor({
                       onClick={() => commitAnnotationColor(selectedAnnotation.id, swatch)}
                     />
                   ))}
-                  <label className="shot-swatch shot-swatch-custom" title="Custom color">
-                    <Palette />
-                    <input
-                      type="color"
-                      value={isValidColor(selectedAnnotation.color) ? selectedAnnotation.color : accentColor}
-                      onFocus={() => pushHistory()}
-                      onChange={(event) => updateAnnotationLive(selectedAnnotation.id, { color: event.target.value })}
-                    />
-                  </label>
+                  <HexColorPicker
+                    compact
+                    value={
+                      isValidColor(selectedAnnotation.color)
+                        ? selectedAnnotation.color!
+                        : accentColor
+                    }
+                    label="Annotation color"
+                    ariaLabel="Pick a custom annotation color"
+                    onOpenChange={(open) => {
+                      if (open) pushHistory();
+                    }}
+                    onChange={(color) =>
+                      updateAnnotationLive(selectedAnnotation.id, { color })
+                    }
+                  />
                 </div>
                 <span className="shot-floating-divider" />
                 <button type="button" className="icon-button tiny danger" onClick={() => removeAnnotation(selectedAnnotation.id)} aria-label="Remove annotation" title="Delete">

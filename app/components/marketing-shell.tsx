@@ -39,10 +39,8 @@ export function MarketingFooter() {
           <Link href="/#pricing">Pricing</Link>
         </div>
         <div>
-          <strong>Company</strong>
-          <Link href="/trust">Trust</Link>
-          <Link href="/security">Security</Link>
-          <Link href="/contact">Contact</Link>
+          <strong>Support</strong>
+          <Link href="/contact">Contact support</Link>
           <Link href="/privacy">Privacy</Link>
           <Link href="/terms">Terms</Link>
         </div>

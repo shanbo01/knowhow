@@ -25,7 +25,6 @@ import {
   PlatformProvisioningDialog,
   KnowHowWorkspaceApp,
 } from "./knowhow-workspace-app";
-import { PlatformApp } from "./platform/platform-app";
 import { ProductBrand } from "./product-brand";
 import {
   SelfServiceSetup,
@@ -61,7 +60,6 @@ import {
   guideEditorHref,
   guideHref,
   parseAppRoute,
-  platformHref,
   routeWorkspaceSlug,
   workspaceHref,
   type AppRoute,
@@ -371,7 +369,6 @@ function WorkspaceOnboarding({
   organizations,
   busy,
   error,
-  onNavigate,
   onSaveProvisioning,
   onCompleteProvisioning,
   onAppointOrganizationMember,
@@ -385,7 +382,6 @@ function WorkspaceOnboarding({
   organizations: OrganizationAdministration[];
   busy: boolean;
   error: string;
-  onNavigate: (href: string) => void;
   onSaveProvisioning: (
     runId: string | null,
     step: number,
@@ -569,31 +565,6 @@ function WorkspaceOnboarding({
           />
         </section>
       ))}
-      {platform ? (
-        <section
-          className="onboarding-platform"
-          aria-label="Platform administration"
-        >
-          <div className="create-workspace-form">
-            <div className="section-heading compact">
-              <div>
-                <h2>Platform console</h2>
-                <p>
-                  Operator queues, customer profiles, inbound leads, and
-                  commercial controls live in the dedicated console.
-                </p>
-              </div>
-            </div>
-            <button
-              className="button primary"
-              type="button"
-              onClick={() => onNavigate(platformHref())}
-            >
-              Open platform console
-            </button>
-          </div>
-        </section>
-      ) : null}
       {provisioningOpen && platform ? (
         <PlatformProvisioningDialog
           busy={busy}
@@ -1455,27 +1426,6 @@ export default function Home() {
     );
   }
 
-  if (
-    route.kind === "platform" &&
-    bootstrap.viewer.platformAdministrator &&
-    bootstrap.platform
-  ) {
-    return (
-      <>
-        <PlatformApp
-          viewer={bootstrap.viewer}
-          platform={bootstrap.platform}
-          route={route}
-          activeWorkspaceSlug={bootstrap.activeWorkspace?.workspace.slug}
-          onNavigate={navigate}
-          onRefresh={() => loadBootstrap(activeWorkspaceId || undefined)}
-          onSignOut={signOut}
-        />
-        {reauthenticationGate}
-      </>
-    );
-  }
-
   if (bootstrap.recovery) {
     return (
       <SubscriptionRecovery
@@ -1580,7 +1530,6 @@ export default function Home() {
           organizations={bootstrap.organizations ?? []}
           busy={busy}
           error={error}
-          onNavigate={navigate}
           onSaveProvisioning={async (runId, step, data) => {
             setBusy(true);
             setError("");

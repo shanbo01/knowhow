@@ -1099,7 +1099,6 @@ export function GuideEditor({
       ) : null}
       {deletePromptOpen && guide ? (
         <GuideDeleteDialog
-          title={title.trim() || guide.title}
           busy={busy}
           onCancel={() => setDeletePromptOpen(false)}
           onConfirm={deleteGuide}

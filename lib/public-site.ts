@@ -3,8 +3,6 @@ const DEFAULT_PUBLIC_ORIGIN = "http://localhost:3001";
 export const PUBLIC_MARKETING_PATHS = [
   "/",
   "/extension",
-  "/trust",
-  "/security",
   "/contact",
   "/privacy",
   "/terms",

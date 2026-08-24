@@ -8,8 +8,8 @@ const links = [
   { href: "/#how", label: "How it works" },
   { href: "/#product", label: "Product" },
   { href: "/#pricing", label: "Pricing" },
-  { href: "/security", label: "Security" },
-  { href: "/trust", label: "Trust" },
+  { href: "/extension", label: "Extension" },
+  { href: "/contact", label: "Support" },
 ] as const;
 
 function isActive(pathname: string, href: string) {

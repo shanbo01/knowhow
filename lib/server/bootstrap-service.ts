@@ -43,8 +43,6 @@ import { TABLES } from "./appwrite-resources";
 import { authorize } from "./policy";
 import type { RecordData, RecordStore, StoredRecord } from "./record-store";
 import type { AuthenticatedIdentity } from "./session-identity";
-import { PricingCatalogService } from "./pricing-catalog-service";
-import { PlatformQueryService } from "./platform-query-service";
 import { toWorkspaceSubscriptionView } from "./commercial-plan";
 import { EntitlementService } from "./entitlement-service";
 import type { WorkspaceEntitlements } from "../knowhow-types";
@@ -743,6 +741,9 @@ export class BootstrapService {
           createdAt: details.createdAt ?? row.$createdAt,
           updatedAt: details.updatedAt ?? row.$updatedAt,
           responseTargetAt: details.responseTargetAt ?? row.$createdAt,
+          resolvedAt: details.resolvedAt ?? null,
+          closedAt: details.closedAt ?? null,
+          closureConfirmedAt: details.closureConfirmedAt ?? null,
           messages: supportMessageRows
             .filter((message) => message.subject_id === row.$id)
             .map((message) => {
@@ -976,33 +977,16 @@ export class BootstrapService {
     roles: PlatformRole[],
   ) {
     if (!roles.length) return undefined;
-    const queues = await new PlatformQueryService(this.store).queues(identity);
-    const [appointmentRows, provisioningRows, pricingCatalogs] = await Promise.all([
-      this.store.list(TABLES.initialAdminAppointments, {
-        filters: [{ field: "status", value: "active" }],
-      }),
-      this.store.list(TABLES.provisioningRuns, {
-        filters: [
-          { field: "user_id", value: identity.userId },
-          { field: "status", value: "draft" },
-        ],
-        order: "desc",
-        limit: 25,
-      }),
-      new PricingCatalogService(this.store).list(),
-    ]);
+    const provisioningRows = await this.store.list(TABLES.provisioningRuns, {
+      filters: [
+        { field: "user_id", value: identity.userId },
+        { field: "status", value: "draft" },
+      ],
+      order: "desc",
+      limit: 25,
+    });
     return {
       generatedAt: new Date().toISOString(),
-      settings: queues.settings,
-      queueCounts: queues.counts,
-      appointments: appointmentRows.map((row) => ({
-        id: row.$id,
-        workspaceId: stringValue(row.workspace_id),
-        email: stringValue(row.email),
-        status: "active" as const,
-        expiresAt: stringValue(row.expires_at),
-        createdAt: row.$createdAt,
-      })),
       provisioningRuns: provisioningRows.map((row) => {
         const run = decodePayload<{
           currentStep?: number;
@@ -1018,7 +1002,6 @@ export class BootstrapService {
           steps: run.steps,
         };
       }),
-      pricingCatalogs,
     };
   }
 

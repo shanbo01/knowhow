@@ -24,7 +24,6 @@ import {
 import {
   entitlementsForPlan,
   inferredCommercialPlan,
-  isCommercialPlan,
   PRO_TRIAL_DAYS,
   subscriptionKindForPlan,
   trialConsumed,
@@ -1926,23 +1925,34 @@ export class CommandService {
           "Contract or invoice reference",
           { min: 3, max: 128 },
         );
-        const expiresAt =
-          payload.expiresAt == null
-            ? null
-            : new Date(
-                inputText(payload.expiresAt, "Expiry", { min: 20, max: 40 }),
-              ).toISOString();
-        const requestedPlan: CommercialPlan = isCommercialPlan(payload.plan)
-          ? payload.plan
-          : payload.plan === "pro"
-            ? "pro"
-            : "enterprise";
-        if (requestedPlan === "pro_trial") {
+        if (
+          payload.plan !== "free" &&
+          payload.plan !== "pro" &&
+          payload.plan !== "enterprise"
+        ) {
           throw new HttpError(
             400,
             "SUBSCRIPTION_PLAN_INVALID",
-            "Use grant Pro trial to start or restart a trial.",
+            "Choose Free, Pro, or Enterprise.",
           );
+        }
+        const requestedPlan: Exclude<CommercialPlan, "pro_trial"> = payload.plan;
+        let expiresAt: string | null = null;
+        if (payload.expiresAt != null) {
+          const parsedExpiry = new Date(
+            inputText(payload.expiresAt, "Expiry", { min: 20, max: 40 }),
+          );
+          if (
+            !Number.isFinite(parsedExpiry.getTime()) ||
+            parsedExpiry.getTime() <= Date.now()
+          ) {
+            throw new HttpError(
+              400,
+              "SUBSCRIPTION_EXPIRY_INVALID",
+              "The contract expiry must be a valid future date.",
+            );
+          }
+          expiresAt = parsedExpiry.toISOString();
         }
         const complimentary = payload.complimentary === true;
         next = {
@@ -1953,6 +1963,7 @@ export class CommandService {
           expiresAt: requestedPlan === "free" ? null : expiresAt,
           publicTrial: false,
           manualContract: requestedPlan !== "free",
+          manualReference: requestedPlan === "free" ? null : manualReference,
           complimentary,
           convertedAt: changedAt,
           ...(requestedPlan === "free"
@@ -1981,6 +1992,8 @@ export class CommandService {
               },
               {
                 manualReference,
+                plan: requestedPlan,
+                expiresAt,
                 recordedAt: changedAt,
                 recordedBy: identity.userId,
                 paymentCollectedByKnowHow: false,
@@ -3228,7 +3241,7 @@ export class CommandService {
       return { expired };
     }
 
-    if (action === "replySupportTicket" || action === "closeSupportTicket") {
+    if (action === "replySupportTicket" || action === "resolveSupportTicket") {
       const platformRoles = await this.platformRoles(identity);
       if (platformMaySupport(platformRoles)) {
         const ticketId = inputText(payload.ticketId, "Support ticket", {
@@ -3253,28 +3266,48 @@ export class CommandService {
         }
         const ticketDetails = decodePayload<Record<string, unknown>>(ticket, {});
         const changedAt = nowIso();
-        if (action === "closeSupportTicket") {
+        if (action === "resolveSupportTicket") {
+          if (ticket.status === "closed") {
+            throw new HttpError(
+              409,
+              "SUPPORT_TICKET_CLOSED",
+              "This support ticket is already closed.",
+            );
+          }
           await this.store.update(
             TABLES.supportTickets,
             ticketId,
             rowData(
-              { status: "closed", updated_by: identity.userId },
+              { status: "resolved", updated_by: identity.userId },
               {
                 ...ticketDetails,
-                status: "closed",
+                status: "resolved",
                 updatedAt: changedAt,
-                closedAt: changedAt,
-                closedBy: identity.userId,
+                resolvedAt: changedAt,
+                resolvedBy: identity.userId,
               },
             ),
           );
+          const targetEmail = String(ticket.email ?? "");
+          if (targetEmail) {
+            await queueNotification(this.store, {
+              organizationId: workspace.organizationId,
+              workspaceId,
+              userId: String(ticket.user_id),
+              email: targetEmail,
+              kind: "support.ticket_updated",
+              subjectId: ticketId,
+              idempotencyKey: `${options.idempotencyKey}:support-resolved`,
+              payload: { workspaceName: workspace.name },
+            });
+          }
           await appendAudit(this.store, identity, workspaceId, {
-            action: "support.ticket-closed",
+            action: "support.ticket-resolved",
             targetType: "support-ticket",
             targetId: ticketId,
-            summary: "In-app support ticket closed",
+            summary: "Support ticket marked resolved pending customer confirmation",
           });
-          return { closed: true, workspaceId };
+          return { resolved: true, workspaceId };
         }
         if (ticket.status === "closed") {
           throw new HttpError(
@@ -3911,6 +3944,27 @@ export class CommandService {
       const ticketDetails = decodePayload<Record<string, unknown>>(ticket, {});
       const changedAt = nowIso();
       if (action === "closeSupportTicket") {
+        if (isSupport) {
+          throw new HttpError(
+            403,
+            "SUPPORT_TICKET_CLIENT_CONFIRMATION_REQUIRED",
+            "A customer must confirm that this ticket can be closed.",
+          );
+        }
+        if (ticket.status === "closed") {
+          throw new HttpError(
+            409,
+            "SUPPORT_TICKET_CLOSED",
+            "This support ticket is already closed.",
+          );
+        }
+        if (ticket.status !== "resolved") {
+          throw new HttpError(
+            409,
+            "SUPPORT_TICKET_NOT_RESOLVED",
+            "KnowHow Support must mark this ticket resolved before the customer confirms closure.",
+          );
+        }
         await this.store.update(
           TABLES.supportTickets,
           ticketId,
@@ -3922,14 +3976,28 @@ export class CommandService {
               updatedAt: changedAt,
               closedAt: changedAt,
               closedBy: identity.userId,
+              closureConfirmedAt: changedAt,
+              closureConfirmedBy: identity.userId,
             },
           ),
         );
+        const supportEmail = process.env.KNOWHOW_SUPPORT_EMAIL?.trim().toLowerCase();
+        if (supportEmail) {
+          await queueNotification(this.store, {
+            organizationId: workspaceAccess.workspace.organizationId,
+            workspaceId,
+            email: supportEmail,
+            kind: "support.ticket_updated",
+            subjectId: ticketId,
+            idempotencyKey: `${options.idempotencyKey}:support-closed`,
+            payload: { workspaceName: workspaceAccess.workspace.name },
+          });
+        }
         await appendAudit(this.store, identity, workspaceId, {
           action: "support.ticket-closed",
           targetType: "support-ticket",
           targetId: ticketId,
-          summary: "In-app support ticket closed",
+          summary: "Support ticket closure confirmed by customer",
         });
         return { closed: true };
       }

@@ -123,12 +123,29 @@ export function searchGuides(workspaceId: string, query: string) {
   return knowhowApi<{ results: GuideSearchResult[] }>(`/api/knowhow/search?${params}`);
 }
 
-export function queryPlatform<T>(params: Record<string, string | undefined>) {
+export function queryAdministration<T>(
+  params: Record<string, string | undefined>,
+) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value) search.set(key, value);
   }
-  return knowhowApi<T>(`/api/knowhow/platform?${search}`);
+  return knowhowApi<T>(`/api/knowhow/administration?${search}`);
+}
+
+export function setAdministrationAccess(
+  email: string,
+  roles: Array<"owner" | "operations" | "support" | "billing" | "auditor">,
+) {
+  return knowhowApi<{
+    userId: string;
+    email: string;
+    roles: typeof roles;
+  }>("/api/knowhow/administration", {
+    method: "POST",
+    headers: { "x-idempotency-key": crypto.randomUUID() },
+    body: JSON.stringify({ action: "set_access", email, roles }),
+  });
 }
 
 export async function downloadAuthorizedExport(

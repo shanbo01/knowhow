@@ -260,7 +260,6 @@ export function deploymentConfigurationIssues(
       issues.push("release_identity");
     }
     if (!process.env.RESEND_API_KEY?.trim()) issues.push("email_provider");
-    if (!process.env.SENTRY_DSN?.trim()) issues.push("monitoring");
   }
 
   const publicEnvironment =

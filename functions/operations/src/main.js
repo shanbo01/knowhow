@@ -1438,7 +1438,7 @@ function emailTemplate(kind, details) {
     subject = `New support ticket for ${workspace}`;
     copy =
       "A member opened an in-app support ticket. Open KnowHow to read and respond; message content is intentionally omitted from email.";
-    action = `${origin}/platform`;
+    action = `${origin}/app`;
   } else if (kind === "support.ticket_updated") {
     subject = `Support ticket updated for ${workspace}`;
     copy =
@@ -1448,7 +1448,7 @@ function emailTemplate(kind, details) {
     subject = `CRITICAL: deletion approval required for ${workspace}`;
     copy =
       "The retention period ended. Content remains inaccessible and will not be purged until a platform owner reauthenticates and gives explicit typed approval.";
-    action = `${origin}/platform`;
+    action = `${origin}/app`;
   } else if (kind.includes("expiry_4d")) {
     subject = `${workspace} expires in four days`;
     copy =

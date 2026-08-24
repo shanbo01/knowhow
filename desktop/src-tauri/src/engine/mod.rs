@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -20,22 +20,27 @@ use self::frames::{DesktopFrame, FrameHub};
 use crate::{
     model::{
         Bounds, CapturedStep, DesktopScope, MAX_SCREENSHOT_BYTES, MAX_STEPS, RecorderSettings,
-        ServerAnnotation,
+        ServerAnnotation, ServerCrop,
     },
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
-        PointerButton, RawEvent, RawInputRegistration, UiAutomationClient, event_sender_capacity,
-        excluded_regions, foreground_context, monitor_descriptors, scope_accepts,
+        PointerButton, PrivacyRegion, RawEvent, RawInputRegistration, UiAutomationClient,
+        event_sender_capacity, excluded_regions, foreground_context, monitor_descriptors,
+        scope_accepts,
     },
 };
 
 type StepCallback = Arc<dyn Fn(CapturedStep, Vec<u8>) + Send + Sync>;
 type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+const MAX_PROCESSING_WIDTH: u32 = 1920;
+const MAX_PROCESSING_HEIGHT: u32 = 1080;
+
 pub struct CaptureEngine {
     accepting: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     raw_input: Option<NativeRawInput>,
+    event_sender: Option<SyncSender<RawEvent>>,
     frames: Arc<Mutex<FrameHub>>,
     processor: Option<JoinHandle<()>>,
     complete: Receiver<()>,
@@ -55,7 +60,7 @@ impl CaptureEngine {
             Arc::clone(&on_status),
         )?));
         let (sender, receiver) = mpsc::sync_channel(event_sender_capacity());
-        let raw_input = NativeRawInput::start(sender)?;
+        let raw_input = NativeRawInput::start(sender.clone())?;
         let accepting = Arc::new(AtomicBool::new(true));
         let paused = Arc::new(AtomicBool::new(start_paused));
         let processor_accepting = Arc::clone(&accepting);
@@ -81,6 +86,7 @@ impl CaptureEngine {
             accepting,
             paused,
             raw_input: Some(raw_input),
+            event_sender: Some(sender),
             frames,
             processor: Some(processor),
             complete,
@@ -95,11 +101,29 @@ impl CaptureEngine {
         self.paused.store(false, Ordering::Release);
     }
 
+    /// Reclaims Windows' process-wide Raw Input registrations after Tauri has shown or focused
+    /// recorder windows. A later WebView registration can otherwise replace the capture sink.
+    pub fn rebind_raw_input(&mut self) -> Result<()> {
+        if let Some(mut raw_input) = self.raw_input.take() {
+            raw_input.stop();
+        }
+        let sender = self
+            .event_sender
+            .as_ref()
+            .ok_or_else(|| anyhow!("capture input is already closed"))?
+            .clone();
+        self.raw_input = Some(NativeRawInput::start(sender)?);
+        Ok(())
+    }
+
     pub fn stop_accepting_and_drain(&mut self, timeout: Duration) -> Result<()> {
         self.accepting.store(false, Ordering::Release);
         if let Some(mut raw_input) = self.raw_input.take() {
             raw_input.stop();
         }
+        // Drop the engine's rebind sender after the native registration is gone so the receiver
+        // observes disconnection and drains every already-accepted action.
+        self.event_sender.take();
         self.complete
             .recv_timeout(timeout)
             .context("accepted capture actions did not drain within ten seconds")?;
@@ -119,6 +143,7 @@ impl Drop for CaptureEngine {
         if let Some(mut raw_input) = self.raw_input.take() {
             raw_input.stop();
         }
+        self.event_sender.take();
         let _ = self.complete.recv_timeout(Duration::from_secs(2));
         if let Some(processor) = self.processor.take()
             && processor.is_finished()
@@ -137,24 +162,83 @@ struct PendingPointer {
     frame: DesktopFrame,
     metadata: ElementMetadata,
     foreground: ForegroundContext,
+    privacy_regions: Vec<PrivacyRegion>,
 }
 
 #[derive(Clone)]
 struct PendingText {
     before: ElementMetadata,
     foreground: ForegroundContext,
+    activity_count: usize,
     deadline: Instant,
 }
 
 enum MeaningfulAction {
-    LeftClick { point: (i32, i32), double: bool },
-    RightClick { point: (i32, i32) },
-    Drag { from: (i32, i32), to: (i32, i32) },
+    LeftClick {
+        point: (i32, i32),
+        double: bool,
+        destination_application: Option<String>,
+    },
+    RightClick {
+        point: (i32, i32),
+    },
+    Drag {
+        from: (i32, i32),
+        to: (i32, i32),
+    },
     TextEntry,
     Enter,
     Tab,
     Shortcut(String),
     AppSwitch,
+}
+
+struct PendingEmission {
+    sequence: usize,
+    action: MeaningfulAction,
+    frame: DesktopFrame,
+    metadata: ElementMetadata,
+    foreground: ForegroundContext,
+    exact_text: Option<String>,
+    privacy_regions: Vec<PrivacyRegion>,
+    settings: RecorderSettings,
+}
+
+struct EmissionPipeline {
+    sender: Option<SyncSender<PendingEmission>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl EmissionPipeline {
+    fn start(on_step: StepCallback, on_status: StatusCallback) -> Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(MAX_STEPS);
+        let worker = thread::Builder::new()
+            .name("knowhow-image-processor".to_owned())
+            .spawn(move || process_emissions(receiver, on_step, on_status))?;
+        Ok(Self {
+            sender: Some(sender),
+            worker: Some(worker),
+        })
+    }
+
+    fn queue(&self, emission: PendingEmission, on_status: &StatusCallback) {
+        let Some(sender) = self.sender.as_ref() else {
+            on_status("Screenshot processing is unavailable; the action was not saved.".to_owned());
+            return;
+        };
+        if sender.send(emission).is_err() {
+            on_status("Screenshot processing stopped; the action was not saved.".to_owned());
+        }
+    }
+
+    fn finish(&mut self, on_status: &StatusCallback) {
+        self.sender.take();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            on_status("Screenshot processing stopped unexpectedly.".to_owned());
+        }
+    }
 }
 
 struct ProcessorState {
@@ -178,18 +262,23 @@ fn process_actions(
     on_step: StepCallback,
     on_status: StatusCallback,
 ) {
+    let Ok(mut emissions) = EmissionPipeline::start(on_step, Arc::clone(&on_status)) else {
+        on_status("Screenshot processing could not start; capture was stopped.".to_owned());
+        return;
+    };
     let Ok(uia) = NativeUia::new() else {
         on_status("UI metadata is unavailable; coordinate instructions will be used.".to_owned());
         process_without_uia(
-            receiver, scope, settings, accepting, paused, frames, on_step, on_status,
+            receiver, scope, settings, accepting, paused, frames, &emissions, &on_status,
         );
+        emissions.finish(&on_status);
         return;
     };
     let mut state = ProcessorState {
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
-        last_focus: uia.focused_element().ok(),
+        last_focus: uia.focused_element_semantic().ok(),
         last_focus_poll: Instant::now(),
         last_signature: None,
         locked: false,
@@ -197,7 +286,7 @@ fn process_actions(
     let order = AtomicUsize::new(0);
     loop {
         flush_due(
-            &mut state, &uia, &scope, &settings, &frames, &order, &on_step, &on_status,
+            &mut state, &uia, &scope, &settings, &frames, &order, &emissions, &on_status,
         );
         match receiver.recv_timeout(Duration::from_millis(35)) {
             Ok(event) => {
@@ -208,7 +297,7 @@ fn process_actions(
                     continue;
                 }
                 handle_event(
-                    event, &mut state, &uia, &scope, &settings, &frames, &order, &on_step,
+                    event, &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
                     &on_status,
                 );
             }
@@ -216,18 +305,19 @@ fn process_actions(
                 if state.pending_text.is_none()
                     && state.last_focus_poll.elapsed() >= Duration::from_millis(120)
                 {
-                    state.last_focus = uia.focused_element().ok();
+                    state.last_focus = uia.focused_element_semantic().ok();
                     state.last_focus_poll = Instant::now();
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
                 flush_all(
-                    &mut state, &uia, &scope, &settings, &frames, &order, &on_step, &on_status,
+                    &mut state, &uia, &scope, &settings, &frames, &order, &emissions, &on_status,
                 );
                 break;
             }
         }
     }
+    emissions.finish(&on_status);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -238,8 +328,8 @@ fn process_without_uia(
     _accepting: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     frames: Arc<Mutex<FrameHub>>,
-    on_step: StepCallback,
-    on_status: StatusCallback,
+    emissions: &EmissionPipeline,
+    on_status: &StatusCallback,
 ) {
     struct UnavailableUia;
     impl UiAutomationClient for UnavailableUia {
@@ -247,6 +337,9 @@ fn process_without_uia(
             bail!("UI Automation unavailable")
         }
         fn focused_element(&self) -> Result<ElementMetadata> {
+            bail!("UI Automation unavailable")
+        }
+        fn privacy_regions(&self, _window_id: &str) -> Result<Vec<PrivacyRegion>> {
             bail!("UI Automation unavailable")
         }
     }
@@ -266,24 +359,24 @@ fn process_without_uia(
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 flush_due(
-                    &mut state, &uia, &scope, &settings, &frames, &order, &on_step, &on_status,
+                    &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
                 );
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        if handle_control_event(&event, &mut state, &on_status)
+        if handle_control_event(&event, &mut state, on_status)
             || paused.load(Ordering::Acquire)
             || state.locked
         {
             continue;
         }
         handle_event(
-            event, &mut state, &uia, &scope, &settings, &frames, &order, &on_step, &on_status,
+            event, &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
         );
     }
     flush_all(
-        &mut state, &uia, &scope, &settings, &frames, &order, &on_step, &on_status,
+        &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
     );
 }
 
@@ -323,11 +416,16 @@ fn handle_event<U: UiAutomationClient>(
     settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     match event {
         RawEvent::PointerDown { button, x, y } => {
+            // A pointer action closes the previous typing group. This preserves the user's
+            // workflow order when they type and click again before the idle timer expires.
+            flush_text(
+                state, uia, scope, settings, frames, order, emissions, on_status,
+            );
             let now = Instant::now();
             let Ok(foreground) = foreground_context() else {
                 on_status("Protected or secure-desktop activity is excluded.".to_owned());
@@ -344,6 +442,7 @@ fn handle_event<U: UiAutomationClient>(
             let metadata = uia
                 .element_at(x, y)
                 .unwrap_or_else(|_| fallback_metadata(&foreground));
+            let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
             state.pending_pointer = Some(PendingPointer {
                 button,
                 point: (x, y),
@@ -351,6 +450,7 @@ fn handle_event<U: UiAutomationClient>(
                 frame,
                 metadata,
                 foreground,
+                privacy_regions,
             });
         }
         RawEvent::PointerUp { button, x, y } => {
@@ -360,6 +460,8 @@ fn handle_event<U: UiAutomationClient>(
             if pointer.button != button {
                 return;
             }
+            state.last_focus = Some(pointer.metadata.clone());
+            state.last_focus_poll = Instant::now();
             let distance = squared_distance(pointer.point, (x, y));
             if button == PointerButton::Left && distance > 64 {
                 emit(
@@ -371,9 +473,10 @@ fn handle_event<U: UiAutomationClient>(
                     pointer.metadata,
                     pointer.foreground,
                     None,
+                    pointer.privacy_regions,
                     settings,
                     order,
-                    on_step,
+                    emissions,
                     on_status,
                 );
             } else if button == PointerButton::Right {
@@ -385,9 +488,10 @@ fn handle_event<U: UiAutomationClient>(
                     pointer.metadata,
                     pointer.foreground,
                     None,
+                    pointer.privacy_regions,
                     settings,
                     order,
-                    on_step,
+                    emissions,
                     on_status,
                 );
             } else if let Some(first) = state.pending_click.take() {
@@ -398,18 +502,20 @@ fn handle_event<U: UiAutomationClient>(
                         MeaningfulAction::LeftClick {
                             point: first.point,
                             double: true,
+                            destination_application: click_destination(&first),
                         },
                         first.frame,
                         first.metadata,
                         first.foreground,
                         None,
+                        first.privacy_regions,
                         settings,
                         order,
-                        on_step,
+                        emissions,
                         on_status,
                     );
                 } else {
-                    emit_pending_click(first, settings, order, on_step, on_status);
+                    emit_pending_click(first, settings, order, emissions, on_status);
                     state.pending_click = Some(pointer);
                 }
             } else {
@@ -417,8 +523,14 @@ fn handle_event<U: UiAutomationClient>(
             }
         }
         RawEvent::TextActivity => {
+            // Once typing begins, the preceding pointer action cannot become a double-click.
+            // Emit it now so Start -> type -> Enter cannot be reordered as type -> Enter -> Start.
+            if let Some(click) = state.pending_click.take() {
+                emit_pending_click(click, settings, order, emissions, on_status);
+            }
             let now = Instant::now();
             if let Some(pending) = &mut state.pending_text {
+                pending.activity_count = pending.activity_count.saturating_add(1);
                 pending.deadline = now + Duration::from_millis(450);
                 return;
             }
@@ -429,20 +541,28 @@ fn handle_event<U: UiAutomationClient>(
                 on_status("Activity outside the selected scope is ignored.".to_owned());
                 return;
             }
-            let before = state
-                .last_focus
-                .clone()
-                .or_else(|| uia.focused_element().ok())
-                .unwrap_or_else(|| fallback_metadata(&foreground));
+            let observed = uia.focused_element_semantic().ok();
+            let before = match (state.last_focus.clone(), observed) {
+                (Some(previous), Some(current)) if same_text_target(&previous, &current) => {
+                    previous
+                }
+                (_, Some(current)) => current,
+                (Some(previous), None) => previous,
+                (None, None) => fallback_metadata(&foreground),
+            };
             state.pending_text = Some(PendingText {
                 before,
                 foreground,
+                activity_count: 1,
                 deadline: now + Duration::from_millis(450),
             });
         }
         RawEvent::Enter | RawEvent::Tab => {
+            if let Some(click) = state.pending_click.take() {
+                emit_pending_click(click, settings, order, emissions, on_status);
+            }
             flush_text(
-                state, uia, scope, settings, frames, order, on_step, on_status,
+                state, uia, scope, settings, frames, order, emissions, on_status,
             );
             emit_keyboard_action(
                 if matches!(event, RawEvent::Enter) {
@@ -455,13 +575,16 @@ fn handle_event<U: UiAutomationClient>(
                 settings,
                 frames,
                 order,
-                on_step,
+                emissions,
                 on_status,
             );
         }
         RawEvent::Shortcut(shortcut) => {
+            if let Some(click) = state.pending_click.take() {
+                emit_pending_click(click, settings, order, emissions, on_status);
+            }
             flush_text(
-                state, uia, scope, settings, frames, order, on_step, on_status,
+                state, uia, scope, settings, frames, order, emissions, on_status,
             );
             let signature = format!("shortcut:{shortcut}");
             if is_duplicate(
@@ -480,10 +603,18 @@ fn handle_event<U: UiAutomationClient>(
                     settings,
                     frames,
                     order,
-                    on_step,
+                    emissions,
                     on_status,
                 );
             } else {
+                // Raw Input reports the chord without delaying the user's key path. Let the
+                // destination application paint selection/copy/paste state before choosing the
+                // screenshot that represents the action.
+                thread::sleep(if is_paste_shortcut(&shortcut) {
+                    Duration::from_millis(180)
+                } else {
+                    Duration::from_millis(90)
+                });
                 emit_keyboard_action(
                     MeaningfulAction::Shortcut(shortcut),
                     uia,
@@ -491,7 +622,7 @@ fn handle_event<U: UiAutomationClient>(
                     settings,
                     frames,
                     order,
-                    on_step,
+                    emissions,
                     on_status,
                 );
             }
@@ -508,7 +639,7 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     let Ok(foreground) = foreground_context() else {
@@ -524,10 +655,20 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         return;
     };
     let metadata = uia
-        .focused_element()
+        .focused_element_semantic()
         .unwrap_or_else(|_| fallback_metadata(&foreground));
+    let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
     emit(
-        action, frame, metadata, foreground, None, settings, order, on_step, on_status,
+        action,
+        frame,
+        metadata,
+        foreground,
+        None,
+        privacy_regions,
+        settings,
+        order,
+        emissions,
+        on_status,
     );
 }
 
@@ -539,7 +680,7 @@ fn flush_due<U: UiAutomationClient>(
     settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     if state
@@ -548,7 +689,7 @@ fn flush_due<U: UiAutomationClient>(
         .is_some_and(|click| click.started_at.elapsed() > Duration::from_millis(500))
         && let Some(click) = state.pending_click.take()
     {
-        emit_pending_click(click, settings, order, on_step, on_status);
+        emit_pending_click(click, settings, order, emissions, on_status);
     }
     if state
         .pending_text
@@ -556,7 +697,7 @@ fn flush_due<U: UiAutomationClient>(
         .is_some_and(|text| text.deadline <= Instant::now())
     {
         flush_text(
-            state, uia, scope, settings, frames, order, on_step, on_status,
+            state, uia, scope, settings, frames, order, emissions, on_status,
         );
     }
 }
@@ -569,14 +710,14 @@ fn flush_all<U: UiAutomationClient>(
     settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     if let Some(click) = state.pending_click.take() {
-        emit_pending_click(click, settings, order, on_step, on_status);
+        emit_pending_click(click, settings, order, emissions, on_status);
     }
     flush_text(
-        state, uia, scope, settings, frames, order, on_step, on_status,
+        state, uia, scope, settings, frames, order, emissions, on_status,
     );
 }
 
@@ -584,23 +725,42 @@ fn emit_pending_click(
     click: PendingPointer,
     settings: &RecorderSettings,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     emit(
         MeaningfulAction::LeftClick {
             point: click.point,
             double: false,
+            destination_application: click_destination(&click),
         },
         click.frame,
         click.metadata,
         click.foreground,
         None,
+        click.privacy_regions,
         settings,
         order,
-        on_step,
+        emissions,
         on_status,
     );
+}
+
+fn click_destination(click: &PendingPointer) -> Option<String> {
+    let destination = foreground_context().ok()?;
+    (destination.process_id != click.foreground.process_id
+        && !destination
+            .application_name
+            .eq_ignore_ascii_case(&click.foreground.application_name)
+        && !destination.application_name.trim().is_empty())
+    .then_some(destination.application_name)
+}
+
+fn same_text_target(left: &ElementMetadata, right: &ElementMetadata) -> bool {
+    left.process_id == right.process_id
+        && left.window_id == right.window_id
+        && left.bounds == right.bounds
+        && left.control_role == right.control_role
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -611,7 +771,7 @@ fn flush_text<U: UiAutomationClient>(
     settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     let Some(pending) = state.pending_text.take() else {
@@ -637,21 +797,25 @@ fn flush_text<U: UiAutomationClient>(
         && pending.before.process_id == after.process_id
     {
         match (pending.before.value.as_deref(), after.value.as_deref()) {
-            (Some(before), Some(after)) => inserted_text(before, after),
+            (Some(before), Some(after)) => {
+                verified_inserted_text(before, after, pending.activity_count)
+            }
             _ => None,
         }
     } else {
         None
     };
+    let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
     emit(
         MeaningfulAction::TextEntry,
         frame,
         after,
         foreground,
         exact_text,
+        privacy_regions,
         settings,
         order,
-        on_step,
+        emissions,
         on_status,
     );
 }
@@ -663,9 +827,10 @@ fn emit(
     metadata: ElementMetadata,
     foreground: ForegroundContext,
     exact_text: Option<String>,
+    privacy_regions: Vec<PrivacyRegion>,
     settings: &RecorderSettings,
     order: &AtomicUsize,
-    on_step: &StepCallback,
+    emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
     let sequence = order.fetch_add(1, Ordering::AcqRel);
@@ -673,10 +838,54 @@ fn emit(
         on_status("The 100-step limit is reached. Finish this capture to continue.".to_owned());
         return;
     }
+    emissions.queue(
+        PendingEmission {
+            sequence,
+            action,
+            frame,
+            metadata,
+            foreground,
+            exact_text,
+            privacy_regions,
+            settings: settings.clone(),
+        },
+        on_status,
+    );
+}
+
+fn process_emissions(
+    receiver: Receiver<PendingEmission>,
+    on_step: StepCallback,
+    on_status: StatusCallback,
+) {
+    while let Ok(emission) = receiver.recv() {
+        process_emission(emission, &on_step, &on_status);
+    }
+}
+
+fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status: &StatusCallback) {
+    let PendingEmission {
+        sequence,
+        action,
+        frame,
+        metadata,
+        foreground,
+        exact_text,
+        privacy_regions,
+        settings,
+    } = emission;
     let (title, instructions, source_event) =
         deterministic_instruction(&action, &metadata, &foreground, exact_text.as_deref());
     let annotations = annotations(&action, &metadata, &frame);
-    match rasterize(&frame, &metadata, &foreground, &action, settings) {
+    let crop = contextual_crop(&action, &metadata, &frame);
+    match rasterize(
+        &frame,
+        &metadata,
+        &privacy_regions,
+        &foreground,
+        &action,
+        &settings,
+    ) {
         Ok(processed) => {
             let text = if metadata.password_status == PasswordStatus::NotPassword {
                 exact_text
@@ -691,6 +900,7 @@ fn emit(
                 source_event: source_event.to_owned(),
                 password_status: metadata.password_status.as_server_value().to_owned(),
                 annotations,
+                crop,
                 text,
                 image_width: processed.width,
                 image_height: processed.height,
@@ -715,6 +925,27 @@ fn fallback_metadata(foreground: &ForegroundContext) -> ElementMetadata {
         value: None,
         window_id: foreground.window_id.clone(),
         process_id: foreground.process_id,
+    }
+}
+
+fn privacy_regions_or_fail_closed<U: UiAutomationClient>(
+    uia: &U,
+    foreground: &ForegroundContext,
+    on_status: &StatusCallback,
+) -> Vec<PrivacyRegion> {
+    match uia.privacy_regions(&foreground.window_id) {
+        Ok(regions) => regions,
+        Err(_) => {
+            on_status(
+                "Live Smart Blur is preparing this app; the current window was masked.".to_owned(),
+            );
+            vec![PrivacyRegion {
+                bounds: foreground.bounds,
+                control_role: Some("text field".to_owned()),
+                text: None,
+                password_status: PasswordStatus::Unknown,
+            }]
+        }
     }
 }
 
@@ -745,14 +976,40 @@ fn deterministic_instruction(
         .map(|label| format!("the “{}” {role}", truncate(label, 120)))
         .unwrap_or_else(|| format!("the selected area in {location}"));
     match action {
-        MeaningfulAction::LeftClick { double: false, .. } => (
-            target.map_or_else(
-                || "Click the selected area".to_owned(),
-                |label| format!("Click {}", truncate(label, 80)),
-            ),
-            format!("Click {described}."),
-            "left-click",
-        ),
+        MeaningfulAction::LeftClick {
+            double: false,
+            destination_application,
+            ..
+        } => {
+            let opens_start = target.is_some_and(|label| {
+                matches!(
+                    label.trim().to_ascii_lowercase().as_str(),
+                    "start" | "windows"
+                )
+            });
+            if opens_start {
+                (
+                    "Open Start".to_owned(),
+                    "Click the Windows Start button.".to_owned(),
+                    "left-click",
+                )
+            } else if let Some(destination) = destination_application {
+                (
+                    format!("Open {}", truncate(destination, 80)),
+                    format!("Click {described} to open {}.", truncate(destination, 80)),
+                    "left-click",
+                )
+            } else {
+                (
+                    target.map_or_else(
+                        || "Click the selected area".to_owned(),
+                        |label| format!("Click {}", truncate(label, 80)),
+                    ),
+                    format!("Click {described}."),
+                    "left-click",
+                )
+            }
+        }
         MeaningfulAction::LeftClick { double: true, .. } => (
             target.map_or_else(
                 || "Double-click the selected area".to_owned(),
@@ -791,17 +1048,58 @@ fn deterministic_instruction(
             format!("Press Tab in {location}."),
             "tab",
         ),
-        MeaningfulAction::Shortcut(shortcut) => (
-            format!("Press {shortcut}"),
-            format!("Press {shortcut} in {location}."),
-            "shortcut",
-        ),
+        MeaningfulAction::Shortcut(shortcut) => {
+            shortcut_instruction(shortcut, &location, &described)
+        }
         MeaningfulAction::AppSwitch => (
             format!("Switch to {application}"),
             format!("Switch to {application}."),
             "app-switch",
         ),
     }
+}
+
+fn shortcut_instruction(
+    shortcut: &str,
+    location: &str,
+    described: &str,
+) -> (String, String, &'static str) {
+    match shortcut {
+        "Ctrl+A" => (
+            "Select all".to_owned(),
+            format!("Press Ctrl+A to select all in {location}."),
+            "shortcut",
+        ),
+        "Ctrl+C" | "Ctrl+Shift+C" => (
+            "Copy the selection".to_owned(),
+            format!("Press {shortcut} to copy the selected content from {location}."),
+            "shortcut",
+        ),
+        "Ctrl+X" | "Shift+Delete" => (
+            "Cut the selection".to_owned(),
+            format!("Press {shortcut} to cut the selected content from {location}."),
+            "shortcut",
+        ),
+        "Ctrl+V" | "Shift+Insert" => (
+            "Paste".to_owned(),
+            format!("Press {shortcut} to paste into {described}."),
+            "shortcut",
+        ),
+        "Ctrl+S" => (
+            "Save".to_owned(),
+            format!("Press Ctrl+S to save in {location}."),
+            "shortcut",
+        ),
+        _ => (
+            format!("Press {shortcut}"),
+            format!("Press {shortcut} in {location}."),
+            "shortcut",
+        ),
+    }
+}
+
+fn is_paste_shortcut(shortcut: &str) -> bool {
+    matches!(shortcut, "Ctrl+V" | "Shift+Insert")
 }
 
 fn annotations(
@@ -821,7 +1119,7 @@ fn annotations(
                 height: None,
                 x2: None,
                 y2: None,
-                color: Some("#25634f".to_owned()),
+                color: Some("#ff5a12".to_owned()),
             }]
         }
         MeaningfulAction::Drag { from, to } => {
@@ -836,7 +1134,7 @@ fn annotations(
                 height: None,
                 x2: Some(x2),
                 y2: Some(y2),
-                color: Some("#25634f".to_owned()),
+                color: Some("#ff5a12".to_owned()),
             }]
         }
         MeaningfulAction::TextEntry | MeaningfulAction::Enter | MeaningfulAction::Tab => metadata
@@ -851,12 +1149,95 @@ fn annotations(
                 height: Some(height),
                 x2: None,
                 y2: None,
-                color: Some("#25634f".to_owned()),
+                color: Some("#ff5a12".to_owned()),
             })
             .into_iter()
             .collect(),
         MeaningfulAction::Shortcut(_) | MeaningfulAction::AppSwitch => Vec::new(),
     }
+}
+
+fn contextual_crop(
+    action: &MeaningfulAction,
+    metadata: &ElementMetadata,
+    frame: &DesktopFrame,
+) -> Option<ServerCrop> {
+    let click = match action {
+        MeaningfulAction::LeftClick { point, .. } | MeaningfulAction::RightClick { point } => {
+            Some(normalize_point(*point, frame.monitor_bounds))
+        }
+        MeaningfulAction::Drag { to, .. } => Some(normalize_point(*to, frame.monitor_bounds)),
+        MeaningfulAction::TextEntry
+        | MeaningfulAction::Enter
+        | MeaningfulAction::Tab
+        | MeaningfulAction::Shortcut(_)
+        | MeaningfulAction::AppSwitch => None,
+    };
+    let focus = metadata
+        .bounds
+        .and_then(|bounds| normalize_bounds(bounds, frame.monitor_bounds))
+        // Some UIA providers expose only their full top-level surface. Treat that as
+        // unavailable so a precise click can still receive the browser-style zoom.
+        .filter(|(_, _, width, height)| *width <= 0.7 && *height <= 0.7);
+    contextual_crop_for_geometry(click, focus, frame.width, frame.height)
+}
+
+fn contextual_crop_for_geometry(
+    click: Option<(f64, f64)>,
+    focus: Option<(f64, f64, f64, f64)>,
+    image_width: u32,
+    image_height: u32,
+) -> Option<ServerCrop> {
+    if click.is_none() && focus.is_none() {
+        return None;
+    }
+    let image_width = f64::from(image_width.max(1));
+    let image_height = f64::from(image_height.max(1));
+    let image_aspect = image_width / image_height;
+    let presentation_aspect = 16.0 / 9.0;
+    let widest_for_ratio = (presentation_aspect / image_aspect).min(1.0);
+    let height_for_width = |width: f64| width * image_aspect / presentation_aspect;
+    let width_for_height = |height: f64| height * presentation_aspect / image_aspect;
+    let target = focus.unwrap_or_else(|| {
+        let (x, y) = click.unwrap_or((0.5, 0.5));
+        (x, y, 0.0, 0.0)
+    });
+    let needed_width = target.2 + (0.1_f64).max(target.2 * 0.85) * 2.0;
+    let needed_height = target.3 + (0.13_f64).max(target.3 * 0.85) * 2.0;
+    let closest_width = widest_for_ratio.min(1.0 / 2.6);
+    let width = clamp_between(
+        needed_width
+            .max(width_for_height(needed_height))
+            .max(closest_width),
+        closest_width,
+        widest_for_ratio,
+    );
+    let height = height_for_width(width).clamp(0.01, 1.0);
+    let center = click.unwrap_or((target.0 + target.2 / 2.0, target.1 + target.3 / 2.0));
+    let mut x = (center.0 - width / 2.0).clamp(0.0, (1.0 - width).max(0.0));
+    let mut y = (center.1 - height / 2.0).clamp(0.0, (1.0 - height).max(0.0));
+    if focus.is_some() {
+        x = clamp_between(
+            x,
+            (target.0 + target.2 - width).clamp(0.0, (1.0 - width).max(0.0)),
+            target.0.clamp(0.0, (1.0 - width).max(0.0)),
+        );
+        y = clamp_between(
+            y,
+            (target.1 + target.3 - height).clamp(0.0, (1.0 - height).max(0.0)),
+            target.1.clamp(0.0, (1.0 - height).max(0.0)),
+        );
+    }
+    Some(ServerCrop {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+fn clamp_between(value: f64, first: f64, second: f64) -> f64 {
+    value.clamp(first.min(second), first.max(second))
 }
 
 struct ProcessedImage {
@@ -869,6 +1250,7 @@ struct ProcessedImage {
 fn rasterize(
     frame: &DesktopFrame,
     metadata: &ElementMetadata,
+    privacy_regions: &[PrivacyRegion],
     foreground: &ForegroundContext,
     action: &MeaningfulAction,
     settings: &RecorderSettings,
@@ -884,37 +1266,86 @@ fn rasterize(
     for (target, source) in image.pixels_mut().zip(frame.bgra.chunks_exact(4)) {
         *target = Rgba([source[2], source[1], source[0], 255]);
     }
+    let (processing_width, processing_height) = processing_dimensions(frame.width, frame.height);
+    if processing_width != frame.width || processing_height != frame.height {
+        image = imageops::resize(
+            &image,
+            processing_width,
+            processing_height,
+            imageops::FilterType::Triangle,
+        );
+    }
+    let mask_frame = DesktopFrame {
+        width: image.width(),
+        height: image.height(),
+        ..frame.clone()
+    };
     let mut mask_count = 0_usize;
+    let mut masked_bounds = Vec::new();
     for excluded in excluded_regions().unwrap_or_default() {
         let _reason = excluded.reason;
-        if let Some(bounds) = global_to_image_bounds(excluded.bounds, frame) {
+        if let Some(bounds) = global_to_image_bounds(excluded.bounds, &mask_frame) {
             solid_mask(&mut image, bounds);
             mask_count += 1;
+            masked_bounds.push(bounds);
         }
     }
     if matches!(action, MeaningfulAction::TextEntry)
         && metadata.password_status != PasswordStatus::NotPassword
     {
         let fail_closed = metadata.bounds.unwrap_or(foreground.bounds);
-        if let Some(bounds) = global_to_image_bounds(fail_closed, frame) {
+        if let Some(bounds) = global_to_image_bounds(fail_closed, &mask_frame) {
             solid_mask(&mut image, bounds);
             mask_count += 1;
+            masked_bounds.push(bounds);
         }
     } else if metadata.password_status == PasswordStatus::Password
         && let Some(bounds) = metadata
             .bounds
-            .and_then(|bounds| global_to_image_bounds(bounds, frame))
+            .and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
     {
         solid_mask(&mut image, bounds);
         mask_count += 1;
+        masked_bounds.push(bounds);
     }
-    if should_smart_blur(metadata, settings)
-        && let Some(bounds) = metadata
-            .bounds
-            .and_then(|bounds| global_to_image_bounds(bounds, frame))
+    if should_smart_blur(
+        metadata.control_role.as_deref(),
+        metadata.value.as_deref(),
+        settings,
+    ) && let Some(bounds) = metadata
+        .bounds
+        .and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
+        && !contains_bounds(&masked_bounds, bounds)
     {
         blur_region(&mut image, bounds);
         mask_count += 1;
+        masked_bounds.push(bounds);
+    }
+    // Smart Blur is applied to every visible UI Automation region in the foreground window,
+    // not only the control that was clicked. Password and uncertain form controls are always
+    // solid-masked before a screenshot can enter encrypted storage.
+    for region in privacy_regions {
+        let Some(bounds) = global_to_image_bounds(region.bounds, &mask_frame) else {
+            continue;
+        };
+        if contains_bounds(&masked_bounds, bounds) {
+            continue;
+        }
+        let role = region.control_role.as_deref();
+        let mandatory_mask = region.password_status == PasswordStatus::Password
+            || (region.password_status == PasswordStatus::Unknown
+                && matches!(role, Some("text field" | "combo box")));
+        if mandatory_mask {
+            solid_mask(&mut image, bounds);
+            mask_count += 1;
+            masked_bounds.push(bounds);
+        } else if region.password_status == PasswordStatus::NotPassword
+            && should_smart_blur(role, region.text.as_deref(), settings)
+        {
+            blur_region(&mut image, bounds);
+            mask_count += 1;
+            masked_bounds.push(bounds);
+        }
     }
     let (jpeg, width, height) = encode_bounded(image)?;
     Ok(ProcessedImage {
@@ -925,9 +1356,26 @@ fn rasterize(
     })
 }
 
-fn should_smart_blur(metadata: &ElementMetadata, settings: &RecorderSettings) -> bool {
-    let role = metadata.control_role.as_deref().unwrap_or("");
-    let value = metadata.value.as_deref().unwrap_or("");
+fn processing_dimensions(width: u32, height: u32) -> (u32, u32) {
+    if width <= MAX_PROCESSING_WIDTH && height <= MAX_PROCESSING_HEIGHT {
+        return (width, height);
+    }
+    let width_scale = f64::from(MAX_PROCESSING_WIDTH) / f64::from(width.max(1));
+    let height_scale = f64::from(MAX_PROCESSING_HEIGHT) / f64::from(height.max(1));
+    let scale = width_scale.min(height_scale);
+    (
+        (f64::from(width) * scale).round().max(1.0) as u32,
+        (f64::from(height) * scale).round().max(1.0) as u32,
+    )
+}
+
+fn should_smart_blur(
+    control_role: Option<&str>,
+    text: Option<&str>,
+    settings: &RecorderSettings,
+) -> bool {
+    let role = control_role.unwrap_or("");
+    let value = text.unwrap_or("");
     (settings.smart_blur.form_fields && matches!(role, "text field" | "combo box"))
         || (settings.smart_blur.images && role == "image")
         || (settings.smart_blur.table_rows && matches!(role, "table" | "data grid" | "list item"))
@@ -936,6 +1384,15 @@ fn should_smart_blur(metadata: &ElementMetadata, settings: &RecorderSettings) ->
         || (settings.smart_blur.financial_numbers && looks_like_financial(value))
         || (settings.smart_blur.identifiers && looks_like_identifier(value))
         || (settings.smart_blur.long_text && value.chars().count() >= 80)
+}
+
+fn contains_bounds(regions: &[Bounds], candidate: Bounds) -> bool {
+    regions.iter().any(|bounds| {
+        bounds.x == candidate.x
+            && bounds.y == candidate.y
+            && bounds.width == candidate.width
+            && bounds.height == candidate.height
+    })
 }
 
 fn looks_like_email(value: &str) -> bool {
@@ -1011,7 +1468,8 @@ fn blur_region(image: &mut RgbaImage, bounds: Bounds) {
     imageops::replace(image, &blurred, i64::from(x), i64::from(y));
 }
 
-fn encode_bounded(mut image: RgbaImage) -> Result<(Vec<u8>, u32, u32)> {
+fn encode_bounded(image: RgbaImage) -> Result<(Vec<u8>, u32, u32)> {
+    let mut image = image::DynamicImage::ImageRgba8(image).to_rgb8();
     loop {
         for quality in [88_u8, 78, 68, 58, 48] {
             let mut output = Cursor::new(Vec::new());
@@ -1019,7 +1477,7 @@ fn encode_bounded(mut image: RgbaImage) -> Result<(Vec<u8>, u32, u32)> {
                 image.as_raw(),
                 image.width(),
                 image.height(),
-                image::ExtendedColorType::Rgba8,
+                image::ExtendedColorType::Rgb8,
             )?;
             if output.get_ref().len() <= MAX_SCREENSHOT_BYTES {
                 return Ok((output.into_inner(), image.width(), image.height()));
@@ -1071,6 +1529,14 @@ fn inserted_text(before: &str, after: &str) -> Option<String> {
     (prefix < end).then(|| after[prefix..end].iter().collect::<String>())
 }
 
+fn verified_inserted_text(before: &str, after: &str, activity_count: usize) -> Option<String> {
+    let inserted = inserted_text(before, after)?;
+    // Raw Input contributes only a count of semantic text-changing key presses. Requiring the
+    // UIA diff to account for every press prevents a raced first snapshot from turning
+    // "powershell" into the misleading partial instruction "owershell".
+    (inserted.chars().count() == activity_count).then_some(inserted)
+}
+
 fn is_duplicate(last: &mut Option<(String, Instant)>, signature: &str, window: Duration) -> bool {
     let now = Instant::now();
     let duplicate = last
@@ -1098,8 +1564,43 @@ fn truncate(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{inserted_text, is_duplicate, looks_like_email, looks_like_phone};
+    use super::{
+        MeaningfulAction, contextual_crop_for_geometry, deterministic_instruction, encode_bounded,
+        inserted_text, is_duplicate, looks_like_email, looks_like_phone, processing_dimensions,
+        shortcut_instruction, should_smart_blur, verified_inserted_text,
+    };
+    use crate::{
+        model::{Bounds, RecorderSettings},
+        platform::{ElementMetadata, ForegroundContext, PasswordStatus},
+    };
+    use image::{Rgba, RgbaImage};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn processed_rgba_frames_encode_as_jpeg() {
+        let image = RgbaImage::from_pixel(64, 48, Rgba([32, 64, 96, 255]));
+        let (jpeg, width, height) = encode_bounded(image).expect("encode screenshot");
+        assert_eq!((width, height), (64, 48));
+        assert!(jpeg.starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn capture_processing_is_bounded_without_distorting_the_display() {
+        assert_eq!(processing_dimensions(3440, 1440), (1920, 804));
+        assert_eq!(processing_dimensions(3840, 2160), (1920, 1080));
+        assert_eq!(processing_dimensions(1280, 720), (1280, 720));
+    }
+
+    #[test]
+    fn desktop_clicks_receive_the_browser_style_contextual_crop() {
+        let crop =
+            contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440).expect("click crop");
+        assert!(crop.width < 0.4);
+        assert!(crop.x <= 0.72 && crop.x + crop.width >= 0.72);
+        assert!(crop.y <= 0.44 && crop.y + crop.height >= 0.44);
+        let ratio = (3440.0 * crop.width) / (1440.0 * crop.height);
+        assert!((ratio - 16.0 / 9.0).abs() < 0.001);
+    }
 
     #[test]
     fn text_differencing_handles_typing_paste_and_replacement() {
@@ -1117,6 +1618,99 @@ mod tests {
         );
         assert_eq!(inserted_text("same", "same"), None);
         assert_eq!(inserted_text("delete me", "delete "), None);
+    }
+
+    #[test]
+    fn exact_text_is_emitted_only_when_the_uia_diff_covers_the_whole_group() {
+        assert_eq!(
+            verified_inserted_text("", "powershell", 10).as_deref(),
+            Some("powershell")
+        );
+        assert_eq!(verified_inserted_text("p", "powershell", 10), None);
+        assert_eq!(
+            verified_inserted_text("PS C:\\> ", "PS C:\\> ls", 2).as_deref(),
+            Some("ls")
+        );
+    }
+
+    #[test]
+    fn requested_workflow_shortcuts_have_semantic_instructions() {
+        assert_eq!(
+            shortcut_instruction("Ctrl+A", "PowerShell", "the terminal").0,
+            "Select all"
+        );
+        assert_eq!(
+            shortcut_instruction("Ctrl+Shift+C", "PowerShell", "the terminal").0,
+            "Copy the selection"
+        );
+        assert_eq!(
+            shortcut_instruction("Ctrl+V", "Word", "the document").0,
+            "Paste"
+        );
+    }
+
+    #[test]
+    fn start_click_and_mouse_app_transition_keep_click_semantics() {
+        let metadata = ElementMetadata {
+            application_name: "Windows Explorer".to_owned(),
+            window_title: "Taskbar".to_owned(),
+            control_role: Some("button".to_owned()),
+            control_label: Some("Start".to_owned()),
+            bounds: Some(Bounds {
+                x: 0,
+                y: 0,
+                width: 48,
+                height: 48,
+            }),
+            password_status: PasswordStatus::NotPassword,
+            value: None,
+            window_id: "1".to_owned(),
+            process_id: 1,
+        };
+        let foreground = ForegroundContext {
+            application_name: "Windows Explorer".to_owned(),
+            window_title: "Taskbar".to_owned(),
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            window_id: "1".to_owned(),
+            root_owner_id: "1".to_owned(),
+            process_id: 1,
+            monitor_id: "display-1".to_owned(),
+            protected: false,
+            elevated: false,
+        };
+        let start = deterministic_instruction(
+            &MeaningfulAction::LeftClick {
+                point: (24, 1050),
+                double: false,
+                destination_application: Some("Start".to_owned()),
+            },
+            &metadata,
+            &foreground,
+            None,
+        );
+        assert_eq!(start.0, "Open Start");
+        assert_eq!(start.2, "left-click");
+
+        let open_word = deterministic_instruction(
+            &MeaningfulAction::LeftClick {
+                point: (200, 1050),
+                double: false,
+                destination_application: Some("Microsoft Word".to_owned()),
+            },
+            &ElementMetadata {
+                control_label: Some("Word".to_owned()),
+                ..metadata
+            },
+            &foreground,
+            None,
+        );
+        assert_eq!(open_word.0, "Open Microsoft Word");
+        assert_eq!(open_word.2, "left-click");
     }
 
     #[test]
@@ -1139,5 +1733,23 @@ mod tests {
         assert!(looks_like_email("author@example.com"));
         assert!(looks_like_phone("+974 5555 0101"));
         assert!(!looks_like_phone("Step 12"));
+    }
+
+    #[test]
+    fn live_smart_blur_applies_to_every_enabled_region_kind() {
+        let mut settings = RecorderSettings::default();
+        settings.smart_blur.form_fields = true;
+        settings.smart_blur.emails = true;
+        assert!(should_smart_blur(Some("text field"), None, &settings));
+        assert!(should_smart_blur(
+            Some("text"),
+            Some("author@example.com"),
+            &settings
+        ));
+        assert!(!should_smart_blur(
+            Some("text"),
+            Some("Public heading"),
+            &settings
+        ));
     }
 }
