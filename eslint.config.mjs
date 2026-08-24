@@ -15,6 +15,15 @@ const eslintConfig = defineConfig([
     "desktop/src-tauri/target/**",
     "next-env.d.ts",
   ]),
+  {
+    files: ["desktop/src/**/*.{ts,tsx}"],
+    rules: {
+      // The desktop recorder renders inside a Tauri webview, not a Next.js
+      // page. Its previews are in-memory data URLs produced by the Rust side,
+      // so there is no loader for next/image to route them through.
+      "@next/next/no-img-element": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

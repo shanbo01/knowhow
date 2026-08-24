@@ -8,7 +8,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, SyncSender},
+        mpsc::{self, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -56,14 +56,17 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
-                IUIAutomationValuePattern, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
-                UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DocumentControlTypeId,
-                UIA_EditControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
-                UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId,
-                UIA_PaneControlTypeId, UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId,
-                UIA_TableControlTypeId, UIA_TextControlTypeId, UIA_TextPatternId,
-                UIA_TreeItemControlTypeId, UIA_ValuePatternId,
+                CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
+                IUIAutomationTextPattern, IUIAutomationValuePattern, TreeScope_Children,
+                TreeScope_Element, UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+                UIA_DataGridControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+                UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_IsOffscreenPropertyId,
+                UIA_IsPasswordPropertyId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
+                UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PaneControlTypeId,
+                UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId,
+                UIA_TextControlTypeId, UIA_TextPatternId, UIA_TreeItemControlTypeId,
+                UIA_ValuePatternId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::{
@@ -107,7 +110,8 @@ use windows_capture::{
 
 use super::{
     ElementMetadata, ExcludedRegion, ForegroundContext, MonitorDescriptor, PasswordStatus,
-    PointerButton, PrivacyRegion, QuitChoice, RawEvent, RawInputRegistration, UiAutomationClient,
+    PointerButton, PrivacyRegion, QuitChoice, RawEvent, RawInputEvent, RawInputRegistration,
+    UiAutomationClient,
 };
 use crate::model::{Bounds, CaptureTarget, CaptureTargetPreview, DesktopScope, ScopeKind};
 
@@ -312,28 +316,40 @@ pub fn capture_target_previews(target_ids: &[String]) -> Result<Vec<CaptureTarge
             jobs.push((target.id.clone(), source));
         }
     }
+    // Every preview opens its own Windows Graphics Capture session, which costs a
+    // D3D device and a swap chain. Starting one for each of a couple of dozen open
+    // windows at the same instant makes the whole machine stutter for a second, so
+    // previews are taken a few at a time. The picker still fills in one pass.
+    const PREVIEW_CONCURRENCY: usize = 4;
     Ok(thread::scope(|scope| {
-        let handles = jobs
-            .into_iter()
-            .map(|(target_id, source)| {
-                scope.spawn(move || {
-                    let data_url = match source {
-                        PreviewSource::Window(raw) => {
-                            capture_window_preview(HWND(raw as *mut c_void)).ok()
-                        }
-                        PreviewSource::Monitor(bounds) => capture_monitor_preview(bounds).ok(),
-                    }?;
-                    Some(CaptureTargetPreview {
-                        target_id,
-                        data_url,
+        let mut previews = Vec::new();
+        for batch in jobs.chunks(PREVIEW_CONCURRENCY) {
+            let handles = batch
+                .iter()
+                .map(|(target_id, source)| {
+                    let target_id = target_id.clone();
+                    let source = *source;
+                    scope.spawn(move || {
+                        let data_url = match source {
+                            PreviewSource::Window(raw) => {
+                                capture_window_preview(HWND(raw as *mut c_void)).ok()
+                            }
+                            PreviewSource::Monitor(bounds) => capture_monitor_preview(bounds).ok(),
+                        }?;
+                        Some(CaptureTargetPreview {
+                            target_id,
+                            data_url,
+                        })
                     })
                 })
-            })
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .filter_map(|handle| handle.join().ok().flatten())
-            .collect()
+                .collect::<Vec<_>>();
+            previews.extend(
+                handles
+                    .into_iter()
+                    .filter_map(|handle| handle.join().ok().flatten()),
+            );
+        }
+        previews
     }))
 }
 
@@ -1141,18 +1157,40 @@ fn privacy_worker(
         unsafe { CoUninitialize() };
         return;
     };
+    // Keeping the foreground window's regions warm is what lets a click be
+    // masked without stalling on a tree walk. Doing it unconditionally, forever,
+    // is what made every application the author was recording feel sluggish: a
+    // UI Automation walk forces accessibility providers awake in the target
+    // process, and browsers in particular slow down dramatically while one is
+    // running. So the worker only self-drives while the author is actually
+    // producing actions, and goes quiet the moment they stop.
+    const SELF_DRIVE_WINDOW: Duration = Duration::from_secs(6);
+    const SELF_DRIVE_REFRESH: Duration = Duration::from_millis(1_100);
+    let mut last_request = Instant::now();
     while !stop.load(Ordering::Acquire) {
-        let requested = requests
-            .recv_timeout(Duration::from_millis(180))
-            .ok()
-            .or_else(|| foreground_context().ok().map(|context| context.window_id));
+        let active = last_request.elapsed() < SELF_DRIVE_WINDOW;
+        let idle_wait = if active {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_millis(500)
+        };
+        let requested = match requests.recv_timeout(idle_wait) {
+            Ok(window_id) => {
+                last_request = Instant::now();
+                Some(window_id)
+            }
+            // Between requests the worker only tops up the window the author is
+            // working in, and only once it is close to going stale.
+            Err(_) if active => foreground_context().ok().map(|context| context.window_id),
+            Err(_) => None,
+        };
         let Some(window_id) = requested else {
             continue;
         };
         if cache
             .lock()
             .get(&window_id)
-            .is_some_and(|entry| entry.captured_at.elapsed() < Duration::from_millis(450))
+            .is_some_and(|entry| entry.captured_at.elapsed() < SELF_DRIVE_REFRESH)
         {
             continue;
         }
@@ -1172,6 +1210,74 @@ fn privacy_worker(
     unsafe { CoUninitialize() };
 }
 
+/// Builds the cache request that lets one cross-process call return every
+/// property the privacy pass needs for a whole level of the tree.
+fn privacy_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
+    // SAFETY: the request is used only on this COM worker thread.
+    let request = unsafe { automation.CreateCacheRequest() }
+        .context("create UI Automation privacy cache request")?;
+    // SAFETY: every call below configures the request created above.
+    unsafe {
+        request.SetTreeScope(TreeScope_Element)?;
+        request.AddProperty(UIA_BoundingRectanglePropertyId)?;
+        request.AddProperty(UIA_IsOffscreenPropertyId)?;
+        request.AddProperty(UIA_IsPasswordPropertyId)?;
+        request.AddProperty(UIA_ControlTypePropertyId)?;
+        request.AddProperty(UIA_NamePropertyId)?;
+        request.AddPattern(UIA_ValuePatternId)?;
+    }
+    Ok(request)
+}
+
+/// Reads one element's privacy-relevant properties out of the cache the caller
+/// already fetched. Every read here is local: no cross-process call is made.
+fn cached_privacy_region(element: &IUIAutomationElement) -> Option<PrivacyRegion> {
+    // SAFETY: the element was returned by a cached query, so these accessors read
+    // the local cache rather than calling back into the provider.
+    let offscreen = unsafe { element.CachedIsOffscreen() }
+        .map(|value| value.as_bool())
+        .unwrap_or(false);
+    if offscreen {
+        return None;
+    }
+    let bounds = unsafe { element.CachedBoundingRectangle() }
+        .ok()
+        .map(rect_bounds)
+        .filter(|bounds| bounds.width > 0 && bounds.height > 0)?;
+    let password_status = match unsafe { element.CachedIsPassword() } {
+        Ok(value) if value.as_bool() => PasswordStatus::Password,
+        Ok(_) => PasswordStatus::NotPassword,
+        Err(_) => PasswordStatus::Unknown,
+    };
+    let control_role = unsafe { element.CachedControlType() }
+        .ok()
+        .map(control_role);
+    let text = if password_status == PasswordStatus::NotPassword {
+        unsafe {
+            element
+                .GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .and_then(|pattern| pattern.CachedValue())
+        }
+        .ok()
+        .map(|value| value.to_string())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            unsafe { element.CachedName() }
+                .ok()
+                .map(|name| name.to_string())
+                .filter(|name| !name.trim().is_empty())
+        })
+    } else {
+        None
+    };
+    Some(PrivacyRegion {
+        bounds,
+        control_role,
+        text,
+        password_status,
+    })
+}
+
 fn collect_privacy_regions(
     automation: &IUIAutomation,
     window_id: &str,
@@ -1179,11 +1285,15 @@ fn collect_privacy_regions(
     const MAX_ELEMENTS: usize = 240;
     let hwnd =
         hwnd_from_id(window_id).ok_or_else(|| anyhow!("UI Automation window is unavailable"))?;
+    let request = privacy_cache_request(automation)?;
     // SAFETY: HWND was resolved from a current window and COM is confined to this worker.
     let root = unsafe { automation.ElementFromHandle(hwnd) }
         .context("look up UI Automation privacy root")?;
-    let walker =
-        unsafe { automation.ControlViewWalker() }.context("create UI Automation privacy walker")?;
+    // SAFETY: the root and the cache request live on this COM apartment.
+    let root =
+        unsafe { root.BuildUpdatedCache(&request) }.context("read UI Automation privacy root")?;
+    let condition = unsafe { automation.CreateTrueCondition() }
+        .context("create UI Automation privacy condition")?;
     let mut pending = vec![root];
     let mut regions = Vec::new();
     let mut visited = 0_usize;
@@ -1192,55 +1302,29 @@ fn collect_privacy_regions(
             break;
         }
         visited += 1;
-        let offscreen = unsafe { element.CurrentIsOffscreen() }
-            .map(|value| value.as_bool())
-            .unwrap_or(false);
-        let bounds = unsafe { element.CurrentBoundingRectangle() }
-            .ok()
-            .map(rect_bounds)
-            .filter(|bounds| bounds.width > 0 && bounds.height > 0);
-        if !offscreen && let Some(bounds) = bounds {
-            let password_status = match unsafe { element.CurrentIsPassword() } {
-                Ok(value) if value.as_bool() => PasswordStatus::Password,
-                Ok(_) => PasswordStatus::NotPassword,
-                Err(_) => PasswordStatus::Unknown,
-            };
-            let control_role = unsafe { element.CurrentControlType() }
-                .ok()
-                .map(control_role);
-            let text = if password_status == PasswordStatus::NotPassword {
-                unsafe {
-                    element
-                        .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                        .and_then(|pattern| pattern.CurrentValue())
-                }
-                .ok()
-                .map(|value| value.to_string())
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| {
-                    unsafe { element.CurrentName() }
-                        .ok()
-                        .map(|name| name.to_string())
-                        .filter(|name| !name.trim().is_empty())
-                })
-            } else {
-                None
-            };
-            regions.push(PrivacyRegion {
-                bounds,
-                control_role,
-                text,
-                password_status,
-            });
+        if let Some(region) = cached_privacy_region(&element) {
+            regions.push(region);
         }
-        // SAFETY: walker and elements remain on this COM apartment. Provider failures prune
-        // only the unavailable branch instead of blocking the action processor.
-        let mut child = unsafe { walker.GetFirstChildElement(&element) }.ok();
-        while let Some(element) = child {
-            child = unsafe { walker.GetNextSiblingElement(&element) }.ok();
-            pending.push(element);
+        // One call returns every child of this element with all six properties
+        // already filled in. Reading them one property at a time — the obvious
+        // way — costs a separate cross-process round trip each, which is roughly
+        // an order of magnitude more work for the same answer.
+        //
+        // SAFETY: elements and the condition remain on this COM apartment.
+        // Provider failures prune only the unavailable branch instead of
+        // blocking the action processor.
+        let Ok(children) =
+            (unsafe { element.FindAllBuildCache(TreeScope_Children, &condition, &request) })
+        else {
+            continue;
+        };
+        let count = unsafe { children.Length() }.unwrap_or(0);
+        for index in 0..count {
             if pending.len() + visited >= MAX_ELEMENTS {
                 break;
+            }
+            if let Ok(child) = unsafe { children.GetElement(index) } {
+                pending.push(child);
             }
         }
     }
@@ -1272,7 +1356,7 @@ fn control_role(control_type: windows::Win32::UI::Accessibility::UIA_CONTROLTYPE
 }
 
 thread_local! {
-    static RAW_SENDER: RefCell<Option<SyncSender<RawEvent>>> = const { RefCell::new(None) };
+    static RAW_SENDER: RefCell<Option<Sender<RawInputEvent>>> = const { RefCell::new(None) };
     static MODIFIERS: Cell<ModifierState> = const { Cell::new(ModifierState::new()) };
 }
 
@@ -1301,7 +1385,7 @@ pub struct WindowsRawInput {
 }
 
 impl WindowsRawInput {
-    pub fn start(sender: SyncSender<RawEvent>) -> Result<Self> {
+    pub fn start(sender: Sender<RawInputEvent>) -> Result<Self> {
         let (ready_sender, ready_receiver) = mpsc::sync_channel::<Result<u32>>(1);
         let join = thread::Builder::new()
             .name("knowhow-raw-input".to_owned())
@@ -1625,10 +1709,21 @@ fn shortcut_name(vkey: u16, state: ModifierState) -> Option<String> {
 }
 
 fn send_raw_event(event: RawEvent) {
+    // Stamped here, on the input thread, so a busy processor cannot backdate or
+    // postdate the author's action.
+    let event = RawInputEvent {
+        at: Instant::now(),
+        event,
+    };
     RAW_SENDER.with(|slot| {
         if let Some(sender) = slot.borrow().as_ref() {
-            // A full channel drops the signal instead of delaying the user's input path.
-            let _ = sender.try_send(event);
+            // The channel is unbounded on purpose. A dropped event is a click the
+            // author performed and KnowHow silently forgot, which is never an
+            // acceptable trade for a shorter queue: hardware input arrives at human
+            // speed and each event is a few dozen bytes, so even a processor stalled
+            // for a minute costs a few kilobytes. Unbounded send also never blocks,
+            // so this stays off the user's input path.
+            let _ = sender.send(event);
         }
     });
 }

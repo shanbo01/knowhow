@@ -3,8 +3,16 @@ const DATABASE_VERSION = 2;
 const STEP_STORE = "steps";
 const FRAME_STORE = "captureFrames";
 
+// One connection is shared by every read and write. Opening and closing a
+// connection per operation cost several milliseconds each on the click path,
+// and a close racing an in-flight open could block the next transaction
+// outright. The handle is dropped whenever the browser closes or supersedes
+// it, so the next call transparently reopens.
+let databaseConnection = null;
+
 function openDatabase() {
-  return new Promise((resolve, reject) => {
+  if (databaseConnection) return databaseConnection;
+  databaseConnection = new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
@@ -24,10 +32,27 @@ function openDatabase() {
         });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => {
+        databaseConnection = null;
+        database.close();
+      };
+      database.onclose = () => {
+        databaseConnection = null;
+      };
+      resolve(database);
+    };
+    request.onerror = () => {
+      databaseConnection = null;
       reject(request.error || new Error("Could not open capture storage."));
+    };
+    request.onblocked = () => {
+      databaseConnection = null;
+      reject(new Error("Capture storage is blocked by another connection."));
+    };
   });
+  return databaseConnection;
 }
 
 function requestResult(request) {
@@ -39,26 +64,33 @@ function requestResult(request) {
 }
 
 async function withStores(storeNames, mode, action) {
-  const database = await openDatabase();
+  let database = await openDatabase();
+  let transaction;
   try {
-    const transaction = database.transaction(storeNames, mode);
-    const completion = new Promise((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () =>
-        reject(transaction.error || new Error("Capture storage failed."));
-      transaction.onabort = () =>
-        reject(transaction.error || new Error("Capture storage aborted."));
-    });
-    try {
-      const result = await action(transaction);
-      await completion;
-      return result;
-    } catch (error) {
-      await completion.catch(() => undefined);
-      throw error;
-    }
-  } finally {
-    database.close();
+    transaction = database.transaction(storeNames, mode);
+  } catch (error) {
+    // A connection the browser closed underneath us (profile eviction, a
+    // version change from another context) throws InvalidStateError here.
+    // Reopen once rather than surfacing a lost screenshot to the author.
+    if (databaseConnection) databaseConnection = null;
+    database = await openDatabase();
+    if (!database) throw error;
+    transaction = database.transaction(storeNames, mode);
+  }
+  const completion = new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(transaction.error || new Error("Capture storage failed."));
+    transaction.onabort = () =>
+      reject(transaction.error || new Error("Capture storage aborted."));
+  });
+  try {
+    const result = await action(transaction);
+    await completion;
+    return result;
+  } catch (error) {
+    await completion.catch(() => undefined);
+    throw error;
   }
 }
 

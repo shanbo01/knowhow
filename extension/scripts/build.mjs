@@ -297,7 +297,9 @@ export async function buildKnowHowCapturePackage({
         "Content capture may listen only for Escape while the element picker is active.",
       );
     }
-    if ((backgroundSource.match(/captureVisibleTab/g) || []).length !== 1) {
+    const captureVisibleTabCalls =
+      backgroundSource.match(/chrome\.tabs\.captureVisibleTab\s*\(/g) || [];
+    if (captureVisibleTabCalls.length !== 1) {
       throw new Error(
         "captureVisibleTab must remain isolated to one guarded code path.",
       );

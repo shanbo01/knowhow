@@ -757,7 +757,18 @@ impl Coordinator {
     }
 
     pub(crate) fn set_status_message(&self, message: String) {
-        self.inner.lock().recorder.status_message = Some(message);
+        {
+            let mut inner = self.inner.lock();
+            // The engine reports a status for every event it decides not to
+            // record, and those repeat verbatim: one identical line per click
+            // outside the selected scope. Re-emitting the whole snapshot for a
+            // message the recorder is already showing costs a full serialize
+            // and a React re-render in both windows for nothing.
+            if inner.recorder.status_message.as_deref() == Some(message.as_str()) {
+                return;
+            }
+            inner.recorder.status_message = Some(message);
+        }
         self.emit();
     }
 

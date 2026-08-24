@@ -29,9 +29,43 @@
   const POINTER_COMMIT_WINDOW_MS = 3_000;
   const DOUBLE_CLICK_WINDOW_MS = 420;
   const PREPARED_FRAME_MAX_AGE_MS = 2_000;
+  // Chrome allows two captureVisibleTab calls per second across the whole
+  // extension. Pre-warming a frame is speculative work, so it must leave most
+  // of that budget for the screenshot that belongs to a click the author
+  // actually made. These bounds keep pre-warming to roughly one capture per
+  // second on a busy page instead of one per DOM mutation batch.
+  const PREPARED_FRAME_QUIET_MS = 220;
+  const PREPARED_FRAME_MAX_WAIT_MS = 700;
+  const PREPARED_FRAME_MIN_SPACING_MS = 600;
+  let lastPreparedFrameAt = 0;
+  let preparedFrameWantedSince = 0;
 
-  function send(message) {
-    return chrome.runtime.sendMessage(message).catch(() => null);
+  // A message that never reaches the worker is a step the author performed and
+  // KnowHow silently forgot. Manifest V3 tears the worker down aggressively, so
+  // the first send after an idle moment routinely rejects with "Could not
+  // establish connection" while Chrome is still booting it back up. Every
+  // handler on the other side is keyed by interactionId and is idempotent, so a
+  // retried message either lands first or is a no-op.
+  const FATAL_SEND_PATTERN = /context invalidated|Extension context/i;
+  const SEND_RETRY_DELAYS_MS = [20, 60, 180, 400];
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  async function send(message, { retries = SEND_RETRY_DELAYS_MS.length } = {}) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await chrome.runtime.sendMessage(message);
+        if (response !== undefined) return response;
+      } catch (error) {
+        // The extension was reloaded or disabled: this document's script is
+        // orphaned and no retry can succeed.
+        if (FATAL_SEND_PATTERN.test(String(error?.message || error))) return null;
+      }
+      if (attempt >= retries) return null;
+      await sleep(SEND_RETRY_DELAYS_MS[attempt] ?? 400);
+    }
   }
 
   function sanitizedText(value) {
@@ -2138,6 +2172,7 @@
   function clearPreparedFrameSchedule() {
     if (preparedFrameTimer) clearTimeout(preparedFrameTimer);
     preparedFrameTimer = null;
+    preparedFrameWantedSince = 0;
   }
 
   function frameIsClaimable(frame = preparedFrames.at(-1)) {
@@ -2168,13 +2203,40 @@
     return frame.id;
   }
 
+  function preparedFrameSchedulingAllowed() {
+    if (state.status !== "recording" || pickerActive) return false;
+    // A backgrounded tab cannot be photographed by captureVisibleTab anyway;
+    // scheduling one only burns a queue slot and returns an error.
+    return document.visibilityState === "visible";
+  }
+
   function schedulePreparedFrame(delay = 180) {
-    if (state.status !== "recording" || pickerActive) return;
-    clearPreparedFrameSchedule();
+    if (!preparedFrameSchedulingAllowed()) return;
+    const now = Date.now();
+    if (!preparedFrameWantedSince) preparedFrameWantedSince = now;
+    // A quiet-period debounce: each new visual change pushes the capture out,
+    // so a burst of mutations produces one screenshot once the page settles
+    // rather than one screenshot per mutation. The max wait keeps a page that
+    // animates without pause — a spinner, a live feed, a video — from
+    // deferring the pre-warm forever and pushing every click onto the slower
+    // capture-after-the-fact path.
+    const quiet = Math.max(PREPARED_FRAME_QUIET_MS, Math.max(0, delay));
+    const untilMaxWait = Math.max(
+      0,
+      preparedFrameWantedSince + PREPARED_FRAME_MAX_WAIT_MS - now,
+    );
+    // Never fire faster than the minimum spacing, so speculative pre-warming
+    // can never crowd out the screenshot that belongs to a real click.
+    const spacing = Math.max(
+      0,
+      lastPreparedFrameAt + PREPARED_FRAME_MIN_SPACING_MS - now,
+    );
+    const delayMs = Math.max(Math.min(quiet, untilMaxWait), spacing);
+    if (preparedFrameTimer) clearTimeout(preparedFrameTimer);
     preparedFrameTimer = setTimeout(() => {
       preparedFrameTimer = null;
       void preparePrivateFrame();
-    }, Math.max(0, delay));
+    }, delayMs);
   }
 
   function noteVisualChange(delay = 180) {
@@ -2189,8 +2251,14 @@
   }
 
   async function preparePrivateFrame() {
-    if (state.status !== "recording" || pickerActive) return null;
+    if (!preparedFrameSchedulingAllowed()) return null;
     if (preparedFrameInFlight) return preparedFrameInFlight;
+    // Another path may have produced a matching frame while this one waited
+    // out its debounce.
+    if (frameIsEligible()) {
+      preparedFrameWantedSince = 0;
+      return null;
+    }
     const epoch = visualEpoch;
     const context = pageContext();
     context.visualEpoch = epoch;
@@ -2246,12 +2314,14 @@
       })
       .finally(() => {
         preparedFrameInFlight = null;
-        if (state.status !== "recording" || pickerActive) return;
-        if (frameIsEligible()) {
-          schedulePreparedFrame(700);
-        } else {
-          schedulePreparedFrame();
-        }
+        lastPreparedFrameAt = Date.now();
+        preparedFrameWantedSince = 0;
+        if (!preparedFrameSchedulingAllowed()) return;
+        // Only re-arm when there is nothing usable in hand. A frame that still
+        // matches the page needs no replacement, and the visual-change, scroll
+        // and resize paths re-arm the moment the page actually moves — so an
+        // idle page stops capturing entirely instead of screenshotting forever.
+        if (!frameIsEligible()) schedulePreparedFrame();
       });
     preparedFrameInFlight = operation;
     return operation;
@@ -2344,7 +2414,10 @@
           visualEpoch += 1;
           occluderBoxes = null;
           scheduleBlurPreview(0);
-          if (!liveOverlayScrolling) schedulePreparedFrame(0);
+          // schedulePreparedFrame debounces and rate-limits internally, so a
+          // page mutating in a tight loop re-arms one pending capture instead
+          // of queueing a screenshot per batch.
+          if (!liveOverlayScrolling) schedulePreparedFrame();
         } else if (pageChanged) {
           scheduleBlurPreview(liveOverlayScrolling ? 80 : 48);
         }
@@ -2643,11 +2716,16 @@
     hideBlurPreviewForCapture();
   }
 
-  function stallForEarlyCapture(ms = 64) {
-    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 80);
+  // Holding the content thread keeps the page painting its pre-click state
+  // while the worker races to photograph it. It is a real cost to the author —
+  // the page is frozen for the duration — so it is paid only when there is no
+  // pre-warmed frame to adopt and the screenshot genuinely has to be taken
+  // after the pointer went down.
+  function stallForEarlyCapture(ms = 24) {
+    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 32);
     while (performance.now() < until) {
-      // Hold the content thread so the visible-tab snapshot can finish while
-      // this page still shows the pre-click UI. Do not preventDefault.
+      // Intentionally busy: yielding would let the click's default action
+      // repaint the page before the snapshot is taken. Do not preventDefault.
     }
   }
 
@@ -2684,7 +2762,9 @@
       viewportKey: viewportKey(context.viewport),
       context: staged.context,
     });
-    stallForEarlyCapture(64);
+    // A claimed pre-warmed frame already shows the pre-click page, so the
+    // author's click proceeds with no delay at all.
+    if (!frameId) stallForEarlyCapture(24);
     return staged;
   }
 
@@ -2846,7 +2926,10 @@
       const hovered = captureElement(event);
       if (hovered && hovered !== preparedFrameTarget) {
         preparedFrameTarget = hovered;
-        if (!frameIsEligible()) schedulePreparedFrame(90);
+        // Hovering a new element hints that a click may be coming, but it is
+        // not a visual change on its own. Only top up when nothing usable is
+        // in hand, and let the debounce decide when.
+        if (!frameIsClaimable()) schedulePreparedFrame();
       }
     }
     const active = pendingPointer;
@@ -3095,6 +3178,13 @@
     occluderBoxes = null;
     scheduleBlurPreview(0);
     schedulePreparedFrame(200);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      schedulePreparedFrame();
+    } else {
+      clearPreparedFrameSchedule();
+    }
   });
   document.addEventListener("input", () => noteVisualChange(140), true);
   document.addEventListener("change", (event) => {

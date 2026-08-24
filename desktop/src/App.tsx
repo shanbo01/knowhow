@@ -181,11 +181,14 @@ function CaptureSetup({
   useEffect(() => {
     let active = true;
     let loading = false;
+    // Derived from the key rather than captured, so the effect re-runs when the
+    // set of targets changes and not merely when the array identity does.
+    const ids = previewKey ? previewKey.split("|") : [];
     async function refreshPreviews() {
-      if (!previewIds.length || loading || document.visibilityState !== "visible") return;
+      if (!ids.length || loading || document.visibilityState !== "visible") return;
       loading = true;
       try {
-        const rows = await desktop.previews(previewIds);
+        const rows = await desktop.previews(ids);
         if (active) {
           const refreshed = Object.fromEntries(rows.map((row) => [row.targetId, row.dataUrl]));
           setPreviews((current) => ({ ...current, ...refreshed }));
@@ -355,11 +358,20 @@ export default function App() {
       });
     let dispose: (() => void) | undefined;
     void desktop.onSnapshot(setSnapshot).then((unlisten) => { dispose = unlisten; });
+    return () => { active = false; dispose?.(); };
+  }, []);
+
+  // Device approval is the only state this poll advances. Running it for the
+  // whole session re-serialized the snapshot and re-rendered the window every
+  // two seconds for an answer that could not change.
+  const authorizing = snapshot?.connection.status === "authorizing";
+  useEffect(() => {
+    if (!authorizing) return;
     const poll = window.setInterval(() => {
       void desktop.pollAuthorization().then(setSnapshot).catch(() => undefined);
     }, 2_000);
-    return () => { active = false; dispose?.(); window.clearInterval(poll); };
-  }, []);
+    return () => window.clearInterval(poll);
+  }, [authorizing]);
 
   async function run(action: () => Promise<AppSnapshot>) {
     setBusy(true); setError("");

@@ -76,10 +76,14 @@ import {
   shouldDropTrailingTabSwitch,
   shouldMintNavigationStep,
   switchNavigationCopy,
+  unconfirmedClickEntryAt,
   unresolvedCaptureEntries,
   updateCaptureEntry,
 } from "../core/capture-coordinator.js";
-import { createScreenshotQueue } from "./screenshot-queue.js";
+import {
+  createScreenshotQueue,
+  ScreenshotPriority,
+} from "./screenshot-queue.js";
 
 let offscreenCreation;
 let stateMutationQueue = Promise.resolve();
@@ -253,24 +257,38 @@ function syncRemoteTransition(state, transition) {
   );
 }
 
+// The worker is the only writer of the capture state, so it can serve reads
+// from memory instead of paying a structured-clone round trip to
+// `chrome.storage.session` on every stage, commit and frame bookkeeping step.
+// The cache is populated on first read and refreshed on every write; a
+// terminated worker simply starts cold and reloads from storage.
+let captureStateCache = null;
+let captureStateBadge = null;
+
 async function getCaptureState() {
+  if (captureStateCache) return captureStateCache;
   const stored = await chrome.storage.session.get(STORAGE_KEYS.captureState);
   const state = stored[STORAGE_KEYS.captureState] || createIdleState();
-  if (
+  captureStateCache =
     state.sessionId &&
     (!Array.isArray(state.captureEntries) ||
       !Number.isInteger(state.nextEventSequence))
-  ) {
-    return initializeCaptureCoordinator(state);
-  }
-  return state;
+      ? initializeCaptureCoordinator(state)
+      : state;
+  return captureStateCache;
 }
 
 async function setCaptureState(state) {
+  captureStateCache = state;
   await chrome.storage.session.set({
     [STORAGE_KEYS.captureState]: state,
   });
-  await updateActionBadge(state);
+  // The badge only ever reflects the status, so repainting it on every frame
+  // bookkeeping write costs three extension IPC calls for nothing.
+  if (state.status !== captureStateBadge) {
+    captureStateBadge = state.status;
+    await updateActionBadge(state);
+  }
   return state;
 }
 
@@ -553,6 +571,7 @@ function safeCaptureText(value, policy, maxLength, fallback) {
 }
 
 async function updateActionBadge(state) {
+  captureStateBadge = state.status;
   const badges = {
     [CaptureStatus.PREPARING]: ["...", "#b45309"],
     [CaptureStatus.RECORDING]: ["REC", "#dc2626"],
@@ -1588,6 +1607,40 @@ async function validateActiveCaptureTab(
   return { tab, verdict };
 }
 
+// Chrome refuses a visible-tab screenshot for reasons that clear on their own:
+// the two-per-second quota, a tab mid-drag, a window still animating in.
+// Surfacing those to the author as a failed step turns a transient condition
+// into a screenshot they have to retry by hand, so retry them here first.
+const TRANSIENT_CAPTURE_PATTERN =
+  /quota|cannot be edited right now|dragging|not ready|busy/i;
+const CAPTURE_RETRY_DELAYS_MS = [180, 420, 900];
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function captureVisibleFrameWithRetry(windowId) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/permission|activeTab|all_urls/i.test(message)) {
+        throw new Error(
+          "Chrome removed KnowHow's website access. Click Resume in the side panel and select Allow to continue.",
+        );
+      }
+      if (
+        attempt >= CAPTURE_RETRY_DELAYS_MS.length ||
+        !TRANSIENT_CAPTURE_PATTERN.test(message)
+      ) {
+        throw error;
+      }
+      await delay(CAPTURE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 async function captureVisiblePage(
   state,
   policy,
@@ -1614,19 +1667,7 @@ async function captureVisiblePage(
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     throw new Error("The active tab changed before screenshot capture began.");
   }
-  let dataUrl;
-  try {
-    dataUrl = await chrome.tabs.captureVisibleTab(state.windowId, {
-      format: "png",
-    });
-  } catch (error) {
-    if (/permission|activeTab|all_urls/i.test(String(error?.message || error))) {
-      throw new Error(
-        "Chrome removed KnowHow's website access. Click Resume in the side panel and select Allow to continue.",
-      );
-    }
-    throw error;
-  }
+  let dataUrl = await captureVisibleFrameWithRetry(state.windowId);
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     dataUrl = null;
     throw new Error(
@@ -2017,7 +2058,13 @@ async function prepareCaptureFrame(message, sender) {
         deadlineRequired: false,
         hideLiveBlur: false,
       }),
-    { deadlineMs: 1_600 },
+    {
+      deadlineMs: 1_600,
+      priority: ScreenshotPriority.PREPARED,
+      // Only the newest pre-warm for a tab is worth taking. An older one still
+      // waiting for a slot photographs a page state the author already left.
+      supersedes: `prepared:${state.tabId}`,
+    },
   );
   if (!result) return { ok: false, abandoned: true };
   const storedNavigationKey = result.navigationKey || message.navigationKey;
@@ -2176,7 +2223,7 @@ async function captureFallbackFrame(
           hideLiveBlur,
         });
       },
-      { deadlineMs },
+      { deadlineMs, priority: ScreenshotPriority.INTERACTION },
     );
     let attachedId = result ? frameId : null;
     if (!attachedId) {
@@ -3079,8 +3126,9 @@ async function commitNavigationTransition(details, kind = "document") {
     await pauseCapture(verdict.reason);
     return null;
   }
+  let salvagedClickId = null;
   const transitioned = await withStateMutation(async () => {
-    const latest = await getCaptureState();
+    let latest = await getCaptureState();
     if (
       !isCollecting(latest) ||
       latest.acceptingEvents === false ||
@@ -3088,6 +3136,19 @@ async function commitNavigationTransition(details, kind = "document") {
       latest.tabId !== details.tabId
     ) {
       return null;
+    }
+    // The click that triggered this navigation may have lost its commit when
+    // the page went away. Adopt it now, before the transition clears the
+    // prepared frames it was going to use.
+    const unconfirmed = unconfirmedClickEntryAt(latest, {
+      tabId: details.tabId,
+    });
+    if (unconfirmed) {
+      salvagedClickId = unconfirmed.id;
+      latest = noteClickInteraction(
+        updateCaptureEntry(latest, unconfirmed.id, { committed: true }),
+        { tabId: latest.tabId },
+      );
     }
     const transitionId = Math.max(
       0,
@@ -3129,6 +3190,12 @@ async function commitNavigationTransition(details, kind = "document") {
     return next;
   });
   if (!transitioned) return null;
+  if (salvagedClickId) {
+    const salvaged = captureEntry(transitioned, salvagedClickId);
+    if (salvaged?.status === CaptureEntryStatus.CAPTURING) {
+      void finalizeInteractionEntry(salvagedClickId);
+    }
+  }
   await retainCaptureFrames(transitioned);
   try {
     await injectCaptureContent(
@@ -3232,7 +3299,7 @@ async function attachSettledFrameToLastClick(details) {
           reserveSlot,
           deadlineRequired: false,
         }),
-      { deadlineMs: 1_600 },
+      { deadlineMs: 1_600, priority: ScreenshotPriority.NAVIGATION },
     );
     if (!result) return false;
     const attached = await withStateMutation(async () => {
@@ -3337,7 +3404,11 @@ async function warmDestinationPreparedFrame(state, context, details) {
           deadlineRequired: false,
           hideLiveBlur: false,
         }),
-      { deadlineMs: 1_600 },
+      {
+        deadlineMs: 1_600,
+        priority: ScreenshotPriority.PREPARED,
+        supersedes: `prepared:${state.tabId}`,
+      },
     );
     if (!result) return;
     await withStateMutation(async () => {
@@ -3570,7 +3641,10 @@ async function recordNavigationDestination(
     stepId,
   });
   try {
-    return await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
+    return await enqueueScreenshot(
+      (reserveSlot) => captureStep(job, reserveSlot),
+      { priority: ScreenshotPriority.NAVIGATION },
+    );
   } catch {
     return false;
   }

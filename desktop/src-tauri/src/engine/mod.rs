@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -24,8 +24,8 @@ use crate::{
     },
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
-        PointerButton, PrivacyRegion, RawEvent, RawInputRegistration, UiAutomationClient,
-        event_sender_capacity, excluded_regions, foreground_context, monitor_descriptors,
+        PointerButton, PrivacyRegion, RawEvent, RawInputEvent, RawInputRegistration,
+        UiAutomationClient, excluded_regions, foreground_context, monitor_descriptors,
         scope_accepts,
     },
 };
@@ -33,6 +33,13 @@ use crate::{
 type StepCallback = Arc<dyn Fn(CapturedStep, Vec<u8>) + Send + Sync>;
 type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+// Each queued emission pins its own full-resolution display frame — tens of
+// megabytes apiece — until the image worker reaches it. Queueing a hundred of
+// them would pin gigabytes, so the pipeline pushes back on the action thread
+// instead. That is safe now that raw input is never dropped: the author keeps
+// clicking, the events wait their turn in an unbounded channel, and each one
+// still carries the timestamp that picks its own pre-action frame.
+const MAX_PENDING_EMISSIONS: usize = 6;
 const MAX_PROCESSING_WIDTH: u32 = 1920;
 const MAX_PROCESSING_HEIGHT: u32 = 1080;
 
@@ -40,7 +47,7 @@ pub struct CaptureEngine {
     accepting: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     raw_input: Option<NativeRawInput>,
-    event_sender: Option<SyncSender<RawEvent>>,
+    event_sender: Option<Sender<RawInputEvent>>,
     frames: Arc<Mutex<FrameHub>>,
     processor: Option<JoinHandle<()>>,
     complete: Receiver<()>,
@@ -59,7 +66,9 @@ impl CaptureEngine {
             monitors,
             Arc::clone(&on_status),
         )?));
-        let (sender, receiver) = mpsc::sync_channel(event_sender_capacity());
+        // Unbounded: see `send_raw_event`. Input the author produced must never be
+        // discarded because the processor is briefly busy.
+        let (sender, receiver) = mpsc::channel();
         let raw_input = NativeRawInput::start(sender.clone())?;
         let accepting = Arc::new(AtomicBool::new(true));
         let paused = Arc::new(AtomicBool::new(start_paused));
@@ -165,6 +174,14 @@ struct PendingPointer {
     privacy_regions: Vec<PrivacyRegion>,
 }
 
+/// A keyboard action whose screenshot has to wait for the destination
+/// application to paint its result — a paste landing, a dialog opening, a
+/// window coming forward after Alt+Tab.
+struct PendingKeyboard {
+    action: MeaningfulAction,
+    deadline: Instant,
+}
+
 #[derive(Clone)]
 struct PendingText {
     before: ElementMetadata,
@@ -211,7 +228,7 @@ struct EmissionPipeline {
 
 impl EmissionPipeline {
     fn start(on_step: StepCallback, on_status: StatusCallback) -> Result<Self> {
-        let (sender, receiver) = mpsc::sync_channel(MAX_STEPS);
+        let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_EMISSIONS);
         let worker = thread::Builder::new()
             .name("knowhow-image-processor".to_owned())
             .spawn(move || process_emissions(receiver, on_step, on_status))?;
@@ -245,6 +262,7 @@ struct ProcessorState {
     pending_pointer: Option<PendingPointer>,
     pending_click: Option<PendingPointer>,
     pending_text: Option<PendingText>,
+    pending_keyboard: Option<PendingKeyboard>,
     last_focus: Option<ElementMetadata>,
     last_focus_poll: Instant,
     last_signature: Option<(String, Instant)>,
@@ -253,7 +271,7 @@ struct ProcessorState {
 
 #[allow(clippy::too_many_arguments)]
 fn process_actions(
-    receiver: Receiver<RawEvent>,
+    receiver: Receiver<RawInputEvent>,
     scope: DesktopScope,
     settings: RecorderSettings,
     accepting: Arc<AtomicBool>,
@@ -278,6 +296,7 @@ fn process_actions(
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
+        pending_keyboard: None,
         last_focus: uia.focused_element_semantic().ok(),
         last_focus_poll: Instant::now(),
         last_signature: None,
@@ -289,7 +308,7 @@ fn process_actions(
             &mut state, &uia, &scope, &settings, &frames, &order, &emissions, &on_status,
         );
         match receiver.recv_timeout(Duration::from_millis(35)) {
-            Ok(event) => {
+            Ok(RawInputEvent { at, event }) => {
                 if handle_control_event(&event, &mut state, &on_status) {
                     continue;
                 }
@@ -297,7 +316,7 @@ fn process_actions(
                     continue;
                 }
                 handle_event(
-                    event, &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
+                    event, at, &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
                     &on_status,
                 );
             }
@@ -322,7 +341,7 @@ fn process_actions(
 
 #[allow(clippy::too_many_arguments)]
 fn process_without_uia(
-    receiver: Receiver<RawEvent>,
+    receiver: Receiver<RawInputEvent>,
     scope: DesktopScope,
     settings: RecorderSettings,
     _accepting: Arc<AtomicBool>,
@@ -348,6 +367,7 @@ fn process_without_uia(
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
+        pending_keyboard: None,
         last_focus: None,
         last_focus_poll: Instant::now(),
         last_signature: None,
@@ -355,7 +375,7 @@ fn process_without_uia(
     };
     let order = AtomicUsize::new(0);
     loop {
-        let event = match receiver.recv_timeout(Duration::from_millis(50)) {
+        let RawInputEvent { at, event } = match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 flush_due(
@@ -372,7 +392,7 @@ fn process_without_uia(
             continue;
         }
         handle_event(
-            event, &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
+            event, at, &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
         );
     }
     flush_all(
@@ -395,6 +415,7 @@ fn handle_control_event(
             state.pending_pointer = None;
             state.pending_click = None;
             state.pending_text = None;
+            state.pending_keyboard = None;
             status("Windows is locked. Activity is excluded.".to_owned());
             true
         }
@@ -410,6 +431,7 @@ fn handle_control_event(
 #[allow(clippy::too_many_arguments)]
 fn handle_event<U: UiAutomationClient>(
     event: RawEvent,
+    at: Instant,
     state: &mut ProcessorState,
     uia: &U,
     scope: &DesktopScope,
@@ -419,6 +441,11 @@ fn handle_event<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    // Steps are recorded in the order the author performed them, so anything
+    // still parked is emitted before the event that arrived after it.
+    flush_keyboard(
+        state, uia, scope, settings, frames, order, emissions, on_status,
+    );
     match event {
         RawEvent::PointerDown { button, x, y } => {
             // A pointer action closes the previous typing group. This preserves the user's
@@ -426,7 +453,9 @@ fn handle_event<U: UiAutomationClient>(
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
             );
-            let now = Instant::now();
+            // The moment the button actually went down, not the moment this
+            // handler reached it: the pre-action frame is chosen against it.
+            let now = at;
             let Ok(foreground) = foreground_context() else {
                 on_status("Protected or secure-desktop activity is excluded.".to_owned());
                 return;
@@ -435,7 +464,14 @@ fn handle_event<U: UiAutomationClient>(
                 on_status("Activity outside the selected scope is ignored.".to_owned());
                 return;
             }
-            let Some(frame) = frames.lock().newest_before(&foreground.monitor_id, now) else {
+            let Some(frame) = ({
+                // Full-rate display mirroring follows the author. Other displays
+                // keep a slower ring that is still fresh enough to serve a click
+                // the moment they move there.
+                let hub = frames.lock();
+                hub.note_active_monitor(&foreground.monitor_id);
+                hub.newest_before(&foreground.monitor_id, now)
+            }) else {
                 on_status("Waiting for a safe display frame…".to_owned());
                 return;
             };
@@ -461,7 +497,7 @@ fn handle_event<U: UiAutomationClient>(
                 return;
             }
             state.last_focus = Some(pointer.metadata.clone());
-            state.last_focus_poll = Instant::now();
+            state.last_focus_poll = at;
             let distance = squared_distance(pointer.point, (x, y));
             if button == PointerButton::Left && distance > 64 {
                 emit(
@@ -528,7 +564,7 @@ fn handle_event<U: UiAutomationClient>(
             if let Some(click) = state.pending_click.take() {
                 emit_pending_click(click, settings, order, emissions, on_status);
             }
-            let now = Instant::now();
+            let now = at;
             if let Some(pending) = &mut state.pending_text {
                 pending.activity_count = pending.activity_count.saturating_add(1);
                 pending.deadline = now + Duration::from_millis(450);
@@ -594,38 +630,30 @@ fn handle_event<U: UiAutomationClient>(
             ) {
                 return;
             }
-            if shortcut == "Alt+Tab" || shortcut.starts_with("Win+") {
-                thread::sleep(Duration::from_millis(220));
-                emit_keyboard_action(
-                    MeaningfulAction::AppSwitch,
-                    uia,
-                    scope,
-                    settings,
-                    frames,
-                    order,
-                    emissions,
-                    on_status,
-                );
-            } else {
-                // Raw Input reports the chord without delaying the user's key path. Let the
-                // destination application paint selection/copy/paste state before choosing the
-                // screenshot that represents the action.
-                thread::sleep(if is_paste_shortcut(&shortcut) {
-                    Duration::from_millis(180)
-                } else {
-                    Duration::from_millis(90)
-                });
-                emit_keyboard_action(
+            // Raw Input reports the chord without delaying the user's key path. The
+            // destination application still needs a moment to paint the result before
+            // the screenshot that represents the action is chosen — but sleeping here
+            // would stall the whole processor, and every click the author made during
+            // that stall would be recorded late or, when the queue was bounded, not at
+            // all. The action is parked with a deadline instead and the loop keeps
+            // draining input.
+            let (action, settle) = if shortcut == "Alt+Tab" || shortcut.starts_with("Win+") {
+                (MeaningfulAction::AppSwitch, Duration::from_millis(220))
+            } else if is_paste_shortcut(&shortcut) {
+                (
                     MeaningfulAction::Shortcut(shortcut),
-                    uia,
-                    scope,
-                    settings,
-                    frames,
-                    order,
-                    emissions,
-                    on_status,
-                );
-            }
+                    Duration::from_millis(180),
+                )
+            } else {
+                (
+                    MeaningfulAction::Shortcut(shortcut),
+                    Duration::from_millis(90),
+                )
+            };
+            state.pending_keyboard = Some(PendingKeyboard {
+                action,
+                deadline: at + settle,
+            });
         }
         RawEvent::DisplayChanged | RawEvent::SessionLocked | RawEvent::SessionUnlocked => {}
     }
@@ -650,7 +678,11 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         on_status("Activity outside the selected scope is ignored.".to_owned());
         return;
     }
-    let Some(frame) = frames.lock().latest(&foreground.monitor_id) else {
+    let Some(frame) = ({
+        let hub = frames.lock();
+        hub.note_active_monitor(&foreground.monitor_id);
+        hub.latest(&foreground.monitor_id)
+    }) else {
         on_status("Waiting for a safe display frame…".to_owned());
         return;
     };
@@ -673,6 +705,39 @@ fn emit_keyboard_action<U: UiAutomationClient>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn flush_keyboard<U: UiAutomationClient>(
+    state: &mut ProcessorState,
+    uia: &U,
+    scope: &DesktopScope,
+    settings: &RecorderSettings,
+    frames: &Arc<Mutex<FrameHub>>,
+    order: &AtomicUsize,
+    emissions: &EmissionPipeline,
+    on_status: &StatusCallback,
+) {
+    let Some(pending) = state.pending_keyboard.take() else {
+        return;
+    };
+    emit_keyboard_action(
+        pending.action,
+        uia,
+        scope,
+        settings,
+        frames,
+        order,
+        emissions,
+        on_status,
+    );
+}
+
+fn keyboard_action_is_due(state: &ProcessorState) -> bool {
+    state
+        .pending_keyboard
+        .as_ref()
+        .is_some_and(|pending| pending.deadline <= Instant::now())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn flush_due<U: UiAutomationClient>(
     state: &mut ProcessorState,
     uia: &U,
@@ -683,6 +748,11 @@ fn flush_due<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    if keyboard_action_is_due(state) {
+        flush_keyboard(
+            state, uia, scope, settings, frames, order, emissions, on_status,
+        );
+    }
     if state
         .pending_click
         .as_ref()
@@ -713,6 +783,9 @@ fn flush_all<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    flush_keyboard(
+        state, uia, scope, settings, frames, order, emissions, on_status,
+    );
     if let Some(click) = state.pending_click.take() {
         emit_pending_click(click, settings, order, emissions, on_status);
     }
@@ -786,7 +859,11 @@ fn flush_text<U: UiAutomationClient>(
         on_status("Activity outside the selected scope is ignored.".to_owned());
         return;
     }
-    let Some(frame) = frames.lock().latest(&foreground.monitor_id) else {
+    let Some(frame) = ({
+        let hub = frames.lock();
+        hub.note_active_monitor(&foreground.monitor_id);
+        hub.latest(&foreground.monitor_id)
+    }) else {
         on_status("Waiting for a stable post-entry frame…".to_owned());
         return;
     };
@@ -1464,7 +1541,12 @@ fn blur_region(image: &mut RgbaImage, bounds: Bounds) {
     let width = bounds.width.min(image.width().saturating_sub(x));
     let height = bounds.height.min(image.height().saturating_sub(y));
     let source = imageops::crop_imm(image, x, y, width, height).to_image();
-    let blurred = imageops::blur(&source, 16.0);
+    // A true Gaussian blur costs work proportional to the kernel radius, and at
+    // this radius a screenshot with a few dozen covered regions took seconds to
+    // process — long enough for the step feed to fall behind the author. This
+    // approximation runs three box passes in time independent of the radius and
+    // is visually indistinguishable at these sizes.
+    let blurred = imageops::fast_blur(&source, 16.0);
     imageops::replace(image, &blurred, i64::from(x), i64::from(y));
 }
 
@@ -1579,7 +1661,9 @@ mod tests {
     #[test]
     fn processed_rgba_frames_encode_as_jpeg() {
         let image = RgbaImage::from_pixel(64, 48, Rgba([32, 64, 96, 255]));
-        let (jpeg, width, height) = encode_bounded(image).expect("encode screenshot");
+        let Ok((jpeg, width, height)) = encode_bounded(image) else {
+            panic!("a solid RGBA frame must encode as JPEG");
+        };
         assert_eq!((width, height), (64, 48));
         assert!(jpeg.starts_with(&[0xff, 0xd8]));
     }
@@ -1593,8 +1677,9 @@ mod tests {
 
     #[test]
     fn desktop_clicks_receive_the_browser_style_contextual_crop() {
-        let crop =
-            contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440).expect("click crop");
+        let Some(crop) = contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440) else {
+            panic!("an ultrawide click must produce a contextual crop");
+        };
         assert!(crop.width < 0.4);
         assert!(crop.x <= 0.72 && crop.x + crop.width >= 0.72);
         assert!(crop.y <= 0.44 && crop.y + crop.height >= 0.44);

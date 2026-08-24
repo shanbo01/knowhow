@@ -64,7 +64,11 @@ windows = { version = "=0.62.2", features = [
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "s"
+# The recorder resizes, blurs and JPEG-encodes full-resolution desktop frames
+# on the author's machine while they work. Optimising for size here traded a
+# few megabytes of installer against a pipeline that visibly lagged behind the
+# actions it was recording.
+opt-level = 3
 panic = "abort"
 strip = "symbols"
 

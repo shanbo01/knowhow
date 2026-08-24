@@ -13,9 +13,19 @@ use parking_lot::Mutex;
 
 use crate::{model::Bounds, platform::MonitorDescriptor};
 
-const RING_CAPACITY: usize = 4;
+// Each entry is a full-resolution BGRA mirror of one display: about 33 MB on a
+// 4K monitor. The ring only has to reach back far enough to find a frame that
+// predates the action being recorded, which the throttle below bounds to a
+// couple of hundred milliseconds — so a deeper ring buys nothing and costs
+// tens of megabytes per display.
+const RING_CAPACITY: usize = 3;
 const FRAME_MAX_AGE: Duration = Duration::from_millis(750);
 const FRAME_THROTTLE: Duration = Duration::from_millis(75);
+// Displays the author is not working on still need a frame recent enough to be
+// eligible the instant they click there, but they do not need one every 75 ms.
+// Copying every attached display at full rate is what made multi-monitor
+// machines feel slow while recording.
+const IDLE_MONITOR_THROTTLE: Duration = Duration::from_millis(320);
 
 #[derive(Clone, Debug)]
 pub struct DesktopFrame {
@@ -58,6 +68,7 @@ impl FrameRing {
 
 pub struct FrameHub {
     rings: Arc<HashMap<String, Arc<Mutex<FrameRing>>>>,
+    active: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     joins: Vec<JoinHandle<()>>,
 }
@@ -82,6 +93,7 @@ impl FrameHub {
                 .collect::<HashMap<_, _>>(),
         );
         let stop = Arc::new(AtomicBool::new(false));
+        let active: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let mut joins = Vec::with_capacity(monitors.len());
         for monitor in monitors {
             let ring = rings
@@ -90,13 +102,31 @@ impl FrameHub {
                 .ok_or_else(|| anyhow!("display frame buffer is unavailable"))?;
             let thread_stop = Arc::clone(&stop);
             let thread_status = Arc::clone(&status);
+            let thread_active = Arc::clone(&active);
             joins.push(
                 thread::Builder::new()
                     .name(format!("knowhow-dxgi-{}", monitor.index))
-                    .spawn(move || capture_monitor(monitor, ring, thread_stop, thread_status))?,
+                    .spawn(move || {
+                        capture_monitor(monitor, ring, thread_active, thread_stop, thread_status)
+                    })?,
             );
         }
-        Ok(Self { rings, stop, joins })
+        Ok(Self {
+            rings,
+            active,
+            stop,
+            joins,
+        })
+    }
+
+    /// Marks the display the author is currently working on. Every other display
+    /// keeps a slower ring that is still fresh enough to serve a click the
+    /// moment they move there.
+    pub fn note_active_monitor(&self, monitor_id: &str) {
+        let mut active = self.active.lock();
+        if active.as_deref() != Some(monitor_id) {
+            *active = Some(monitor_id.to_owned());
+        }
     }
 
     pub fn newest_before(&self, monitor_id: &str, action_at: Instant) -> Option<DesktopFrame> {
@@ -132,6 +162,7 @@ impl Drop for FrameHub {
 fn capture_monitor(
     monitor: MonitorDescriptor,
     ring: Arc<Mutex<FrameRing>>,
+    active: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     status: Arc<dyn Fn(String) + Send + Sync>,
 ) {
@@ -175,7 +206,15 @@ fn capture_monitor(
                     // Keeping a short pre-action ring does not require copying the full desktop
                     // at the display refresh rate. This caps CPU and memory bandwidth while still
                     // leaving a recent frame available for every hardware input event.
-                    thread::sleep(FRAME_THROTTLE);
+                    let focused = active
+                        .lock()
+                        .as_deref()
+                        .is_none_or(|current| current == monitor.id);
+                    thread::sleep(if focused {
+                        FRAME_THROTTLE
+                    } else {
+                        IDLE_MONITOR_THROTTLE
+                    });
                 }
                 Err(CaptureError::Timeout) => {}
                 Err(CaptureError::AccessLost | CaptureError::RefreshFailure) => {
@@ -200,6 +239,7 @@ fn capture_monitor(
 fn capture_monitor(
     _monitor: MonitorDescriptor,
     _ring: Arc<Mutex<FrameRing>>,
+    _active: Arc<Mutex<Option<String>>>,
     _stop: Arc<AtomicBool>,
     status: Arc<dyn Fn(String) + Send + Sync>,
 ) {
@@ -246,12 +286,28 @@ mod tests {
     }
 
     #[test]
+    fn a_late_processed_action_still_uses_the_frame_from_before_it() {
+        let start = Instant::now();
+        let mut ring = FrameRing::default();
+        ring.push(frame(start));
+        ring.push(frame(start + Duration::from_millis(120)));
+        // The press happened 40 ms in; the processor only reached it later, by
+        // which point a post-click frame was already in the ring. Selection is
+        // made against the moment of the press, so the earlier frame wins.
+        assert_eq!(
+            ring.newest_eligible(start + Duration::from_millis(40))
+                .map(|frame| frame.captured_at),
+            Some(start)
+        );
+    }
+
+    #[test]
     fn ring_has_bounded_gpu_ram_mirror() {
         let start = Instant::now();
         let mut ring = FrameRing::default();
         for index in 0..12 {
             ring.push(frame(start + Duration::from_millis(index)));
         }
-        assert_eq!(ring.frames.len(), 4);
+        assert_eq!(ring.frames.len(), super::RING_CAPACITY);
     }
 }
