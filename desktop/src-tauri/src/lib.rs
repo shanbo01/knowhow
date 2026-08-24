@@ -37,14 +37,28 @@ async fn poll_authorization(state: State<'_, Arc<Coordinator>>) -> CommandResult
     state.poll_authorization().await.map_err(command_error)
 }
 
+// Window enumeration walks every top-level window and opens each owning
+// process to check elevation. A synchronous Tauri command runs on the main
+// thread, so doing that there stalls the recorder's own window for the whole
+// pass — and the preview pass, which photographs each target, stalled it for
+// far longer. Both hand the blocking work to a worker thread.
 #[tauri::command]
-fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
-    state.targets().map_err(command_error)
+async fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
+    let coordinator = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || coordinator.targets())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 #[tauri::command]
-fn capture_target_previews(target_ids: Vec<String>) -> CommandResult<Vec<CaptureTargetPreview>> {
-    platform::capture_target_previews(&target_ids).map_err(command_error)
+async fn capture_target_previews(
+    target_ids: Vec<String>,
+) -> CommandResult<Vec<CaptureTargetPreview>> {
+    tauri::async_runtime::spawn_blocking(move || platform::capture_target_previews(&target_ids))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 #[tauri::command]

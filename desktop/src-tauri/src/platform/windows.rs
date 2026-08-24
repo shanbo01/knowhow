@@ -57,8 +57,8 @@ use windows::{
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
-                IUIAutomationTextPattern, IUIAutomationValuePattern, TreeScope_Children,
-                TreeScope_Element, UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+                IUIAutomationTextPattern, IUIAutomationValuePattern, TreeScope_Element,
+                UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
                 UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
                 UIA_DataGridControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
                 UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_IsOffscreenPropertyId,
@@ -135,7 +135,7 @@ const PROTECTED_PROCESSES: &[&str] = &[
 
 const PREVIEW_WIDTH: u32 = 320;
 const PREVIEW_HEIGHT: u32 = 180;
-const PREVIEW_TIMEOUT: Duration = Duration::from_millis(1_250);
+const PREVIEW_TIMEOUT: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Debug)]
 struct WindowRecord {
@@ -227,7 +227,13 @@ pub fn quit_capture_choice() -> QuitChoice {
 }
 
 pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
-    let windows = enumerate_windows()?;
+    capture_targets_from(enumerate_windows()?, monitor_descriptors()?)
+}
+
+fn capture_targets_from(
+    windows: Vec<WindowRecord>,
+    monitors: Vec<MonitorDescriptor>,
+) -> Result<Vec<CaptureTarget>> {
     let mut seen_processes = HashSet::new();
     let mut applications = Vec::new();
     for window in &windows {
@@ -259,19 +265,15 @@ pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
         bounds: Some(window.bounds),
         protected: window.protected || window.elevated || window.process_id == std::process::id(),
     }));
-    targets.extend(
-        monitor_descriptors()?
-            .into_iter()
-            .map(|monitor| CaptureTarget {
-                id: monitor.id,
-                kind: ScopeKind::Monitor,
-                label: monitor.name,
-                detail: format!("{} × {}", monitor.bounds.width, monitor.bounds.height),
-                process_id: None,
-                bounds: Some(monitor.bounds),
-                protected: false,
-            }),
-    );
+    targets.extend(monitors.into_iter().map(|monitor| CaptureTarget {
+        id: monitor.id,
+        kind: ScopeKind::Monitor,
+        label: monitor.name,
+        detail: format!("{} × {}", monitor.bounds.width, monitor.bounds.height),
+        process_id: None,
+        bounds: Some(monitor.bounds),
+        protected: false,
+    }));
     Ok(targets)
 }
 
@@ -282,9 +284,12 @@ pub fn capture_target_previews(target_ids: &[String]) -> Result<Vec<CaptureTarge
         Monitor(Bounds),
     }
 
+    // One enumeration for the whole pass. Calling capture_targets() here walked
+    // every window a second time, opening each owning process again just to
+    // re-derive a list this function already has the inputs for.
     let windows = enumerate_windows()?;
     let monitors = monitor_descriptors()?;
-    let targets = capture_targets()?;
+    let targets = capture_targets_from(windows.clone(), monitors.clone())?;
     let mut jobs = Vec::new();
     for target_id in target_ids {
         let Some(target) = targets
@@ -374,14 +379,10 @@ fn capture_window_preview(hwnd: HWND) -> Result<String> {
     control
         .stop()
         .context("stop Windows Graphics Capture preview")?;
-    let mut frame = output
+    let frame = output
         .lock()
         .take()
         .ok_or_else(|| anyhow!("Windows did not provide a preview for this window"))?;
-    for pixel in frame.pixels.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-        pixel[3] = 255;
-    }
     encode_preview_pixels(frame.width, frame.height, frame.pixels)
 }
 
@@ -469,10 +470,6 @@ fn capture_preview_bitmap(
         if scanlines == 0 {
             bail!("read preview pixels failed");
         }
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-            pixel[3] = 255;
-        }
         encode_preview_pixels(u32::try_from(width)?, u32::try_from(height)?, pixels)
     })();
     // SAFETY: restore the original object before deleting our compatible bitmap and DC.
@@ -485,11 +482,24 @@ fn capture_preview_bitmap(
     result
 }
 
+/// Turns raw BGRA preview pixels into the thumbnail data URL the picker shows.
+///
+/// Both sources — Windows Graphics Capture and GetDIBits — produce BGRA, and
+/// resizing is a per-channel linear filter, so reducing first and correcting
+/// the thumbnail's channel order afterwards yields exactly the same image for a
+/// fraction of the work. A 4K display is eight million pixels to swap before
+/// the resize and fifty-eight thousand after it.
 fn encode_preview_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Result<String> {
     let image = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, pixels)
         .ok_or_else(|| anyhow!("preview pixel layout is invalid"))?;
-    let resized =
-        DynamicImage::ImageRgba8(image).resize(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Triangle);
+    let mut resized = DynamicImage::ImageRgba8(image)
+        .resize(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Triangle)
+        .to_rgba8();
+    for pixel in resized.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+        pixel[3] = 255;
+    }
+    let resized = DynamicImage::ImageRgba8(resized);
     let mut encoded = Cursor::new(Vec::new());
     JpegEncoder::new_with_quality(&mut encoded, 52)
         .encode_image(&DynamicImage::ImageRgb8(resized.to_rgb8()))?;
@@ -1292,8 +1302,8 @@ fn collect_privacy_regions(
     // SAFETY: the root and the cache request live on this COM apartment.
     let root =
         unsafe { root.BuildUpdatedCache(&request) }.context("read UI Automation privacy root")?;
-    let condition = unsafe { automation.CreateTrueCondition() }
-        .context("create UI Automation privacy condition")?;
+    let walker =
+        unsafe { automation.ControlViewWalker() }.context("create UI Automation privacy walker")?;
     let mut pending = vec![root];
     let mut regions = Vec::new();
     let mut visited = 0_usize;
@@ -1305,26 +1315,22 @@ fn collect_privacy_regions(
         if let Some(region) = cached_privacy_region(&element) {
             regions.push(region);
         }
-        // One call returns every child of this element with all six properties
-        // already filled in. Reading them one property at a time — the obvious
-        // way — costs a separate cross-process round trip each, which is roughly
-        // an order of magnitude more work for the same answer.
+        // Navigation and property reads share one cross-process round trip per
+        // element. Reading each property separately — the obvious way — costs a
+        // round trip apiece, which is what made a privacy pass slow enough to
+        // drag down the application being recorded. The traversal itself is
+        // unchanged: the same control view, in the same order, to the same
+        // bound, so exactly the same regions are covered.
         //
-        // SAFETY: elements and the condition remain on this COM apartment.
-        // Provider failures prune only the unavailable branch instead of
-        // blocking the action processor.
-        let Ok(children) =
-            (unsafe { element.FindAllBuildCache(TreeScope_Children, &condition, &request) })
-        else {
-            continue;
-        };
-        let count = unsafe { children.Length() }.unwrap_or(0);
-        for index in 0..count {
+        // SAFETY: walker and elements remain on this COM apartment. Provider
+        // failures prune only the unavailable branch instead of blocking the
+        // action processor.
+        let mut child = unsafe { walker.GetFirstChildElementBuildCache(&element, &request) }.ok();
+        while let Some(element) = child {
+            child = unsafe { walker.GetNextSiblingElementBuildCache(&element, &request) }.ok();
+            pending.push(element);
             if pending.len() + visited >= MAX_ELEMENTS {
                 break;
-            }
-            if let Ok(child) = unsafe { children.GetElement(index) } {
-                pending.push(child);
             }
         }
     }

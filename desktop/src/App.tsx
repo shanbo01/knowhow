@@ -184,12 +184,33 @@ function CaptureSetup({
     // Derived from the key rather than captured, so the effect re-runs when the
     // set of targets changes and not merely when the array identity does.
     const ids = previewKey ? previewKey.split("|") : [];
+    // Every preview opens a Graphics Capture session against one window. The
+    // first pass fills the whole gallery so nothing shows a placeholder, but
+    // repeating that for twenty open applications every six seconds is a
+    // steady drain on the machine the author is trying to record. Later passes
+    // keep the selected source live and rotate through the rest, which each
+    // tile has already drawn at least once.
+    const ROTATING_PREVIEWS = 6;
+    let cursor = 0;
+    let filled = false;
+    function nextBatch() {
+      if (!filled) return ids;
+      const start = cursor % ids.length;
+      const rotating = [...ids.slice(start), ...ids.slice(0, start)].slice(
+        0,
+        ROTATING_PREVIEWS,
+      );
+      cursor = start + rotating.length;
+      // ids[0] is the selected source, which stays live on every pass.
+      return [...new Set([ids[0], ...rotating])];
+    }
     async function refreshPreviews() {
       if (!ids.length || loading || document.visibilityState !== "visible") return;
       loading = true;
       try {
-        const rows = await desktop.previews(ids);
+        const rows = await desktop.previews(nextBatch());
         if (active) {
+          filled = true;
           const refreshed = Object.fromEntries(rows.map((row) => [row.targetId, row.dataUrl]));
           setPreviews((current) => ({ ...current, ...refreshed }));
         }

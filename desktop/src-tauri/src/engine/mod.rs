@@ -40,6 +40,11 @@ type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 // clicking, the events wait their turn in an unbounded channel, and each one
 // still carries the timestamp that picks its own pre-action frame.
 const MAX_PENDING_EMISSIONS: usize = 6;
+// A display ring can be momentarily empty — DXGI reconnecting after a mode
+// change, a capture thread restarting. An action that arrives in that window
+// still happened, so it waits for the next frame instead of being dropped.
+const FRAME_RETRY_INTERVAL: Duration = Duration::from_millis(60);
+const MAX_FRAME_RETRIES: u8 = 8;
 const MAX_PROCESSING_WIDTH: u32 = 1920;
 const MAX_PROCESSING_HEIGHT: u32 = 1080;
 
@@ -180,6 +185,7 @@ struct PendingPointer {
 struct PendingKeyboard {
     action: MeaningfulAction,
     deadline: Instant,
+    retries: u8,
 }
 
 #[derive(Clone)]
@@ -188,6 +194,7 @@ struct PendingText {
     foreground: ForegroundContext,
     activity_count: usize,
     deadline: Instant,
+    retries: u8,
 }
 
 enum MeaningfulAction {
@@ -591,6 +598,7 @@ fn handle_event<U: UiAutomationClient>(
                 foreground,
                 activity_count: 1,
                 deadline: now + Duration::from_millis(450),
+                retries: 0,
             });
         }
         RawEvent::Enter | RawEvent::Tab => {
@@ -600,7 +608,10 @@ fn handle_event<U: UiAutomationClient>(
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
             );
-            emit_keyboard_action(
+            // Enter and Tab need no settle delay, but they do need a display
+            // frame. If the ring is momentarily empty the action is parked and
+            // retried on the next pass rather than dropped.
+            if let Some(action) = emit_keyboard_action(
                 if matches!(event, RawEvent::Enter) {
                     MeaningfulAction::Enter
                 } else {
@@ -613,7 +624,13 @@ fn handle_event<U: UiAutomationClient>(
                 order,
                 emissions,
                 on_status,
-            );
+            ) {
+                state.pending_keyboard = Some(PendingKeyboard {
+                    action,
+                    deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+                    retries: 0,
+                });
+            }
         }
         RawEvent::Shortcut(shortcut) => {
             if let Some(click) = state.pending_click.take() {
@@ -653,6 +670,7 @@ fn handle_event<U: UiAutomationClient>(
             state.pending_keyboard = Some(PendingKeyboard {
                 action,
                 deadline: at + settle,
+                retries: 0,
             });
         }
         RawEvent::DisplayChanged | RawEvent::SessionLocked | RawEvent::SessionUnlocked => {}
@@ -660,6 +678,8 @@ fn handle_event<U: UiAutomationClient>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Emits a keyboard action, or hands it back when no display frame is
+/// available yet so the caller can try again rather than lose the step.
 fn emit_keyboard_action<U: UiAutomationClient>(
     action: MeaningfulAction,
     uia: &U,
@@ -669,14 +689,14 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
-) {
+) -> Option<MeaningfulAction> {
     let Ok(foreground) = foreground_context() else {
         on_status("Protected or secure-desktop activity is excluded.".to_owned());
-        return;
+        return None;
     };
     if !scope_accepts(scope, &foreground, None) {
         on_status("Activity outside the selected scope is ignored.".to_owned());
-        return;
+        return None;
     }
     let Some(frame) = ({
         let hub = frames.lock();
@@ -684,7 +704,7 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         hub.latest(&foreground.monitor_id)
     }) else {
         on_status("Waiting for a safe display frame…".to_owned());
-        return;
+        return Some(action);
     };
     let metadata = uia
         .focused_element_semantic()
@@ -702,6 +722,7 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         emissions,
         on_status,
     );
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -718,16 +739,26 @@ fn flush_keyboard<U: UiAutomationClient>(
     let Some(pending) = state.pending_keyboard.take() else {
         return;
     };
-    emit_keyboard_action(
-        pending.action,
-        uia,
-        scope,
-        settings,
-        frames,
-        order,
-        emissions,
-        on_status,
-    );
+    let PendingKeyboard {
+        action, retries, ..
+    } = pending;
+    // A returned action means the display ring had nothing to photograph yet.
+    if let Some(action) = emit_keyboard_action(
+        action, uia, scope, settings, frames, order, emissions, on_status,
+    ) {
+        if retries >= MAX_FRAME_RETRIES {
+            on_status(
+                "A keyboard action could not be captured: no display frame was available."
+                    .to_owned(),
+            );
+            return;
+        }
+        state.pending_keyboard = Some(PendingKeyboard {
+            action,
+            deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+            retries: retries + 1,
+        });
+    }
 }
 
 fn keyboard_action_is_due(state: &ProcessorState) -> bool {
@@ -854,7 +885,7 @@ fn flush_text<U: UiAutomationClient>(
         .focused_element()
         .unwrap_or_else(|_| fallback_metadata(&pending.foreground));
     state.last_focus = Some(after.clone());
-    let foreground = foreground_context().unwrap_or(pending.foreground);
+    let foreground = foreground_context().unwrap_or_else(|_| pending.foreground.clone());
     if !scope_accepts(scope, &foreground, None) {
         on_status("Activity outside the selected scope is ignored.".to_owned());
         return;
@@ -864,7 +895,20 @@ fn flush_text<U: UiAutomationClient>(
         hub.note_active_monitor(&foreground.monitor_id);
         hub.latest(&foreground.monitor_id)
     }) else {
+        // The author's typing is already recorded in `pending`; putting it back
+        // is the difference between a late step and a missing one.
+        if pending.retries >= MAX_FRAME_RETRIES {
+            on_status(
+                "Typed text could not be captured: no display frame was available.".to_owned(),
+            );
+            return;
+        }
         on_status("Waiting for a stable post-entry frame…".to_owned());
+        state.pending_text = Some(PendingText {
+            deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+            retries: pending.retries + 1,
+            ..pending
+        });
         return;
     };
     let exact_text = if settings.capture_typed_text
