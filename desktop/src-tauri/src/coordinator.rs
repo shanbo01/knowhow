@@ -750,7 +750,14 @@ impl Coordinator {
             ) {
                 return;
             }
-            inner.recorder.steps.push(step.summary(StepStatus::Ready));
+            // The engine numbers steps from a counter that never rewinds, so a
+            // screenshot that failed to process leaves a hole and a step captured
+            // after a deletion jumps ahead of the list it is joining. The upload
+            // re-indexes by insertion order regardless; this keeps the number the
+            // recorder shows the author honest in the meantime.
+            let mut summary = step.summary(StepStatus::Ready);
+            summary.order = inner.recorder.steps.len();
+            inner.recorder.steps.push(summary);
             inner.recorder.status_message = Some("Step captured".to_owned());
         }
         self.emit();
