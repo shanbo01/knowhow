@@ -759,30 +759,44 @@ async function injectCaptureContent(state, capturePolicy, documentId) {
     tabId: state.tabId,
     ...(typeof documentId === "string" ? { documentIds: [documentId] } : {}),
   };
-  await chrome.scripting.insertCSS({
-    target,
-    files: [CONTENT_STYLE_PATH],
-  });
-  await chrome.scripting.executeScript({
-    target,
-    files: [CONTENT_GEOMETRY_PATH, CONTENT_SETTLED_PATH, CONTENT_SCRIPT_PATH],
-    injectImmediately: true,
-  });
   const policy = capturePolicy || (await getCapturePolicy());
-  const configured = await chrome.tabs.sendMessage(
-    state.tabId,
-    {
-      type: "KNOWHOW_CONFIGURE",
-      sessionId: state.sessionId,
-      status: state.status,
-      scopeLabel: state.scopeLabel,
-      policy,
-      documentId: documentId || state.activeDocumentId || null,
-      navigationKey:
-        state.activeNavigationKey || state.sanitizedUrl || null,
-    },
-    typeof documentId === "string" ? { documentId } : undefined,
-  );
+  const configure = {
+    type: "KNOWHOW_CONFIGURE",
+    sessionId: state.sessionId,
+    status: state.status,
+    scopeLabel: state.scopeLabel,
+    policy,
+    documentId: documentId || state.activeDocumentId || null,
+    navigationKey: state.activeNavigationKey || state.sanitizedUrl || null,
+  };
+  const frame = typeof documentId === "string" ? { documentId } : undefined;
+
+  // Switching back to a tab that already carries the recorder is the common
+  // shape of a real workflow — copy a code out of one tab, type it into
+  // another, switch back. Re-injecting there costs two round trips before
+  // Smart Blur can paint, so try to configure what is already running first
+  // and only pay for injection when nothing answers. A reloaded extension
+  // orphans its old content script, whose runtime is dead, so it fails this
+  // probe and is replaced rather than left stale.
+  try {
+    const existing = await chrome.tabs.sendMessage(state.tabId, configure, frame);
+    if (existing?.ok) return;
+  } catch {
+    // No recorder on this document yet.
+  }
+
+  // Styles and scripts do not depend on each other, and both must land before
+  // the configure below; injecting them concurrently removes a round trip from
+  // every fresh page.
+  await Promise.all([
+    chrome.scripting.insertCSS({ target, files: [CONTENT_STYLE_PATH] }),
+    chrome.scripting.executeScript({
+      target,
+      files: [CONTENT_GEOMETRY_PATH, CONTENT_SETTLED_PATH, CONTENT_SCRIPT_PATH],
+      injectImmediately: true,
+    }),
+  ]);
+  const configured = await chrome.tabs.sendMessage(state.tabId, configure, frame);
   if (!configured?.ok) {
     throw new Error("KnowHow could not safely configure capture on this page.");
   }
