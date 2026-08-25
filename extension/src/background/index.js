@@ -3451,7 +3451,11 @@ async function warmDestinationPreparedFrame(state, context, details) {
           documentId,
           reserveSlot,
           deadlineRequired: false,
-          hideLiveBlur: false,
+          // This frame is what the next click on the destination page adopts,
+          // so KnowHow's own on-page UI has to be out of shot. The hide and
+          // restore land during a navigation the author is already watching
+          // change, so unlike the per-click path there is nothing to flicker.
+          hideLiveBlur: true,
         }),
       {
         deadlineMs: 1_600,

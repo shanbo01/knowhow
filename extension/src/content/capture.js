@@ -2344,8 +2344,16 @@
             await waiter.waitForPageSettled();
           }
         }
+        // Most steps adopt a pre-warmed frame, so anything KnowHow draws on the
+        // page has to be out of shot here or it ends up in the author's guide.
+        // Only the chrome is hidden: the blur preview itself can stay, because
+        // the bake re-applies every mask from its own coordinates, and hiding
+        // the largest overlay on a timer is exactly the flicker that made Smart
+        // Blur look broken.
+        hideCaptureOverlays();
         await waitForPagePaint();
         if (state.status !== "recording" || pickerActive) {
+          restoreCaptureOverlays();
           return null;
         }
         return send({
@@ -2382,6 +2390,8 @@
       })
       .finally(() => {
         preparedFrameInFlight = null;
+        // Whatever happened to the capture, the author's own UI comes back.
+        restoreCaptureOverlays();
         lastPreparedFrameAt = Date.now();
         preparedFrameWantedSince = 0;
         if (!preparedFrameSchedulingAllowed()) return;
