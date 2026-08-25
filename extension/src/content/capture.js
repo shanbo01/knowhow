@@ -2273,6 +2273,12 @@
 
   function preparedFrameSchedulingAllowed() {
     if (state.status !== "recording" || pickerActive) return false;
+    // Every capture tears the start-of-recording flash down so it can never be
+    // photographed, and the first pre-warm used to fire within a couple of
+    // hundred milliseconds — which meant the author saw a blink instead of the
+    // message. Nothing is worth capturing during that beat anyway: the author
+    // is reading it, not working.
+    if (recordingFlashPlaying()) return false;
     // A backgrounded tab cannot be photographed by captureVisibleTab anyway;
     // scheduling one only burns a queue slot and returns an error.
     return document.visibilityState === "visible";
@@ -2709,6 +2715,15 @@
   let recordingFlashEl = null;
   let recordingFlashHideTimer = null;
   let recordingActivationCount = 0;
+  let recordingFlashUntilMs = 0;
+
+  const RECORDING_FLASH_HOLD_MS = 1_100;
+  const RECORDING_FLASH_FADE_MS = 450;
+
+  /** True while the start-of-recording flash is still meant to be on screen. */
+  function recordingFlashPlaying() {
+    return Date.now() < recordingFlashUntilMs;
+  }
 
   // A brief full-viewport dim + "Recording started/resumed" flash gives clear
   // feedback that capture is live, without leaving any persistent page UI
@@ -2719,6 +2734,7 @@
       clearTimeout(recordingFlashHideTimer);
       recordingFlashHideTimer = null;
     }
+    recordingFlashUntilMs = 0;
     if (recordingFlashEl) {
       recordingFlashEl.remove();
       recordingFlashEl = null;
@@ -2730,22 +2746,26 @@
     const root = document.body || document.documentElement;
     if (!root) return;
     removeRecordingFlash();
+    // The dim is a background colour on the backdrop rather than an opacity on
+    // the whole overlay, so the badge sitting on top of it stays at full
+    // strength — the page recedes, the message does not.
     const flash = document.createElement("div");
     flash.setAttribute("aria-hidden", "true");
     flash.style.cssText =
       "position:fixed;inset:0;z-index:2147483647;display:flex;" +
       "align-items:center;justify-content:center;" +
-      "background:rgba(8,10,20,.55);opacity:1;" +
-      "transition:opacity .45s ease;pointer-events:none;";
+      "background:rgba(8,10,20,.58);opacity:0;" +
+      "transition:opacity .22s ease;pointer-events:none;";
     const badge = document.createElement("div");
     badge.style.cssText =
-      "display:flex;align-items:center;gap:10px;padding:14px 22px;" +
-      "border-radius:999px;background:rgba(17,20,30,.94);color:#fff;" +
-      "font:600 15px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
-      "box-shadow:0 12px 32px rgba(0,0,0,.35);letter-spacing:.01em;";
+      "display:flex;align-items:center;gap:12px;padding:16px 28px;" +
+      "border-radius:999px;background:rgba(17,20,30,.96);color:#fff;" +
+      "font:650 17px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
+      "box-shadow:0 18px 44px rgba(0,0,0,.45);letter-spacing:.01em;" +
+      "transform:scale(.96);transition:transform .22s cubic-bezier(.2,.8,.3,1);";
     const dot = document.createElement("span");
     dot.style.cssText =
-      "width:10px;height:10px;border-radius:50%;background:#ef4444;" +
+      "width:11px;height:11px;border-radius:50%;background:#ef4444;" +
       "animation:knowhow-recording-pulse 1.4s ease-out infinite;";
     const style = document.createElement("style");
     style.textContent =
@@ -2759,13 +2779,27 @@
     flash.append(style, badge);
     root.appendChild(flash);
     recordingFlashEl = flash;
+    recordingFlashUntilMs =
+      Date.now() + RECORDING_FLASH_HOLD_MS + RECORDING_FLASH_FADE_MS;
+    // Fade in off the first frame so the dim and the badge animate in together
+    // rather than snapping onto the page.
+    requestAnimationFrame(() => {
+      if (recordingFlashEl !== flash) return;
+      flash.style.opacity = "1";
+      badge.style.transform = "scale(1)";
+    });
     recordingFlashHideTimer = setTimeout(() => {
       if (recordingFlashEl !== flash) return;
+      flash.style.transition = `opacity ${RECORDING_FLASH_FADE_MS}ms ease`;
       flash.style.opacity = "0";
       recordingFlashHideTimer = setTimeout(() => {
-        if (recordingFlashEl === flash) removeRecordingFlash();
-      }, 450);
-    }, 1100);
+        if (recordingFlashEl !== flash) return;
+        removeRecordingFlash();
+        // Pre-warming was held back while this played; get a frame ready now
+        // so the author's first click still has one to adopt.
+        schedulePreparedFrame(0);
+      }, RECORDING_FLASH_FADE_MS);
+    }, RECORDING_FLASH_HOLD_MS);
   }
 
   function setStatus(status) {

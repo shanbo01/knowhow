@@ -1102,22 +1102,12 @@ async function startCapture(options = {}) {
       await setCaptureState(ready);
       return ready;
     });
-    const initialJob = snapshotCaptureJob(recording, {
-      pageUrl: beforeReady.tab.url,
-      sourceEvent: "navigation",
-      title: "Navigate to " + beforeReady.verdict.sanitizedUrl,
-      instructions: "Navigate to " + beforeReady.verdict.sanitizedUrl + ".",
-      targetRect: null,
-      clickPoint: null,
-    });
-    const capturedInitialStep = await enqueueScreenshot((reserveSlot) =>
-      captureStep(initialJob, reserveSlot),
-    );
-    if (!capturedInitialStep) {
-      throw new Error(
-        "The selected page changed before KnowHow could capture the initial step.",
-      );
-    }
+    // No screenshot is taken here. A guide begins at the first thing the author
+    // actually does, and photographing the starting page before they have done
+    // anything only added a step showing an untouched page — while spending the
+    // slowest part of startup, and failing the whole capture if the page moved
+    // in the meantime. The starting URL is already recorded on the session, and
+    // the first click captures the page from the moment it matters.
     const statusResponse = await chrome.tabs.sendMessage(recording.tabId, {
       type: "KNOWHOW_SET_STATUS",
       status: CaptureStatus.RECORDING,
