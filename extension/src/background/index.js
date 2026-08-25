@@ -2138,9 +2138,22 @@ function newestReusablePreparedFrame(state) {
   );
 }
 
+// Chrome caps captureVisibleTab near two calls a second, so a burst of clicks
+// cannot each get their own screenshot inside a tight deadline. Abandoning the
+// capture left the step with its text and no picture — and because an
+// unresolved step blocks Finish, the author had to retry or delete every one of
+// them by hand. Interaction captures already take priority in the queue, so
+// waiting a little longer for a slightly late frame beats having none: the step
+// still shows the page the author was working on.
+const INTERACTION_CAPTURE_DEADLINE_MS = 4_000;
+
 async function captureFallbackFrame(
   entryId,
-  { deadlineMs = 1_200, preparePage = false, hideLiveBlur = true } = {},
+  {
+    deadlineMs = INTERACTION_CAPTURE_DEADLINE_MS,
+    preparePage = false,
+    hideLiveBlur = true,
+  } = {},
 ) {
   const state = await getCaptureState();
   const entry = captureEntry(state, entryId);
@@ -2232,6 +2245,25 @@ async function captureFallbackFrame(
     }
     if (attachedId) {
       await attachFrame(attachedId);
+    } else {
+      // Neither a fresh capture nor a recent frame was available. Say so on the
+      // entry instead of leaving it pending forever: an entry stuck in that
+      // state shows the author a step with no picture and silently blocks
+      // Finish until they notice and repair it themselves.
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const current = captureEntry(latest, entryId);
+        if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
+          return latest;
+        }
+        const failed = markCaptureEntryFailed(
+          latest,
+          entryId,
+          "The screenshot could not be taken in time. Retry this step from the side panel.",
+        );
+        await setCaptureState(failed);
+        return failed;
+      });
     }
     await sendToCapturedTab(state, {
       type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
@@ -2398,11 +2430,14 @@ async function reconcileCaptureEntries({ workerRecovery = false } = {}) {
       await finalizeInteractionEntry(entry.id);
       continue;
     }
+    // Leave a pending capture alone until its own deadline has actually
+    // elapsed. Failing it earlier than the queue could possibly have served it
+    // is what turned a slow screenshot into a step the author had to repair.
     if (
       !workerRecovery &&
       entry.capturePending === true &&
       Date.now() - Number(entry.acceptedAtMs || 0) <=
-        CAPTURE_LIMITS.preparedFrameMaxAgeMs + 500
+        INTERACTION_CAPTURE_DEADLINE_MS + 1_000
     ) {
       continue;
     }

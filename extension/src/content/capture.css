@@ -92,12 +92,43 @@
   pointer-events: auto;
 }
 
+/* The picker positions this box over whichever element is under the pointer.
+   Without a base rule it renders invisible, which left "Choose other elements"
+   with no indication of what was about to be covered. */
+.knowhow-picker-highlight {
+  position: fixed;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 2px solid #f59e0b;
+  border-radius: 4px;
+  pointer-events: none;
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2), 0 8px 28px rgba(245, 158, 11, 0.18);
+}
+
+.knowhow-picker-highlight[hidden] {
+  display: none;
+}
+
 .knowhow-picker-unblur .knowhow-picker-highlight {
   border-color: #38bdf8;
   background: rgba(56, 189, 248, 0.1);
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18), 0 8px 28px rgba(56, 189, 248, 0.16);
 }
 
+/* Follows the element a click would record. Deliberately quieter than the
+   picker highlight: it is on screen for the whole session, so it marks the
+   target without competing with the page. */
+[data-knowhow-overlay="hover-target"] {
+  position: fixed;
+  z-index: 2147483644;
+  box-sizing: border-box;
+  border: 1.5px solid rgba(217, 119, 6, 0.85);
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45);
+  transition: opacity 90ms ease;
+}
 
 .knowhow-picker-toolbar {
   position: fixed;

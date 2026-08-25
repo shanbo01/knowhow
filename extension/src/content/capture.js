@@ -1108,6 +1108,8 @@
   let pickerToolbar = null;
   let lastPointerPoint = null;
   let privacyVeilEl = null;
+  let hoverTargetEl = null;
+  let hoverTargetElement = null;
 
   const NUMBER_POLICY_KEYS = [
     "redactAllNumbers",
@@ -1450,6 +1452,9 @@
     }
     liveOverlayScrolling = true;
     updateBlurReveal(null);
+    // The outline is anchored to viewport coordinates that scrolling
+    // invalidates; the next pointer move re-places it against the element.
+    updateHoverTarget(null);
     blurPreviewRoot?.setAttribute("data-knowhow-scrolling", "true");
     for (const host of scrollerOverlayHosts.values()) {
       host.setAttribute("data-knowhow-scrolling", "true");
@@ -2157,16 +2162,74 @@
     syncBlurCoverageCopy();
   }
 
+  /**
+   * Outlines the element a click would record, so the author can see what
+   * KnowHow is about to capture before committing to it. Purely an on-page
+   * affordance: it is never part of a screenshot, because every capture path
+   * hides the overlays first.
+   */
+  function updateHoverTarget(element) {
+    if (
+      !element ||
+      state.status !== "recording" ||
+      pickerActive ||
+      blurPreviewSuspended
+    ) {
+      if (hoverTargetEl) hoverTargetEl.style.opacity = "0";
+      hoverTargetElement = null;
+      return;
+    }
+    // Only the element under the pointer changing is worth a reposition. This
+    // runs off pointermove, so it deliberately avoids the mask pipeline's
+    // occlusion and overflow work — a plain clipped client rect is all an
+    // outline needs.
+    if (element === hoverTargetElement) return;
+    const box = element.getBoundingClientRect();
+    const left = Math.max(0, box.left);
+    const top = Math.max(0, box.top);
+    const width = Math.min(innerWidth, box.right) - left;
+    const height = Math.min(innerHeight, box.bottom) - top;
+    if (!(width >= 3 && height >= 3)) {
+      if (hoverTargetEl) hoverTargetEl.style.opacity = "0";
+      hoverTargetElement = null;
+      return;
+    }
+    const rect = { x: left, y: top, width, height };
+    if (!hoverTargetEl?.isConnected) {
+      const root = document.body || document.documentElement;
+      if (!root) return;
+      const outline = document.createElement("div");
+      outline.dataset.knowhowOverlay = "hover-target";
+      outline.setAttribute("aria-hidden", "true");
+      root.append(outline);
+      hoverTargetEl = outline;
+    }
+    hoverTargetElement = element;
+    hoverTargetEl.style.opacity = "1";
+    hoverTargetEl.style.left = `${rect.x}px`;
+    hoverTargetEl.style.top = `${rect.y}px`;
+    hoverTargetEl.style.width = `${rect.width}px`;
+    hoverTargetEl.style.height = `${rect.height}px`;
+  }
+
+  function removeHoverTarget() {
+    hoverTargetEl?.remove();
+    hoverTargetEl = null;
+    hoverTargetElement = null;
+  }
+
   function hideCaptureOverlays() {
     if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "hidden";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "hidden";
     if (pickerToolbar) pickerToolbar.style.visibility = "hidden";
+    if (hoverTargetEl) hoverTargetEl.style.visibility = "hidden";
   }
 
   function restoreCaptureOverlays() {
     if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "visible";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "visible";
     if (pickerToolbar) pickerToolbar.style.visibility = "visible";
+    if (hoverTargetEl) hoverTargetEl.style.visibility = "visible";
   }
 
   function clearPreparedFrameSchedule() {
@@ -2200,6 +2263,11 @@
     preparedFrames = preparedFrames.filter(
       (candidate) => candidate.id !== frame.id,
     );
+    // A claimed frame means a click just spent it and took no screenshot of its
+    // own, so the queue is free and the next click needs a replacement now.
+    // Holding the usual spacing here is what left rapid clicks with nothing to
+    // claim and pushed them onto the slower capture-after-the-fact path.
+    lastPreparedFrameAt = 0;
     return frame.id;
   }
 
@@ -2344,6 +2412,19 @@
     privacyVeilEl = null;
   }
 
+  // Screenshots need the veil out of the frame, but tearing the node out of the
+  // DOM and rebuilding it made it flash back in a beat late — and nothing on
+  // the restore path ever rebuilt it, so it simply stayed gone until the next
+  // status change. Toggling visibility keeps the element alive and the
+  // hide/restore pair symmetric.
+  function suspendPrivacyVeilForCapture() {
+    if (privacyVeilEl) privacyVeilEl.style.visibility = "hidden";
+  }
+
+  function resumePrivacyVeilAfterCapture() {
+    if (privacyVeilEl) privacyVeilEl.style.visibility = "";
+  }
+
   function startBlurPreviewTracking() {
     blurPreviewSuspended = false;
     showPrivacyVeil();
@@ -2470,7 +2551,7 @@
 
   function hideBlurPreviewForCapture() {
     blurPreviewSuspended = true;
-    hidePrivacyVeil();
+    suspendPrivacyVeilForCapture();
     if (blurPreviewRoot) blurPreviewRoot.style.visibility = "hidden";
     for (const host of scrollerOverlayHosts.values()) {
       host.style.visibility = "hidden";
@@ -2479,11 +2560,13 @@
     if (blurPreviewRestoreTimer) clearTimeout(blurPreviewRestoreTimer);
     // The background normally restores immediately after capture. This
     // fallback prevents a failed or cancelled screenshot from leaving the
-    // author without their live privacy preview.
+    // author without their live privacy preview. A screenshot that is going to
+    // happen has happened well inside this window; five seconds only meant a
+    // lost restore message left the author staring at an unprotected page.
     blurPreviewRestoreTimer = setTimeout(() => {
       blurPreviewRestoreTimer = null;
       restoreBlurPreviewAfterCapture();
-    }, 5_000);
+    }, 1_200);
   }
 
   function restoreBlurPreviewAfterCapture() {
@@ -2492,6 +2575,7 @@
       blurPreviewRestoreTimer = null;
     }
     blurPreviewSuspended = false;
+    resumePrivacyVeilAfterCapture();
     if (blurPreviewRoot) blurPreviewRoot.style.visibility = "";
     for (const host of scrollerOverlayHosts.values()) {
       host.style.visibility = "";
@@ -2680,6 +2764,7 @@
     state.status = status;
     if (status !== "recording") {
       removeRecordingFlash();
+      removeHoverTarget();
       if (pendingPointer) cancelStagedInteraction(pendingPointer);
       pendingPointer = null;
       preparedFrames = [];
@@ -2731,8 +2816,14 @@
 
   function stageInteraction(element, context, sourceEvent = "click") {
     const interactionId = crypto.randomUUID();
-    hideCaptureChrome();
+    // Claim first, then decide whether anything has to be hidden. A claimed
+    // frame was photographed earlier, so no screenshot happens at click time —
+    // tearing the privacy preview and the Smart Blur panel down and waiting on
+    // the worker to put them back made them flicker on every single click for
+    // no benefit. Only the fallback path below actually photographs the page
+    // now, and only that path pays for hiding.
     const frameId = claimPreparedFrame();
+    if (!frameId) hideCaptureChrome();
     const staged = {
       interactionId,
       element,
@@ -2924,6 +3015,7 @@
     updateBlurReveal(lastPointerPoint);
     if (state.status === "recording") {
       const hovered = captureElement(event);
+      updateHoverTarget(hovered);
       if (hovered && hovered !== preparedFrameTarget) {
         preparedFrameTarget = hovered;
         // Hovering a new element hints that a click may be coming, but it is
@@ -2931,6 +3023,8 @@
         // in hand, and let the debounce decide when.
         if (!frameIsClaimable()) schedulePreparedFrame();
       }
+    } else {
+      updateHoverTarget(null);
     }
     const active = pendingPointer;
     if (!active || event.pointerId !== active.pointerId) return;
@@ -3170,6 +3264,7 @@
   document.addEventListener("pointerleave", () => {
     lastPointerPoint = null;
     updateBlurReveal(null);
+    updateHoverTarget(null);
   }, true);
   document.addEventListener("scroll", onLiveOverlayScroll, true);
   addEventListener("scroll", onLiveOverlayScroll, true);

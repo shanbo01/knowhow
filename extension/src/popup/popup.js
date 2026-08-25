@@ -276,6 +276,46 @@ async function getSelectedContentTab() {
   return { tabId: tab.id, windowId: tab.windowId };
 }
 
+// The title only ever had to be typed because the field was marked required.
+// The worker already falls back to the page title, so this just shows the
+// author what the guide will be called and lets them change it — no model
+// involved, and nothing to fill in before recording.
+let guideTitleEdited = false;
+
+function defaultGuideTitle(tab) {
+  const pageTitle = String(tab?.title || "").replace(/\s+/g, " ").trim();
+  const named =
+    pageTitle ||
+    (() => {
+      try {
+        return new URL(tab?.url || "").hostname.replace(/^www\./, "");
+      } catch {
+        return "";
+      }
+    })();
+  if (!named) return "";
+  const day = new Date().toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  return `${named.slice(0, 120)} — ${day}`;
+}
+
+async function suggestGuideTitle() {
+  if (guideTitleEdited || elements.title.value.trim()) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Without host access Chrome withholds both title and URL; the worker
+    // still names the guide once access is granted at capture start.
+    const suggestion = defaultGuideTitle(tab);
+    if (suggestion && !guideTitleEdited && !elements.title.value.trim()) {
+      elements.title.value = suggestion;
+    }
+  } catch {
+    // Leave the field empty; the worker names the capture instead.
+  }
+}
+
 function showError(message) {
   elements.error.textContent = message || "";
   elements.error.hidden = !message;
@@ -1028,6 +1068,10 @@ elements.startForm.addEventListener("submit", async (event) => {
         ...captureTarget,
       },
     });
+    // The name now belongs to the running capture; clear the field so the next
+    // one is suggested from wherever the author starts it, not from this one.
+    elements.title.value = "";
+    guideTitleEdited = false;
     renderState(response.state, currentPolicy);
     await refreshCapture();
   } catch (error) {
@@ -1237,6 +1281,19 @@ elements.connectButton.addEventListener("click", () => {
   window.open(KNOWHOW_ORIGIN, "_blank", "noopener,noreferrer");
 });
 
+elements.title.addEventListener("input", () => {
+  guideTitleEdited = elements.title.value.trim().length > 0;
+});
+
+if (extensionRuntimeAvailable) {
+  // The panel stays open while the author moves between tabs looking for the
+  // page they want to record, so the suggested name follows them.
+  chrome.tabs.onActivated.addListener(() => void suggestGuideTitle());
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (tab?.active && changeInfo.title) void suggestGuideTitle();
+  });
+}
+
 for (const tab of elements.panelTabs) {
   tab.addEventListener("click", () => setActivePanel(tab.dataset.panelTab));
 }
@@ -1330,6 +1387,7 @@ addEventListener(
 if (extensionRuntimeAvailable) {
   setActivePanel("capture");
   void refresh();
+  void suggestGuideTitle();
 } else {
   initializePreview();
 }
