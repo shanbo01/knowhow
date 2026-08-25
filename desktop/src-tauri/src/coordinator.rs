@@ -1,4 +1,5 @@
 use std::{
+    io::Cursor,
     sync::{
         Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -7,8 +8,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use chrono::{DateTime, Local, Utc};
+use image::{codecs::jpeg::JpegEncoder, imageops::FilterType};
 use parking_lot::Mutex;
 use rand::RngCore;
 use serde::Serialize;
@@ -263,6 +268,27 @@ impl Coordinator {
 
     pub fn targets(&self) -> Result<Vec<CaptureTarget>> {
         capture_targets()
+    }
+
+    /// Local-only sign-out: wipes the stored device credential and pending
+    /// authorization, mirroring the wipe `access_credentials` already
+    /// performs when the server responds 401. There is no server call here —
+    /// the device simply forgets its own credential, exactly as a revoked
+    /// token would leave it.
+    pub async fn disconnect(&self) -> Result<AppSnapshot> {
+        if self.inner.lock().active.is_some() {
+            bail!("Finish or discard the current capture before disconnecting.");
+        }
+        self.store.clear_credentials()?;
+        self.store.clear_pending_authorization()?;
+        {
+            let mut inner = self.inner.lock();
+            inner.connection = ConnectionState::Disconnected;
+            inner.context = None;
+            inner.pending_authorization = None;
+        }
+        self.emit();
+        Ok(self.snapshot())
     }
 
     pub async fn start_capture(self: &Arc<Self>, input: StartCaptureInput) -> Result<AppSnapshot> {
@@ -665,6 +691,26 @@ impl Coordinator {
         self.show_main()?;
         self.emit();
         Ok(self.snapshot())
+    }
+
+    /// A small preview of one step's already-captured, already-masked
+    /// screenshot, for the HUD's step feed. `step_id` always resolves against
+    /// the session currently being recorded — it can never read another
+    /// session's image, matching how delete/retry are already scoped — so
+    /// once recording ends this becomes permanently unavailable. Nothing
+    /// decrypted here is ever written back to disk; this is a pure in-memory
+    /// round trip per request, the same pattern `capture_target_previews`
+    /// already uses for the picker's live thumbnails.
+    pub fn step_thumbnail(&self, step_id: &str) -> Result<String> {
+        let session_id = self
+            .inner
+            .lock()
+            .active
+            .as_ref()
+            .map(|active| active.session_id.clone())
+            .ok_or_else(|| anyhow!("no capture is active"))?;
+        let jpeg = self.store.load_step_image(&session_id, step_id)?;
+        encode_step_thumbnail(&jpeg)
     }
 
     pub fn delete_step(&self, step_id: &str) -> Result<AppSnapshot> {
@@ -1168,6 +1214,30 @@ fn user_error(error: &anyhow::Error) -> String {
         .map_or_else(|| error.to_string(), |api| api.message.clone())
 }
 
+// Small enough that a HUD feed of several thumbnails costs nothing to hold,
+// large enough to still show what was on screen.
+const STEP_THUMBNAIL_WIDTH: u32 = 96;
+const STEP_THUMBNAIL_HEIGHT: u32 = 54;
+
+/// The stored step image is already a fully encoded JPEG (`rasterize`
+/// produces it once, at capture time) — this decodes it, shrinks it, and
+/// re-encodes at a lower quality for a thumbnail, rather than serving the
+/// full-resolution capture to the HUD.
+fn encode_step_thumbnail(jpeg: &[u8]) -> Result<String> {
+    let image = image::load_from_memory(jpeg).context("decode stored step screenshot")?;
+    let resized = image.resize(
+        STEP_THUMBNAIL_WIDTH,
+        STEP_THUMBNAIL_HEIGHT,
+        FilterType::Triangle,
+    );
+    let mut encoded = Cursor::new(Vec::new());
+    JpegEncoder::new_with_quality(&mut encoded, 60).encode_image(&resized)?;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(encoded.into_inner())
+    ))
+}
+
 fn update_endpoint() -> Result<Url> {
     let endpoint = option_env!("KNOWHOW_DESKTOP_UPDATE_ENDPOINT").unwrap_or("");
     if endpoint.trim().is_empty() {
@@ -1186,7 +1256,43 @@ fn update_endpoint() -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_hud_position, resize_hud_position};
+    use super::{
+        STEP_THUMBNAIL_HEIGHT, STEP_THUMBNAIL_WIDTH, clamp_hud_position, encode_step_thumbnail,
+        resize_hud_position,
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use image::{ImageEncoder, Rgb, RgbImage, codecs::jpeg::JpegEncoder};
+
+    #[test]
+    fn a_stored_step_screenshot_shrinks_to_a_thumbnail() {
+        // Stands in for what rasterize() actually stores: a full-resolution,
+        // already-encoded JPEG — not raw pixels.
+        let source = RgbImage::from_pixel(640, 360, Rgb([32, 64, 96]));
+        let mut stored = Vec::new();
+        let Ok(()) = JpegEncoder::new_with_quality(&mut stored, 85).write_image(
+            source.as_raw(),
+            640,
+            360,
+            image::ExtendedColorType::Rgb8,
+        ) else {
+            panic!("encoding a fixture JPEG must succeed");
+        };
+
+        let Ok(data_url) = encode_step_thumbnail(&stored) else {
+            panic!("a valid stored screenshot must produce a thumbnail");
+        };
+        let Some(encoded) = data_url.strip_prefix("data:image/jpeg;base64,") else {
+            panic!("thumbnail must be a JPEG data URL");
+        };
+        let Ok(bytes) = STANDARD.decode(encoded) else {
+            panic!("thumbnail payload must be valid base64");
+        };
+        let Ok(thumbnail) = image::load_from_memory(&bytes) else {
+            panic!("the thumbnail itself must decode as an image");
+        };
+        assert!(thumbnail.width() <= STEP_THUMBNAIL_WIDTH);
+        assert!(thumbnail.height() <= STEP_THUMBNAIL_HEIGHT);
+    }
 
     #[test]
     fn keeps_the_hud_inside_the_lower_right_screen_edge() {

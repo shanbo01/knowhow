@@ -20,7 +20,7 @@ use self::frames::{DesktopFrame, FrameHub};
 use crate::{
     model::{
         Bounds, CapturedStep, DesktopScope, MAX_SCREENSHOT_BYTES, MAX_STEPS, RecorderSettings,
-        ServerAnnotation, ServerCrop,
+        ServerAnnotation, ServerCrop, SmartBlurSettings,
     },
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
@@ -995,8 +995,16 @@ fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status
         privacy_regions,
         settings,
     } = emission;
-    let (title, instructions, source_event) =
-        deterministic_instruction(&action, &metadata, &foreground, exact_text.as_deref());
+    // Redacted once, then reused for both the instruction text and the stored
+    // exact-text field, so the two can never disagree about what was scrubbed.
+    let exact_text = exact_text.map(|text| redact_sensitive_text(&text, &settings.smart_blur));
+    let (title, instructions, source_event) = deterministic_instruction(
+        &action,
+        &metadata,
+        &foreground,
+        exact_text.as_deref(),
+        &settings.smart_blur,
+    );
     let annotations = annotations(&action, &metadata, &frame);
     let crop = contextual_crop(&action, &metadata, &frame);
     match rasterize(
@@ -1075,23 +1083,31 @@ fn deterministic_instruction(
     metadata: &ElementMetadata,
     foreground: &ForegroundContext,
     exact_text: Option<&str>,
+    blur: &SmartBlurSettings,
 ) -> (String, String, &'static str) {
     let application = if metadata.application_name.is_empty() {
         &foreground.application_name
     } else {
         &metadata.application_name
     };
-    let location = if metadata.window_title.trim().is_empty()
-        || metadata.window_title.eq_ignore_ascii_case(application)
-    {
-        application.to_owned()
-    } else {
-        format!("{} in {application}", truncate(&metadata.window_title, 80))
-    };
-    let target = metadata
+    // Window titles and control labels are arbitrary on-screen text — whatever
+    // an app's accessibility tree happens to expose as a Name, which can carry
+    // anything the author was looking at. Smart Blur's content heuristics
+    // already decide what counts as sensitive for the image; running the same
+    // decision over this text is what keeps the two promises in sync.
+    let window_title = redact_sensitive_text(&metadata.window_title, blur);
+    let location =
+        if window_title.trim().is_empty() || window_title.eq_ignore_ascii_case(application) {
+            application.to_owned()
+        } else {
+            format!("{} in {application}", truncate(&window_title, 80))
+        };
+    let raw_target = metadata
         .control_label
         .as_deref()
         .filter(|label| !label.trim().is_empty());
+    let redacted_label = raw_target.map(|label| redact_sensitive_text(label, blur));
+    let target = redacted_label.as_deref();
     let role = metadata.control_role.as_deref().unwrap_or("control");
     let described = target
         .map(|label| format!("the “{}” {role}", truncate(label, 120)))
@@ -1102,7 +1118,9 @@ fn deterministic_instruction(
             destination_application,
             ..
         } => {
-            let opens_start = target.is_some_and(|label| {
+            // Checked against the original label, ahead of redaction, so this
+            // comparison never depends on what the heuristics below did to it.
+            let opens_start = raw_target.is_some_and(|label| {
                 matches!(
                     label.trim().to_ascii_lowercase().as_str(),
                     "start" | "windows"
@@ -1542,6 +1560,126 @@ fn looks_like_identifier(value: &str) -> bool {
         && !value.contains(' ')
 }
 
+/// A maximal non-whitespace run in `text`, with its byte range.
+struct TextToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
+fn tokenize(text: &str) -> Vec<TextToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(begin) = start.take() {
+                tokens.push(TextToken {
+                    text: &text[begin..index],
+                    start: begin,
+                    end: index,
+                });
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+    if let Some(begin) = start {
+        tokens.push(TextToken {
+            text: &text[begin..],
+            start: begin,
+            end: text.len(),
+        });
+    }
+    tokens
+}
+
+/// True for a token made only of digits and the punctuation a phone number or
+/// a plain amount can contain. Used only to decide whether an adjacent token
+/// may extend a candidate run — never to redact on its own — so it can be
+/// permissive without risking pulling a real word into a run.
+fn is_numeric_run_token(word: &str) -> bool {
+    !word.is_empty()
+        && word.chars().any(|character| character.is_ascii_digit())
+        && word
+            .chars()
+            .all(|character| matches!(character, '0'..='9' | '+' | '(' | ')' | '-' | '.'))
+}
+
+fn is_financial_marker_token(word: &str) -> bool {
+    word.contains('$')
+        || word.contains('€')
+        || word.contains('£')
+        || word.to_ascii_lowercase().contains("qar")
+}
+
+/// Redacts substrings that Smart Blur's existing content heuristics
+/// (`looks_like_email` and friends) would flag, using those exact predicates
+/// so text redaction and image redaction never disagree about what counts as
+/// sensitive — this is what `should_smart_blur` already applies to
+/// screenshot pixels; nothing analogous ran over instruction/typed-text
+/// strings before this function existed.
+///
+/// A phone number or a monetary amount often spans more than one
+/// whitespace-delimited token (`"+974 5555 0101"`), so adjacent
+/// numeric/currency tokens are merged into one candidate before the
+/// predicate is applied. Email addresses and long identifiers never contain
+/// whitespace, so each token is also tested on its own. Only the four
+/// content-based detectors apply here — `formFields`/`images`/`tableRows`
+/// are UI-role gates and `longText` is a pure length gate, neither of which
+/// says anything meaningful about a free-form sentence; applying `longText`
+/// in particular would redact almost any real typed sentence, so it is
+/// deliberately not included.
+fn redact_sensitive_text(text: &str, blur: &SmartBlurSettings) -> String {
+    if !(blur.emails || blur.phone_numbers || blur.financial_numbers || blur.identifiers) {
+        return text.to_owned();
+    }
+    let tokens = tokenize(text);
+    if tokens.is_empty() {
+        return text.to_owned();
+    }
+    let mut redacted = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut index = 0;
+    while index < tokens.len() {
+        let start_token = &tokens[index];
+        let mut run_end = index;
+        if is_numeric_run_token(start_token.text) || is_financial_marker_token(start_token.text) {
+            run_end = index + 1;
+            while run_end < tokens.len()
+                && (is_numeric_run_token(tokens[run_end].text)
+                    || is_financial_marker_token(tokens[run_end].text))
+            {
+                run_end += 1;
+            }
+        }
+        if run_end > index + 1 {
+            let run = &text[start_token.start..tokens[run_end - 1].end];
+            let matched = (blur.phone_numbers && looks_like_phone(run))
+                || (blur.financial_numbers && looks_like_financial(run));
+            if matched {
+                redacted.push_str(&text[cursor..start_token.start]);
+                redacted.push_str("[redacted]");
+                cursor = tokens[run_end - 1].end;
+                index = run_end;
+                continue;
+            }
+        }
+        let word = start_token.text;
+        let matched = (blur.emails && looks_like_email(word))
+            || (blur.identifiers && looks_like_identifier(word))
+            || (blur.phone_numbers && looks_like_phone(word))
+            || (blur.financial_numbers && looks_like_financial(word));
+        if matched {
+            redacted.push_str(&text[cursor..start_token.start]);
+            redacted.push_str("[redacted]");
+            cursor = start_token.end;
+        }
+        index += 1;
+    }
+    redacted.push_str(&text[cursor..]);
+    redacted
+}
+
 fn global_to_image_bounds(bounds: Bounds, frame: &DesktopFrame) -> Option<Bounds> {
     let intersection = bounds.intersection(frame.monitor_bounds)?;
     let scale_x = f64::from(frame.width) / f64::from(frame.monitor_bounds.width.max(1));
@@ -1693,10 +1831,10 @@ mod tests {
     use super::{
         MeaningfulAction, contextual_crop_for_geometry, deterministic_instruction, encode_bounded,
         inserted_text, is_duplicate, looks_like_email, looks_like_phone, processing_dimensions,
-        shortcut_instruction, should_smart_blur, verified_inserted_text,
+        redact_sensitive_text, shortcut_instruction, should_smart_blur, verified_inserted_text,
     };
     use crate::{
-        model::{Bounds, RecorderSettings},
+        model::{Bounds, RecorderSettings, SmartBlurSettings},
         platform::{ElementMetadata, ForegroundContext, PasswordStatus},
     };
     use image::{Rgba, RgbaImage};
@@ -1812,6 +1950,7 @@ mod tests {
             protected: false,
             elevated: false,
         };
+        let no_blur = SmartBlurSettings::default();
         let start = deterministic_instruction(
             &MeaningfulAction::LeftClick {
                 point: (24, 1050),
@@ -1821,6 +1960,7 @@ mod tests {
             &metadata,
             &foreground,
             None,
+            &no_blur,
         );
         assert_eq!(start.0, "Open Start");
         assert_eq!(start.2, "left-click");
@@ -1837,6 +1977,7 @@ mod tests {
             },
             &foreground,
             None,
+            &no_blur,
         );
         assert_eq!(open_word.0, "Open Microsoft Word");
         assert_eq!(open_word.2, "left-click");
@@ -1862,6 +2003,124 @@ mod tests {
         assert!(looks_like_email("author@example.com"));
         assert!(looks_like_phone("+974 5555 0101"));
         assert!(!looks_like_phone("Step 12"));
+    }
+
+    #[test]
+    fn text_redaction_uses_the_same_heuristics_as_image_blurring() {
+        let mut blur = SmartBlurSettings::default();
+
+        // Off by default: nothing is redacted until the author turns a
+        // detector on, exactly like the image path.
+        assert_eq!(
+            redact_sensitive_text("Contact author@example.com for access", &blur),
+            "Contact author@example.com for access",
+        );
+
+        blur.emails = true;
+        assert_eq!(
+            redact_sensitive_text("Contact author@example.com for access", &blur),
+            "Contact [redacted] for access",
+        );
+
+        // A phone number spanning multiple whitespace-delimited tokens is
+        // redacted as one unit, matching the existing looks_like_phone
+        // fixture shape.
+        blur = SmartBlurSettings {
+            phone_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Call +974 5555 0101 today", &blur),
+            "Call [redacted] today",
+        );
+        assert_eq!(
+            redact_sensitive_text("Step 12 of 40", &blur),
+            "Step 12 of 40",
+            "short numbers that don't look like a phone number are left alone",
+        );
+
+        blur = SmartBlurSettings {
+            financial_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Enter $4,500.00 as the amount", &blur),
+            "Enter [redacted] as the amount",
+        );
+
+        blur = SmartBlurSettings {
+            identifiers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Order ABCD1234EFGH shipped", &blur),
+            "Order [redacted] shipped",
+        );
+
+        // Multiple independent matches in one string.
+        blur = SmartBlurSettings {
+            emails: true,
+            phone_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Reach author@example.com or +974 5555 0101", &blur),
+            "Reach [redacted] or [redacted]",
+        );
+    }
+
+    #[test]
+    fn instruction_text_is_redacted_like_the_screenshot_is() {
+        // The regression this fix exists for: a UI Automation accessible
+        // name that happens to carry an email address must not appear
+        // verbatim in the step's title/instructions when the matching Smart
+        // Blur detector is on, exactly as it would already be masked in the
+        // screenshot pixels.
+        let metadata = ElementMetadata {
+            application_name: "Mail".to_owned(),
+            window_title: String::new(),
+            control_role: Some("button".to_owned()),
+            control_label: Some("author@example.com".to_owned()),
+            bounds: None,
+            password_status: PasswordStatus::NotPassword,
+            value: None,
+            window_id: "1".to_owned(),
+            process_id: 1,
+        };
+        let foreground = ForegroundContext {
+            application_name: "Mail".to_owned(),
+            window_title: "Mail".to_owned(),
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            window_id: "1".to_owned(),
+            root_owner_id: "1".to_owned(),
+            process_id: 1,
+            monitor_id: "display-1".to_owned(),
+            protected: false,
+            elevated: false,
+        };
+        let blur = SmartBlurSettings {
+            emails: true,
+            ..SmartBlurSettings::default()
+        };
+        let (title, instructions, _) = deterministic_instruction(
+            &MeaningfulAction::LeftClick {
+                point: (10, 10),
+                double: false,
+                destination_application: None,
+            },
+            &metadata,
+            &foreground,
+            None,
+            &blur,
+        );
+        assert!(!title.contains("author@example.com"));
+        assert!(!instructions.contains("author@example.com"));
+        assert!(instructions.contains("[redacted]"));
     }
 
     #[test]

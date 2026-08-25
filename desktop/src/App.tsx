@@ -16,8 +16,12 @@ import {
   Type,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BrandMarkGlyph } from "./BrandMarkGlyph";
 import { desktop } from "./ipc";
 import { selectedTarget, targetsForScope, typedTextEnabled } from "./setup";
+import Settings from "./Settings";
+import { SmartBlurToggles } from "./SmartBlurToggles";
+import { updateStatusLabel } from "./update-status";
 import type {
   AppSnapshot,
   CaptureScopeKind,
@@ -46,7 +50,7 @@ function errorMessage(error: unknown) {
 function Mark() {
   return (
     <span className="brand-mark" aria-hidden="true">
-      <span>K</span><i />
+      <BrandMarkGlyph size={18} />
     </span>
   );
 }
@@ -301,33 +305,10 @@ function CaptureSetup({
           <ChevronDown className={blurOpen ? "open" : ""} />
         </button>
         {blurOpen ? (
-          <div className="blur-options">
-            {(
-              [
-                ["emails", "Email addresses"],
-                ["phoneNumbers", "Phone numbers"],
-                ["financialNumbers", "Financial numbers"],
-                ["identifiers", "Long identifiers"],
-                ["formFields", "Form fields"],
-                ["images", "Images"],
-                ["tableRows", "Table rows"],
-                ["longText", "Long text regions"],
-              ] as const
-            ).map(([key, label]) => (
-              <label key={key}>
-                <input
-                  type="checkbox"
-                  checked={settings.smartBlur[key]}
-                  onChange={(event) =>
-                    updateSettings({
-                      smartBlur: { ...settings.smartBlur, [key]: event.target.checked },
-                    })
-                  }
-                />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
+          <SmartBlurToggles
+            settings={settings.smartBlur}
+            onChange={(smartBlur) => updateSettings({ smartBlur })}
+          />
         ) : null}
       </section>
       <button
@@ -358,6 +339,8 @@ export default function App() {
   const [targets, setTargets] = useState<CaptureTarget[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [updateError, setUpdateError] = useState("");
+  const [view, setView] = useState<"capture" | "settings">("capture");
 
   const refreshTargets = useCallback(async () => {
     setBusy(true);
@@ -401,6 +384,36 @@ export default function App() {
     finally { setBusy(false); }
   }
 
+  // Deliberately not routed through run(): in a local/dev build with no
+  // signing key configured, check_for_updates always rejects, and the
+  // coordinator already emits an honest "error" update status via the
+  // snapshot event before that rejection happens. Popping the shared global
+  // error banner on top of that inline status would just be noise for an
+  // expected, everyday condition in a dev build — the rejection's own
+  // message is kept locally instead, for the inline status text.
+  async function checkUpdate() {
+    setBusy(true);
+    setUpdateError("");
+    try { setSnapshot(await desktop.checkUpdate()); }
+    catch (nextError) { setUpdateError(errorMessage(nextError)); }
+    finally { setBusy(false); }
+  }
+
+  async function disconnect() {
+    setBusy(true); setError("");
+    try {
+      setSnapshot(await desktop.disconnect());
+      setView("capture");
+    }
+    catch (nextError) { setError(errorMessage(nextError)); }
+    finally { setBusy(false); }
+  }
+
+  function updateRecorderSettings(settings: RecorderSettings) {
+    setSnapshot((current) => (current ? { ...current, settings } : current));
+    void desktop.settings(settings).catch((nextError) => setError(errorMessage(nextError)));
+  }
+
   if (!snapshot) {
     return <main className="opening"><Mark /><LoaderCircle className="spin" /><p>Opening KnowHow Capture</p>{error ? <span>{error}</span> : null}</main>;
   }
@@ -411,7 +424,17 @@ export default function App() {
     <div className="app-shell">
       <ConnectedHeader snapshot={snapshot} />
       {error ? <div className="error-banner"><CircleAlert /><span>{error}</span><button onClick={() => setError("")}>×</button></div> : null}
-      {!connected ? (
+      {view === "settings" ? (
+        <Settings
+          snapshot={snapshot}
+          busy={busy}
+          updateError={updateError}
+          onClose={() => setView("capture")}
+          onSettings={updateRecorderSettings}
+          onDisconnect={() => void disconnect()}
+          onCheckUpdate={() => void checkUpdate()}
+        />
+      ) : !connected ? (
         <ConnectionScreen snapshot={snapshot} busy={busy} onConnect={() => void run(async () => { await desktop.authorize(); return desktop.snapshot(); })} />
       ) : recorder.status === "countdown" ? (
         <Countdown snapshot={snapshot} onCancel={() => void run(desktop.cancelCountdown)} />
@@ -430,11 +453,24 @@ export default function App() {
           targets={targets}
           busy={busy}
           onRefreshTargets={() => void refreshTargets()}
-          onSettings={(settings) => { setSnapshot({ ...snapshot, settings }); void desktop.settings(settings).catch((nextError) => setError(errorMessage(nextError))); }}
+          onSettings={updateRecorderSettings}
           onStart={(scopeKind, target, settings) => void run(() => desktop.start({ scopeKind, targetId: target?.id, targetLabel: target?.label ?? "All displays", captureTypedText: settings.captureTypedText, smartBlur: settings.smartBlur }))}
         />
       )}
-      <footer className="app-footer"><button onClick={() => void desktop.openKnowHow()}><Globe2 /> Open KnowHow</button><button onClick={() => void desktop.checkUpdate()}><RefreshCw /> Updates</button><button title="Recorder settings"><Settings2 /> Settings</button><span>v{snapshot.version}</span></footer>
+      <footer className="app-footer">
+        <button onClick={() => void desktop.openKnowHow()}><Globe2 /> Open KnowHow</button>
+        <button
+          onClick={() => void checkUpdate()}
+          disabled={busy || snapshot.update.status === "checking"}
+          title={updateStatusLabel(snapshot.update, updateError)}
+        >
+          {snapshot.update.status === "checking" ? <LoaderCircle className="spin" /> : <RefreshCw />}
+          Updates
+          {snapshot.update.status === "available" ? <i className="update-dot" aria-hidden="true" /> : null}
+        </button>
+        <button title="Recorder settings" onClick={() => setView("settings")}><Settings2 /> Settings</button>
+        <span>v{snapshot.version}</span>
+      </footer>
     </div>
   );
 }
