@@ -30,7 +30,7 @@
   padding: clamp(1.25rem, 3vw, 2.5rem);
   color: var(--setup-ink);
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
+    radial-gradient(circle at 92% 2%, rgb(232 85 17 / 0.08), transparent 18rem),
     var(--setup-paper);
 }
 
@@ -137,7 +137,7 @@
   padding: clamp(1.25rem, 3vw, 2.25rem);
   border: 1px solid var(--setup-line);
   border-radius: 1.5rem;
-  box-shadow: 0 28px 80px rgb(58 46 34 / 0.11);
+  box-shadow: 0 28px 80px rgb(40 48 61 / 0.11);
   background: var(--setup-card);
 }
 
@@ -499,13 +499,21 @@
   pointer-events: none;
 }
 
+/* A flat 25% orange disc over near-black resolves to muddy maroon with a hard
+   edge. It wants to be a glow, so give it a real falloff and let the centre
+   carry the colour instead of the whole shape. */
 .auth-intro::before {
-  width: 30rem;
-  height: 30rem;
-  right: -17rem;
-  top: -12rem;
-  background: rgb(232 85 17 / 0.25);
-  filter: blur(1px);
+  width: 34rem;
+  height: 34rem;
+  right: -19rem;
+  top: -15rem;
+  background: radial-gradient(
+    circle,
+    rgb(232 85 17 / 0.3),
+    rgb(232 85 17 / 0.12) 45%,
+    transparent 70%
+  );
+  filter: blur(18px);
 }
 
 .auth-intro::after {
@@ -549,7 +557,7 @@
 }
 
 .auth-intro .product-brand-copy small {
-  color: rgb(248 244 237 / 0.56);
+  color: rgb(242 245 248 / 0.56);
   font-size: 0.65rem;
 }
 
@@ -580,7 +588,7 @@
 .auth-intro-copy > p:last-child {
   max-width: 32rem;
   margin: 1.55rem 0 0;
-  color: rgb(248 244 237 / 0.68);
+  color: rgb(242 245 248 / 0.68);
   font-size: 1rem;
   line-height: 1.7;
 }
@@ -592,7 +600,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem 1.25rem;
-  color: rgb(248 244 237 / 0.78);
+  color: rgb(242 245 248 / 0.78);
   list-style: none;
   font-size: 0.74rem;
 }
@@ -620,14 +628,14 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-  color: rgb(248 244 237 / 0.72);
+  color: rgb(242 245 248 / 0.72);
   font-size: 0.68rem;
 }
 
 .auth-trust-note svg {
   width: 0.95rem;
   height: 0.95rem;
-  color: rgb(248 244 237 / 0.72);
+  color: rgb(242 245 248 / 0.72);
 }
 
 .auth-panel {
@@ -637,7 +645,7 @@
   padding: clamp(1.25rem, 4vw, 4rem);
   overflow-y: auto;
   background:
-    radial-gradient(circle at 90% 5%, rgb(232 85 17 / 0.09), transparent 22rem),
+    radial-gradient(circle at 96% -2%, rgb(232 85 17 / 0.08), transparent 13rem),
     var(--auth-paper);
 }
 
@@ -646,13 +654,13 @@
   display: grid;
   gap: 1.25rem;
   padding: clamp(1.5rem, 4vw, 2.75rem) !important;
-  border: 1px solid rgb(45 41 36 / 0.08) !important;
+  border: 1px solid rgb(34 42 53 / 0.08) !important;
   border-radius: 1.25rem !important;
   color: var(--auth-ink);
-  background: rgb(255 253 249 / 0.96) !important;
+  background: rgb(253 253 254 / 0.96) !important;
   box-shadow:
     0 1px 0 rgb(255 255 255 / 0.9) inset,
-    0 24px 70px rgb(48 41 32 / 0.1) !important;
+    0 24px 70px rgb(35 42 54 / 0.1) !important;
 }
 
 .auth-backend-status {
@@ -683,7 +691,7 @@
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: rgb(29 27 25 / 0.06);
+  background: rgb(22 28 36 / 0.06);
 }
 
 .auth-status-icon svg {
@@ -790,7 +798,7 @@
 .auth-mode-button-active {
   color: var(--auth-ink);
   background: var(--auth-card);
-  box-shadow: 0 2px 8px rgb(39 34 29 / 0.08);
+  box-shadow: 0 2px 8px rgb(28 35 45 / 0.08);
 }
 
 .auth-form {
@@ -1047,7 +1055,7 @@
   padding: 0.75rem;
   border-radius: 1rem;
   background: white;
-  box-shadow: 0 8px 24px rgb(29 27 25 / 0.08);
+  box-shadow: 0 8px 24px rgb(22 28 36 / 0.08);
 }
 
 .mfa-recovery-codes {
@@ -1074,7 +1082,7 @@
   padding: 0 0 5rem;
   color: var(--auth-ink);
   background:
-    radial-gradient(circle at 86% 0, rgb(232 85 17 / 0.1), transparent 28rem),
+    radial-gradient(circle at 92% 0, rgb(232 85 17 / 0.08), transparent 16rem),
     var(--auth-paper);
 }
 
@@ -1084,7 +1092,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 clamp(1rem, 5vw, 5rem);
-  border-bottom: 1px solid rgb(29 27 25 / 0.08);
+  border-bottom: 1px solid rgb(22 28 36 / 0.08);
 }
 
 .onboarding-card,
@@ -1110,10 +1118,10 @@
   width: min(72rem, calc(100% - 2rem));
   margin: clamp(2rem, 6vw, 5rem) auto 0;
   padding: clamp(1.5rem, 4vw, 3rem) !important;
-  border: 1px solid rgb(29 27 25 / 0.08) !important;
+  border: 1px solid rgb(22 28 36 / 0.08) !important;
   border-radius: 1.25rem !important;
-  background: rgb(255 253 249 / 0.96) !important;
-  box-shadow: 0 24px 70px rgb(48 41 32 / 0.08) !important;
+  background: rgb(253 253 254 / 0.96) !important;
+  box-shadow: 0 24px 70px rgb(35 42 54 / 0.08) !important;
 }
 
 .onboarding-card > .eyebrow:first-child {
@@ -1216,7 +1224,7 @@
   color: #0e1319;
   text-align: center;
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
+    radial-gradient(circle at 92% 2%, rgb(232 85 17 / 0.08), transparent 18rem),
     #edf0f5;
 }
 
@@ -1234,7 +1242,7 @@
   padding: clamp(1.25rem, 3vw, 2.5rem);
   color: #0e1319;
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
+    radial-gradient(circle at 92% 2%, rgb(232 85 17 / 0.08), transparent 18rem),
     #edf0f5;
 }
 
@@ -1250,9 +1258,9 @@
   max-width: 42rem;
   margin: 0 auto;
   padding: clamp(1.5rem, 4vw, 2.75rem);
-  border: 1px solid rgb(45 41 36 / 0.08);
+  border: 1px solid rgb(34 42 53 / 0.08);
   border-radius: 1.25rem;
-  background: rgb(255 253 249 / 0.96);
+  background: rgb(253 253 254 / 0.96);
   box-shadow: 0 24px 60px rgb(62 46 29 / 0.08);
 }
 

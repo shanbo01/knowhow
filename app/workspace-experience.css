@@ -452,8 +452,8 @@
 
 :root:not([data-theme="dark"]):not(.dark) .experience-shell .theme-toggle {
   box-shadow:
-    0 1px 2px rgb(28 25 23 / 0.08),
-    0 6px 16px rgb(28 25 23 / 0.1) !important;
+    0 1px 2px rgb(20 26 34 / 0.08),
+    0 6px 16px rgb(20 26 34 / 0.1) !important;
 }
 
 .experience-shell .topbar-primary-action {
@@ -487,8 +487,8 @@
 
 .experience-shell .profile-button .avatar {
   box-shadow:
-    0 1px 2px rgb(28 25 23 / 0.1),
-    0 4px 12px rgb(28 25 23 / 0.12) !important;
+    0 1px 2px rgb(20 26 34 / 0.1),
+    0 4px 12px rgb(20 26 34 / 0.12) !important;
 }
 
 .experience-shell .profile-button:hover {

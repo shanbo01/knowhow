@@ -62,7 +62,7 @@
   --amber: #e85511;
   --amber-soft: #ffe4d2;
   --red: #b42318;
-  --red-soft: #fef3f2;
+  --red-soft: #f4f6f8;
   --purple: #4a5460;
   --purple-soft: #edf0f5;
   --shadow-sm: 0 1px 2px rgb(14 19 25 / 0.07);
@@ -968,7 +968,7 @@ svg {
 
 .button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--primary) 90%, var(--brand));
-  box-shadow: 0 5px 14px rgb(28 25 23 / 0.16);
+  box-shadow: 0 5px 14px rgb(20 26 34 / 0.16);
 }
 
 .button.secondary {
@@ -4566,7 +4566,7 @@ button.member-row:hover {
       #166534,
       #8a6d1f,
       #7f1d1d,
-      #44403c,
+      #37414f,
       #3f3f46);
   color: #fff;
 }
@@ -7276,7 +7276,7 @@ select {
   border-radius: var(--radius);
   background: var(--card);
   color: var(--foreground);
-  box-shadow: 0 1px 0 rgb(28 25 23 / 0.02);
+  box-shadow: 0 1px 0 rgb(20 26 34 / 0.02);
 }
 
 .field input:focus,
@@ -7306,7 +7306,7 @@ select {
   border-radius: var(--radius) !important;
   background: var(--card) !important;
   color: var(--foreground) !important;
-  box-shadow: 0 1px 0 rgb(28 25 23 / 0.02);
+  box-shadow: 0 1px 0 rgb(20 26 34 / 0.02);
 }
 
 .kh-select-trigger:hover {
@@ -7666,7 +7666,7 @@ select {
   border-color: var(--border);
   border-radius: calc(var(--radius) + 0.125rem);
   background: var(--card);
-  box-shadow: 0 1px 1px rgb(28 25 23 / 0.03);
+  box-shadow: 0 1px 1px rgb(20 26 34 / 0.03);
 }
 
 .table-card {

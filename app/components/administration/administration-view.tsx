@@ -1934,6 +1934,11 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
                   <div><span>Movement</span><h2>Started, converted, and churned by month</h2></div>
                   <small>Derived from subscription lifecycle dates</small>
                 </header>
+                <p className="administration-panel-note">
+                  Subscriptions store their last transition, not a history, so a
+                  workspace that left and came back nets to zero here rather than
+                  showing both moves.
+                </p>
                 <div className="administration-movement">
                   {revenue.months.map((month) => {
                     const peak = Math.max(

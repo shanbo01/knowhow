@@ -1604,17 +1604,19 @@ export class PlatformQueryService {
       for (const { record } of subscriptions) {
         if (within(record.startsAt)) started += 1;
         if (within(record.convertedAt)) converted += 1;
-        /* "converted" is a subscription status, not only a date, so a lost
-           subscription cannot be defined as "not active": that counts every
-           trial that converted as churn in the same month it converted. Churn
-           is a downgrade, or an expiry that ended in a terminal state. */
-        if (within(record.downgradedAt)) {
-          churned += 1;
-        } else if (
-          LOST_SUBSCRIPTION_STATUSES.has(record.status) &&
-          record.expiresAt &&
-          within(record.expiresAt)
-        ) {
+        /* downgradedAt and convertedAt are last-transition stamps on a mutable
+           subscription row, not an event log. A workspace that downgraded and
+           later came back still carries the downgrade stamp, so counting the
+           stamp alone reports a live paying customer as churned, in the same
+           month it converted, and keeps doing so forever.
+
+           Churn therefore requires the subscription to be lost now. Anything
+           still active or in grace has not churned, whatever it did on the way
+           here. The cost is that a genuine churn-and-return nets to zero
+           instead of showing both moves; recording lifecycle transitions as
+           events is what would make both visible. */
+        if (!LOST_SUBSCRIPTION_STATUSES.has(record.status)) continue;
+        if (within(record.downgradedAt) || within(record.expiresAt)) {
           churned += 1;
         }
       }
