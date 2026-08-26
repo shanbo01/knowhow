@@ -26,8 +26,8 @@
   border: 1px solid var(--experience-line);
   border-radius: 1.35rem;
   background:
-    radial-gradient(circle at 88% 14%, color-mix(in srgb, var(--brand) 15%, transparent), transparent 21rem),
-    linear-gradient(135deg, color-mix(in srgb, var(--experience-panel) 97%, transparent), color-mix(in srgb, var(--brand) 4%, var(--experience-panel)));
+    radial-gradient(circle at 93% 6%, color-mix(in srgb, var(--brand) 10%, transparent), transparent 12rem),
+    linear-gradient(135deg, var(--experience-panel), color-mix(in srgb, var(--foreground) 5%, var(--experience-panel)));
   box-shadow: var(--experience-shadow);
 }
 
@@ -1915,4 +1915,355 @@ button.administration-directory-row[data-selected] {
   .administration-dialog-actions > button {
     width: 100%;
   }
+}
+
+/* The hero is a landing surface for the overview. On the working tabs it was
+   pushing the table and the record panel below the fold on every visit. */
+.administration-page[data-section]:not([data-section="overview"]) .administration-page-header {
+  min-height: 0;
+  align-items: center;
+  padding: 0.85rem clamp(1rem, 2vw, 1.35rem);
+}
+
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header h1 {
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  line-height: 1.15;
+}
+
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header h1 + p,
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header::after {
+  display: none;
+}
+
+/* One row per section instead of five stacked, so the record panel stops being
+   a scroll of its own next to a short table. */
+.administration-inspector-tabs {
+  display: flex;
+  gap: 0.15rem;
+  margin: 0 1.15rem;
+  padding: 0.2rem;
+  border-radius: var(--kh-control-radius);
+  background: var(--surface-hover);
+}
+
+.administration-inspector-tabs button {
+  flex: 1 1 0;
+  min-height: var(--kh-control-height-sm);
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: calc(var(--kh-control-radius) - 0.2rem);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color var(--kh-ui-speed) ease,
+    color var(--kh-ui-speed) ease;
+}
+
+.administration-inspector-tabs button:hover {
+  color: var(--foreground);
+}
+
+.administration-inspector-tabs button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--kh-control-shadow);
+}
+
+/* Leads, revenue, and activity. These reuse the directory and panel shells, so
+   only what is genuinely new is defined here. */
+.administration-unassigned {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.status-badge[data-lead-status="converted"] {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.status-badge[data-lead-status="rejected"],
+.status-badge[data-lead-status="closed"] {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.administration-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 26%, var(--experience-line));
+  border-radius: var(--kh-surface-radius);
+  background: var(--brand-soft);
+  color: var(--brand-contrast);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.administration-notice svg {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1rem;
+}
+
+.administration-revenue {
+  display: grid;
+  gap: 0.9rem;
+}
+
+/* Twelve months of three series. Bars share one scale so the columns are
+   comparable across the year rather than each month self-normalising. */
+.administration-movement {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: end;
+  gap: 0.35rem;
+  height: 9rem;
+  padding: 0.5rem 0 0;
+}
+
+.administration-movement-month {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 0.35rem;
+  min-width: 0;
+  height: 100%;
+}
+
+.administration-movement-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.administration-movement-bars i {
+  flex: 1 1 0;
+  max-width: 0.6rem;
+  border-radius: 2px 2px 0 0;
+  transition: height var(--kh-ui-speed) ease;
+}
+
+.administration-movement-bars i[data-kind="started"] {
+  background: var(--line-strong);
+}
+
+.administration-movement-bars i[data-kind="converted"] {
+  background: var(--green);
+}
+
+.administration-movement-bars i[data-kind="churned"] {
+  background: var(--red);
+}
+
+.administration-movement-month small {
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.administration-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  padding: 0.7rem 0 0;
+}
+
+.administration-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.administration-legend span::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+}
+
+.administration-legend span[data-kind="started"]::before { background: var(--line-strong); }
+.administration-legend span[data-kind="converted"]::before { background: var(--green); }
+.administration-legend span[data-kind="churned"]::before { background: var(--red); }
+
+.administration-activity-grid {
+  align-items: start;
+}
+
+.administration-activity-side {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.administration-audit-list {
+  display: grid;
+}
+
+.administration-audit-list > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.administration-audit-list > div:last-child {
+  border-bottom: 0;
+}
+
+.administration-audit-mark {
+  display: grid;
+  width: var(--kh-tile-sm);
+  height: var(--kh-tile-sm);
+  place-items: center;
+  border-radius: var(--kh-tile-radius-sm);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.administration-audit-mark[data-tone="attention"] {
+  background: var(--brand-soft);
+  color: var(--brand-contrast);
+}
+
+.administration-audit-mark svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.administration-audit-list > div > span:nth-child(2) {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.administration-audit-list strong {
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.administration-audit-list small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.administration-audit-list time {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.administration-field {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.7rem;
+}
+
+.administration-field > span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.administration-field textarea {
+  padding: 0.55rem 0.68rem;
+  border: 1px solid var(--input);
+  border-radius: var(--kh-control-radius);
+  background: var(--background);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  resize: vertical;
+}
+
+.administration-field-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.administration-field-actions small {
+  color: var(--brand-contrast);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.administration-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+@media (max-width: 980px) {
+  .administration-movement {
+    height: 7rem;
+  }
+}
+
+/* With no leads at all there is no record to select, so the directory takes the
+   full width instead of sitting beside an empty second column. */
+.administration-workspaces-layout:not(:has(.administration-client-inspector)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* At laptop widths the directory header put a 22rem search and a select beside
+   the title inside a column that is roughly half the page, leaving the heading
+   about 70px and wrapping both its lines. Let the controls take their own row
+   before the title is squeezed. */
+.administration-directory-header,
+.administration-access-header {
+  flex-wrap: wrap;
+}
+
+.administration-directory-header > div:first-child,
+.administration-access-header > div:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.administration-directory-controls {
+  flex: 1 1 22rem;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.administration-search {
+  flex: 1 1 auto;
+  min-width: min(14rem, 100%);
+}
+
+/* Five labels in a 22rem panel do not fit. Fill the strip when there is room
+   and scroll when there is not, rather than truncating a tab's name. */
+.administration-inspector-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.administration-inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.administration-inspector-tabs button {
+  flex: 1 0 auto;
+  white-space: nowrap;
 }

@@ -12,6 +12,8 @@ import type {
   PlatformPage,
   PlatformPerson,
   PlatformQueueCounts,
+  PlatformRevenue,
+  PlatformRevenueMonth,
   PlatformSearchHit,
   PlatformSubscriptionSummary,
   PlatformTicketRecord,
@@ -213,6 +215,17 @@ function personFromMember(row: StoredRecord<RecordData>): PlatformPerson {
     roles: details.roles,
   };
 }
+
+/* A subscription in grace is past its expiry but still has access and still
+   owes, so it counts as held, not lost. */
+const HOLDING_SUBSCRIPTION_STATUSES = new Set(["active", "grace"]);
+const LOST_SUBSCRIPTION_STATUSES = new Set([
+  "cancelled",
+  "suspended",
+  "deletion_pending",
+  "deleting",
+  "deleted",
+]);
 
 export class PlatformQueryService {
   private readonly access: AccessService;
@@ -1514,6 +1527,126 @@ export class PlatformQueryService {
       items: page,
       nextCursor: from + limit < items.length ? (page.at(-1)?.id ?? null) : null,
       catalogs,
+    };
+  }
+
+  /* Revenue is derived, never stored. The pricing catalog carries amountMinor
+     per workspace_month and per usage unit, and in private beta those are null.
+     When they are null this reports the plan mix and says the catalog is
+     unpriced rather than inventing a number, because a wrong MRR is worse than
+     an absent one.
+
+     Movement comes from the subscription lifecycle dates that already exist
+     (startsAt, convertedAt, downgradedAt, expiresAt). usage_rollups is declared
+     but never written, so there is no other time series to read. */
+  async revenue(identity: AuthenticatedIdentity): Promise<PlatformRevenue> {
+    await this.requireOperator(identity);
+    const now = Date.now();
+    const [subscriptionRows, invoiceRows, catalogs] = await Promise.all([
+      this.store.list(TABLES.subscriptions, { limit: INDEX_LIMIT }),
+      this.store.list(TABLES.manualInvoices, { order: "desc", limit: INDEX_LIMIT }),
+      new PricingCatalogService(this.store).list(),
+    ]);
+
+    const effective = catalogs
+      .filter((catalog) => catalog.status === "active")
+      .sort((left, right) =>
+        (right.effectiveFrom ?? "").localeCompare(left.effectiveFrom ?? ""),
+      )[0];
+    const currency = effective?.currency ?? "USD";
+    const baseMinor = effective?.baseWorkspace?.amountMinor ?? null;
+
+    const subscriptions = subscriptionRows.flatMap((row) => {
+      const record = decodePayload<SubscriptionRecord | null>(row, null);
+      return record ? [{ id: row.$id, record }] : [];
+    });
+
+    const paying = subscriptions.filter(
+      ({ record }) =>
+        HOLDING_SUBSCRIPTION_STATUSES.has(record.status) &&
+        (record.plan === "pro" || record.plan === "enterprise") &&
+        !record.complimentary,
+    );
+    const planMix = { free: 0, pro_trial: 0, pro: 0, enterprise: 0 };
+    for (const { record } of subscriptions) {
+      if (!HOLDING_SUBSCRIPTION_STATUSES.has(record.status)) continue;
+      const plan = record.plan ?? "free";
+      if (plan in planMix) planMix[plan as keyof typeof planMix] += 1;
+    }
+
+    const mrrMinor = baseMinor === null ? null : paying.length * baseMinor;
+
+    /* Manual contracts are the only revenue actually agreed today. They carry a
+       reference, not an amount, so this counts them rather than summing them. */
+    const contracted = invoiceRows.filter((row) => {
+      const details = decodePayload<{ complimentary?: boolean }>(row, {});
+      return row.status === "recorded" && !details.complimentary;
+    }).length;
+
+    const months: PlatformRevenueMonth[] = [];
+    const cursor = new Date(now);
+    cursor.setUTCDate(1);
+    cursor.setUTCHours(0, 0, 0, 0);
+    cursor.setUTCMonth(cursor.getUTCMonth() - 11);
+    for (let index = 0; index < 12; index += 1) {
+      const from = cursor.getTime();
+      const next = new Date(cursor);
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      const to = next.getTime();
+      const within = (value?: string | null) => {
+        if (!value) return false;
+        const at = Date.parse(value);
+        return Number.isFinite(at) && at >= from && at < to;
+      };
+      let started = 0;
+      let converted = 0;
+      let churned = 0;
+      for (const { record } of subscriptions) {
+        if (within(record.startsAt)) started += 1;
+        if (within(record.convertedAt)) converted += 1;
+        /* downgradedAt and convertedAt are last-transition stamps on a mutable
+           subscription row, not an event log. A workspace that downgraded and
+           later came back still carries the downgrade stamp, so counting the
+           stamp alone reports a live paying customer as churned, in the same
+           month it converted, and keeps doing so forever.
+
+           Churn therefore requires the subscription to be lost now. Anything
+           still active or in grace has not churned, whatever it did on the way
+           here. The cost is that a genuine churn-and-return nets to zero
+           instead of showing both moves; recording lifecycle transitions as
+           events is what would make both visible. */
+        if (!LOST_SUBSCRIPTION_STATUSES.has(record.status)) continue;
+        if (within(record.downgradedAt) || within(record.expiresAt)) {
+          churned += 1;
+        }
+      }
+      months.push({
+        month: new Date(from).toISOString().slice(0, 7),
+        started,
+        converted,
+        churned,
+      });
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+    }
+
+    const trialsStarted = subscriptions.filter(
+      ({ record }) => record.plan === "pro_trial" || record.trialConsumed,
+    ).length;
+    const trialsConverted = subscriptions.filter(({ record }) => record.convertedAt).length;
+
+    return {
+      currency,
+      catalogPriced: baseMinor !== null,
+      catalogName: effective?.name ?? null,
+      baseAmountMinor: baseMinor,
+      mrrMinor,
+      arrMinor: mrrMinor === null ? null : mrrMinor * 12,
+      payingWorkspaces: paying.length,
+      contractedAgreements: contracted,
+      planMix,
+      months,
+      trialsStarted,
+      trialsConverted,
     };
   }
 

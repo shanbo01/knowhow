@@ -15,7 +15,7 @@
     var(--card)
   );
   --experience-shadow:
-    0 1px 2px rgb(17 17 15 / 0.035), 0 14px 36px rgb(17 17 15 / 0.055);
+    0 1px 2px rgb(14 19 25 / 0.035), 0 14px 36px rgb(14 19 25 / 0.055);
   --kh-card-pad-x: 1.25rem;
   --kh-card-pad-y: 0.9rem;
   --kh-stack-gap: 1.15rem;
@@ -38,7 +38,7 @@
 
 .experience-shell .sidebar [data-slot="sidebar-inner"] {
   border-right: 1px solid var(--experience-line) !important;
-  box-shadow: 8px 0 28px rgb(17 17 15 / 0.045) !important;
+  box-shadow: 8px 0 28px rgb(14 19 25 / 0.045) !important;
 }
 
 @media (min-width: 768px) {
@@ -97,7 +97,7 @@
   border: 1px solid var(--experience-line) !important;
   border-radius: 0.8rem !important;
   background: var(--card) !important;
-  box-shadow: 0 4px 18px rgb(17 17 15 / 0.04) !important;
+  box-shadow: 0 4px 18px rgb(14 19 25 / 0.04) !important;
 }
 
 .experience-shell .workspace-menu .kh-select-trigger:hover {
@@ -452,8 +452,8 @@
 
 :root:not([data-theme="dark"]):not(.dark) .experience-shell .theme-toggle {
   box-shadow:
-    0 1px 2px rgb(28 25 23 / 0.08),
-    0 6px 16px rgb(28 25 23 / 0.1) !important;
+    0 1px 2px rgb(20 26 34 / 0.08),
+    0 6px 16px rgb(20 26 34 / 0.1) !important;
 }
 
 .experience-shell .topbar-primary-action {
@@ -463,7 +463,7 @@
   background: var(--brand-fill, var(--experience-accent)) !important;
   color: var(--brand-foreground) !important;
   box-shadow:
-    0 1px 2px rgb(17 17 15 / 0.14),
+    0 1px 2px rgb(14 19 25 / 0.14),
     0 6px 16px color-mix(in srgb, var(--brand-fill, var(--experience-accent)) 42%, transparent) !important;
 }
 
@@ -474,7 +474,7 @@
     var(--foreground)
   ) !important;
   box-shadow:
-    0 2px 4px rgb(17 17 15 / 0.16),
+    0 2px 4px rgb(14 19 25 / 0.16),
     0 10px 22px color-mix(in srgb, var(--brand-fill, var(--experience-accent)) 48%, transparent) !important;
 }
 
@@ -487,8 +487,8 @@
 
 .experience-shell .profile-button .avatar {
   box-shadow:
-    0 1px 2px rgb(28 25 23 / 0.1),
-    0 4px 12px rgb(28 25 23 / 0.12) !important;
+    0 1px 2px rgb(20 26 34 / 0.1),
+    0 4px 12px rgb(20 26 34 / 0.12) !important;
 }
 
 .experience-shell .profile-button:hover {
@@ -571,7 +571,7 @@
   border: 1px solid var(--experience-line);
   border-radius: 1rem;
   background:
-    radial-gradient(circle at 78% 0%, color-mix(in srgb, var(--experience-accent) 9%, transparent), transparent 34%),
+    radial-gradient(circle at 92% -10%, color-mix(in srgb, var(--experience-accent) 9%, transparent), transparent 18%),
     var(--experience-panel);
   box-shadow: var(--experience-shadow);
 }
@@ -659,7 +659,7 @@
 
 .experience-shell .home-guide-card:hover {
   border-color: color-mix(in srgb, var(--experience-accent) 34%, var(--experience-line));
-  box-shadow: 0 12px 28px rgb(17 17 15 / 0.09);
+  box-shadow: 0 12px 28px rgb(14 19 25 / 0.09);
   transform: translateY(-2px);
 }
 
@@ -683,8 +683,8 @@
   align-items: center;
   justify-content: center;
   border-radius: 0.6rem;
-  background: var(--experience-soft);
-  color: var(--experience-accent);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
 }
 
 .experience-shell .home-guide-icon svg,
@@ -962,7 +962,7 @@
 .experience-shell .library-layout-toggle button.is-active {
   background: var(--card);
   color: var(--foreground);
-  box-shadow: var(--kh-control-shadow, 0 1px 3px rgb(17 17 15 / 0.08));
+  box-shadow: var(--kh-control-shadow, 0 1px 3px rgb(14 19 25 / 0.08));
 }
 
 .experience-shell .library-layout-toggle svg {
@@ -1488,7 +1488,7 @@
 .experience-shell .support-composer-fields :is(input, textarea) {
   border-color: var(--experience-line);
   background: var(--card);
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.03);
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.03);
 }
 
 .experience-shell .support-composer-fields textarea {
@@ -1702,7 +1702,7 @@
 .invite-form .select-menu-trigger {
   border-color: var(--border);
   background: var(--card);
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.035);
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.035);
 }
 
 .invite-form .invite-emails {
@@ -2090,7 +2090,7 @@
   border: 1px solid var(--experience-line);
   border-radius: 0.9rem;
   background: var(--experience-panel);
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.025);
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.025);
 }
 
 .experience-shell .directory-summary-grid article > span {
@@ -2218,7 +2218,7 @@
 .experience-shell .directory-filter-tabs button.active {
   color: var(--foreground);
   background: var(--card);
-  box-shadow: 0 1px 3px rgb(17 17 15 / 0.08);
+  box-shadow: 0 1px 3px rgb(14 19 25 / 0.08);
 }
 
 .experience-shell .directory-filter-tabs button > span {
@@ -2251,13 +2251,13 @@
   border-radius: 0.9rem;
   color: var(--foreground);
   background: var(--card);
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.025) !important;
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.025) !important;
   transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .experience-shell .audience-group-grid .group-card:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--experience-accent) 28%, var(--experience-line)) !important;
-  box-shadow: 0 8px 22px rgb(17 17 15 / 0.07) !important;
+  box-shadow: 0 8px 22px rgb(14 19 25 / 0.07) !important;
   transform: translateY(-1px);
 }
 
@@ -2452,8 +2452,8 @@
   min-height: 2.5rem;
   padding: 0 1rem;
   border-bottom: 1px solid var(--experience-line);
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--surface-soft) 28%, transparent);
+  color: var(--text-secondary);
+  background: var(--surface-soft);
   font-size: 0.6rem;
   font-weight: 720;
   letter-spacing: 0.045em;
@@ -2512,8 +2512,8 @@
 
 .experience-shell .members-directory .role-list > span {
   padding: 0.26rem 0.45rem;
-  color: color-mix(in srgb, var(--experience-accent) 76%, var(--foreground));
-  background: var(--experience-soft);
+  color: var(--text-secondary);
+  background: var(--surface-hover);
   font-size: 0.57rem;
 }
 
@@ -2766,8 +2766,8 @@
   height: 3.25rem;
   border-radius: 0.85rem;
   box-shadow:
-    0 1px 2px rgb(17 17 15 / 0.08),
-    0 8px 16px rgb(17 17 15 / 0.08);
+    0 1px 2px rgb(14 19 25 / 0.08),
+    0 8px 16px rgb(14 19 25 / 0.08);
 }
 
 .experience-shell .color-picker-grid {
@@ -2799,7 +2799,7 @@
   background: var(--swatch, var(--experience-accent));
   box-shadow:
     inset 0 0 0 1px rgb(255 255 255 / 0.38),
-    0 1px 2px rgb(17 17 15 / 0.14),
+    0 1px 2px rgb(14 19 25 / 0.14),
     0 10px 18px color-mix(in srgb, var(--swatch, var(--experience-accent)) 42%, transparent);
   appearance: none;
   cursor: pointer;
@@ -2810,7 +2810,7 @@
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--experience-accent) 22%, transparent),
     inset 0 0 0 1px rgb(255 255 255 / 0.38),
-    0 1px 2px rgb(17 17 15 / 0.14),
+    0 1px 2px rgb(14 19 25 / 0.14),
     0 10px 18px color-mix(in srgb, var(--swatch, var(--experience-accent)) 42%, transparent);
 }
 
@@ -3138,7 +3138,7 @@
   border: 1px solid var(--experience-line);
   border-radius: 1rem;
   background: color-mix(in srgb, var(--experience-panel) 94%, transparent);
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.025);
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.025);
 }
 
 .experience-shell .settings-nav-heading {
@@ -3196,7 +3196,7 @@
 .experience-shell .settings-section-nav .settings-tabs button.active {
   border-color: color-mix(in srgb, var(--experience-accent) 22%, var(--experience-line));
   background: var(--card);
-  box-shadow: 0 5px 16px rgb(17 17 15 / 0.055);
+  box-shadow: 0 5px 16px rgb(14 19 25 / 0.055);
 }
 
 .experience-shell .settings-section-nav .settings-tabs button.active::before {
@@ -3323,8 +3323,8 @@
 .experience-shell .settings-section-header > span {
   padding: 0.3rem 0.55rem;
   border-radius: 999px;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--muted) 68%, transparent);
+  color: var(--text-secondary);
+  background: var(--surface-hover);
   font-size: 0.65rem;
   font-weight: 680;
   white-space: nowrap;
@@ -3341,7 +3341,7 @@
   min-height: 23rem;
   padding: clamp(1rem, 2vw, 1.35rem);
   border-radius: 1.05rem !important;
-  box-shadow: 0 1px 2px rgb(17 17 15 / 0.035), 0 12px 30px rgb(17 17 15 / 0.045) !important;
+  box-shadow: 0 1px 2px rgb(14 19 25 / 0.035), 0 12px 30px rgb(14 19 25 / 0.045) !important;
 }
 
 .experience-shell .settings-page .settings-title {
@@ -3491,7 +3491,7 @@
   height: 1rem;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 3px rgb(17 17 15 / 0.22);
+  box-shadow: 0 1px 3px rgb(14 19 25 / 0.22);
   transition: transform 140ms ease;
   content: "";
 }
@@ -3853,8 +3853,15 @@
 .experience-shell .status-pending,
 .experience-shell .status-draft,
 .experience-shell .restricted-label {
-  background: var(--brand-soft);
-  color: var(--brand-contrast, #8a2e08);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.experience-shell .status-published,
+.experience-shell .status-active,
+.experience-shell .status-approved {
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .experience-shell .trial-chip {
@@ -3907,7 +3914,7 @@
   border-radius: 0.7rem;
   cursor: crosshair;
   touch-action: none;
-  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(14 19 25 / 0.14);
 }
 
 .color-picker-sv-white,
@@ -3934,8 +3941,8 @@
   border-radius: 999px;
   pointer-events: none;
   box-shadow:
-    0 0 0 1px rgb(17 17 15 / 0.28),
-    0 2px 6px rgb(17 17 15 / 0.28);
+    0 0 0 1px rgb(14 19 25 / 0.28),
+    0 2px 6px rgb(14 19 25 / 0.28);
   transform: translate(-50%, -50%);
 }
 
@@ -3955,7 +3962,7 @@
     #ff00ff,
     #ff0000
   );
-  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(14 19 25 / 0.12);
 }
 
 .color-picker-hue-knob {
@@ -3976,7 +3983,7 @@
   border: 0;
   border-radius: 999px;
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgb(17 17 15 / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(14 19 25 / 0.18);
 }
 
 .experience-shell .guide-title-line {

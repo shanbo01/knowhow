@@ -8,24 +8,26 @@
 
 :root {
   color-scheme: light;
-  --background: #f5f4f0;
-  --foreground: #11110f;
+  --background: #f3f5f8;
+  --foreground: #0e1319;
   --card: #ffffff;
-  --card-muted: #f8f7f4;
-  --muted: #6e6c66;
-  --muted-foreground: #8a8882;
-  --border: #deddd7;
-  --border-strong: #cfcbc3;
-  --primary: #11110f;
+  --card-muted: #edf0f5;
+  --muted: #5d6875;
+  --muted-foreground: #7a8695;
+  --border: #dfe4eb;
+  --border-strong: #c1cad6;
+  --primary: #0e1319;
   --primary-foreground: #ffffff;
-  --accent: #ff5a12;
-  --accent-soft: #ffe7da;
-  --accent-strong: #eb4d08;
-  --danger: #c52828;
-  --danger-soft: #fff2f2;
-  --success: #15965f;
-  --shadow: 0 12px 32px rgb(17 17 15 / 0.08);
-  --shadow-sm: 0 1px 2px rgb(17 17 15 / 0.05);
+  --accent: #e85511;
+  --accent-soft: #ffe4d2;
+  --accent-strong: #c2410c;
+  --accent-fill: #c2410c;
+  --accent-contrast: #ffffff;
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --success: #157f3f;
+  --shadow: 0 12px 32px rgb(14 19 25 / 0.09);
+  --shadow-sm: 0 1px 2px rgb(14 19 25 / 0.06);
   font-family: "Google Sans Flex Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   background: var(--background);
   color: var(--foreground);
@@ -33,22 +35,24 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --background: #0e0e0c;
-  --foreground: #f5f4f0;
-  --card: #171714;
-  --card-muted: #1c1c18;
-  --muted: #a6a49d;
-  --muted-foreground: #85827a;
-  --border: #2e2e29;
-  --border-strong: #3b3933;
-  --primary: #f5f4f0;
-  --primary-foreground: #11110f;
-  --accent: #ff5a12;
-  --accent-soft: #3a2115;
-  --accent-strong: #ff7b2f;
-  --danger: #fb7185;
-  --danger-soft: #3b1b22;
-  --success: #34d399;
+  --background: #0d1117;
+  --foreground: #e7ecf3;
+  --card: #151b23;
+  --card-muted: #1c232d;
+  --muted: #93a0b1;
+  --muted-foreground: #7a8695;
+  --border: #262e3a;
+  --border-strong: #333d4b;
+  --primary: #e7ecf3;
+  --primary-foreground: #0e1319;
+  --accent: #ff7a3d;
+  --accent-soft: #38231a;
+  --accent-strong: #ff9b6b;
+  --accent-fill: #d9480f;
+  --accent-contrast: #ffffff;
+  --danger: #f97066;
+  --danger-soft: #3d1d1a;
+  --success: #4ade80;
   --shadow: 0 16px 40px rgb(0 0 0 / 0.26);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.2);
 }
@@ -148,10 +152,7 @@ input {
   width: 32px;
   height: 32px;
   display: grid;
-  grid-template-columns: repeat(2, 6px);
-  grid-template-rows: repeat(2, 6px);
   place-content: center;
-  gap: 2px;
   flex: 0 0 auto;
   border-radius: 8px;
   background: var(--primary);
@@ -170,11 +171,9 @@ input {
   background: var(--accent);
 }
 
-.brand-mark i {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.5px;
-  background: currentColor;
+.brand-mark svg {
+  width: 20px;
+  height: 20px;
 }
 
 .brand-mark i:nth-child(2),
@@ -1206,10 +1205,10 @@ input {
 }
 
 .start-button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 12px 28px rgb(255 90 18 / 0.25);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--accent-contrast);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent-fill) 28%, transparent);
 }
 
 .step-thumbnail,
