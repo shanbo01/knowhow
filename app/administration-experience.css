@@ -2225,3 +2225,45 @@ button.administration-directory-row[data-selected] {
 .administration-workspaces-layout:not(:has(.administration-client-inspector)) {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* At laptop widths the directory header put a 22rem search and a select beside
+   the title inside a column that is roughly half the page, leaving the heading
+   about 70px and wrapping both its lines. Let the controls take their own row
+   before the title is squeezed. */
+.administration-directory-header,
+.administration-access-header {
+  flex-wrap: wrap;
+}
+
+.administration-directory-header > div:first-child,
+.administration-access-header > div:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.administration-directory-controls {
+  flex: 1 1 22rem;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.administration-search {
+  flex: 1 1 auto;
+  min-width: min(14rem, 100%);
+}
+
+/* Five labels in a 22rem panel do not fit. Fill the strip when there is room
+   and scroll when there is not, rather than truncating a tab's name. */
+.administration-inspector-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.administration-inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.administration-inspector-tabs button {
+  flex: 1 0 auto;
+  white-space: nowrap;
+}

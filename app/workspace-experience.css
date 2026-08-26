@@ -2452,8 +2452,8 @@
   min-height: 2.5rem;
   padding: 0 1rem;
   border-bottom: 1px solid var(--experience-line);
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--surface-soft) 28%, transparent);
+  color: var(--text-secondary);
+  background: var(--surface-soft);
   font-size: 0.6rem;
   font-weight: 720;
   letter-spacing: 0.045em;
@@ -2512,8 +2512,8 @@
 
 .experience-shell .members-directory .role-list > span {
   padding: 0.26rem 0.45rem;
-  color: color-mix(in srgb, var(--experience-accent) 76%, var(--foreground));
-  background: var(--experience-soft);
+  color: var(--text-secondary);
+  background: var(--surface-hover);
   font-size: 0.57rem;
 }
 
@@ -3323,8 +3323,8 @@
 .experience-shell .settings-section-header > span {
   padding: 0.3rem 0.55rem;
   border-radius: 999px;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--muted) 68%, transparent);
+  color: var(--text-secondary);
+  background: var(--surface-hover);
   font-size: 0.65rem;
   font-weight: 680;
   white-space: nowrap;
