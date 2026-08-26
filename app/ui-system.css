@@ -233,13 +233,13 @@
 .product-brand-mark,
 .experience-shell .sidebar-brand .product-brand-mark,
 .auth-intro .product-brand-mark {
-  width: 28px;
-  height: 28px;
+  width: var(--kh-tile-sm);
+  height: var(--kh-tile-sm);
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--kh-tile-radius-sm);
   overflow: hidden;
-  background: #0e1319;
-  color: #fff;
+  background: var(--foreground);
+  color: var(--background);
 }
 
 .product-brand-mark svg,
@@ -256,8 +256,8 @@
   width: 8px;
   height: 8px;
   border: 0;
-  background: #ff5a12;
-  box-shadow: 0 0 0 3px rgb(255 90 18 / 14%);
+  background: var(--brand-signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-signal) 16%, transparent);
 }
 
 .product-brand-copy strong,
@@ -273,9 +273,9 @@
 
 /* Opening screens intentionally keep the same artwork at display size. */
 .opening-product-brand .product-brand-mark {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
+  width: var(--kh-tile-lg);
+  height: var(--kh-tile-lg);
+  border-radius: var(--kh-tile-radius-lg);
 }
 
 .opening-product-brand .product-brand-mark svg {

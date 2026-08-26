@@ -44,6 +44,9 @@
   --destructive: #b42318;
   --green: #157f3f;
   --green-soft: #dcf5e5;
+  /* The mark's dot sits on a tile that inverts with the theme, so the dot
+     has to invert with it: bright on the dark tile, deep on the light one. */
+  --brand-signal: #ff5a12;
   --border: #dfe4eb;
   --input: #cdd5df;
   --ring: #e85511;
@@ -71,6 +74,13 @@
   --radius-sm: 0.5rem;
   --radius: 0.75rem;
   --radius-lg: 1.25rem;
+  /* Identity tiles came in four sizes and three radii. One scale. */
+  --kh-tile-sm: 2rem;
+  --kh-tile-md: 2.25rem;
+  --kh-tile-lg: 3.5rem;
+  --kh-tile-radius-sm: 0.625rem;
+  --kh-tile-radius-md: 0.7rem;
+  --kh-tile-radius-lg: 1.05rem;
   --workspace-accent: var(--brand);
   --click-color: #ff5a12;
   --chart-1: #0e1319;
@@ -803,6 +813,7 @@
   --destructive: #f97066;
   --green: #4ade80;
   --green-soft: #14301f;
+  --brand-signal: #d9480f;
   --border: #262e3a;
   --input: #333d4b;
   --ring: #ff7a3d;
@@ -1893,11 +1904,11 @@ svg {
 }
 
 .workspace-avatar {
-  width: 37px;
-  height: 37px;
+  width: var(--kh-tile-md);
+  height: var(--kh-tile-md);
   display: inline-grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: var(--kh-tile-radius-md);
   background: color-mix(in srgb,
       var(--workspace-accent, var(--accent)) 20%,
       var(--surface));
@@ -4711,11 +4722,11 @@ button.member-row:hover {
 }
 
 .brand-preview-logo {
-  width: 38px;
-  height: 38px;
+  width: var(--kh-tile-md);
+  height: var(--kh-tile-md);
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: var(--kh-tile-radius-md);
   background: var(--workspace-accent);
   color: var(--accent-contrast);
   font-weight: 800;
@@ -12944,14 +12955,14 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
   }
 }
 
-/* Keep the product identity identical to the landing-page wordmark in every
-   app theme: charcoal tile, white K, and the clipped orange signal dot. */
+/* The mark inverts with the theme. Locking it to a charcoal tile put a
+   near-black square on a near-black sidebar, where the identity vanished. */
 .product-brand-mark {
   position: relative;
   overflow: hidden;
-  border: 0 !important;
-  background: #0e1319 !important;
-  color: #ffffff !important;
+  border: 0;
+  background: var(--foreground);
+  color: var(--background);
 }
 
 .product-brand-mark::after {
@@ -12960,8 +12971,8 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
   width: 0.42rem;
   height: 0.42rem;
   border: 0;
-  background: #ff5a12 !important;
-  box-shadow: 0 0 0 3px rgb(255 90 18 / 14%);
+  background: var(--brand-signal);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-signal) 16%, transparent);
 }
 
 .product-brand-copy strong {
