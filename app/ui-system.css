@@ -20,12 +20,12 @@
   --kh-ui-speed: 140ms;
   --kh-focus-ring: 0 0 0 3px color-mix(in srgb, var(--ring) 24%, transparent);
   --kh-surface-shadow:
-    0 1px 2px rgb(17 17 15 / 0.04),
-    0 10px 28px rgb(17 17 15 / 0.06);
+    0 1px 2px rgb(14 19 25 / 0.04),
+    0 10px 28px rgb(14 19 25 / 0.06);
   --kh-control-shadow:
-    0 1px 2px rgb(17 17 15 / 0.04),
-    0 3px 10px rgb(17 17 15 / 0.05);
-  --kh-floating-shadow: 0 16px 42px rgb(17 17 15 / 0.14);
+    0 1px 2px rgb(14 19 25 / 0.04),
+    0 3px 10px rgb(14 19 25 / 0.05);
+  --kh-floating-shadow: 0 16px 42px rgb(14 19 25 / 0.14);
 }
 
 :root[data-theme="dark"],
@@ -238,7 +238,7 @@
   border: 0;
   border-radius: 9px;
   overflow: hidden;
-  background: #11110f;
+  background: #0e1319;
   color: #fff;
 }
 

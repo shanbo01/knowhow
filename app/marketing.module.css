@@ -1,19 +1,19 @@
 .page {
-  --paper: #f5f4f0;
-  --paper-deep: #eceae5;
+  --paper: #f3f5f8;
+  --paper-deep: #e2e7ee;
   --surface: #ffffff;
-  --surface-soft: #f8f7f4;
-  --ink: #11110f;
-  --ink-soft: #171714;
-  --quiet: #534f49;
-  --line: #deddd7;
-  --line-strong: #cfcbc3;
-  --orange: #ff5a12;
+  --surface-soft: #edf0f5;
+  --ink: #0e1319;
+  --ink-soft: #1a1f27;
+  --quiet: #4a5460;
+  --line: #dfe4eb;
+  --line-strong: #c1cad6;
+  --orange: #e85511;
   --orange-dark: #c2410c;
-  --orange-soft: #ffe7da;
-  --green: #37735b;
-  --night: #20201e;
-  --night-soft: #2a2926;
+  --orange-soft: #fdeade;
+  --green: #0f7a5a;
+  --night: #131920;
+  --night-soft: #1c232d;
   --foreground: var(--ink);
   --background: var(--paper);
   --muted: var(--quiet);
@@ -27,7 +27,7 @@
   background:
     radial-gradient(
       circle at 84% 4%,
-      rgb(223 157 113 / 0.17),
+      rgb(232 121 70 / 0.12),
       transparent 30rem
     ),
     radial-gradient(

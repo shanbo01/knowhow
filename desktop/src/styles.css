@@ -1,19 +1,19 @@
 :root {
-  color: #11110f;
-  background: #f5f4f0;
+  color: #0e1319;
+  background: #f3f5f8;
   font-family: "Google Sans Flex Variable", "Segoe UI Variable", "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --ink: #11110f;
-  --muted: #6e6c66;
-  --line: #deddd7;
+  --ink: #0e1319;
+  --muted: #5d6875;
+  --line: #dfe4eb;
   --paper: #ffffff;
-  --soft: #f8f7f4;
-  --brand: #ff5a12;
+  --soft: #edf0f5;
+  --brand: #e85511;
   --brand-deep: #c2410c;
-  --brand-wash: #ffe7da;
-  --danger: #b91c1c;
-  --shadow: 0 24px 70px rgba(17, 17, 15, 0.13);
+  --brand-wash: #fdeade;
+  --danger: #b42318;
+  --shadow: 0 24px 70px rgba(14, 19, 25, 0.15);
 }
 
 * {
@@ -32,7 +32,7 @@ body {
   overflow: hidden;
   background:
     radial-gradient(circle at 10% 0%, rgba(255, 90, 18, 0.08), transparent 31rem),
-    #f5f4f0;
+    #f3f5f8;
 }
 
 button,
@@ -127,7 +127,7 @@ svg {
   overflow: hidden;
   border-radius: 9px;
   color: #fff;
-  background: #11110f;
+  background: #0e1319;
 }
 
 .brand-mark svg {
@@ -295,13 +295,13 @@ h1 {
 
 .share-tile:hover:not(:disabled) {
   transform: translateY(-1px);
-  border-color: #cfcbc3;
-  box-shadow: 0 9px 24px rgba(17, 17, 15, 0.08);
+  border-color: #c1cad6;
+  box-shadow: 0 9px 24px rgba(14, 19, 25, 0.08);
 }
 
 .share-tile.selected {
   border-color: var(--brand);
-  box-shadow: 0 0 0 2px rgba(255, 90, 18, 0.14), 0 10px 25px rgba(17, 17, 15, 0.08);
+  box-shadow: 0 0 0 2px rgba(255, 90, 18, 0.14), 0 10px 25px rgba(14, 19, 25, 0.08);
 }
 
 .share-tile.protected {
@@ -340,7 +340,7 @@ h1 {
   border-radius: 999px;
   padding: 3px 6px;
   color: white;
-  background: rgba(17, 17, 15, 0.82);
+  background: rgba(14, 19, 25, 0.82);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
   backdrop-filter: blur(6px);
   font-size: 7px;
@@ -409,7 +409,7 @@ h1 {
 .window-lines i {
   height: 4px;
   border-radius: 3px;
-  background: #d4d2cb;
+  background: #cdd5df;
 }
 
 .window-lines i:nth-child(2) { width: 82%; }
@@ -508,7 +508,7 @@ h1 {
   border-radius: 50%;
   color: white;
   background: var(--brand);
-  box-shadow: 0 3px 9px rgba(17, 17, 15, 0.18);
+  box-shadow: 0 3px 9px rgba(14, 19, 25, 0.18);
 }
 
 .share-tile.selected .selection-check { display: grid; }
@@ -521,7 +521,7 @@ h1 {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border: 1px dashed #cfcbc3;
+  border: 1px dashed #c1cad6;
   border-radius: 14px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.52);
@@ -1168,7 +1168,7 @@ html[data-window="hud"] #root {
   border: 1px solid rgba(255, 255, 255, 0.34);
   border-radius: 19px;
   padding: 8px 9px 8px 8px;
-  background: rgba(17, 17, 15, 0.97);
+  background: rgba(14, 19, 25, 0.97);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.62), 0 20px 48px rgba(4, 4, 3, 0.34);
   backdrop-filter: blur(17px);
 }
@@ -1317,7 +1317,7 @@ html[data-window="hud"] #root {
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 17px;
   margin-top: 7px;
-  background: rgba(17, 17, 15, 0.98);
+  background: rgba(14, 19, 25, 0.98);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.62), 0 20px 48px rgba(4, 4, 3, 0.34);
 }
 
@@ -1401,7 +1401,7 @@ html[data-window="hud"] #root {
   padding: 0 2px;
   border-radius: 4px;
   color: #ff9a6c;
-  background: rgba(17, 17, 15, 0.68);
+  background: rgba(14, 19, 25, 0.68);
   font-size: 7px;
   font-weight: 800;
 }

@@ -16,53 +16,53 @@
     ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, Monaco, Consolas,
     monospace;
   --font-sans: var(--font-geist-sans);
-  --background: #f5f4f0;
-  --foreground: #11110f;
+  --background: #f3f5f8;
+  --foreground: #0e1319;
   --card: #ffffff;
-  --card-foreground: #11110f;
+  --card-foreground: #0e1319;
   --popover: #ffffff;
-  --popover-foreground: #11110f;
-  --primary: #11110f;
-  --primary-foreground: #fafafa;
-  --secondary: #f8f7f4;
-  --secondary-foreground: #171714;
-  --surface-soft: #f8f7f4;
-  --surface-hover: #eceae5;
-  --muted: #6e6c66;
-  --muted-foreground: #6e6c66;
-  --brand: #ff5a12;
-  --brand-hover: #c2410c;
+  --popover-foreground: #0e1319;
+  --primary: #0e1319;
+  --primary-foreground: #f7f9fb;
+  --secondary: #edf0f5;
+  --secondary-foreground: #1a1f27;
+  --surface-soft: #edf0f5;
+  --surface-hover: #e2e7ee;
+  --muted: #5d6875;
+  --muted-foreground: #5d6875;
+  --brand: #e85511;
+  --brand-hover: #a63709;
   --brand-fill: #c2410c;
-  --brand-contrast: #8a2e08;
-  --brand-soft: #ffe7da;
+  --brand-contrast: #8f3208;
+  --brand-soft: #fdeade;
   --brand-foreground: #ffffff;
   --accent: var(--brand);
   --accent-hover: var(--brand-hover);
   --accent-soft: var(--brand-soft);
   --accent-foreground: var(--brand);
   --accent-contrast: #ffffff;
-  --destructive: #b91c1c;
-  --border: #deddd7;
-  --input: #d4d2cb;
-  --ring: #ff5a12;
+  --destructive: #b42318;
+  --border: #dfe4eb;
+  --input: #cdd5df;
+  --ring: #e85511;
   --bg: var(--background);
   --surface: var(--card);
   --surface-raised: #ffffff;
-  --sidebar: #f8f7f4;
-  --sidebar-soft: #eceae5;
+  --sidebar: #edf0f5;
+  --sidebar-soft: #e2e7ee;
   --text: var(--foreground);
-  --text-secondary: #5f5d57;
+  --text-secondary: #4a5460;
   --line: var(--border);
-  --line-strong: #cfcbc3;
-  --amber: #ff5a12;
-  --amber-soft: #ffe7da;
-  --red: #b91c1c;
-  --red-soft: #fef2f2;
-  --purple: #57534e;
-  --purple-soft: #f4f4f5;
-  --shadow-sm: 0 1px 2px rgb(17 17 15 / 0.06);
-  --shadow-md: 0 12px 30px rgb(17 17 15 / 0.09);
-  --shadow-lg: 0 24px 60px rgb(17 17 15 / 0.16);
+  --line-strong: #c1cad6;
+  --amber: #e85511;
+  --amber-soft: #fdeade;
+  --red: #b42318;
+  --red-soft: #fef3f2;
+  --purple: #4a5460;
+  --purple-soft: #edf0f5;
+  --shadow-sm: 0 1px 2px rgb(14 19 25 / 0.07);
+  --shadow-md: 0 12px 30px rgb(14 19 25 / 0.10);
+  --shadow-lg: 0 24px 60px rgb(14 19 25 / 0.17);
   --kh-card-pad-x: 1.25rem;
   --kh-card-pad-y: 0.9rem;
   --kh-stack-gap: 1.15rem;
@@ -71,19 +71,19 @@
   --radius-lg: 1.25rem;
   --workspace-accent: var(--brand);
   --click-color: #ff5a12;
-  --chart-1: #09090b;
-  --chart-2: #ff5a12;
-  --chart-3: #71717a;
-  --chart-4: #a1a1aa;
-  --chart-5: #d4d4d8;
-  --chart-muted: #d4d4d8;
+  --chart-1: #0e1319;
+  --chart-2: #e85511;
+  --chart-3: #5d6875;
+  --chart-4: #98a3b2;
+  --chart-5: #cdd5df;
+  --chart-muted: #cdd5df;
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: #eceae5;
-  --sidebar-accent-foreground: #11110f;
+  --sidebar-accent: #e2e7ee;
+  --sidebar-accent-foreground: #0e1319;
   --sidebar-border: var(--border);
-  --sidebar-ring: #cfcbc3;
+  --sidebar-ring: #c1cad6;
 }
 
 /* Windows device authorization is intentionally a focused, single-decision
@@ -774,65 +774,65 @@
 
 :root[data-theme="dark"],
 .dark {
-  --background: #0e0e0c;
-  --foreground: #f5f4f0;
-  --card: #171714;
-  --card-foreground: #f5f4f0;
-  --popover: #1c1c18;
-  --popover-foreground: #f5f4f0;
-  --primary: #f5f4f0;
-  --primary-foreground: #11110f;
-  --secondary: #22221e;
-  --secondary-foreground: #f5f4f0;
-  --surface-soft: #22221e;
-  --surface-hover: #2c2c27;
-  --muted: #a6a49d;
-  --muted-foreground: #9d9b94;
-  --brand: #ff5a12;
-  --brand-hover: #ffb089;
-  --brand-fill: #c2410c;
-  --brand-contrast: #ffc2a3;
-  --brand-soft: #3a2115;
+  --background: #0d1117;
+  --foreground: #e7ecf3;
+  --card: #151b23;
+  --card-foreground: #e7ecf3;
+  --popover: #1a212b;
+  --popover-foreground: #e7ecf3;
+  --primary: #e7ecf3;
+  --primary-foreground: #0e1319;
+  --secondary: #1c232d;
+  --secondary-foreground: #e7ecf3;
+  --surface-soft: #1c232d;
+  --surface-hover: #252d39;
+  --muted: #93a0b1;
+  --muted-foreground: #8b98a9;
+  --brand: #ff7a3d;
+  --brand-hover: #ff9b6b;
+  --brand-fill: #d9480f;
+  --brand-contrast: #ffb08a;
+  --brand-soft: #38231a;
   --brand-foreground: #ffffff;
   --accent: var(--brand);
   --accent-hover: var(--brand-hover);
   --accent-soft: var(--brand-soft);
   --accent-foreground: var(--brand);
-  --destructive: #f87171;
-  --border: #2e2e29;
-  --input: #3b3933;
-  --ring: #ff5a12;
+  --destructive: #f97066;
+  --border: #262e3a;
+  --input: #333d4b;
+  --ring: #ff7a3d;
   --bg: var(--background);
   --surface: var(--card);
-  --surface-raised: #1c1c18;
-  --sidebar: #11110f;
-  --sidebar-soft: #1c1c18;
+  --surface-raised: #1a212b;
+  --sidebar: #0a0e14;
+  --sidebar-soft: #151b23;
   --text: var(--foreground);
-  --text-secondary: #c5c2bb;
+  --text-secondary: #b6c1ce;
   --line: var(--border);
-  --line-strong: #3b3933;
-  --amber: #ff7b2f;
-  --amber-soft: #3a2115;
-  --red: #f87171;
-  --red-soft: #421f1f;
-  --purple: #d4d4d8;
-  --purple-soft: #2c2c27;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.18);
-  --shadow-md: 0 14px 36px rgb(0 0 0 / 0.24);
-  --shadow-lg: 0 28px 80px rgb(0 0 0 / 0.36);
+  --line-strong: #333d4b;
+  --amber: #ff7a3d;
+  --amber-soft: #38231a;
+  --red: #f97066;
+  --red-soft: #3d1d1a;
+  --purple: #b6c1ce;
+  --purple-soft: #252d39;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-md: 0 14px 36px rgb(0 0 0 / 0.30);
+  --shadow-lg: 0 28px 80px rgb(0 0 0 / 0.42);
   --sidebar-foreground: var(--foreground);
-  --chart-1: #fafafa;
-  --chart-2: #f97316;
-  --chart-3: #a1a1aa;
-  --chart-4: #71717a;
-  --chart-5: #454a53;
-  --chart-muted: #454a53;
-  --sidebar-primary: #fafafa;
-  --sidebar-primary-foreground: #18181b;
-  --sidebar-accent: #2c2c27;
-  --sidebar-accent-foreground: #f5f4f0;
+  --chart-1: #e7ecf3;
+  --chart-2: #ff7a3d;
+  --chart-3: #93a0b1;
+  --chart-4: #64717f;
+  --chart-5: #3d4855;
+  --chart-muted: #3d4855;
+  --sidebar-primary: #e7ecf3;
+  --sidebar-primary-foreground: #0e1319;
+  --sidebar-accent: #252d39;
+  --sidebar-accent-foreground: #e7ecf3;
   --sidebar-border: var(--border);
-  --sidebar-ring: #3b3933;
+  --sidebar-ring: #333d4b;
 }
 
 * {
@@ -12707,10 +12707,10 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
    remain so rows are still easy to scan. */
 :root {
   --kh-surface-shadow:
-    0 1px 2px rgb(17 17 15 / 0.025), 0 8px 24px rgb(17 17 15 / 0.055);
+    0 1px 2px rgb(14 19 25 / 0.025), 0 8px 24px rgb(14 19 25 / 0.055);
   --kh-control-shadow:
-    0 1px 2px rgb(17 17 15 / 0.035), 0 3px 10px rgb(17 17 15 / 0.04);
-  --kh-floating-shadow: 0 16px 42px rgb(17 17 15 / 0.12);
+    0 1px 2px rgb(14 19 25 / 0.035), 0 3px 10px rgb(14 19 25 / 0.04);
+  --kh-floating-shadow: 0 16px 42px rgb(14 19 25 / 0.12);
 }
 
 :root[data-theme="dark"],
@@ -12816,7 +12816,7 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
 
 .sidebar [data-slot="sidebar-inner"] {
   border-right: 0 !important;
-  box-shadow: 7px 0 24px rgb(17 17 15 / 0.045);
+  box-shadow: 7px 0 24px rgb(14 19 25 / 0.045);
 }
 
 .topbar {
@@ -12946,7 +12946,7 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
   position: relative;
   overflow: hidden;
   border: 0 !important;
-  background: #11110f !important;
+  background: #0e1319 !important;
   color: #ffffff !important;
 }
 

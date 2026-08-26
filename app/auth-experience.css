@@ -3,12 +3,12 @@
    is not affected by the historical workspace cascade. */
 
 .auth-shell {
-  --auth-ink: #11110f;
-  --auth-muted: #6e6c66;
-  --auth-paper: #f5f4f0;
+  --auth-ink: #0e1319;
+  --auth-muted: #5d6875;
+  --auth-paper: #f3f5f8;
   --auth-card: #ffffff;
-  --auth-line: #deddd7;
-  --auth-orange: #ff5a12;
+  --auth-line: #dfe4eb;
+  --auth-orange: #e85511;
   min-height: 100svh;
   display: grid;
   grid-template-columns: minmax(22rem, 0.88fr) minmax(30rem, 1.12fr);
@@ -20,17 +20,17 @@
 /* Admitted-user tenant setup. Kept in the account layer so it remains
    independent from the legacy workspace shell while setup is incomplete. */
 .self-service-shell {
-  --setup-ink: #11110f;
-  --setup-muted: #6e6c66;
-  --setup-paper: #f5f4f0;
+  --setup-ink: #0e1319;
+  --setup-muted: #5d6875;
+  --setup-paper: #f3f5f8;
   --setup-card: #ffffff;
-  --setup-line: #deddd7;
-  --setup-orange: #ff5a12;
+  --setup-line: #dfe4eb;
+  --setup-orange: #e85511;
   min-height: 100svh;
   padding: clamp(1.25rem, 3vw, 2.5rem);
   color: var(--setup-ink);
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 93 36 / 0.09), transparent 32rem),
+    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
     var(--setup-paper);
 }
 
@@ -252,7 +252,7 @@
 
 .self-service-field input:focus {
   border-color: var(--setup-orange);
-  box-shadow: 0 0 0 3px rgb(232 93 36 / 0.14);
+  box-shadow: 0 0 0 3px rgb(232 85 17 / 0.14);
 }
 
 .self-service-field-grid {
@@ -504,7 +504,7 @@
   height: 30rem;
   right: -17rem;
   top: -12rem;
-  background: rgb(232 93 36 / 0.25);
+  background: rgb(232 85 17 / 0.25);
   filter: blur(1px);
 }
 
@@ -637,7 +637,7 @@
   padding: clamp(1.25rem, 4vw, 4rem);
   overflow-y: auto;
   background:
-    radial-gradient(circle at 90% 5%, rgb(232 93 36 / 0.09), transparent 22rem),
+    radial-gradient(circle at 90% 5%, rgb(232 85 17 / 0.09), transparent 22rem),
     var(--auth-paper);
 }
 
@@ -869,7 +869,7 @@
 
 .auth-input-wrap:focus-within {
   border-color: #9f968c;
-  box-shadow: 0 0 0 3px rgb(232 93 36 / 0.12);
+  box-shadow: 0 0 0 3px rgb(232 85 17 / 0.12);
 }
 
 .auth-input-wrap > svg {
@@ -904,7 +904,7 @@
 .auth-field input:focus,
 .auth-input-wrap input:focus {
   outline: 0;
-  box-shadow: 0 0 0 3px rgb(232 93 36 / 0.12) !important;
+  box-shadow: 0 0 0 3px rgb(232 85 17 / 0.12) !important;
 }
 
 .auth-input-wrap input:focus {
@@ -1074,7 +1074,7 @@
   padding: 0 0 5rem;
   color: var(--auth-ink);
   background:
-    radial-gradient(circle at 86% 0, rgb(232 93 36 / 0.1), transparent 28rem),
+    radial-gradient(circle at 86% 0, rgb(232 85 17 / 0.1), transparent 28rem),
     var(--auth-paper);
 }
 
@@ -1216,7 +1216,7 @@
   color: #1d1b19;
   text-align: center;
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 93 36 / 0.09), transparent 32rem),
+    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
     #f4f1ea;
 }
 
@@ -1234,7 +1234,7 @@
   padding: clamp(1.25rem, 3vw, 2.5rem);
   color: #1d1b19;
   background:
-    radial-gradient(circle at 80% 8%, rgb(232 93 36 / 0.09), transparent 32rem),
+    radial-gradient(circle at 80% 8%, rgb(232 85 17 / 0.09), transparent 32rem),
     #f4f1ea;
 }
 
