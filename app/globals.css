@@ -34,7 +34,7 @@
   --brand-hover: #a63709;
   --brand-fill: #c2410c;
   --brand-contrast: #8f3208;
-  --brand-soft: #fdeade;
+  --brand-soft: #ffe4d2;
   --brand-foreground: #ffffff;
   --accent: var(--brand);
   --accent-hover: var(--brand-hover);
@@ -55,7 +55,7 @@
   --line: var(--border);
   --line-strong: #c1cad6;
   --amber: #e85511;
-  --amber-soft: #fdeade;
+  --amber-soft: #ffe4d2;
   --red: #b42318;
   --red-soft: #fef3f2;
   --purple: #4a5460;

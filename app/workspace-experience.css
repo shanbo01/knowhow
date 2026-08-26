@@ -571,7 +571,7 @@
   border: 1px solid var(--experience-line);
   border-radius: 1rem;
   background:
-    radial-gradient(circle at 78% 0%, color-mix(in srgb, var(--experience-accent) 9%, transparent), transparent 34%),
+    radial-gradient(circle at 92% -10%, color-mix(in srgb, var(--experience-accent) 9%, transparent), transparent 18%),
     var(--experience-panel);
   box-shadow: var(--experience-shadow);
 }

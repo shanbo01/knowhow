@@ -26,8 +26,8 @@
   border: 1px solid var(--experience-line);
   border-radius: 1.35rem;
   background:
-    radial-gradient(circle at 88% 14%, color-mix(in srgb, var(--brand) 15%, transparent), transparent 21rem),
-    linear-gradient(135deg, color-mix(in srgb, var(--experience-panel) 97%, transparent), color-mix(in srgb, var(--brand) 4%, var(--experience-panel)));
+    radial-gradient(circle at 93% 6%, color-mix(in srgb, var(--brand) 10%, transparent), transparent 12rem),
+    linear-gradient(135deg, var(--experience-panel), color-mix(in srgb, var(--foreground) 5%, var(--experience-panel)));
   box-shadow: var(--experience-shadow);
 }
 
