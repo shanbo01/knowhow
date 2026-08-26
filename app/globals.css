@@ -42,6 +42,8 @@
   --accent-foreground: var(--brand);
   --accent-contrast: #ffffff;
   --destructive: #b42318;
+  --green: #157f3f;
+  --green-soft: #dcf5e5;
   --border: #dfe4eb;
   --input: #cdd5df;
   --ring: #e85511;
@@ -799,6 +801,8 @@
   --accent-soft: var(--brand-soft);
   --accent-foreground: var(--brand);
   --destructive: #f97066;
+  --green: #4ade80;
+  --green-soft: #14301f;
   --border: #262e3a;
   --input: #333d4b;
   --ring: #ff7a3d;
@@ -2634,20 +2638,16 @@ svg {
 .status-published,
 .status-active,
 .status-approved {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .status-review,
 .status-pending,
-.status-suspended {
-  background: var(--brand-soft);
-  color: var(--brand-contrast, #8a2e08);
-}
-
+.status-suspended,
 .status-draft {
-  background: var(--brand-soft);
-  color: var(--brand-contrast, #8a2e08);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
 }
 
 .status-archived,
@@ -3786,7 +3786,7 @@ button.member-row:hover {
 .extension-connected svg {
   width: 16px;
   height: 16px;
-  color: var(--success);
+  color: var(--green);
 }
 
 .revealed-secret {
@@ -7723,10 +7723,14 @@ select {
 
 .status-published,
 .status-active,
-.status-approved,
+.status-approved {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
 .workspace-label {
-  background: var(--brand-soft);
-  color: var(--brand);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
 }
 
 /* Focused guide surfaces */
@@ -9993,9 +9997,9 @@ body::before {
 }
 
 .status-review {
-  border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
-  background: var(--brand-soft);
-  color: var(--brand-contrast, #8a2e08);
+  border-color: var(--border);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
 }
 
 .text-button {

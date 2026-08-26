@@ -683,8 +683,8 @@
   align-items: center;
   justify-content: center;
   border-radius: 0.6rem;
-  background: var(--experience-soft);
-  color: var(--experience-accent);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
 }
 
 .experience-shell .home-guide-icon svg,
@@ -3853,8 +3853,15 @@
 .experience-shell .status-pending,
 .experience-shell .status-draft,
 .experience-shell .restricted-label {
-  background: var(--brand-soft);
-  color: var(--brand-contrast, #8a2e08);
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.experience-shell .status-published,
+.experience-shell .status-active,
+.experience-shell .status-approved {
+  background: var(--green-soft);
+  color: var(--green);
 }
 
 .experience-shell .trial-chip {
