@@ -16,8 +16,11 @@ import {
   RefreshCw,
   Search,
   Send,
+  ScrollText,
   ShieldCheck,
   Sparkles,
+  TrendingUp,
+  UserPlus,
   UserRoundCog,
   UsersRound,
   X,
@@ -47,17 +50,43 @@ import type {
   AdministrationAccessMember,
   PlatformAccountRecord,
   PlatformAccountSummary,
+  PlatformAuditSummary,
+  PlatformDeletionCase,
   PlatformHealth,
   PlatformHome,
+  PlatformLeadRecord,
   PlatformNextAction,
+  PlatformNotificationFailure,
   PlatformPage,
+  PlatformRevenue,
   PlatformRole,
   PlatformTicketRecord,
   PlatformTicketSummary,
   Viewer,
 } from "../../../lib/knowhow-types";
 
-type AdministrationSection = "overview" | "workspaces" | "support" | "access";
+type AdministrationActivity = {
+  audits: PlatformPage<PlatformAuditSummary>;
+  notificationFailures: PlatformNotificationFailure[];
+  deletionCases: PlatformDeletionCase[];
+  appointments: Array<{
+    id: string;
+    workspaceId: string;
+    email: string;
+    status: "active";
+    expiresAt: string;
+    createdAt: string;
+  }>;
+};
+
+type AdministrationSection =
+  | "overview"
+  | "leads"
+  | "workspaces"
+  | "revenue"
+  | "activity"
+  | "support"
+  | "access";
 
 type CommercialAction = {
   kind: "grant_trial" | "extend" | "contract";
@@ -249,7 +278,7 @@ function MetricCard({
 }: {
   icon: typeof Building2;
   label: string;
-  value: number;
+  value: number | string;
   detail: string;
   tone?: "neutral" | "attention" | "positive";
 }) {
@@ -834,6 +863,152 @@ function TicketDialog({
   );
 }
 
+const LEAD_STATUSES = [
+  "new",
+  "qualified",
+  "waiting",
+  "converted",
+  "rejected",
+  "closed",
+] as const;
+
+/* The pricing catalog stores amounts in minor units and leaves them null while
+   the product is unpriced. Null has to read as "not priced", never as zero. */
+function formatMinor(value: number | null, currency: string) {
+  if (value === null) return "Not priced";
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(value / 100);
+}
+
+function LeadInspector({
+  lead,
+  busy,
+  onClose,
+  onSave,
+}: {
+  lead: PlatformLeadRecord | null;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (
+    leadId: string,
+    input: { status: string; ownerLabel: string; notes: string },
+  ) => Promise<boolean>;
+}) {
+  /* Keyed by lead id at the call site, so selecting another lead remounts this
+     and the draft resets without syncing state inside an effect. */
+  const [draft, setDraft] = useState(() => ({
+    status: lead?.status ?? "new",
+    ownerLabel: lead?.ownerLabel ?? "",
+    notes: lead?.notes ?? "",
+  }));
+  const [dirty, setDirty] = useState(false);
+
+  if (!lead) {
+    return (
+      <aside className="administration-client-inspector is-empty">
+        <EmptyPanel
+          icon={UserPlus}
+          title="Select a lead"
+          description="Open a lead to qualify it, assign an owner, and keep notes for the next conversation."
+        />
+      </aside>
+    );
+  }
+
+  const update = (patch: Partial<typeof draft>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+    setDirty(true);
+  };
+
+  return (
+    <aside className="administration-client-inspector" aria-label={`${lead.organization} lead`}>
+      <header className="administration-inspector-header">
+        <div>
+          <span className="administration-overline">Lead</span>
+          <h2>{lead.organization || "Unknown organization"}</h2>
+          <p>{lead.contactName ? `${lead.contactName} · ${lead.email}` : lead.email}</p>
+        </div>
+        <Button variant="ghost" size="icon-sm" type="button" aria-label="Close lead" onClick={onClose}>
+          <X />
+        </Button>
+      </header>
+
+      <div className="administration-inspector-badges">
+        <span className="status-badge" data-lead-status={lead.status}>{titleCase(lead.status)}</span>
+        <span>{titleCase(lead.kind || "inbound")}</span>
+        {lead.convertedRunId ? <span>Converted</span> : null}
+      </div>
+
+      <div className="administration-inspector-stats">
+        <div><small>Team size</small><strong>{lead.teamSize ?? "—"}</strong></div>
+        <div><small>Role</small><strong>{lead.role || "—"}</strong></div>
+        <div><small>Country</small><strong>{lead.country || "—"}</strong></div>
+        <div><small>Received</small><strong>{relativeDate(lead.occurredAt)}</strong></div>
+      </div>
+
+      {lead.workflow ? (
+        <section className="administration-inspector-section">
+          <header><h3>Workflow they described</h3></header>
+          <p className="administration-internal-note">{lead.workflow}</p>
+        </section>
+      ) : null}
+
+      <section className="administration-inspector-section">
+        <header><h3>Qualification</h3></header>
+        <label className="administration-field">
+          <span>Status</span>
+          <select
+            value={draft.status}
+            disabled={busy}
+            onChange={(event) => update({ status: event.target.value })}
+          >
+            {LEAD_STATUSES.map((value) => (
+              <option key={value} value={value}>{titleCase(value)}</option>
+            ))}
+          </select>
+        </label>
+        <label className="administration-field">
+          <span>Owner</span>
+          <input
+            value={draft.ownerLabel}
+            placeholder="Who is running this conversation"
+            maxLength={128}
+            disabled={busy}
+            onChange={(event) => update({ ownerLabel: event.target.value })}
+          />
+        </label>
+        <label className="administration-field">
+          <span>Notes</span>
+          <textarea
+            value={draft.notes}
+            rows={5}
+            maxLength={4000}
+            placeholder="What was said, what they need, what happens next"
+            disabled={busy}
+            onChange={(event) => update({ notes: event.target.value })}
+          />
+        </label>
+        <div className="administration-field-actions">
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || !dirty}
+            onClick={async () => {
+              if (await onSave(lead.id, draft)) setDirty(false);
+            }}
+          >
+            {busy ? <LoaderCircle className="spin" /> : <PencilLine />} Save lead
+          </Button>
+          {dirty ? <small>Unsaved changes</small> : null}
+        </div>
+      </section>
+    </aside>
+  );
+}
+
 function ClientInspector({
   client,
   loading,
@@ -1028,11 +1203,19 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
   const [ticketLoading, setTicketLoading] = useState(false);
   const [ticketError, setTicketError] = useState("");
   const [accessMembers, setAccessMembers] = useState<AdministrationAccessMember[]>([]);
+  const [leads, setLeads] = useState<PlatformLeadRecord[]>([]);
+  const [leadCursor, setLeadCursor] = useState<string | null>(null);
+  const [leadStatus, setLeadStatus] = useState("all");
+  const [selectedLeadId, setSelectedLeadId] = useState("");
+  const [revenue, setRevenue] = useState<PlatformRevenue | null>(null);
+  const [activity, setActivity] = useState<AdministrationActivity | null>(null);
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedClient, setSelectedClient] = useState<PlatformAccountRecord | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [loading, setLoading] = useState<"dashboard" | "clients" | "client" | "support" | "access" | "">("");
+  const [loading, setLoading] = useState<
+    "dashboard" | "clients" | "client" | "leads" | "revenue" | "activity" | "support" | "access" | ""
+  >("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
@@ -1149,14 +1332,77 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
     }
   }, [isOwner]);
 
+  const loadLeads = useCallback(
+    async (cursor?: string) => {
+      if (!canManage) return;
+      setLoading(cursor ? "" : "leads");
+      try {
+        const payload = await queryAdministration<PlatformPage<PlatformLeadRecord>>({
+          resource: "leads",
+          status: leadStatus === "all" ? undefined : leadStatus,
+          q: query || undefined,
+          cursor,
+        });
+        setLeads((current) => (cursor ? [...current, ...payload.items] : payload.items));
+        setLeadCursor(payload.nextCursor);
+        setLastSyncedAt(new Date().toISOString());
+      } catch (nextError) {
+        setError(messageFromError(nextError));
+      } finally {
+        setLoading("");
+      }
+    },
+    [canManage, leadStatus, query],
+  );
+
+  const loadRevenue = useCallback(async () => {
+    if (!canManage) return;
+    setLoading("revenue");
+    try {
+      const payload = await queryAdministration<{ revenue: PlatformRevenue }>({
+        resource: "revenue",
+      });
+      setRevenue(payload.revenue);
+      setLastSyncedAt(new Date().toISOString());
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setLoading("");
+    }
+  }, [canManage]);
+
+  const loadActivity = useCallback(async () => {
+    if (!canManage) return;
+    setLoading("activity");
+    try {
+      const payload = await queryAdministration<AdministrationActivity>({
+        resource: "activity",
+      });
+      setActivity(payload);
+      setLastSyncedAt(new Date().toISOString());
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    } finally {
+      setLoading("");
+    }
+  }, [canManage]);
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       if (section === "overview") void loadDashboard();
       if (section === "support") void loadSupport();
       if (section === "access") void loadAccess();
+      if (section === "revenue") void loadRevenue();
+      if (section === "activity") void loadActivity();
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [section, loadAccess, loadDashboard, loadSupport]);
+  }, [section, loadAccess, loadActivity, loadDashboard, loadRevenue, loadSupport]);
+
+  useEffect(() => {
+    if (section !== "leads") return;
+    const timeout = window.setTimeout(() => void loadLeads(), 250);
+    return () => window.clearTimeout(timeout);
+  }, [section, loadLeads]);
 
   useEffect(() => {
     if (section !== "workspaces") return;
@@ -1193,7 +1439,29 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
       if (selectedTicketId) await loadTicket(selectedTicketId);
     }
     if (section === "access") await loadAccess();
-  }, [section, loadAccess, loadClient, loadClients, loadDashboard, loadSupport, loadTicket, selectedClientId, selectedTicketId]);
+    if (section === "leads") await loadLeads();
+    if (section === "revenue") await loadRevenue();
+    if (section === "activity") await loadActivity();
+  }, [section, loadAccess, loadActivity, loadClient, loadClients, loadDashboard, loadLeads, loadRevenue, loadSupport, loadTicket, selectedClientId, selectedTicketId]);
+
+  async function saveLead(
+    leadId: string,
+    input: { status: string; ownerLabel: string; notes: string },
+  ) {
+    setBusy(true);
+    try {
+      await knowhowCommand("updateLead", { leadId, ...input });
+      toast.success("Lead updated");
+      await loadLeads();
+      if (canManage) void loadDashboard();
+      return true;
+    } catch (nextError) {
+      toast.error(messageFromError(nextError));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function replySupportTicket(message: string) {
     if (!selectedTicketId) return false;
@@ -1289,7 +1557,10 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
       ...(canManage
         ? [
             { id: "overview" as const, label: "Overview", icon: Activity },
+            { id: "leads" as const, label: "Leads", icon: UserPlus },
             { id: "workspaces" as const, label: "Workspaces", icon: Building2 },
+            { id: "revenue" as const, label: "Revenue", icon: TrendingUp },
+            { id: "activity" as const, label: "Activity", icon: ScrollText },
           ]
         : []),
       ...(canSupport
@@ -1537,6 +1808,243 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
             onEdit={() => selectedClient && setDialog({ kind: "relationship", client: selectedClient })}
           />
         </div>
+      ) : null}
+
+      {section === "leads" && canManage ? (
+        <div className="administration-workspaces-layout" data-open={Boolean(selectedLeadId) || undefined}>
+          <section className="administration-panel administration-directory">
+            <header className="administration-directory-header">
+              <div><span className="administration-overline">Pipeline</span><h2>Leads</h2></div>
+              <div className="administration-directory-controls">
+                <label className="administration-search">
+                  <Search />
+                  <input value={query} placeholder="Search organization, contact, or email" onChange={(event) => setQuery(event.target.value)} />
+                </label>
+                <select value={leadStatus} onChange={(event) => setLeadStatus(event.target.value)} aria-label="Lead status">
+                  {["all", "new", "qualified", "waiting", "converted", "rejected", "closed"].map((value) => (
+                    <option key={value} value={value}>{value === "all" ? "All statuses" : titleCase(value)}</option>
+                  ))}
+                </select>
+              </div>
+            </header>
+            {loading === "leads" && !leads.length ? (
+              <LoadingState label="Loading leads" />
+            ) : leads.length ? (
+              <table className="administration-table">
+                <thead>
+                  <tr><th>Organization</th><th>Contact</th><th>Status</th><th>Owner</th><th>Received</th></tr>
+                </thead>
+                <tbody>
+                  {leads.map((lead) => (
+                    <tr key={lead.id} data-selected={lead.id === selectedLeadId || undefined} onClick={() => setSelectedLeadId(lead.id)}>
+                      <td>
+                        <span className="administration-cell-primary">
+                          <strong>{lead.organization || "Unknown organization"}</strong>
+                          <small>{lead.country || lead.workflow || "—"}</small>
+                        </span>
+                      </td>
+                      <td>
+                        <span className="administration-cell-primary">
+                          <strong>{lead.contactName || "—"}</strong>
+                          <small>{lead.email}</small>
+                        </span>
+                      </td>
+                      <td><span className="status-badge" data-lead-status={lead.status}>{titleCase(lead.status)}</span></td>
+                      <td>{lead.ownerLabel || <span className="administration-unassigned">Unassigned</span>}</td>
+                      <td>{relativeDate(lead.occurredAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <EmptyPanel icon={UserPlus} title="No leads yet" description="Trial requests and contact submissions land here." />
+            )}
+            {leadCursor ? (
+              <div className="administration-load-more">
+                <Button variant="outline" size="sm" type="button" onClick={() => void loadLeads(leadCursor)}>
+                  <Plus /> Load more
+                </Button>
+              </div>
+            ) : null}
+          </section>
+          <LeadInspector
+            key={selectedLeadId || "empty"}
+            lead={leads.find((item) => item.id === selectedLeadId) ?? null}
+            busy={busy}
+            onClose={() => setSelectedLeadId("")}
+            onSave={saveLead}
+          />
+        </div>
+      ) : null}
+
+      {section === "revenue" && canManage ? (
+        loading === "revenue" && !revenue ? (
+          <LoadingState label="Deriving revenue" />
+        ) : revenue ? (
+          <div className="administration-revenue">
+            {!revenue.catalogPriced ? (
+              <div className="administration-notice" role="status">
+                <CircleAlert />
+                <span>
+                  The effective pricing catalog{revenue.catalogName ? ` (${revenue.catalogName})` : ""} has no amount
+                  set, so recurring revenue cannot be derived yet. Plan mix and movement below are live.
+                </span>
+              </div>
+            ) : null}
+            <div className="administration-metrics">
+              <MetricCard
+                icon={TrendingUp}
+                label="MRR"
+                value={formatMinor(revenue.mrrMinor, revenue.currency)}
+                detail={`${revenue.payingWorkspaces} paying workspace${revenue.payingWorkspaces === 1 ? "" : "s"}`}
+                tone={revenue.mrrMinor ? "positive" : "neutral"}
+              />
+              <MetricCard
+                icon={TrendingUp}
+                label="ARR"
+                value={formatMinor(revenue.arrMinor, revenue.currency)}
+                detail="MRR over twelve months"
+                tone="neutral"
+              />
+              <MetricCard
+                icon={FileSignature}
+                label="Contracts"
+                value={revenue.contractedAgreements}
+                detail="manual agreements recorded"
+                tone="neutral"
+              />
+              <MetricCard
+                icon={BadgeCheck}
+                label="Trial conversion"
+                value={
+                  revenue.trialsStarted
+                    ? `${Math.round((revenue.trialsConverted / revenue.trialsStarted) * 100)}%`
+                    : "—"
+                }
+                detail={`${revenue.trialsConverted} of ${revenue.trialsStarted} trials`}
+                tone={revenue.trialsConverted ? "positive" : "neutral"}
+              />
+            </div>
+
+            <div className="administration-command-grid">
+              <section className="administration-panel">
+                <header className="administration-panel-header">
+                  <div><span>Movement</span><h2>Started, converted, and churned by month</h2></div>
+                  <small>Derived from subscription lifecycle dates</small>
+                </header>
+                <div className="administration-movement">
+                  {revenue.months.map((month) => {
+                    const peak = Math.max(
+                      ...revenue.months.flatMap((item) => [item.started, item.converted, item.churned]),
+                      1,
+                    );
+                    return (
+                      <div key={month.month} className="administration-movement-month">
+                        <div className="administration-movement-bars">
+                          <i data-kind="started" style={{ height: `${(month.started / peak) * 100}%` }} title={`${month.started} started`} />
+                          <i data-kind="converted" style={{ height: `${(month.converted / peak) * 100}%` }} title={`${month.converted} converted`} />
+                          <i data-kind="churned" style={{ height: `${(month.churned / peak) * 100}%` }} title={`${month.churned} churned`} />
+                        </div>
+                        <small>{month.month.slice(5)}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="administration-legend">
+                  <span data-kind="started">Started</span>
+                  <span data-kind="converted">Converted</span>
+                  <span data-kind="churned">Churned</span>
+                </div>
+              </section>
+
+              <section className="administration-panel">
+                <header className="administration-panel-header">
+                  <div><span>Plan mix</span><h2>Where active workspaces sit</h2></div>
+                </header>
+                <div className="administration-funnel">
+                  {(["enterprise", "pro", "pro_trial", "free"] as const).map((plan) => {
+                    const total = Math.max(...Object.values(revenue.planMix), 1);
+                    return (
+                      <div key={plan}>
+                        <span><strong>{titleCase(plan)}</strong><small>{revenue.planMix[plan]}</small></span>
+                        <div><i style={{ width: `${Math.max(4, (revenue.planMix[plan] / total) * 100)}%` }} /></div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="administration-panel-note">
+                  Counts active subscriptions. Complimentary and internal workspaces are excluded from paying totals.
+                </p>
+              </section>
+            </div>
+          </div>
+        ) : (
+          <EmptyPanel icon={TrendingUp} title="No revenue data yet" description="Recurring revenue appears once subscriptions exist." />
+        )
+      ) : null}
+
+      {section === "activity" && canManage ? (
+        loading === "activity" && !activity ? (
+          <LoadingState label="Loading activity" />
+        ) : activity ? (
+          <div className="administration-command-grid administration-activity-grid">
+            <section className="administration-panel">
+              <header className="administration-panel-header">
+                <div><span>Audit trail</span><h2>What staff did, and when</h2></div>
+                <small>Hash-chained per workspace</small>
+              </header>
+              <div className="administration-audit-list">
+                {activity.audits.items.map((entry) => (
+                  <div key={entry.id}>
+                    <span className="administration-audit-mark"><ScrollText /></span>
+                    <span>
+                      <strong>{titleCase(entry.action.replace(/[._]/g, " "))}</strong>
+                      <small>{entry.workspaceName}</small>
+                    </span>
+                    <time>{formatDate(entry.occurredAt, true)}</time>
+                  </div>
+                ))}
+                {!activity.audits.items.length ? (
+                  <EmptyPanel icon={ScrollText} title="No audited events" description="Staff actions on customer workspaces are recorded here." />
+                ) : null}
+              </div>
+            </section>
+
+            <div className="administration-activity-side">
+              <section className="administration-panel">
+                <header className="administration-panel-header">
+                  <div><span>Deletion approvals</span><h2>Awaiting confirmation</h2></div>
+                </header>
+                <div className="administration-audit-list">
+                  {activity.deletionCases.map((item) => (
+                    <div key={item.id}>
+                      <span className="administration-audit-mark" data-tone="attention"><CircleAlert /></span>
+                      <span><strong>{item.workspaceName}</strong><small>Retention ended</small></span>
+                      <time>{formatDate(item.eligibleAt)}</time>
+                    </div>
+                  ))}
+                  {!activity.deletionCases.length ? <p className="administration-panel-note">Nothing awaiting approval.</p> : null}
+                </div>
+              </section>
+
+              <section className="administration-panel">
+                <header className="administration-panel-header">
+                  <div><span>Delivery failures</span><h2>Notifications that did not land</h2></div>
+                </header>
+                <div className="administration-audit-list">
+                  {activity.notificationFailures.map((item) => (
+                    <div key={item.id}>
+                      <span className="administration-audit-mark" data-tone="attention"><CircleAlert /></span>
+                      <span><strong>{titleCase(item.kind.replace(/[._]/g, " "))}</strong><small>{item.workspaceName}</small></span>
+                      <time>{formatDate(item.lastFailedAt, true)}</time>
+                    </div>
+                  ))}
+                  {!activity.notificationFailures.length ? <p className="administration-panel-note">All notifications delivered.</p> : null}
+                </div>
+              </section>
+            </div>
+          </div>
+        ) : null
       ) : null}
 
       {section === "support" && canSupport ? (

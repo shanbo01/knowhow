@@ -159,7 +159,9 @@ export async function GET(request: Request) {
     const canManage = roles.some((role) => role === "owner" || role === "operations");
     const canSupport = canManage || roles.includes("support");
     if (
-      ["dashboard", "clients", "client"].includes(resource) &&
+      ["dashboard", "clients", "client", "leads", "lead", "revenue", "activity"].includes(
+        resource,
+      ) &&
       !canManage
     ) {
       throw new HttpError(
@@ -182,6 +184,7 @@ export async function GET(request: Request) {
     const limit = url.searchParams.get("limit");
     const workspaceId = url.searchParams.get("workspaceId")?.trim() ?? "";
     const ticketId = url.searchParams.get("ticketId")?.trim() ?? "";
+    const leadId = url.searchParams.get("leadId")?.trim() ?? "";
 
     let body: object;
     if (resource === "dashboard") {
@@ -215,6 +218,22 @@ export async function GET(request: Request) {
           inputText(ticketId, "Support ticket", { min: 1, max: 36 }),
         ),
       };
+    } else if (resource === "leads") {
+      body = await service.listLeads(identity, { query, status, cursor, limit });
+    } else if (resource === "lead") {
+      if (!leadId) {
+        throw new HttpError(400, "LEAD_REQUIRED", "Lead is required.");
+      }
+      body = {
+        lead: await service.lead(
+          identity,
+          inputText(leadId, "Lead", { min: 1, max: 36 }),
+        ),
+      };
+    } else if (resource === "revenue") {
+      body = { revenue: await service.revenue(identity) };
+    } else if (resource === "activity") {
+      body = await service.listActivity(identity, { cursor, limit });
     } else if (resource === "access") {
       await requireAdministrationOwner(access, identity.userId);
       body = { members: await accessMembers() };

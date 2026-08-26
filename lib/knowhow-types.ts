@@ -583,6 +583,31 @@ export type PlatformNotificationFailure = {
   lastFailedAt: string;
 };
 
+export type PlatformRevenueMonth = {
+  month: string;
+  started: number;
+  converted: number;
+  churned: number;
+  activeEnd: number;
+};
+
+export type PlatformRevenue = {
+  currency: string;
+  /* False while the effective catalog has no amountMinor, which is the private
+     beta state. Consumers must render "not priced" rather than a zero. */
+  catalogPriced: boolean;
+  catalogName: string | null;
+  baseAmountMinor: number | null;
+  mrrMinor: number | null;
+  arrMinor: number | null;
+  payingWorkspaces: number;
+  contractedAgreements: number;
+  planMix: { free: number; pro_trial: number; pro: number; enterprise: number };
+  months: PlatformRevenueMonth[];
+  trialsStarted: number;
+  trialsConverted: number;
+};
+
 export type PlatformAuditSummary = {
   id: string;
   workspaceId: string;
