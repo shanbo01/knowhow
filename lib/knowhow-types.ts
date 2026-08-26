@@ -588,7 +588,6 @@ export type PlatformRevenueMonth = {
   started: number;
   converted: number;
   churned: number;
-  activeEnd: number;
 };
 
 export type PlatformRevenue = {

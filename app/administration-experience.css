@@ -2048,7 +2048,6 @@ button.administration-directory-row[data-selected] {
 
 .administration-movement-bars i {
   flex: 1 1 0;
-  min-height: 2px;
   max-width: 0.6rem;
   border-radius: 2px 2px 0 0;
   transition: height var(--kh-ui-speed) ease;
@@ -2219,4 +2218,10 @@ button.administration-directory-row[data-selected] {
   .administration-movement {
     height: 7rem;
   }
+}
+
+/* With no leads at all there is no record to select, so the directory takes the
+   full width instead of sitting beside an empty second column. */
+.administration-workspaces-layout:not(:has(.administration-client-inspector)) {
+  grid-template-columns: minmax(0, 1fr);
 }

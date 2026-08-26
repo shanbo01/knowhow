@@ -216,6 +216,17 @@ function personFromMember(row: StoredRecord<RecordData>): PlatformPerson {
   };
 }
 
+/* A subscription in grace is past its expiry but still has access and still
+   owes, so it counts as held, not lost. */
+const HOLDING_SUBSCRIPTION_STATUSES = new Set(["active", "grace"]);
+const LOST_SUBSCRIPTION_STATUSES = new Set([
+  "cancelled",
+  "suspended",
+  "deletion_pending",
+  "deleting",
+  "deleted",
+]);
+
 export class PlatformQueryService {
   private readonly access: AccessService;
 
@@ -1552,13 +1563,13 @@ export class PlatformQueryService {
 
     const paying = subscriptions.filter(
       ({ record }) =>
-        record.status === "active" &&
+        HOLDING_SUBSCRIPTION_STATUSES.has(record.status) &&
         (record.plan === "pro" || record.plan === "enterprise") &&
         !record.complimentary,
     );
     const planMix = { free: 0, pro_trial: 0, pro: 0, enterprise: 0 };
     for (const { record } of subscriptions) {
-      if (record.status !== "active") continue;
+      if (!HOLDING_SUBSCRIPTION_STATUSES.has(record.status)) continue;
       const plan = record.plan ?? "free";
       if (plan in planMix) planMix[plan as keyof typeof planMix] += 1;
     }
@@ -1590,27 +1601,21 @@ export class PlatformQueryService {
       let started = 0;
       let converted = 0;
       let churned = 0;
-      let activeEnd = 0;
       for (const { record } of subscriptions) {
         if (within(record.startsAt)) started += 1;
         if (within(record.convertedAt)) converted += 1;
-        if (within(record.downgradedAt)) churned += 1;
-        else if (
-          record.status !== "active" &&
+        /* "converted" is a subscription status, not only a date, so a lost
+           subscription cannot be defined as "not active": that counts every
+           trial that converted as churn in the same month it converted. Churn
+           is a downgrade, or an expiry that ended in a terminal state. */
+        if (within(record.downgradedAt)) {
+          churned += 1;
+        } else if (
+          LOST_SUBSCRIPTION_STATUSES.has(record.status) &&
           record.expiresAt &&
           within(record.expiresAt)
         ) {
           churned += 1;
-        }
-        const startedAt = Date.parse(record.startsAt ?? "");
-        const endedAt = record.expiresAt ? Date.parse(record.expiresAt) : Number.POSITIVE_INFINITY;
-        if (
-          Number.isFinite(startedAt) &&
-          startedAt < to &&
-          endedAt >= to &&
-          (record.plan === "pro" || record.plan === "enterprise")
-        ) {
-          activeEnd += 1;
         }
       }
       months.push({
@@ -1618,7 +1623,6 @@ export class PlatformQueryService {
         started,
         converted,
         churned,
-        activeEnd,
       });
       cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     }

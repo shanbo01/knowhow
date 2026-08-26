@@ -1721,7 +1721,7 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
                     return (
                       <div key={step.id}>
                         <span><strong>{step.label}</strong><small>{step.count}</small></span>
-                        <div><i style={{ width: `${Math.max(4, (step.count / maximum) * 100)}%` }} /></div>
+                        <div><i style={{ width: step.count ? `max(4px, ${(step.count / maximum) * 100}%)` : 0 }} /></div>
                       </div>
                     );
                   })}
@@ -1867,6 +1867,7 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
               </div>
             ) : null}
           </section>
+          {leads.length ? (
           <LeadInspector
             key={selectedLeadId || "empty"}
             lead={leads.find((item) => item.id === selectedLeadId) ?? null}
@@ -1874,6 +1875,7 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
             onClose={() => setSelectedLeadId("")}
             onSave={saveLead}
           />
+          ) : null}
         </div>
       ) : null}
 
@@ -1941,9 +1943,9 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
                     return (
                       <div key={month.month} className="administration-movement-month">
                         <div className="administration-movement-bars">
-                          <i data-kind="started" style={{ height: `${(month.started / peak) * 100}%` }} title={`${month.started} started`} />
-                          <i data-kind="converted" style={{ height: `${(month.converted / peak) * 100}%` }} title={`${month.converted} converted`} />
-                          <i data-kind="churned" style={{ height: `${(month.churned / peak) * 100}%` }} title={`${month.churned} churned`} />
+                          <i data-kind="started" style={{ height: month.started ? `max(3px, ${(month.started / peak) * 100}%)` : 0 }} title={`${month.started} started`} />
+                          <i data-kind="converted" style={{ height: month.converted ? `max(3px, ${(month.converted / peak) * 100}%)` : 0 }} title={`${month.converted} converted`} />
+                          <i data-kind="churned" style={{ height: month.churned ? `max(3px, ${(month.churned / peak) * 100}%)` : 0 }} title={`${month.churned} churned`} />
                         </div>
                         <small>{month.month.slice(5)}</small>
                       </div>
@@ -1963,11 +1965,16 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
                 </header>
                 <div className="administration-funnel">
                   {(["enterprise", "pro", "pro_trial", "free"] as const).map((plan) => {
-                    const total = Math.max(...Object.values(revenue.planMix), 1);
+                    /* A mix is a share of the whole, not of the largest slice:
+                       scaling to the max makes two equal plans both read full. */
+                    const total = Math.max(
+                      Object.values(revenue.planMix).reduce((sum, count) => sum + count, 0),
+                      1,
+                    );
                     return (
                       <div key={plan}>
                         <span><strong>{titleCase(plan)}</strong><small>{revenue.planMix[plan]}</small></span>
-                        <div><i style={{ width: `${Math.max(4, (revenue.planMix[plan] / total) * 100)}%` }} /></div>
+                        <div><i style={{ width: revenue.planMix[plan] ? `max(4px, ${(revenue.planMix[plan] / total) * 100}%)` : 0 }} /></div>
                       </div>
                     );
                   })}
