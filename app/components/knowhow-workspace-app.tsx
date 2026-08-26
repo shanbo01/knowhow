@@ -3466,9 +3466,9 @@ function SettingsView({
             <HexColorPicker
               value={settings.accentColor}
               onChange={(value) => update("accentColor", value)}
-              label="Document accent"
-              ariaLabel="Pick document accent"
-              hint="Used in guide branding and annotations, not the application interface."
+              label="Workspace accent"
+              ariaLabel="Pick workspace accent"
+              hint="Tints the workspace interface, and brands guides, annotations, and exports."
             />
             <HexColorPicker
               value={settings.clickTargetColor}

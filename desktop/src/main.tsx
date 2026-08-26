@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import Hud from "./Hud";
+import "@fontsource-variable/google-sans-flex/wght.css";
 import "./styles.css";
 
 const root = document.getElementById("root");

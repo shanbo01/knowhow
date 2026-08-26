@@ -339,6 +339,25 @@ export function shouldMintNavigationStep(titleMode) {
   return titleMode === "new-tab" || titleMode === "switch";
 }
 
+// A click that navigates can destroy its own document before the commit
+// message leaves it. The pointer-down half of that click is already in the
+// ledger, uncommitted, and would otherwise be swept away as abandoned — the
+// author would see the navigation recorded but not the click that caused it.
+export function unconfirmedClickEntryAt(
+  state,
+  { tabId, now = Date.now(), maxAgeMs = 4_000 } = {},
+) {
+  const candidates = entriesOf(state).filter(
+    (entry) =>
+      entry.committed !== true &&
+      entry.status === CaptureEntryStatus.CAPTURING &&
+      CLICK_SOURCE_EVENTS.has(entry.sourceEvent || entry.kind) &&
+      Number(entry.tabId) === Number(tabId) &&
+      now - Number(entry.acceptedAtMs || 0) <= maxAgeMs,
+  );
+  return candidates.at(-1) || null;
+}
+
 export function lastClickCaptureEntry(state) {
   const entries = entriesOf(state).filter((entry) =>
     CLICK_SOURCE_EVENTS.has(entry.sourceEvent || entry.kind),

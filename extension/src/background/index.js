@@ -76,10 +76,14 @@ import {
   shouldDropTrailingTabSwitch,
   shouldMintNavigationStep,
   switchNavigationCopy,
+  unconfirmedClickEntryAt,
   unresolvedCaptureEntries,
   updateCaptureEntry,
 } from "../core/capture-coordinator.js";
-import { createScreenshotQueue } from "./screenshot-queue.js";
+import {
+  createScreenshotQueue,
+  ScreenshotPriority,
+} from "./screenshot-queue.js";
 
 let offscreenCreation;
 let stateMutationQueue = Promise.resolve();
@@ -253,24 +257,38 @@ function syncRemoteTransition(state, transition) {
   );
 }
 
+// The worker is the only writer of the capture state, so it can serve reads
+// from memory instead of paying a structured-clone round trip to
+// `chrome.storage.session` on every stage, commit and frame bookkeeping step.
+// The cache is populated on first read and refreshed on every write; a
+// terminated worker simply starts cold and reloads from storage.
+let captureStateCache = null;
+let captureStateBadge = null;
+
 async function getCaptureState() {
+  if (captureStateCache) return captureStateCache;
   const stored = await chrome.storage.session.get(STORAGE_KEYS.captureState);
   const state = stored[STORAGE_KEYS.captureState] || createIdleState();
-  if (
+  captureStateCache =
     state.sessionId &&
     (!Array.isArray(state.captureEntries) ||
       !Number.isInteger(state.nextEventSequence))
-  ) {
-    return initializeCaptureCoordinator(state);
-  }
-  return state;
+      ? initializeCaptureCoordinator(state)
+      : state;
+  return captureStateCache;
 }
 
 async function setCaptureState(state) {
+  captureStateCache = state;
   await chrome.storage.session.set({
     [STORAGE_KEYS.captureState]: state,
   });
-  await updateActionBadge(state);
+  // The badge only ever reflects the status, so repainting it on every frame
+  // bookkeeping write costs three extension IPC calls for nothing.
+  if (state.status !== captureStateBadge) {
+    captureStateBadge = state.status;
+    await updateActionBadge(state);
+  }
   return state;
 }
 
@@ -553,6 +571,7 @@ function safeCaptureText(value, policy, maxLength, fallback) {
 }
 
 async function updateActionBadge(state) {
+  captureStateBadge = state.status;
   const badges = {
     [CaptureStatus.PREPARING]: ["...", "#b45309"],
     [CaptureStatus.RECORDING]: ["REC", "#dc2626"],
@@ -740,30 +759,44 @@ async function injectCaptureContent(state, capturePolicy, documentId) {
     tabId: state.tabId,
     ...(typeof documentId === "string" ? { documentIds: [documentId] } : {}),
   };
-  await chrome.scripting.insertCSS({
-    target,
-    files: [CONTENT_STYLE_PATH],
-  });
-  await chrome.scripting.executeScript({
-    target,
-    files: [CONTENT_GEOMETRY_PATH, CONTENT_SETTLED_PATH, CONTENT_SCRIPT_PATH],
-    injectImmediately: true,
-  });
   const policy = capturePolicy || (await getCapturePolicy());
-  const configured = await chrome.tabs.sendMessage(
-    state.tabId,
-    {
-      type: "KNOWHOW_CONFIGURE",
-      sessionId: state.sessionId,
-      status: state.status,
-      scopeLabel: state.scopeLabel,
-      policy,
-      documentId: documentId || state.activeDocumentId || null,
-      navigationKey:
-        state.activeNavigationKey || state.sanitizedUrl || null,
-    },
-    typeof documentId === "string" ? { documentId } : undefined,
-  );
+  const configure = {
+    type: "KNOWHOW_CONFIGURE",
+    sessionId: state.sessionId,
+    status: state.status,
+    scopeLabel: state.scopeLabel,
+    policy,
+    documentId: documentId || state.activeDocumentId || null,
+    navigationKey: state.activeNavigationKey || state.sanitizedUrl || null,
+  };
+  const frame = typeof documentId === "string" ? { documentId } : undefined;
+
+  // Switching back to a tab that already carries the recorder is the common
+  // shape of a real workflow — copy a code out of one tab, type it into
+  // another, switch back. Re-injecting there costs two round trips before
+  // Smart Blur can paint, so try to configure what is already running first
+  // and only pay for injection when nothing answers. A reloaded extension
+  // orphans its old content script, whose runtime is dead, so it fails this
+  // probe and is replaced rather than left stale.
+  try {
+    const existing = await chrome.tabs.sendMessage(state.tabId, configure, frame);
+    if (existing?.ok) return;
+  } catch {
+    // No recorder on this document yet.
+  }
+
+  // Styles and scripts do not depend on each other, and both must land before
+  // the configure below; injecting them concurrently removes a round trip from
+  // every fresh page.
+  await Promise.all([
+    chrome.scripting.insertCSS({ target, files: [CONTENT_STYLE_PATH] }),
+    chrome.scripting.executeScript({
+      target,
+      files: [CONTENT_GEOMETRY_PATH, CONTENT_SETTLED_PATH, CONTENT_SCRIPT_PATH],
+      injectImmediately: true,
+    }),
+  ]);
+  const configured = await chrome.tabs.sendMessage(state.tabId, configure, frame);
   if (!configured?.ok) {
     throw new Error("KnowHow could not safely configure capture on this page.");
   }
@@ -1069,22 +1102,12 @@ async function startCapture(options = {}) {
       await setCaptureState(ready);
       return ready;
     });
-    const initialJob = snapshotCaptureJob(recording, {
-      pageUrl: beforeReady.tab.url,
-      sourceEvent: "navigation",
-      title: "Navigate to " + beforeReady.verdict.sanitizedUrl,
-      instructions: "Navigate to " + beforeReady.verdict.sanitizedUrl + ".",
-      targetRect: null,
-      clickPoint: null,
-    });
-    const capturedInitialStep = await enqueueScreenshot((reserveSlot) =>
-      captureStep(initialJob, reserveSlot),
-    );
-    if (!capturedInitialStep) {
-      throw new Error(
-        "The selected page changed before KnowHow could capture the initial step.",
-      );
-    }
+    // No screenshot is taken here. A guide begins at the first thing the author
+    // actually does, and photographing the starting page before they have done
+    // anything only added a step showing an untouched page — while spending the
+    // slowest part of startup, and failing the whole capture if the page moved
+    // in the meantime. The starting URL is already recorded on the session, and
+    // the first click captures the page from the moment it matters.
     const statusResponse = await chrome.tabs.sendMessage(recording.tabId, {
       type: "KNOWHOW_SET_STATUS",
       status: CaptureStatus.RECORDING,
@@ -1588,6 +1611,40 @@ async function validateActiveCaptureTab(
   return { tab, verdict };
 }
 
+// Chrome refuses a visible-tab screenshot for reasons that clear on their own:
+// the two-per-second quota, a tab mid-drag, a window still animating in.
+// Surfacing those to the author as a failed step turns a transient condition
+// into a screenshot they have to retry by hand, so retry them here first.
+const TRANSIENT_CAPTURE_PATTERN =
+  /quota|cannot be edited right now|dragging|not ready|busy/i;
+const CAPTURE_RETRY_DELAYS_MS = [180, 420, 900];
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function captureVisibleFrameWithRetry(windowId) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/permission|activeTab|all_urls/i.test(message)) {
+        throw new Error(
+          "Chrome removed KnowHow's website access. Click Resume in the side panel and select Allow to continue.",
+        );
+      }
+      if (
+        attempt >= CAPTURE_RETRY_DELAYS_MS.length ||
+        !TRANSIENT_CAPTURE_PATTERN.test(message)
+      ) {
+        throw error;
+      }
+      await delay(CAPTURE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 async function captureVisiblePage(
   state,
   policy,
@@ -1614,19 +1671,7 @@ async function captureVisiblePage(
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     throw new Error("The active tab changed before screenshot capture began.");
   }
-  let dataUrl;
-  try {
-    dataUrl = await chrome.tabs.captureVisibleTab(state.windowId, {
-      format: "png",
-    });
-  } catch (error) {
-    if (/permission|activeTab|all_urls/i.test(String(error?.message || error))) {
-      throw new Error(
-        "Chrome removed KnowHow's website access. Click Resume in the side panel and select Allow to continue.",
-      );
-    }
-    throw error;
-  }
+  let dataUrl = await captureVisibleFrameWithRetry(state.windowId);
   if (windowActivationEpochs.current(state.windowId) !== activationEpoch) {
     dataUrl = null;
     throw new Error(
@@ -2017,7 +2062,13 @@ async function prepareCaptureFrame(message, sender) {
         deadlineRequired: false,
         hideLiveBlur: false,
       }),
-    { deadlineMs: 1_600 },
+    {
+      deadlineMs: 1_600,
+      priority: ScreenshotPriority.PREPARED,
+      // Only the newest pre-warm for a tab is worth taking. An older one still
+      // waiting for a slot photographs a page state the author already left.
+      supersedes: `prepared:${state.tabId}`,
+    },
   );
   if (!result) return { ok: false, abandoned: true };
   const storedNavigationKey = result.navigationKey || message.navigationKey;
@@ -2091,9 +2142,22 @@ function newestReusablePreparedFrame(state) {
   );
 }
 
+// Chrome caps captureVisibleTab near two calls a second, so a burst of clicks
+// cannot each get their own screenshot inside a tight deadline. Abandoning the
+// capture left the step with its text and no picture — and because an
+// unresolved step blocks Finish, the author had to retry or delete every one of
+// them by hand. Interaction captures already take priority in the queue, so
+// waiting a little longer for a slightly late frame beats having none: the step
+// still shows the page the author was working on.
+const INTERACTION_CAPTURE_DEADLINE_MS = 4_000;
+
 async function captureFallbackFrame(
   entryId,
-  { deadlineMs = 1_200, preparePage = false, hideLiveBlur = true } = {},
+  {
+    deadlineMs = INTERACTION_CAPTURE_DEADLINE_MS,
+    preparePage = false,
+    hideLiveBlur = true,
+  } = {},
 ) {
   const state = await getCaptureState();
   const entry = captureEntry(state, entryId);
@@ -2176,7 +2240,7 @@ async function captureFallbackFrame(
           hideLiveBlur,
         });
       },
-      { deadlineMs },
+      { deadlineMs, priority: ScreenshotPriority.INTERACTION },
     );
     let attachedId = result ? frameId : null;
     if (!attachedId) {
@@ -2185,6 +2249,25 @@ async function captureFallbackFrame(
     }
     if (attachedId) {
       await attachFrame(attachedId);
+    } else {
+      // Neither a fresh capture nor a recent frame was available. Say so on the
+      // entry instead of leaving it pending forever: an entry stuck in that
+      // state shows the author a step with no picture and silently blocks
+      // Finish until they notice and repair it themselves.
+      await withStateMutation(async () => {
+        const latest = await getCaptureState();
+        const current = captureEntry(latest, entryId);
+        if (!current || current.status !== CaptureEntryStatus.CAPTURING) {
+          return latest;
+        }
+        const failed = markCaptureEntryFailed(
+          latest,
+          entryId,
+          "The screenshot could not be taken in time. Retry this step from the side panel.",
+        );
+        await setCaptureState(failed);
+        return failed;
+      });
     }
     await sendToCapturedTab(state, {
       type: "KNOWHOW_RESTORE_PRIVACY_PREVIEW",
@@ -2351,11 +2434,14 @@ async function reconcileCaptureEntries({ workerRecovery = false } = {}) {
       await finalizeInteractionEntry(entry.id);
       continue;
     }
+    // Leave a pending capture alone until its own deadline has actually
+    // elapsed. Failing it earlier than the queue could possibly have served it
+    // is what turned a slow screenshot into a step the author had to repair.
     if (
       !workerRecovery &&
       entry.capturePending === true &&
       Date.now() - Number(entry.acceptedAtMs || 0) <=
-        CAPTURE_LIMITS.preparedFrameMaxAgeMs + 500
+        INTERACTION_CAPTURE_DEADLINE_MS + 1_000
     ) {
       continue;
     }
@@ -3079,8 +3165,9 @@ async function commitNavigationTransition(details, kind = "document") {
     await pauseCapture(verdict.reason);
     return null;
   }
+  let salvagedClickId = null;
   const transitioned = await withStateMutation(async () => {
-    const latest = await getCaptureState();
+    let latest = await getCaptureState();
     if (
       !isCollecting(latest) ||
       latest.acceptingEvents === false ||
@@ -3088,6 +3175,19 @@ async function commitNavigationTransition(details, kind = "document") {
       latest.tabId !== details.tabId
     ) {
       return null;
+    }
+    // The click that triggered this navigation may have lost its commit when
+    // the page went away. Adopt it now, before the transition clears the
+    // prepared frames it was going to use.
+    const unconfirmed = unconfirmedClickEntryAt(latest, {
+      tabId: details.tabId,
+    });
+    if (unconfirmed) {
+      salvagedClickId = unconfirmed.id;
+      latest = noteClickInteraction(
+        updateCaptureEntry(latest, unconfirmed.id, { committed: true }),
+        { tabId: latest.tabId },
+      );
     }
     const transitionId = Math.max(
       0,
@@ -3129,6 +3229,12 @@ async function commitNavigationTransition(details, kind = "document") {
     return next;
   });
   if (!transitioned) return null;
+  if (salvagedClickId) {
+    const salvaged = captureEntry(transitioned, salvagedClickId);
+    if (salvaged?.status === CaptureEntryStatus.CAPTURING) {
+      void finalizeInteractionEntry(salvagedClickId);
+    }
+  }
   await retainCaptureFrames(transitioned);
   try {
     await injectCaptureContent(
@@ -3232,7 +3338,7 @@ async function attachSettledFrameToLastClick(details) {
           reserveSlot,
           deadlineRequired: false,
         }),
-      { deadlineMs: 1_600 },
+      { deadlineMs: 1_600, priority: ScreenshotPriority.NAVIGATION },
     );
     if (!result) return false;
     const attached = await withStateMutation(async () => {
@@ -3335,9 +3441,17 @@ async function warmDestinationPreparedFrame(state, context, details) {
           documentId,
           reserveSlot,
           deadlineRequired: false,
-          hideLiveBlur: false,
+          // This frame is what the next click on the destination page adopts,
+          // so KnowHow's own on-page UI has to be out of shot. The hide and
+          // restore land during a navigation the author is already watching
+          // change, so unlike the per-click path there is nothing to flicker.
+          hideLiveBlur: true,
         }),
-      { deadlineMs: 1_600 },
+      {
+        deadlineMs: 1_600,
+        priority: ScreenshotPriority.PREPARED,
+        supersedes: `prepared:${state.tabId}`,
+      },
     );
     if (!result) return;
     await withStateMutation(async () => {
@@ -3570,7 +3684,10 @@ async function recordNavigationDestination(
     stepId,
   });
   try {
-    return await enqueueScreenshot((reserveSlot) => captureStep(job, reserveSlot));
+    return await enqueueScreenshot(
+      (reserveSlot) => captureStep(job, reserveSlot),
+      { priority: ScreenshotPriority.NAVIGATION },
+    );
   } catch {
     return false;
   }

@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -20,12 +20,12 @@ use self::frames::{DesktopFrame, FrameHub};
 use crate::{
     model::{
         Bounds, CapturedStep, DesktopScope, MAX_SCREENSHOT_BYTES, MAX_STEPS, RecorderSettings,
-        ServerAnnotation, ServerCrop,
+        ServerAnnotation, ServerCrop, SmartBlurSettings,
     },
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
-        PointerButton, PrivacyRegion, RawEvent, RawInputRegistration, UiAutomationClient,
-        event_sender_capacity, excluded_regions, foreground_context, monitor_descriptors,
+        PointerButton, PrivacyRegion, RawEvent, RawInputEvent, RawInputRegistration,
+        UiAutomationClient, excluded_regions, foreground_context, monitor_descriptors,
         scope_accepts,
     },
 };
@@ -33,6 +33,18 @@ use crate::{
 type StepCallback = Arc<dyn Fn(CapturedStep, Vec<u8>) + Send + Sync>;
 type StatusCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+// Each queued emission pins its own full-resolution display frame — tens of
+// megabytes apiece — until the image worker reaches it. Queueing a hundred of
+// them would pin gigabytes, so the pipeline pushes back on the action thread
+// instead. That is safe now that raw input is never dropped: the author keeps
+// clicking, the events wait their turn in an unbounded channel, and each one
+// still carries the timestamp that picks its own pre-action frame.
+const MAX_PENDING_EMISSIONS: usize = 6;
+// A display ring can be momentarily empty — DXGI reconnecting after a mode
+// change, a capture thread restarting. An action that arrives in that window
+// still happened, so it waits for the next frame instead of being dropped.
+const FRAME_RETRY_INTERVAL: Duration = Duration::from_millis(60);
+const MAX_FRAME_RETRIES: u8 = 8;
 const MAX_PROCESSING_WIDTH: u32 = 1920;
 const MAX_PROCESSING_HEIGHT: u32 = 1080;
 
@@ -40,7 +52,7 @@ pub struct CaptureEngine {
     accepting: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
     raw_input: Option<NativeRawInput>,
-    event_sender: Option<SyncSender<RawEvent>>,
+    event_sender: Option<Sender<RawInputEvent>>,
     frames: Arc<Mutex<FrameHub>>,
     processor: Option<JoinHandle<()>>,
     complete: Receiver<()>,
@@ -59,7 +71,9 @@ impl CaptureEngine {
             monitors,
             Arc::clone(&on_status),
         )?));
-        let (sender, receiver) = mpsc::sync_channel(event_sender_capacity());
+        // Unbounded: see `send_raw_event`. Input the author produced must never be
+        // discarded because the processor is briefly busy.
+        let (sender, receiver) = mpsc::channel();
         let raw_input = NativeRawInput::start(sender.clone())?;
         let accepting = Arc::new(AtomicBool::new(true));
         let paused = Arc::new(AtomicBool::new(start_paused));
@@ -165,12 +179,22 @@ struct PendingPointer {
     privacy_regions: Vec<PrivacyRegion>,
 }
 
+/// A keyboard action whose screenshot has to wait for the destination
+/// application to paint its result — a paste landing, a dialog opening, a
+/// window coming forward after Alt+Tab.
+struct PendingKeyboard {
+    action: MeaningfulAction,
+    deadline: Instant,
+    retries: u8,
+}
+
 #[derive(Clone)]
 struct PendingText {
     before: ElementMetadata,
     foreground: ForegroundContext,
     activity_count: usize,
     deadline: Instant,
+    retries: u8,
 }
 
 enum MeaningfulAction {
@@ -211,7 +235,7 @@ struct EmissionPipeline {
 
 impl EmissionPipeline {
     fn start(on_step: StepCallback, on_status: StatusCallback) -> Result<Self> {
-        let (sender, receiver) = mpsc::sync_channel(MAX_STEPS);
+        let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_EMISSIONS);
         let worker = thread::Builder::new()
             .name("knowhow-image-processor".to_owned())
             .spawn(move || process_emissions(receiver, on_step, on_status))?;
@@ -245,6 +269,7 @@ struct ProcessorState {
     pending_pointer: Option<PendingPointer>,
     pending_click: Option<PendingPointer>,
     pending_text: Option<PendingText>,
+    pending_keyboard: Option<PendingKeyboard>,
     last_focus: Option<ElementMetadata>,
     last_focus_poll: Instant,
     last_signature: Option<(String, Instant)>,
@@ -253,7 +278,7 @@ struct ProcessorState {
 
 #[allow(clippy::too_many_arguments)]
 fn process_actions(
-    receiver: Receiver<RawEvent>,
+    receiver: Receiver<RawInputEvent>,
     scope: DesktopScope,
     settings: RecorderSettings,
     accepting: Arc<AtomicBool>,
@@ -278,6 +303,7 @@ fn process_actions(
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
+        pending_keyboard: None,
         last_focus: uia.focused_element_semantic().ok(),
         last_focus_poll: Instant::now(),
         last_signature: None,
@@ -289,7 +315,7 @@ fn process_actions(
             &mut state, &uia, &scope, &settings, &frames, &order, &emissions, &on_status,
         );
         match receiver.recv_timeout(Duration::from_millis(35)) {
-            Ok(event) => {
+            Ok(RawInputEvent { at, event }) => {
                 if handle_control_event(&event, &mut state, &on_status) {
                     continue;
                 }
@@ -297,7 +323,7 @@ fn process_actions(
                     continue;
                 }
                 handle_event(
-                    event, &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
+                    event, at, &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
                     &on_status,
                 );
             }
@@ -322,7 +348,7 @@ fn process_actions(
 
 #[allow(clippy::too_many_arguments)]
 fn process_without_uia(
-    receiver: Receiver<RawEvent>,
+    receiver: Receiver<RawInputEvent>,
     scope: DesktopScope,
     settings: RecorderSettings,
     _accepting: Arc<AtomicBool>,
@@ -348,6 +374,7 @@ fn process_without_uia(
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
+        pending_keyboard: None,
         last_focus: None,
         last_focus_poll: Instant::now(),
         last_signature: None,
@@ -355,7 +382,7 @@ fn process_without_uia(
     };
     let order = AtomicUsize::new(0);
     loop {
-        let event = match receiver.recv_timeout(Duration::from_millis(50)) {
+        let RawInputEvent { at, event } = match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 flush_due(
@@ -372,7 +399,7 @@ fn process_without_uia(
             continue;
         }
         handle_event(
-            event, &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
+            event, at, &mut state, &uia, &scope, &settings, &frames, &order, emissions, on_status,
         );
     }
     flush_all(
@@ -395,6 +422,7 @@ fn handle_control_event(
             state.pending_pointer = None;
             state.pending_click = None;
             state.pending_text = None;
+            state.pending_keyboard = None;
             status("Windows is locked. Activity is excluded.".to_owned());
             true
         }
@@ -410,6 +438,7 @@ fn handle_control_event(
 #[allow(clippy::too_many_arguments)]
 fn handle_event<U: UiAutomationClient>(
     event: RawEvent,
+    at: Instant,
     state: &mut ProcessorState,
     uia: &U,
     scope: &DesktopScope,
@@ -419,6 +448,11 @@ fn handle_event<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    // Steps are recorded in the order the author performed them, so anything
+    // still parked is emitted before the event that arrived after it.
+    flush_keyboard(
+        state, uia, scope, settings, frames, order, emissions, on_status,
+    );
     match event {
         RawEvent::PointerDown { button, x, y } => {
             // A pointer action closes the previous typing group. This preserves the user's
@@ -426,7 +460,9 @@ fn handle_event<U: UiAutomationClient>(
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
             );
-            let now = Instant::now();
+            // The moment the button actually went down, not the moment this
+            // handler reached it: the pre-action frame is chosen against it.
+            let now = at;
             let Ok(foreground) = foreground_context() else {
                 on_status("Protected or secure-desktop activity is excluded.".to_owned());
                 return;
@@ -435,7 +471,14 @@ fn handle_event<U: UiAutomationClient>(
                 on_status("Activity outside the selected scope is ignored.".to_owned());
                 return;
             }
-            let Some(frame) = frames.lock().newest_before(&foreground.monitor_id, now) else {
+            let Some(frame) = ({
+                // Full-rate display mirroring follows the author. Other displays
+                // keep a slower ring that is still fresh enough to serve a click
+                // the moment they move there.
+                let hub = frames.lock();
+                hub.note_active_monitor(&foreground.monitor_id);
+                hub.newest_before(&foreground.monitor_id, now)
+            }) else {
                 on_status("Waiting for a safe display frame…".to_owned());
                 return;
             };
@@ -461,7 +504,7 @@ fn handle_event<U: UiAutomationClient>(
                 return;
             }
             state.last_focus = Some(pointer.metadata.clone());
-            state.last_focus_poll = Instant::now();
+            state.last_focus_poll = at;
             let distance = squared_distance(pointer.point, (x, y));
             if button == PointerButton::Left && distance > 64 {
                 emit(
@@ -528,7 +571,7 @@ fn handle_event<U: UiAutomationClient>(
             if let Some(click) = state.pending_click.take() {
                 emit_pending_click(click, settings, order, emissions, on_status);
             }
-            let now = Instant::now();
+            let now = at;
             if let Some(pending) = &mut state.pending_text {
                 pending.activity_count = pending.activity_count.saturating_add(1);
                 pending.deadline = now + Duration::from_millis(450);
@@ -555,6 +598,7 @@ fn handle_event<U: UiAutomationClient>(
                 foreground,
                 activity_count: 1,
                 deadline: now + Duration::from_millis(450),
+                retries: 0,
             });
         }
         RawEvent::Enter | RawEvent::Tab => {
@@ -564,7 +608,10 @@ fn handle_event<U: UiAutomationClient>(
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
             );
-            emit_keyboard_action(
+            // Enter and Tab need no settle delay, but they do need a display
+            // frame. If the ring is momentarily empty the action is parked and
+            // retried on the next pass rather than dropped.
+            if let Some(action) = emit_keyboard_action(
                 if matches!(event, RawEvent::Enter) {
                     MeaningfulAction::Enter
                 } else {
@@ -577,7 +624,13 @@ fn handle_event<U: UiAutomationClient>(
                 order,
                 emissions,
                 on_status,
-            );
+            ) {
+                state.pending_keyboard = Some(PendingKeyboard {
+                    action,
+                    deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+                    retries: 0,
+                });
+            }
         }
         RawEvent::Shortcut(shortcut) => {
             if let Some(click) = state.pending_click.take() {
@@ -594,44 +647,39 @@ fn handle_event<U: UiAutomationClient>(
             ) {
                 return;
             }
-            if shortcut == "Alt+Tab" || shortcut.starts_with("Win+") {
-                thread::sleep(Duration::from_millis(220));
-                emit_keyboard_action(
-                    MeaningfulAction::AppSwitch,
-                    uia,
-                    scope,
-                    settings,
-                    frames,
-                    order,
-                    emissions,
-                    on_status,
-                );
-            } else {
-                // Raw Input reports the chord without delaying the user's key path. Let the
-                // destination application paint selection/copy/paste state before choosing the
-                // screenshot that represents the action.
-                thread::sleep(if is_paste_shortcut(&shortcut) {
-                    Duration::from_millis(180)
-                } else {
-                    Duration::from_millis(90)
-                });
-                emit_keyboard_action(
+            // Raw Input reports the chord without delaying the user's key path. The
+            // destination application still needs a moment to paint the result before
+            // the screenshot that represents the action is chosen — but sleeping here
+            // would stall the whole processor, and every click the author made during
+            // that stall would be recorded late or, when the queue was bounded, not at
+            // all. The action is parked with a deadline instead and the loop keeps
+            // draining input.
+            let (action, settle) = if shortcut == "Alt+Tab" || shortcut.starts_with("Win+") {
+                (MeaningfulAction::AppSwitch, Duration::from_millis(220))
+            } else if is_paste_shortcut(&shortcut) {
+                (
                     MeaningfulAction::Shortcut(shortcut),
-                    uia,
-                    scope,
-                    settings,
-                    frames,
-                    order,
-                    emissions,
-                    on_status,
-                );
-            }
+                    Duration::from_millis(180),
+                )
+            } else {
+                (
+                    MeaningfulAction::Shortcut(shortcut),
+                    Duration::from_millis(90),
+                )
+            };
+            state.pending_keyboard = Some(PendingKeyboard {
+                action,
+                deadline: at + settle,
+                retries: 0,
+            });
         }
         RawEvent::DisplayChanged | RawEvent::SessionLocked | RawEvent::SessionUnlocked => {}
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Emits a keyboard action, or hands it back when no display frame is
+/// available yet so the caller can try again rather than lose the step.
 fn emit_keyboard_action<U: UiAutomationClient>(
     action: MeaningfulAction,
     uia: &U,
@@ -641,18 +689,22 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
-) {
+) -> Option<MeaningfulAction> {
     let Ok(foreground) = foreground_context() else {
         on_status("Protected or secure-desktop activity is excluded.".to_owned());
-        return;
+        return None;
     };
     if !scope_accepts(scope, &foreground, None) {
         on_status("Activity outside the selected scope is ignored.".to_owned());
-        return;
+        return None;
     }
-    let Some(frame) = frames.lock().latest(&foreground.monitor_id) else {
+    let Some(frame) = ({
+        let hub = frames.lock();
+        hub.note_active_monitor(&foreground.monitor_id);
+        hub.latest(&foreground.monitor_id)
+    }) else {
         on_status("Waiting for a safe display frame…".to_owned());
-        return;
+        return Some(action);
     };
     let metadata = uia
         .focused_element_semantic()
@@ -670,6 +722,50 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         emissions,
         on_status,
     );
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_keyboard<U: UiAutomationClient>(
+    state: &mut ProcessorState,
+    uia: &U,
+    scope: &DesktopScope,
+    settings: &RecorderSettings,
+    frames: &Arc<Mutex<FrameHub>>,
+    order: &AtomicUsize,
+    emissions: &EmissionPipeline,
+    on_status: &StatusCallback,
+) {
+    let Some(pending) = state.pending_keyboard.take() else {
+        return;
+    };
+    let PendingKeyboard {
+        action, retries, ..
+    } = pending;
+    // A returned action means the display ring had nothing to photograph yet.
+    if let Some(action) = emit_keyboard_action(
+        action, uia, scope, settings, frames, order, emissions, on_status,
+    ) {
+        if retries >= MAX_FRAME_RETRIES {
+            on_status(
+                "A keyboard action could not be captured: no display frame was available."
+                    .to_owned(),
+            );
+            return;
+        }
+        state.pending_keyboard = Some(PendingKeyboard {
+            action,
+            deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+            retries: retries + 1,
+        });
+    }
+}
+
+fn keyboard_action_is_due(state: &ProcessorState) -> bool {
+    state
+        .pending_keyboard
+        .as_ref()
+        .is_some_and(|pending| pending.deadline <= Instant::now())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -683,6 +779,11 @@ fn flush_due<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    if keyboard_action_is_due(state) {
+        flush_keyboard(
+            state, uia, scope, settings, frames, order, emissions, on_status,
+        );
+    }
     if state
         .pending_click
         .as_ref()
@@ -713,6 +814,9 @@ fn flush_all<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    flush_keyboard(
+        state, uia, scope, settings, frames, order, emissions, on_status,
+    );
     if let Some(click) = state.pending_click.take() {
         emit_pending_click(click, settings, order, emissions, on_status);
     }
@@ -781,13 +885,30 @@ fn flush_text<U: UiAutomationClient>(
         .focused_element()
         .unwrap_or_else(|_| fallback_metadata(&pending.foreground));
     state.last_focus = Some(after.clone());
-    let foreground = foreground_context().unwrap_or(pending.foreground);
+    let foreground = foreground_context().unwrap_or_else(|_| pending.foreground.clone());
     if !scope_accepts(scope, &foreground, None) {
         on_status("Activity outside the selected scope is ignored.".to_owned());
         return;
     }
-    let Some(frame) = frames.lock().latest(&foreground.monitor_id) else {
+    let Some(frame) = ({
+        let hub = frames.lock();
+        hub.note_active_monitor(&foreground.monitor_id);
+        hub.latest(&foreground.monitor_id)
+    }) else {
+        // The author's typing is already recorded in `pending`; putting it back
+        // is the difference between a late step and a missing one.
+        if pending.retries >= MAX_FRAME_RETRIES {
+            on_status(
+                "Typed text could not be captured: no display frame was available.".to_owned(),
+            );
+            return;
+        }
         on_status("Waiting for a stable post-entry frame…".to_owned());
+        state.pending_text = Some(PendingText {
+            deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+            retries: pending.retries + 1,
+            ..pending
+        });
         return;
     };
     let exact_text = if settings.capture_typed_text
@@ -874,8 +995,16 @@ fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status
         privacy_regions,
         settings,
     } = emission;
-    let (title, instructions, source_event) =
-        deterministic_instruction(&action, &metadata, &foreground, exact_text.as_deref());
+    // Redacted once, then reused for both the instruction text and the stored
+    // exact-text field, so the two can never disagree about what was scrubbed.
+    let exact_text = exact_text.map(|text| redact_sensitive_text(&text, &settings.smart_blur));
+    let (title, instructions, source_event) = deterministic_instruction(
+        &action,
+        &metadata,
+        &foreground,
+        exact_text.as_deref(),
+        &settings.smart_blur,
+    );
     let annotations = annotations(&action, &metadata, &frame);
     let crop = contextual_crop(&action, &metadata, &frame);
     match rasterize(
@@ -954,23 +1083,31 @@ fn deterministic_instruction(
     metadata: &ElementMetadata,
     foreground: &ForegroundContext,
     exact_text: Option<&str>,
+    blur: &SmartBlurSettings,
 ) -> (String, String, &'static str) {
     let application = if metadata.application_name.is_empty() {
         &foreground.application_name
     } else {
         &metadata.application_name
     };
-    let location = if metadata.window_title.trim().is_empty()
-        || metadata.window_title.eq_ignore_ascii_case(application)
-    {
-        application.to_owned()
-    } else {
-        format!("{} in {application}", truncate(&metadata.window_title, 80))
-    };
-    let target = metadata
+    // Window titles and control labels are arbitrary on-screen text — whatever
+    // an app's accessibility tree happens to expose as a Name, which can carry
+    // anything the author was looking at. Smart Blur's content heuristics
+    // already decide what counts as sensitive for the image; running the same
+    // decision over this text is what keeps the two promises in sync.
+    let window_title = redact_sensitive_text(&metadata.window_title, blur);
+    let location =
+        if window_title.trim().is_empty() || window_title.eq_ignore_ascii_case(application) {
+            application.to_owned()
+        } else {
+            format!("{} in {application}", truncate(&window_title, 80))
+        };
+    let raw_target = metadata
         .control_label
         .as_deref()
         .filter(|label| !label.trim().is_empty());
+    let redacted_label = raw_target.map(|label| redact_sensitive_text(label, blur));
+    let target = redacted_label.as_deref();
     let role = metadata.control_role.as_deref().unwrap_or("control");
     let described = target
         .map(|label| format!("the “{}” {role}", truncate(label, 120)))
@@ -981,7 +1118,9 @@ fn deterministic_instruction(
             destination_application,
             ..
         } => {
-            let opens_start = target.is_some_and(|label| {
+            // Checked against the original label, ahead of redaction, so this
+            // comparison never depends on what the heuristics below did to it.
+            let opens_start = raw_target.is_some_and(|label| {
                 matches!(
                     label.trim().to_ascii_lowercase().as_str(),
                     "start" | "windows"
@@ -1421,6 +1560,126 @@ fn looks_like_identifier(value: &str) -> bool {
         && !value.contains(' ')
 }
 
+/// A maximal non-whitespace run in `text`, with its byte range.
+struct TextToken<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
+fn tokenize(text: &str) -> Vec<TextToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (index, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if let Some(begin) = start.take() {
+                tokens.push(TextToken {
+                    text: &text[begin..index],
+                    start: begin,
+                    end: index,
+                });
+            }
+        } else if start.is_none() {
+            start = Some(index);
+        }
+    }
+    if let Some(begin) = start {
+        tokens.push(TextToken {
+            text: &text[begin..],
+            start: begin,
+            end: text.len(),
+        });
+    }
+    tokens
+}
+
+/// True for a token made only of digits and the punctuation a phone number or
+/// a plain amount can contain. Used only to decide whether an adjacent token
+/// may extend a candidate run — never to redact on its own — so it can be
+/// permissive without risking pulling a real word into a run.
+fn is_numeric_run_token(word: &str) -> bool {
+    !word.is_empty()
+        && word.chars().any(|character| character.is_ascii_digit())
+        && word
+            .chars()
+            .all(|character| matches!(character, '0'..='9' | '+' | '(' | ')' | '-' | '.'))
+}
+
+fn is_financial_marker_token(word: &str) -> bool {
+    word.contains('$')
+        || word.contains('€')
+        || word.contains('£')
+        || word.to_ascii_lowercase().contains("qar")
+}
+
+/// Redacts substrings that Smart Blur's existing content heuristics
+/// (`looks_like_email` and friends) would flag, using those exact predicates
+/// so text redaction and image redaction never disagree about what counts as
+/// sensitive — this is what `should_smart_blur` already applies to
+/// screenshot pixels; nothing analogous ran over instruction/typed-text
+/// strings before this function existed.
+///
+/// A phone number or a monetary amount often spans more than one
+/// whitespace-delimited token (`"+974 5555 0101"`), so adjacent
+/// numeric/currency tokens are merged into one candidate before the
+/// predicate is applied. Email addresses and long identifiers never contain
+/// whitespace, so each token is also tested on its own. Only the four
+/// content-based detectors apply here — `formFields`/`images`/`tableRows`
+/// are UI-role gates and `longText` is a pure length gate, neither of which
+/// says anything meaningful about a free-form sentence; applying `longText`
+/// in particular would redact almost any real typed sentence, so it is
+/// deliberately not included.
+fn redact_sensitive_text(text: &str, blur: &SmartBlurSettings) -> String {
+    if !(blur.emails || blur.phone_numbers || blur.financial_numbers || blur.identifiers) {
+        return text.to_owned();
+    }
+    let tokens = tokenize(text);
+    if tokens.is_empty() {
+        return text.to_owned();
+    }
+    let mut redacted = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut index = 0;
+    while index < tokens.len() {
+        let start_token = &tokens[index];
+        let mut run_end = index;
+        if is_numeric_run_token(start_token.text) || is_financial_marker_token(start_token.text) {
+            run_end = index + 1;
+            while run_end < tokens.len()
+                && (is_numeric_run_token(tokens[run_end].text)
+                    || is_financial_marker_token(tokens[run_end].text))
+            {
+                run_end += 1;
+            }
+        }
+        if run_end > index + 1 {
+            let run = &text[start_token.start..tokens[run_end - 1].end];
+            let matched = (blur.phone_numbers && looks_like_phone(run))
+                || (blur.financial_numbers && looks_like_financial(run));
+            if matched {
+                redacted.push_str(&text[cursor..start_token.start]);
+                redacted.push_str("[redacted]");
+                cursor = tokens[run_end - 1].end;
+                index = run_end;
+                continue;
+            }
+        }
+        let word = start_token.text;
+        let matched = (blur.emails && looks_like_email(word))
+            || (blur.identifiers && looks_like_identifier(word))
+            || (blur.phone_numbers && looks_like_phone(word))
+            || (blur.financial_numbers && looks_like_financial(word));
+        if matched {
+            redacted.push_str(&text[cursor..start_token.start]);
+            redacted.push_str("[redacted]");
+            cursor = start_token.end;
+        }
+        index += 1;
+    }
+    redacted.push_str(&text[cursor..]);
+    redacted
+}
+
 fn global_to_image_bounds(bounds: Bounds, frame: &DesktopFrame) -> Option<Bounds> {
     let intersection = bounds.intersection(frame.monitor_bounds)?;
     let scale_x = f64::from(frame.width) / f64::from(frame.monitor_bounds.width.max(1));
@@ -1464,7 +1723,12 @@ fn blur_region(image: &mut RgbaImage, bounds: Bounds) {
     let width = bounds.width.min(image.width().saturating_sub(x));
     let height = bounds.height.min(image.height().saturating_sub(y));
     let source = imageops::crop_imm(image, x, y, width, height).to_image();
-    let blurred = imageops::blur(&source, 16.0);
+    // A true Gaussian blur costs work proportional to the kernel radius, and at
+    // this radius a screenshot with a few dozen covered regions took seconds to
+    // process — long enough for the step feed to fall behind the author. This
+    // approximation runs three box passes in time independent of the radius and
+    // is visually indistinguishable at these sizes.
+    let blurred = imageops::fast_blur(&source, 16.0);
     imageops::replace(image, &blurred, i64::from(x), i64::from(y));
 }
 
@@ -1567,10 +1831,10 @@ mod tests {
     use super::{
         MeaningfulAction, contextual_crop_for_geometry, deterministic_instruction, encode_bounded,
         inserted_text, is_duplicate, looks_like_email, looks_like_phone, processing_dimensions,
-        shortcut_instruction, should_smart_blur, verified_inserted_text,
+        redact_sensitive_text, shortcut_instruction, should_smart_blur, verified_inserted_text,
     };
     use crate::{
-        model::{Bounds, RecorderSettings},
+        model::{Bounds, RecorderSettings, SmartBlurSettings},
         platform::{ElementMetadata, ForegroundContext, PasswordStatus},
     };
     use image::{Rgba, RgbaImage};
@@ -1579,7 +1843,9 @@ mod tests {
     #[test]
     fn processed_rgba_frames_encode_as_jpeg() {
         let image = RgbaImage::from_pixel(64, 48, Rgba([32, 64, 96, 255]));
-        let (jpeg, width, height) = encode_bounded(image).expect("encode screenshot");
+        let Ok((jpeg, width, height)) = encode_bounded(image) else {
+            panic!("a solid RGBA frame must encode as JPEG");
+        };
         assert_eq!((width, height), (64, 48));
         assert!(jpeg.starts_with(&[0xff, 0xd8]));
     }
@@ -1593,8 +1859,9 @@ mod tests {
 
     #[test]
     fn desktop_clicks_receive_the_browser_style_contextual_crop() {
-        let crop =
-            contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440).expect("click crop");
+        let Some(crop) = contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440) else {
+            panic!("an ultrawide click must produce a contextual crop");
+        };
         assert!(crop.width < 0.4);
         assert!(crop.x <= 0.72 && crop.x + crop.width >= 0.72);
         assert!(crop.y <= 0.44 && crop.y + crop.height >= 0.44);
@@ -1683,6 +1950,7 @@ mod tests {
             protected: false,
             elevated: false,
         };
+        let no_blur = SmartBlurSettings::default();
         let start = deterministic_instruction(
             &MeaningfulAction::LeftClick {
                 point: (24, 1050),
@@ -1692,6 +1960,7 @@ mod tests {
             &metadata,
             &foreground,
             None,
+            &no_blur,
         );
         assert_eq!(start.0, "Open Start");
         assert_eq!(start.2, "left-click");
@@ -1708,6 +1977,7 @@ mod tests {
             },
             &foreground,
             None,
+            &no_blur,
         );
         assert_eq!(open_word.0, "Open Microsoft Word");
         assert_eq!(open_word.2, "left-click");
@@ -1733,6 +2003,124 @@ mod tests {
         assert!(looks_like_email("author@example.com"));
         assert!(looks_like_phone("+974 5555 0101"));
         assert!(!looks_like_phone("Step 12"));
+    }
+
+    #[test]
+    fn text_redaction_uses_the_same_heuristics_as_image_blurring() {
+        let mut blur = SmartBlurSettings::default();
+
+        // Off by default: nothing is redacted until the author turns a
+        // detector on, exactly like the image path.
+        assert_eq!(
+            redact_sensitive_text("Contact author@example.com for access", &blur),
+            "Contact author@example.com for access",
+        );
+
+        blur.emails = true;
+        assert_eq!(
+            redact_sensitive_text("Contact author@example.com for access", &blur),
+            "Contact [redacted] for access",
+        );
+
+        // A phone number spanning multiple whitespace-delimited tokens is
+        // redacted as one unit, matching the existing looks_like_phone
+        // fixture shape.
+        blur = SmartBlurSettings {
+            phone_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Call +974 5555 0101 today", &blur),
+            "Call [redacted] today",
+        );
+        assert_eq!(
+            redact_sensitive_text("Step 12 of 40", &blur),
+            "Step 12 of 40",
+            "short numbers that don't look like a phone number are left alone",
+        );
+
+        blur = SmartBlurSettings {
+            financial_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Enter $4,500.00 as the amount", &blur),
+            "Enter [redacted] as the amount",
+        );
+
+        blur = SmartBlurSettings {
+            identifiers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Order ABCD1234EFGH shipped", &blur),
+            "Order [redacted] shipped",
+        );
+
+        // Multiple independent matches in one string.
+        blur = SmartBlurSettings {
+            emails: true,
+            phone_numbers: true,
+            ..SmartBlurSettings::default()
+        };
+        assert_eq!(
+            redact_sensitive_text("Reach author@example.com or +974 5555 0101", &blur),
+            "Reach [redacted] or [redacted]",
+        );
+    }
+
+    #[test]
+    fn instruction_text_is_redacted_like_the_screenshot_is() {
+        // The regression this fix exists for: a UI Automation accessible
+        // name that happens to carry an email address must not appear
+        // verbatim in the step's title/instructions when the matching Smart
+        // Blur detector is on, exactly as it would already be masked in the
+        // screenshot pixels.
+        let metadata = ElementMetadata {
+            application_name: "Mail".to_owned(),
+            window_title: String::new(),
+            control_role: Some("button".to_owned()),
+            control_label: Some("author@example.com".to_owned()),
+            bounds: None,
+            password_status: PasswordStatus::NotPassword,
+            value: None,
+            window_id: "1".to_owned(),
+            process_id: 1,
+        };
+        let foreground = ForegroundContext {
+            application_name: "Mail".to_owned(),
+            window_title: "Mail".to_owned(),
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            window_id: "1".to_owned(),
+            root_owner_id: "1".to_owned(),
+            process_id: 1,
+            monitor_id: "display-1".to_owned(),
+            protected: false,
+            elevated: false,
+        };
+        let blur = SmartBlurSettings {
+            emails: true,
+            ..SmartBlurSettings::default()
+        };
+        let (title, instructions, _) = deterministic_instruction(
+            &MeaningfulAction::LeftClick {
+                point: (10, 10),
+                double: false,
+                destination_application: None,
+            },
+            &metadata,
+            &foreground,
+            None,
+            &blur,
+        );
+        assert!(!title.contains("author@example.com"));
+        assert!(!instructions.contains("author@example.com"));
+        assert!(instructions.contains("[redacted]"));
     }
 
     #[test]

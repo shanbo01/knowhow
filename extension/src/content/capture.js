@@ -29,9 +29,43 @@
   const POINTER_COMMIT_WINDOW_MS = 3_000;
   const DOUBLE_CLICK_WINDOW_MS = 420;
   const PREPARED_FRAME_MAX_AGE_MS = 2_000;
+  // Chrome allows two captureVisibleTab calls per second across the whole
+  // extension. Pre-warming a frame is speculative work, so it must leave most
+  // of that budget for the screenshot that belongs to a click the author
+  // actually made. These bounds keep pre-warming to roughly one capture per
+  // second on a busy page instead of one per DOM mutation batch.
+  const PREPARED_FRAME_QUIET_MS = 220;
+  const PREPARED_FRAME_MAX_WAIT_MS = 700;
+  const PREPARED_FRAME_MIN_SPACING_MS = 600;
+  let lastPreparedFrameAt = 0;
+  let preparedFrameWantedSince = 0;
 
-  function send(message) {
-    return chrome.runtime.sendMessage(message).catch(() => null);
+  // A message that never reaches the worker is a step the author performed and
+  // KnowHow silently forgot. Manifest V3 tears the worker down aggressively, so
+  // the first send after an idle moment routinely rejects with "Could not
+  // establish connection" while Chrome is still booting it back up. Every
+  // handler on the other side is keyed by interactionId and is idempotent, so a
+  // retried message either lands first or is a no-op.
+  const FATAL_SEND_PATTERN = /context invalidated|Extension context/i;
+  const SEND_RETRY_DELAYS_MS = [20, 60, 180, 400];
+
+  function sleep(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  async function send(message, { retries = SEND_RETRY_DELAYS_MS.length } = {}) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await chrome.runtime.sendMessage(message);
+        if (response !== undefined) return response;
+      } catch (error) {
+        // The extension was reloaded or disabled: this document's script is
+        // orphaned and no retry can succeed.
+        if (FATAL_SEND_PATTERN.test(String(error?.message || error))) return null;
+      }
+      if (attempt >= retries) return null;
+      await sleep(SEND_RETRY_DELAYS_MS[attempt] ?? 400);
+    }
   }
 
   function sanitizedText(value) {
@@ -1074,6 +1108,8 @@
   let pickerToolbar = null;
   let lastPointerPoint = null;
   let privacyVeilEl = null;
+  let hoverTargetEl = null;
+  let hoverTargetElement = null;
 
   const NUMBER_POLICY_KEYS = [
     "redactAllNumbers",
@@ -1416,6 +1452,9 @@
     }
     liveOverlayScrolling = true;
     updateBlurReveal(null);
+    // The outline is anchored to viewport coordinates that scrolling
+    // invalidates; the next pointer move re-places it against the element.
+    updateHoverTarget(null);
     blurPreviewRoot?.setAttribute("data-knowhow-scrolling", "true");
     for (const host of scrollerOverlayHosts.values()) {
       host.setAttribute("data-knowhow-scrolling", "true");
@@ -2123,21 +2162,80 @@
     syncBlurCoverageCopy();
   }
 
+  /**
+   * Outlines the element a click would record, so the author can see what
+   * KnowHow is about to capture before committing to it. Purely an on-page
+   * affordance: it is never part of a screenshot, because every capture path
+   * hides the overlays first.
+   */
+  function updateHoverTarget(element) {
+    if (
+      !element ||
+      state.status !== "recording" ||
+      pickerActive ||
+      blurPreviewSuspended
+    ) {
+      if (hoverTargetEl) hoverTargetEl.style.opacity = "0";
+      hoverTargetElement = null;
+      return;
+    }
+    // Only the element under the pointer changing is worth a reposition. This
+    // runs off pointermove, so it deliberately avoids the mask pipeline's
+    // occlusion and overflow work — a plain clipped client rect is all an
+    // outline needs.
+    if (element === hoverTargetElement) return;
+    const box = element.getBoundingClientRect();
+    const left = Math.max(0, box.left);
+    const top = Math.max(0, box.top);
+    const width = Math.min(innerWidth, box.right) - left;
+    const height = Math.min(innerHeight, box.bottom) - top;
+    if (!(width >= 3 && height >= 3)) {
+      if (hoverTargetEl) hoverTargetEl.style.opacity = "0";
+      hoverTargetElement = null;
+      return;
+    }
+    const rect = { x: left, y: top, width, height };
+    if (!hoverTargetEl?.isConnected) {
+      const root = document.body || document.documentElement;
+      if (!root) return;
+      const outline = document.createElement("div");
+      outline.dataset.knowhowOverlay = "hover-target";
+      outline.setAttribute("aria-hidden", "true");
+      root.append(outline);
+      hoverTargetEl = outline;
+    }
+    hoverTargetElement = element;
+    hoverTargetEl.style.opacity = "1";
+    hoverTargetEl.style.left = `${rect.x}px`;
+    hoverTargetEl.style.top = `${rect.y}px`;
+    hoverTargetEl.style.width = `${rect.width}px`;
+    hoverTargetEl.style.height = `${rect.height}px`;
+  }
+
+  function removeHoverTarget() {
+    hoverTargetEl?.remove();
+    hoverTargetEl = null;
+    hoverTargetElement = null;
+  }
+
   function hideCaptureOverlays() {
     if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "hidden";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "hidden";
     if (pickerToolbar) pickerToolbar.style.visibility = "hidden";
+    if (hoverTargetEl) hoverTargetEl.style.visibility = "hidden";
   }
 
   function restoreCaptureOverlays() {
     if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "visible";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "visible";
     if (pickerToolbar) pickerToolbar.style.visibility = "visible";
+    if (hoverTargetEl) hoverTargetEl.style.visibility = "visible";
   }
 
   function clearPreparedFrameSchedule() {
     if (preparedFrameTimer) clearTimeout(preparedFrameTimer);
     preparedFrameTimer = null;
+    preparedFrameWantedSince = 0;
   }
 
   function frameIsClaimable(frame = preparedFrames.at(-1)) {
@@ -2165,16 +2263,54 @@
     preparedFrames = preparedFrames.filter(
       (candidate) => candidate.id !== frame.id,
     );
+    // A claimed frame means a click just spent it and took no screenshot of its
+    // own, so the queue is free and the next click needs a replacement now.
+    // Holding the usual spacing here is what left rapid clicks with nothing to
+    // claim and pushed them onto the slower capture-after-the-fact path.
+    lastPreparedFrameAt = 0;
     return frame.id;
   }
 
+  function preparedFrameSchedulingAllowed() {
+    if (state.status !== "recording" || pickerActive) return false;
+    // Every capture tears the start-of-recording flash down so it can never be
+    // photographed, and the first pre-warm used to fire within a couple of
+    // hundred milliseconds — which meant the author saw a blink instead of the
+    // message. Nothing is worth capturing during that beat anyway: the author
+    // is reading it, not working.
+    if (recordingFlashPlaying()) return false;
+    // A backgrounded tab cannot be photographed by captureVisibleTab anyway;
+    // scheduling one only burns a queue slot and returns an error.
+    return document.visibilityState === "visible";
+  }
+
   function schedulePreparedFrame(delay = 180) {
-    if (state.status !== "recording" || pickerActive) return;
-    clearPreparedFrameSchedule();
+    if (!preparedFrameSchedulingAllowed()) return;
+    const now = Date.now();
+    if (!preparedFrameWantedSince) preparedFrameWantedSince = now;
+    // A quiet-period debounce: each new visual change pushes the capture out,
+    // so a burst of mutations produces one screenshot once the page settles
+    // rather than one screenshot per mutation. The max wait keeps a page that
+    // animates without pause — a spinner, a live feed, a video — from
+    // deferring the pre-warm forever and pushing every click onto the slower
+    // capture-after-the-fact path.
+    const quiet = Math.max(PREPARED_FRAME_QUIET_MS, Math.max(0, delay));
+    const untilMaxWait = Math.max(
+      0,
+      preparedFrameWantedSince + PREPARED_FRAME_MAX_WAIT_MS - now,
+    );
+    // Never fire faster than the minimum spacing, so speculative pre-warming
+    // can never crowd out the screenshot that belongs to a real click.
+    const spacing = Math.max(
+      0,
+      lastPreparedFrameAt + PREPARED_FRAME_MIN_SPACING_MS - now,
+    );
+    const delayMs = Math.max(Math.min(quiet, untilMaxWait), spacing);
+    if (preparedFrameTimer) clearTimeout(preparedFrameTimer);
     preparedFrameTimer = setTimeout(() => {
       preparedFrameTimer = null;
       void preparePrivateFrame();
-    }, Math.max(0, delay));
+    }, delayMs);
   }
 
   function noteVisualChange(delay = 180) {
@@ -2189,8 +2325,14 @@
   }
 
   async function preparePrivateFrame() {
-    if (state.status !== "recording" || pickerActive) return null;
+    if (!preparedFrameSchedulingAllowed()) return null;
     if (preparedFrameInFlight) return preparedFrameInFlight;
+    // Another path may have produced a matching frame while this one waited
+    // out its debounce.
+    if (frameIsEligible()) {
+      preparedFrameWantedSince = 0;
+      return null;
+    }
     const epoch = visualEpoch;
     const context = pageContext();
     context.visualEpoch = epoch;
@@ -2208,8 +2350,16 @@
             await waiter.waitForPageSettled();
           }
         }
+        // Most steps adopt a pre-warmed frame, so anything KnowHow draws on the
+        // page has to be out of shot here or it ends up in the author's guide.
+        // Only the chrome is hidden: the blur preview itself can stay, because
+        // the bake re-applies every mask from its own coordinates, and hiding
+        // the largest overlay on a timer is exactly the flicker that made Smart
+        // Blur look broken.
+        hideCaptureOverlays();
         await waitForPagePaint();
         if (state.status !== "recording" || pickerActive) {
+          restoreCaptureOverlays();
           return null;
         }
         return send({
@@ -2246,12 +2396,16 @@
       })
       .finally(() => {
         preparedFrameInFlight = null;
-        if (state.status !== "recording" || pickerActive) return;
-        if (frameIsEligible()) {
-          schedulePreparedFrame(700);
-        } else {
-          schedulePreparedFrame();
-        }
+        // Whatever happened to the capture, the author's own UI comes back.
+        restoreCaptureOverlays();
+        lastPreparedFrameAt = Date.now();
+        preparedFrameWantedSince = 0;
+        if (!preparedFrameSchedulingAllowed()) return;
+        // Only re-arm when there is nothing usable in hand. A frame that still
+        // matches the page needs no replacement, and the visual-change, scroll
+        // and resize paths re-arm the moment the page actually moves — so an
+        // idle page stops capturing entirely instead of screenshotting forever.
+        if (!frameIsEligible()) schedulePreparedFrame();
       });
     preparedFrameInFlight = operation;
     return operation;
@@ -2272,6 +2426,19 @@
   function hidePrivacyVeil() {
     privacyVeilEl?.remove();
     privacyVeilEl = null;
+  }
+
+  // Screenshots need the veil out of the frame, but tearing the node out of the
+  // DOM and rebuilding it made it flash back in a beat late — and nothing on
+  // the restore path ever rebuilt it, so it simply stayed gone until the next
+  // status change. Toggling visibility keeps the element alive and the
+  // hide/restore pair symmetric.
+  function suspendPrivacyVeilForCapture() {
+    if (privacyVeilEl) privacyVeilEl.style.visibility = "hidden";
+  }
+
+  function resumePrivacyVeilAfterCapture() {
+    if (privacyVeilEl) privacyVeilEl.style.visibility = "";
   }
 
   function startBlurPreviewTracking() {
@@ -2344,7 +2511,10 @@
           visualEpoch += 1;
           occluderBoxes = null;
           scheduleBlurPreview(0);
-          if (!liveOverlayScrolling) schedulePreparedFrame(0);
+          // schedulePreparedFrame debounces and rate-limits internally, so a
+          // page mutating in a tight loop re-arms one pending capture instead
+          // of queueing a screenshot per batch.
+          if (!liveOverlayScrolling) schedulePreparedFrame();
         } else if (pageChanged) {
           scheduleBlurPreview(liveOverlayScrolling ? 80 : 48);
         }
@@ -2397,7 +2567,7 @@
 
   function hideBlurPreviewForCapture() {
     blurPreviewSuspended = true;
-    hidePrivacyVeil();
+    suspendPrivacyVeilForCapture();
     if (blurPreviewRoot) blurPreviewRoot.style.visibility = "hidden";
     for (const host of scrollerOverlayHosts.values()) {
       host.style.visibility = "hidden";
@@ -2406,11 +2576,13 @@
     if (blurPreviewRestoreTimer) clearTimeout(blurPreviewRestoreTimer);
     // The background normally restores immediately after capture. This
     // fallback prevents a failed or cancelled screenshot from leaving the
-    // author without their live privacy preview.
+    // author without their live privacy preview. A screenshot that is going to
+    // happen has happened well inside this window; five seconds only meant a
+    // lost restore message left the author staring at an unprotected page.
     blurPreviewRestoreTimer = setTimeout(() => {
       blurPreviewRestoreTimer = null;
       restoreBlurPreviewAfterCapture();
-    }, 5_000);
+    }, 1_200);
   }
 
   function restoreBlurPreviewAfterCapture() {
@@ -2419,6 +2591,7 @@
       blurPreviewRestoreTimer = null;
     }
     blurPreviewSuspended = false;
+    resumePrivacyVeilAfterCapture();
     if (blurPreviewRoot) blurPreviewRoot.style.visibility = "";
     for (const host of scrollerOverlayHosts.values()) {
       host.style.visibility = "";
@@ -2542,6 +2715,15 @@
   let recordingFlashEl = null;
   let recordingFlashHideTimer = null;
   let recordingActivationCount = 0;
+  let recordingFlashUntilMs = 0;
+
+  const RECORDING_FLASH_HOLD_MS = 1_100;
+  const RECORDING_FLASH_FADE_MS = 450;
+
+  /** True while the start-of-recording flash is still meant to be on screen. */
+  function recordingFlashPlaying() {
+    return Date.now() < recordingFlashUntilMs;
+  }
 
   // A brief full-viewport dim + "Recording started/resumed" flash gives clear
   // feedback that capture is live, without leaving any persistent page UI
@@ -2552,6 +2734,7 @@
       clearTimeout(recordingFlashHideTimer);
       recordingFlashHideTimer = null;
     }
+    recordingFlashUntilMs = 0;
     if (recordingFlashEl) {
       recordingFlashEl.remove();
       recordingFlashEl = null;
@@ -2563,22 +2746,26 @@
     const root = document.body || document.documentElement;
     if (!root) return;
     removeRecordingFlash();
+    // The dim is a background colour on the backdrop rather than an opacity on
+    // the whole overlay, so the badge sitting on top of it stays at full
+    // strength — the page recedes, the message does not.
     const flash = document.createElement("div");
     flash.setAttribute("aria-hidden", "true");
     flash.style.cssText =
       "position:fixed;inset:0;z-index:2147483647;display:flex;" +
       "align-items:center;justify-content:center;" +
-      "background:rgba(8,10,20,.55);opacity:1;" +
-      "transition:opacity .45s ease;pointer-events:none;";
+      "background:rgba(8,10,20,.58);opacity:0;" +
+      "transition:opacity .22s ease;pointer-events:none;";
     const badge = document.createElement("div");
     badge.style.cssText =
-      "display:flex;align-items:center;gap:10px;padding:14px 22px;" +
-      "border-radius:999px;background:rgba(17,20,30,.94);color:#fff;" +
-      "font:600 15px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
-      "box-shadow:0 12px 32px rgba(0,0,0,.35);letter-spacing:.01em;";
+      "display:flex;align-items:center;gap:12px;padding:16px 28px;" +
+      "border-radius:999px;background:rgba(17,20,30,.96);color:#fff;" +
+      "font:650 17px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
+      "box-shadow:0 18px 44px rgba(0,0,0,.45);letter-spacing:.01em;" +
+      "transform:scale(.96);transition:transform .22s cubic-bezier(.2,.8,.3,1);";
     const dot = document.createElement("span");
     dot.style.cssText =
-      "width:10px;height:10px;border-radius:50%;background:#ef4444;" +
+      "width:11px;height:11px;border-radius:50%;background:#ef4444;" +
       "animation:knowhow-recording-pulse 1.4s ease-out infinite;";
     const style = document.createElement("style");
     style.textContent =
@@ -2592,13 +2779,27 @@
     flash.append(style, badge);
     root.appendChild(flash);
     recordingFlashEl = flash;
+    recordingFlashUntilMs =
+      Date.now() + RECORDING_FLASH_HOLD_MS + RECORDING_FLASH_FADE_MS;
+    // Fade in off the first frame so the dim and the badge animate in together
+    // rather than snapping onto the page.
+    requestAnimationFrame(() => {
+      if (recordingFlashEl !== flash) return;
+      flash.style.opacity = "1";
+      badge.style.transform = "scale(1)";
+    });
     recordingFlashHideTimer = setTimeout(() => {
       if (recordingFlashEl !== flash) return;
+      flash.style.transition = `opacity ${RECORDING_FLASH_FADE_MS}ms ease`;
       flash.style.opacity = "0";
       recordingFlashHideTimer = setTimeout(() => {
-        if (recordingFlashEl === flash) removeRecordingFlash();
-      }, 450);
-    }, 1100);
+        if (recordingFlashEl !== flash) return;
+        removeRecordingFlash();
+        // Pre-warming was held back while this played; get a frame ready now
+        // so the author's first click still has one to adopt.
+        schedulePreparedFrame(0);
+      }, RECORDING_FLASH_FADE_MS);
+    }, RECORDING_FLASH_HOLD_MS);
   }
 
   function setStatus(status) {
@@ -2607,6 +2808,7 @@
     state.status = status;
     if (status !== "recording") {
       removeRecordingFlash();
+      removeHoverTarget();
       if (pendingPointer) cancelStagedInteraction(pendingPointer);
       pendingPointer = null;
       preparedFrames = [];
@@ -2643,18 +2845,29 @@
     hideBlurPreviewForCapture();
   }
 
-  function stallForEarlyCapture(ms = 64) {
-    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 80);
+  // Holding the content thread keeps the page painting its pre-click state
+  // while the worker races to photograph it. It is a real cost to the author —
+  // the page is frozen for the duration — so it is paid only when there is no
+  // pre-warmed frame to adopt and the screenshot genuinely has to be taken
+  // after the pointer went down.
+  function stallForEarlyCapture(ms = 24) {
+    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 32);
     while (performance.now() < until) {
-      // Hold the content thread so the visible-tab snapshot can finish while
-      // this page still shows the pre-click UI. Do not preventDefault.
+      // Intentionally busy: yielding would let the click's default action
+      // repaint the page before the snapshot is taken. Do not preventDefault.
     }
   }
 
   function stageInteraction(element, context, sourceEvent = "click") {
     const interactionId = crypto.randomUUID();
-    hideCaptureChrome();
+    // Claim first, then decide whether anything has to be hidden. A claimed
+    // frame was photographed earlier, so no screenshot happens at click time —
+    // tearing the privacy preview and the Smart Blur panel down and waiting on
+    // the worker to put them back made them flicker on every single click for
+    // no benefit. Only the fallback path below actually photographs the page
+    // now, and only that path pays for hiding.
     const frameId = claimPreparedFrame();
+    if (!frameId) hideCaptureChrome();
     const staged = {
       interactionId,
       element,
@@ -2684,7 +2897,9 @@
       viewportKey: viewportKey(context.viewport),
       context: staged.context,
     });
-    stallForEarlyCapture(64);
+    // A claimed pre-warmed frame already shows the pre-click page, so the
+    // author's click proceeds with no delay at all.
+    if (!frameId) stallForEarlyCapture(24);
     return staged;
   }
 
@@ -2844,10 +3059,16 @@
     updateBlurReveal(lastPointerPoint);
     if (state.status === "recording") {
       const hovered = captureElement(event);
+      updateHoverTarget(hovered);
       if (hovered && hovered !== preparedFrameTarget) {
         preparedFrameTarget = hovered;
-        if (!frameIsEligible()) schedulePreparedFrame(90);
+        // Hovering a new element hints that a click may be coming, but it is
+        // not a visual change on its own. Only top up when nothing usable is
+        // in hand, and let the debounce decide when.
+        if (!frameIsClaimable()) schedulePreparedFrame();
       }
+    } else {
+      updateHoverTarget(null);
     }
     const active = pendingPointer;
     if (!active || event.pointerId !== active.pointerId) return;
@@ -3087,6 +3308,7 @@
   document.addEventListener("pointerleave", () => {
     lastPointerPoint = null;
     updateBlurReveal(null);
+    updateHoverTarget(null);
   }, true);
   document.addEventListener("scroll", onLiveOverlayScroll, true);
   addEventListener("scroll", onLiveOverlayScroll, true);
@@ -3095,6 +3317,13 @@
     occluderBoxes = null;
     scheduleBlurPreview(0);
     schedulePreparedFrame(200);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      schedulePreparedFrame();
+    } else {
+      clearPreparedFrameSchedule();
+    }
   });
   document.addEventListener("input", () => noteVisualChange(140), true);
   document.addEventListener("change", (event) => {

@@ -38,13 +38,32 @@ async fn poll_authorization(state: State<'_, Arc<Coordinator>>) -> CommandResult
 }
 
 #[tauri::command]
-fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
-    state.targets().map_err(command_error)
+async fn disconnect(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
+    state.disconnect().await.map_err(command_error)
+}
+
+// Window enumeration walks every top-level window and opens each owning
+// process to check elevation. A synchronous Tauri command runs on the main
+// thread, so doing that there stalls the recorder's own window for the whole
+// pass — and the preview pass, which photographs each target, stalled it for
+// far longer. Both hand the blocking work to a worker thread.
+#[tauri::command]
+async fn capture_targets(state: State<'_, Arc<Coordinator>>) -> CommandResult<Vec<CaptureTarget>> {
+    let coordinator = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || coordinator.targets())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 #[tauri::command]
-fn capture_target_previews(target_ids: Vec<String>) -> CommandResult<Vec<CaptureTargetPreview>> {
-    platform::capture_target_previews(&target_ids).map_err(command_error)
+async fn capture_target_previews(
+    target_ids: Vec<String>,
+) -> CommandResult<Vec<CaptureTargetPreview>> {
+    tauri::async_runtime::spawn_blocking(move || platform::capture_target_previews(&target_ids))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 #[tauri::command]
@@ -83,6 +102,22 @@ async fn finish_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<App
 #[tauri::command]
 async fn discard_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<AppSnapshot> {
     state.discard_capture().await.map_err(command_error)
+}
+
+// Decoding, resizing and re-encoding a screenshot is real work — cheap
+// individually, but the HUD may ask for one per visible step. Offloading it
+// keeps the main thread free the same way capture_targets/previews already
+// do for the picker.
+#[tauri::command]
+async fn capture_step_thumbnail(
+    state: State<'_, Arc<Coordinator>>,
+    step_id: String,
+) -> CommandResult<String> {
+    let coordinator = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || coordinator.step_thumbnail(&step_id))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(command_error)
 }
 
 #[tauri::command]
@@ -182,6 +217,7 @@ pub fn run() {
             app_snapshot,
             begin_authorization,
             poll_authorization,
+            disconnect,
             capture_targets,
             capture_target_previews,
             start_capture,
@@ -190,6 +226,7 @@ pub fn run() {
             resume_capture,
             finish_capture,
             discard_capture,
+            capture_step_thumbnail,
             delete_capture_step,
             retry_capture_step,
             update_recorder_settings,

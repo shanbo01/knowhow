@@ -12,6 +12,7 @@ export const desktop = {
   snapshot: () => invoke<AppSnapshot>("app_snapshot"),
   authorize: () => invoke<{ verificationUri: string }>("begin_authorization"),
   pollAuthorization: () => invoke<AppSnapshot>("poll_authorization"),
+  disconnect: () => invoke<AppSnapshot>("disconnect"),
   targets: () => invoke<CaptureTarget[]>("capture_targets"),
   previews: (targetIds: string[]) =>
     invoke<CaptureTargetPreview[]>("capture_target_previews", { targetIds }),
@@ -21,6 +22,8 @@ export const desktop = {
   resume: () => invoke<AppSnapshot>("resume_capture"),
   finish: () => invoke<AppSnapshot>("finish_capture"),
   discard: () => invoke<AppSnapshot>("discard_capture"),
+  stepThumbnail: (stepId: string) =>
+    invoke<string>("capture_step_thumbnail", { stepId }),
   deleteStep: (stepId: string) =>
     invoke<AppSnapshot>("delete_capture_step", { stepId }),
   retryStep: (stepId: string) =>

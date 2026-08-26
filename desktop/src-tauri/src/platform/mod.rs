@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::Result;
 
 use crate::model::{Bounds, DesktopScope};
@@ -6,6 +8,20 @@ use crate::model::{Bounds, DesktopScope};
 pub enum PointerButton {
     Left,
     Right,
+}
+
+/// A raw input event together with the moment the hardware produced it.
+///
+/// The processor can fall behind — a UI Automation lookup on a busy application
+/// takes as long as it takes — and when it does, `Instant::now()` inside the
+/// handler is no longer the time of the action. Choosing a pre-action screenshot
+/// or deciding whether two presses were a double-click from that later reading
+/// silently attributes the wrong moment to the author's click, so the timestamp
+/// travels with the event instead.
+#[derive(Clone, Debug)]
+pub struct RawInputEvent {
+    pub at: Instant,
+    pub event: RawEvent,
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +144,7 @@ pub use windows::{
 #[cfg(not(windows))]
 mod unsupported {
     use super::*;
-    use std::sync::mpsc::SyncSender;
+    use std::sync::mpsc::Sender;
 
     use crate::model::CaptureTarget;
 
@@ -136,7 +152,7 @@ mod unsupported {
     pub struct NativeUia;
 
     impl NativeRawInput {
-        pub fn start(_sender: SyncSender<RawEvent>) -> Result<Self> {
+        pub fn start(_sender: Sender<RawInputEvent>) -> Result<Self> {
             anyhow::bail!("KnowHow Capture supports Windows only")
         }
     }
@@ -202,10 +218,6 @@ mod unsupported {
 
 #[cfg(not(windows))]
 pub use unsupported::*;
-
-pub fn event_sender_capacity() -> usize {
-    512
-}
 
 pub fn scope_accepts(
     scope: &DesktopScope,
