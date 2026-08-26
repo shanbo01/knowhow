@@ -1916,3 +1916,61 @@ button.administration-directory-row[data-selected] {
     width: 100%;
   }
 }
+
+/* The hero is a landing surface for the overview. On the working tabs it was
+   pushing the table and the record panel below the fold on every visit. */
+.administration-page[data-section]:not([data-section="overview"]) .administration-page-header {
+  min-height: 0;
+  align-items: center;
+  padding: 0.85rem clamp(1rem, 2vw, 1.35rem);
+}
+
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header h1 {
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  line-height: 1.15;
+}
+
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header h1 + p,
+.administration-page[data-section]:not([data-section="overview"])
+  .administration-page-header::after {
+  display: none;
+}
+
+/* One row per section instead of five stacked, so the record panel stops being
+   a scroll of its own next to a short table. */
+.administration-inspector-tabs {
+  display: flex;
+  gap: 0.15rem;
+  margin: 0 1.15rem;
+  padding: 0.2rem;
+  border-radius: var(--kh-control-radius);
+  background: var(--surface-hover);
+}
+
+.administration-inspector-tabs button {
+  flex: 1 1 0;
+  min-height: var(--kh-control-height-sm);
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: calc(var(--kh-control-radius) - 0.2rem);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background-color var(--kh-ui-speed) ease,
+    color var(--kh-ui-speed) ease;
+}
+
+.administration-inspector-tabs button:hover {
+  color: var(--foreground);
+}
+
+.administration-inspector-tabs button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--kh-control-shadow);
+}

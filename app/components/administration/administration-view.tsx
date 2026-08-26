@@ -154,6 +154,58 @@ function healthLabel(health?: PlatformHealth) {
   return titleCase(health);
 }
 
+/* The API returns queues in declaration order, and the overview used to render
+   them with flatMap + slice(0, 10). That had three consequences: the order was
+   never a ranking despite the panel saying so, the queues declared last —
+   overdue support and deletion approvals, the only two that are actually time
+   critical — were the first to fall off the list, and a workspace matching
+   three queues produced three rows.
+
+   Rank explicitly, and collapse a workspace's matches into one decision that
+   carries a count of the signals behind it. */
+const DECISION_WEIGHT: Record<string, number> = {
+  deletions: 100,
+  support: 90,
+  risk: 80,
+  trials: 70,
+  intent: 60,
+  expansion: 50,
+  enterprise: 40,
+  winback: 30,
+  "never-published": 20,
+};
+
+type DecisionQueue = PlatformHome["queues"][number];
+type DecisionItem = DecisionQueue["items"][number];
+
+function decisionInbox(queues: DecisionQueue[]) {
+  const ranked = new Map<
+    string,
+    { queue: DecisionQueue; item: DecisionItem; weight: number; also: number }
+  >();
+  for (const queue of queues) {
+    const weight = DECISION_WEIGHT[queue.id];
+    /* "talk-today" is built server-side as trials + intent + winback, each of
+       which is also its own queue, so it can only ever duplicate them. */
+    if (weight === undefined) continue;
+    for (const item of queue.items) {
+      const key =
+        queue.id === "support"
+          ? `ticket:${item.href}`
+          : `workspace:${item.workspaceId}`;
+      const current = ranked.get(key);
+      if (!current) {
+        ranked.set(key, { queue, item, weight, also: 0 });
+      } else if (weight > current.weight) {
+        ranked.set(key, { queue, item, weight, also: current.also + 1 });
+      } else {
+        current.also += 1;
+      }
+    }
+  }
+  return [...ranked.values()].sort((a, b) => b.weight - a.weight).slice(0, 10);
+}
+
 function nextActionLabel(action?: PlatformNextAction) {
   switch (action) {
     case "grant_trial":
@@ -797,6 +849,10 @@ function ClientInspector({
   onCommercial: (kind: CommercialAction["kind"]) => void;
   onEdit: () => void;
 }) {
+  /* Five sections stacked in one column made the panel a long scroll next to a
+     table that is usually a handful of rows. Only one is on screen at a time. */
+  const [detail, setDetail] = useState<"access" | "activation" | "usage" | "relationship" | "timeline">("access");
+
   if (loading) {
     return <aside className="administration-client-inspector"><LoadingState label="Loading workspace" /></aside>;
   }
@@ -874,6 +930,15 @@ function ClientInspector({
         <div><small>Views</small><strong>{client.usage?.views ?? 0}</strong></div>
       </div>
 
+      <div className="administration-inspector-tabs" role="tablist" aria-label="Workspace detail">
+        <button type="button" role="tab" aria-selected={detail === "access"} onClick={() => setDetail("access")}>Access</button>
+        <button type="button" role="tab" aria-selected={detail === "activation"} onClick={() => setDetail("activation")}>Activation</button>
+        <button type="button" role="tab" aria-selected={detail === "usage"} onClick={() => setDetail("usage")}>Usage</button>
+        <button type="button" role="tab" aria-selected={detail === "relationship"} onClick={() => setDetail("relationship")}>Relationship</button>
+        <button type="button" role="tab" aria-selected={detail === "timeline"} onClick={() => setDetail("timeline")}>Timeline</button>
+      </div>
+
+      {detail === "access" ? (
       <section className="administration-inspector-section">
         <header><h3>Commercial access</h3></header>
         <dl className="administration-definition-list">
@@ -883,7 +948,9 @@ function ClientInspector({
           <div><dt>Access ends</dt><dd>{formatDate(client.subscription?.expiresAt)}</dd></div>
         </dl>
       </section>
+      ) : null}
 
+      {detail === "activation" ? (
       <section className="administration-inspector-section">
         <header><h3>Activation</h3></header>
         <div className="administration-checklist">
@@ -896,7 +963,9 @@ function ClientInspector({
           {!client.activationChecklist?.length ? <p>No activation events recorded yet.</p> : null}
         </div>
       </section>
+      ) : null}
 
+      {detail === "usage" ? (
       <section className="administration-inspector-section">
         <header><h3>Usage & limits</h3></header>
         <div className="administration-facts">
@@ -906,7 +975,9 @@ function ClientInspector({
           <div><span>Storage</span><strong>{formatBytes(client.usage?.storageBytes)} / {client.usage?.storageLimit ? formatBytes(client.usage.storageLimit) : "—"}</strong></div>
         </div>
       </section>
+      ) : null}
 
+      {detail === "relationship" ? (
       <section className="administration-inspector-section">
         <header><h3>Relationship</h3></header>
         <dl className="administration-definition-list">
@@ -919,7 +990,9 @@ function ClientInspector({
           <p className="administration-internal-note">{client.organization.internalNotes}</p>
         ) : null}
       </section>
+      ) : null}
 
+      {detail === "timeline" ? (
       <section className="administration-inspector-section">
         <header><h3>Recent timeline</h3></header>
         <div className="administration-timeline">
@@ -932,6 +1005,7 @@ function ClientInspector({
           {!client.timeline?.length ? <p>No activity has been recorded yet.</p> : null}
         </div>
       </section>
+      ) : null}
     </aside>
   );
 }
@@ -1251,7 +1325,7 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
   const supportComparisonTime = lastSyncedAt ? Date.parse(lastSyncedAt) : 0;
 
   return (
-    <section className="administration-page">
+    <section className="administration-page" data-section={section}>
       <header className="administration-page-header">
         <div>
           <span className="administration-overline"><ShieldCheck /> Private administration</span>
@@ -1335,23 +1409,27 @@ export function AdministrationView({ viewer }: { viewer: Viewer }) {
               <section className="administration-panel administration-priority-panel">
                 <header className="administration-panel-header">
                   <div><span>Decision inbox</span><h2>What deserves attention now</h2></div>
-                  <small>Ranked from live behavior and lifecycle signals</small>
+                  <small>One row per workspace, most urgent first</small>
                 </header>
                 <div className="administration-priority-list">
-                  {dashboard.queues.flatMap((queue) =>
-                    queue.items.slice(0, 4).map((item) => (
-                      <button type="button" key={`${queue.id}:${item.workspaceId}`} onClick={() => openPriorityItem(queue.id, item)}>
-                        <span className="administration-priority-mark"><Sparkles /></span>
-                        <span className="administration-priority-copy">
-                          <span><strong>{item.name}</strong><small>{queue.title}</small></span>
-                          <p>{item.reason}</p>
+                  {decisionInbox(dashboard.queues).map(({ queue, item, also }) => (
+                    <button type="button" key={`${queue.id}:${item.workspaceId}:${item.href}`} onClick={() => openPriorityItem(queue.id, item)}>
+                      <span className="administration-priority-mark"><Sparkles /></span>
+                      <span className="administration-priority-copy">
+                        <span>
+                          <strong>{item.name}</strong>
+                          <small>
+                            {queue.title}
+                            {also ? ` · +${also} more signal${also > 1 ? "s" : ""}` : ""}
+                          </small>
                         </span>
-                        <span className="administration-priority-action">
-                          {nextActionLabel(item.nextAction)} <ChevronRight />
-                        </span>
-                      </button>
-                    )),
-                  ).slice(0, 10)}
+                        <p>{item.reason}</p>
+                      </span>
+                      <span className="administration-priority-action">
+                        {nextActionLabel(item.nextAction)} <ChevronRight />
+                      </span>
+                    </button>
+                  ))}
                   {!dashboard.queues.some((queue) => queue.items.length) ? (
                     <EmptyPanel
                       icon={CheckCircle2}
