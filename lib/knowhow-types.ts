@@ -6,7 +6,7 @@ export type { GuideSource, WorkspaceRole } from "./guide-contracts";
 import type { GuideSource, WorkspaceRole } from "./guide-contracts";
 export type WorkspaceStatus = "active" | "suspended" | "archived";
 export type RevisionStatus = "draft" | "review" | "published" | "archived";
-export type AudienceKind = "workspace" | "group" | "user";
+export type AudienceKind = "workspace" | "group" | "user" | "link";
 export type ThemeMode = "light" | "dark" | "system";
 
 export type PlatformRole =
@@ -217,7 +217,6 @@ export type WorkspaceMember = {
   name: string;
   status: "active" | "invited" | "suspended";
   roles: WorkspaceRole[];
-  capabilities: Array<"vault">;
   groupIds: string[];
   joinedAt?: string;
 };
@@ -244,16 +243,6 @@ export type Invitation = {
   revokedAt: string | null;
   createdAt: string;
   inviteUrl?: string;
-};
-
-export type VaultItem = {
-  id: string;
-  title: string;
-  encryptedEnvelopeJson: string;
-  metadataJson: string;
-  createdBy: string;
-  createdAt: string;
-  updatedAt: string;
 };
 
 export type SupportAccessRequest = {
@@ -915,7 +904,6 @@ export type WorkspaceBundle = {
   supportGrants: SupportAccessGrant[];
   supportTickets: SupportTicket[];
   audits: AuditEvent[];
-  vaultItems: VaultItem[];
   onboarding: {
     startedAt: string;
     completedAt: string | null;
@@ -933,6 +921,18 @@ export type WorkspaceBundle = {
       completedAt: string | null;
     }>;
   };
+};
+
+export type PublicGuideBundle = {
+  token: string;
+  workspace: {
+    id: string;
+    name: string;
+    slug: string;
+    settings: WorkspaceSettings;
+  };
+  guide: Guide;
+  revision: GuideRevisionView;
 };
 
 export type BootstrapResponse = {

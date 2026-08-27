@@ -15,7 +15,6 @@ export type WorkspaceAccess = {
   workspace: WorkspaceRecord;
   membershipRow: StoredRecord<RecordData> | null;
   roles: WorkspaceRole[];
-  capabilities: Array<"vault">;
   membershipStatus: "active" | "suspended";
   supportGrant: (SupportGrantRecord & { id: string }) | null;
   lifecycleAccess: LifecycleAccess;
@@ -82,7 +81,6 @@ export class AccessService {
       const member = decodePayload<WorkspaceMemberRecord>(membershipRow, {
         name: identity.name,
         roles: [],
-        capabilities: [],
         groupIds: [],
       });
       return {
@@ -90,7 +88,6 @@ export class AccessService {
         workspace,
         membershipRow,
         roles: member.roles,
-        capabilities: member.capabilities,
         membershipStatus: "active",
         supportGrant: null,
         lifecycleAccess,
@@ -117,7 +114,6 @@ export class AccessService {
           workspace,
           membershipRow: null,
           roles: [grant.role],
-          capabilities: [],
           membershipStatus: "active",
           supportGrant: { ...grant, id: grantRow.$id },
           lifecycleAccess,
@@ -132,7 +128,6 @@ export class AccessService {
         workspace,
         membershipRow,
         roles: [],
-        capabilities: [],
         membershipStatus: "suspended",
         supportGrant: null,
         lifecycleAccess,
@@ -157,7 +152,6 @@ export class AccessService {
       workspaceStatus: access.workspace.status as WorkspaceStatus,
       lifecycleAccess: access.lifecycleAccess,
       roles: access.roles,
-      capabilities: access.capabilities,
       ...(access.supportGrant
         ? {
             supportGrant: {

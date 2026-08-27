@@ -7,17 +7,8 @@ import type {
 
 export type { CommercialPlan };
 
-export const COMMERCIAL_PLANS: readonly CommercialPlan[] = [
-  "free",
-  "pro_trial",
-  "pro",
-  "enterprise",
-];
-
 const DAY = 86_400_000;
 export const PRO_TRIAL_DAYS = 14;
-export const PRO_INVOICE_DAYS = 30;
-export const RENEWAL_CHIP_DAYS = 14;
 
 export type PlanEntitlements = {
   maximumUsers: number;

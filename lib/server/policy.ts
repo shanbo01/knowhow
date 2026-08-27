@@ -25,8 +25,7 @@ export type PolicyAction =
   | "guide.archive"
   | "guide.export"
   | "capture.create"
-  | "capture.update"
-  | "vault.use";
+  | "capture.update";
 
 export interface GuideAuthorizationFacts {
   revisionStatus?: RevisionStatus;
@@ -52,7 +51,6 @@ export interface AuthorizationContext {
   workspaceStatus?: WorkspaceStatus;
   lifecycleAccess?: LifecycleAccess;
   roles: readonly WorkspaceRole[];
-  capabilities?: readonly ("vault")[];
   guide?: GuideAuthorizationFacts;
   /**
    * Present when the actor is inside the workspace through a temporary,
@@ -290,12 +288,6 @@ export function authorize(
     return canRead && guide?.exportAllowed === true
       ? allow("The actor may read the guide and its export policy permits export.")
       : deny("EXPORT_NOT_ALLOWED", "This guide cannot be exported by the actor.");
-  }
-
-  if (action === "vault.use") {
-    return context.capabilities?.includes("vault")
-      ? allow("The actor has the vault capability.")
-      : deny("VAULT_CAPABILITY_REQUIRED", "Vault access is required.");
   }
 
   return deny("DEFAULT_DENY", "No policy grants this action.");

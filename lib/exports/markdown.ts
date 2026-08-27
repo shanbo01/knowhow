@@ -82,7 +82,7 @@ export function renderGuideToMarkdown(
       );
     }
     if (block.media) {
-      const source = assetSource(block.media, assets.get(block.media.mediaId));
+      const source = assetSource(assets.get(block.media.mediaId));
       output.push(
         source
           ? `![${escapeMarkdown(block.media.altText)}](${markdownDestination(source)})`

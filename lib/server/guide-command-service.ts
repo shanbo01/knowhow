@@ -12,7 +12,7 @@ import {
   type GuideRevision,
   type WorkspaceBranding,
 } from "../guide-contracts";
-import { AccessService, type WorkspaceAccess } from "./access-service";
+import type { WorkspaceAccess } from "./access-service";
 import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -36,6 +36,7 @@ import type { RecordData, RecordStore, StoredRecord } from "./record-store";
 import type { AuthenticatedIdentity } from "./session-identity";
 
 const RESOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
+const SHARE_TOKEN = /^share_[A-Za-z0-9]{20,30}$/;
 const MAX_MEDIA_CLONES = 50;
 const MAX_TRANSACTION_MUTATIONS = 900;
 
@@ -63,8 +64,15 @@ function stringValue(value: unknown, fallback = "") {
 }
 
 function canonicalAudience(audiences: Audience[], workspaceId: string): GuideAudience {
+  if (!audiences.length) {
+    return { mode: "private", workspaceId };
+  }
   if (audiences.some((item) => item.kind === "workspace")) {
     return { mode: "workspace", workspaceId };
+  }
+  const publicLink = audiences.find((item) => item.kind === "link");
+  if (publicLink?.subjectId) {
+    return { mode: "public-link", workspaceId, token: publicLink.subjectId };
   }
   return {
     mode: "restricted",
@@ -173,14 +181,10 @@ function mediaValue(row: StoredRecord<RecordData>) {
 }
 
 export class GuideCommandService {
-  private readonly access: AccessService;
-
   constructor(
     private readonly store: RecordStore,
     private readonly objects?: PrivateObjectStore,
-  ) {
-    this.access = new AccessService(store);
-  }
+  ) {}
 
   async execute(
     identity: AuthenticatedIdentity,
@@ -201,6 +205,9 @@ export class GuideCommandService {
     }
     if (action === "shareGuide") {
       return this.share(identity, payload, workspaceAccess, context, options);
+    }
+    if (action === "unshareGuide") {
+      return this.unshare(identity, payload, workspaceAccess);
     }
     if (action === "archiveGuide") {
       return this.archive(identity, payload, workspaceAccess, context);
@@ -256,7 +263,7 @@ export class GuideCommandService {
       if (!audience) return false;
       if (audience.kind === "workspace") return true;
       if (audience.kind === "user") return audience.subjectId === identity.userId;
-      return Boolean(audience.subjectId && groupIds.has(audience.subjectId));
+      return audience.kind === "group" && Boolean(audience.subjectId && groupIds.has(audience.subjectId));
     });
     const settings = settingRows[0]
       ? { ...DEFAULT_WORKSPACE_SETTINGS, ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}) }
@@ -287,7 +294,12 @@ export class GuideCommandService {
         continue;
       }
       const subjectId = resourceInput(audience.subjectId, "Audience target");
-      if (audience.kind === "group") {
+      if (audience.kind === "link") {
+        if (!SHARE_TOKEN.test(subjectId)) {
+          throw new HttpError(400, "AUDIENCE_INVALID", "The public link audience is invalid.");
+        }
+        continue;
+      } else if (audience.kind === "group") {
         const group = await this.store.get(TABLES.workspaceGroups, subjectId);
         if (!group || group.workspace_id !== workspaceId || group.status !== "active") {
           throw new HttpError(400, "AUDIENCE_INVALID", "An audience group is outside this workspace.");
@@ -393,7 +405,12 @@ export class GuideCommandService {
     const tags = inputStringList(payload.tags ?? [], "Tags", 50, 200);
     const systemReferences = inputStringList(payload.systemReferences ?? [], "Systems", 50, 200);
     let steps = normalizeGuideSteps(payload.steps);
-    const audiences = normalizeGuideAudiences(payload.audiences, workspaceId);
+    const audiences = normalizeGuideAudiences(payload.audiences, workspaceId).map(
+      (audience) =>
+        audience.kind === "link" && !audience.subjectId
+          ? { ...audience, subjectId: resourceId("share") }
+          : audience,
+    );
     await this.validateAudiences(audiences, workspaceId);
     const source: RevisionRecord["source"] =
       payload.source === "browser-capture" || payload.source === "desktop-capture"
@@ -1002,7 +1019,15 @@ export class GuideCommandService {
     if (guide.deletedAt || guide.archivedAt) {
       throw new HttpError(409, "SHARE_NOT_AVAILABLE", "This guide cannot be shared.");
     }
-    const audiences = normalizeGuideAudiences(payload.audiences, workspaceId);
+    const audiences = normalizeGuideAudiences(payload.audiences, workspaceId).map(
+      (audience) =>
+        audience.kind === "link" && !audience.subjectId
+          ? { ...audience, subjectId: resourceId("share") }
+          : audience,
+    );
+    if (!audiences.length) {
+      throw new HttpError(400, "AUDIENCE_REQUIRED", "Select at least one audience.");
+    }
     await this.validateAudiences(audiences, workspaceId);
     const privacyReviewed = inputBoolean(payload.privacyReviewed ?? false, "Privacy review");
     const settings = await this.settings(workspaceId);
@@ -1068,6 +1093,58 @@ export class GuideCommandService {
       metadata: { revisionId: published.row.$id },
     });
     return { audienceChanged: true };
+  }
+
+  private async unshare(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.publishedRevisionId || guide.deletedAt || guide.archivedAt) {
+      throw new HttpError(409, "UNSHARE_NOT_AVAILABLE", "This guide is not live.");
+    }
+    const settings = await this.settings(workspaceId);
+    const isPublisher = workspaceAccess.roles.includes("publisher");
+    const isAuthorCreator =
+      guide.authorUserId === identity.userId &&
+      (workspaceAccess.roles.includes("creator") ||
+        workspaceAccess.roles.includes("administrator"));
+    if (!isPublisher && !(isAuthorCreator && !settings.requireReviewBeforePublish)) {
+      throw new HttpError(
+        403,
+        "PUBLISHER_REQUIRED",
+        "Publisher access is required to stop sharing this guide.",
+      );
+    }
+
+    await this.replaceAudiences(
+      identity,
+      workspaceAccess,
+      guide.publishedRevisionId,
+      [],
+    );
+    const changedAt = nowIso();
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData({ updated_by: identity.userId }, { ...guide, updatedAt: changedAt }),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.unshared",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} is no longer shared`,
+      metadata: { revisionId: guide.publishedRevisionId },
+    });
+    return { unshared: true };
   }
 
   private async archive(

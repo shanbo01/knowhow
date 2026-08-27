@@ -1,7 +1,5 @@
 "use client";
 
-import type { GuideSearchResult } from "./knowhow-types";
-
 export class KnowHowApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -115,14 +113,6 @@ export function knowhowCommand<T>(action: string, payload: unknown = {}) {
   });
 }
 
-export function searchGuides(workspaceId: string, query: string) {
-  const params = new URLSearchParams({
-    workspaceId,
-    q: query.slice(0, 300),
-  });
-  return knowhowApi<{ results: GuideSearchResult[] }>(`/api/knowhow/search?${params}`);
-}
-
 export function queryAdministration<T>(
   params: Record<string, string | undefined>,
 ) {
@@ -221,39 +211,6 @@ export async function downloadAuthorizedExport(
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
-export async function downloadAuditCsv(
-  workspaceId: string,
-  filters: { action?: string; from?: string; to?: string } = {},
-) {
-  const params = new URLSearchParams({ workspaceId });
-  if (filters.action) params.set("action", filters.action);
-  if (filters.from) params.set("from", filters.from);
-  if (filters.to) params.set("to", filters.to);
-
-  const response = await fetch(`/api/knowhow/audit?${params}`, {
-    credentials: "same-origin",
-    headers: { accept: "text/csv" },
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    if (response.status === 401) clearApiCredential();
-    throw new Error(payload.error ?? `Audit export failed (${response.status})`);
-  }
-
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download =
-    response.headers
-      .get("content-disposition")
-      ?.match(/filename="([^"]+)"/)?.[1] ?? "knowhow-audit.csv";
-  link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 

@@ -125,7 +125,6 @@ async function displayNames(store: RecordStore, workspaceId: string) {
       const member = decodePayload<WorkspaceMemberRecord>(row, {
         name: value(row.email),
         roles: [],
-        capabilities: [],
         groupIds: [],
       });
       return [value(row.user_id), member.name || value(row.email)] as const;

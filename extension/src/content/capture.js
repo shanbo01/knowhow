@@ -3098,7 +3098,7 @@
   }
 
   // A right-click that opens the native context menu is captured as its own
-  // step, matching how Scribe documents "right-click X" actions.
+  // step, matching the extension's right-click capture behavior.
   function onContextMenu(event) {
     if (pickerActive) {
       if (!isKnowHowUiEvent(event)) {

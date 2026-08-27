@@ -7,18 +7,18 @@ import {
   Check,
   Copy,
   Download,
+  ExternalLink,
   GripVertical,
   Heading2,
   ImagePlus,
   ListChecks,
+  Pencil,
   Plus,
   Save,
   Share2,
-  SlidersHorizontal,
   StickyNote,
   Trash2,
   TriangleAlert,
-  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { loadAuthorizedMediaUrl, replaceDraftScreenshot } from "../../lib/knowhow-client";
@@ -35,13 +35,77 @@ import type {
   WorkspaceSummary,
 } from "../../lib/knowhow-types";
 import { flattenScreenshot, needsFlattening } from "../../lib/screenshot-flatten";
+import { parseStepLink } from "../../lib/step-links";
 import { ScreenshotEditor } from "./screenshot-editor";
 import { SelectMenu } from "./select-menu";
 import { GuideShareDialog } from "./guide-share-dialog";
 import { GuideExportDialog, type GuideExportFormatChoice } from "./guide-export-dialog";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
-import { WorkspaceLogo } from "./workspace-logo";
 import { Button } from "@/components/ui/button";
+
+function StepTitleField({
+  value,
+  linkable,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  linkable: boolean;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const link = linkable ? parseStepLink(value) : null;
+
+  useEffect(() => {
+    if (!editing) return;
+    const input = inputRef.current;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }, [editing]);
+
+  if (!link || editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="step-title-input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={() => setEditing(false)}
+        placeholder={placeholder}
+      />
+    );
+  }
+
+  return (
+    <div className="step-title-display">
+      <span className="step-title-rendered">
+        {link.before}
+        <a
+          className="step-title-inline-link"
+          href={link.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${link.label}`}
+        >
+          <span>{link.label}</span>
+          <ExternalLink />
+        </a>
+        {link.after}
+      </span>
+      <button
+        className="step-title-edit-button"
+        type="button"
+        aria-label="Edit action title"
+        title="Edit action title"
+        onClick={() => setEditing(true)}
+      >
+        <Pencil />
+      </button>
+    </div>
+  );
+}
 
 export type GuideEditorPayload = {
   guideId?: string;
@@ -230,7 +294,7 @@ async function rasterizeReplacement(file: File) {
 }
 
 function initialAudience(revision: ReturnType<typeof selectedRevision>) {
-  return revision?.audiences.length
+  return revision
     ? revision.audiences
     : [{ kind: "workspace" as const, label: "Entire workspace" }];
 }
@@ -306,14 +370,11 @@ export function GuideEditor({
   const [dragOverStepId, setDragOverStepId] = useState("");
   const [transition, setTransition] = useState<"draft" | "review">("draft");
   const [flattening, setFlattening] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [insertAfterId, setInsertAfterId] = useState<string | "start" | null>(null);
   const [leavePromptOpen, setLeavePromptOpen] = useState(false);
   const [deletePromptOpen, setDeletePromptOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const inspectorTriggerRef = useRef<HTMLButtonElement>(null);
-  const inspectorPanelRef = useRef<HTMLElement>(null);
   const ensureDraftRef = useRef<Promise<GuideSaveResult> | null>(null);
   const [draftIds, setDraftIds] = useState<GuideSaveResult | null>(
     guide?.workingRevision
@@ -393,45 +454,6 @@ export function GuideEditor({
     return () => window.removeEventListener("pointerdown", dismissInsertMenu);
   }, [insertAfterId]);
 
-  useEffect(() => {
-    if (!inspectorOpen) return;
-    const panel = inspectorPanelRef.current;
-    const trigger = inspectorTriggerRef.current;
-    if (!panel) return;
-    const focusable = () =>
-      [...panel.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )].filter((element) => !element.hidden);
-    focusable()[0]?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setInspectorOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (!items.length) {
-        event.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    panel.addEventListener("keydown", handleKeyDown);
-    return () => {
-      panel.removeEventListener("keydown", handleKeyDown);
-      if (trigger?.isConnected) window.requestAnimationFrame(() => trigger.focus());
-    };
-  }, [inspectorOpen]);
-
   function updateStep(id: string, patch: Partial<EditorBlock>) {
     setSteps((items) =>
       items.map((item) => (item.id === id ? { ...item, ...patch } : item)),
@@ -477,9 +499,7 @@ export function GuideEditor({
             step.title.trim() ||
             (step.kind === "heading" ? "Section heading" : "Untitled step"),
         })),
-        audiences: audiences.length
-          ? audiences
-          : [{ kind: "workspace", label: "Entire workspace" }],
+        audiences,
         source,
         privacyReviewed,
         transition: "draft",
@@ -612,10 +632,6 @@ export function GuideEditor({
         }
       }
     }
-    if (!audiences.length) {
-      setLocalError("Select at least one audience before saving.");
-      return false;
-    }
     return true;
   }
 
@@ -724,6 +740,9 @@ export function GuideEditor({
     if (isCaptured && !privacyReviewed) {
       throw new Error("Complete the privacy review before sharing.");
     }
+    if (!audiences.length && (kind === "review" || !guide?.publishedRevision)) {
+      throw new Error("Choose who can see this guide before publishing or review.");
+    }
     const finalSteps = await flattenIfNeeded();
     const payload = payloadFor(kind === "review" ? "review" : "draft", finalSteps);
     const result =
@@ -810,6 +829,7 @@ export function GuideEditor({
               <Save /> Save
             </Button>
             <Button
+              className="editor-share-trigger"
               variant={guide ? undefined : "outline"}
               type="button"
               disabled={busy || flattening}
@@ -823,10 +843,12 @@ export function GuideEditor({
               }}
             >
               <Share2 /> Share
-            </Button>
-            <Button ref={inspectorTriggerRef} className={`editor-inspector-trigger${inspectorOpen ? " active" : ""}`} variant="ghost" type="button" onClick={() => setInspectorOpen((open) => !open)} aria-expanded={inspectorOpen} aria-controls="guide-editor-inspector" aria-haspopup="dialog">
-              <SlidersHorizontal /> Settings
-              {isCaptured && !privacyReviewed ? <span className="editor-attention-dot" aria-label="Privacy review required" /> : null}
+              {isCaptured && !privacyReviewed ? (
+                <span
+                  className="editor-attention-dot"
+                  aria-label="Privacy review required"
+                />
+              ) : null}
             </Button>
           </div>
         </header>
@@ -913,7 +935,12 @@ export function GuideEditor({
                       <button type="button" className="icon-button tiny" onClick={() => duplicateStep(index)} aria-label="Duplicate"><Copy /></button>
                       <button type="button" className="icon-button tiny danger" onClick={() => setSteps((items) => items.filter((item) => item.id !== step.id))} disabled={steps.length === 1} aria-label="Delete"><Trash2 /></button>
                     </div>
-                    <input className="step-title-input" value={step.title} onChange={(event) => updateStep(step.id, { title: event.target.value })} placeholder={step.kind === "heading" ? "Section heading" : "Describe the action"} />
+                    <StepTitleField
+                      value={step.title}
+                      linkable={step.kind === "action"}
+                      onChange={(title) => updateStep(step.id, { title })}
+                      placeholder={step.kind === "heading" ? "Section heading" : "Describe the action"}
+                    />
                     {step.kind === "action" ? (
                       <div className="screenshot-editor">
                         {step.screenshotMediaId ? (
@@ -998,57 +1025,6 @@ export function GuideEditor({
             </button>
           </main>
 
-          {inspectorOpen ? <button className="editor-inspector-backdrop" type="button" aria-hidden="true" tabIndex={-1} onClick={() => setInspectorOpen(false)} /> : null}
-          <aside ref={inspectorPanelRef} id="guide-editor-inspector" className={`editor-sidebar${inspectorOpen ? " open" : ""}`} role="dialog" aria-modal={inspectorOpen ? true : undefined} aria-hidden={!inspectorOpen} inert={!inspectorOpen} aria-label="Guide settings">
-            <div className="editor-sidebar-heading">
-              <div><span className="eyebrow">Guide settings</span><strong>Access and privacy</strong></div>
-              <button className="icon-button" type="button" aria-label="Close guide settings" onClick={() => setInspectorOpen(false)}><X /></button>
-            </div>
-            <section className="card sidebar-card">
-              <p className="eyebrow">Audience</p>
-              <h3>Who can view the live version?</h3>
-              <p>
-                Choose the audience from Share. This panel is for privacy review
-                and branding.
-              </p>
-              <button
-                className="button secondary"
-                type="button"
-                onClick={() => {
-                  setLocalError("");
-                  if (!validateDraft()) return;
-                  setShareOpen(true);
-                }}
-              >
-                <Share2 /> Share
-              </button>
-            </section>
-
-            {isCaptured ? (
-              <section className="card sidebar-card privacy-review-card">
-                <p className="eyebrow">Required gate</p>
-                <h3>Privacy review</h3>
-                <p>Confirm every screenshot is redacted and contains only information this audience may see.</p>
-                <label className="choice-row emphasized">
-                  <input type="checkbox" checked={privacyReviewed} onChange={(event) => setPrivacyReviewed(event.target.checked)} />
-                  <span><strong>I reviewed every capture</strong><small>Required before sharing</small></span>
-                </label>
-              </section>
-            ) : null}
-
-            <section className="card sidebar-card">
-              <p className="eyebrow">Brand preview</p>
-              <div className="brand-preview" style={{ "--preview-accent": "var(--accent)" } as React.CSSProperties}>
-                <WorkspaceLogo workspaceId={workspace.id} workspaceName={workspace.name} logoKey={workspace.settings.logoUrl} size="md" />
-                <span><strong>{workspace.name}</strong><small>Click targets use workspace styling</small></span>
-              </div>
-            </section>
-            {guide?.canDelete && onDelete ? (
-              <button className="button ghost danger-button editor-delete" type="button" disabled={busy} onClick={() => setDeletePromptOpen(true)}>
-                <Trash2 /> Delete guide
-              </button>
-            ) : null}
-          </aside>
         </div>
 
         <footer className="editor-footer">

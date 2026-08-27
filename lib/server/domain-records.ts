@@ -258,7 +258,6 @@ export type WorkspaceMemberRecord = Omit<
 > & {
   name: string;
   roles: WorkspaceRole[];
-  capabilities: Array<"vault">;
 };
 
 export type WorkspaceGroupRecord = Omit<

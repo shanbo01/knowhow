@@ -2,8 +2,10 @@
 
 import {
   Archive,
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   BookOpen,
   Building2,
   Check,
@@ -17,6 +19,7 @@ import {
   Download,
   Eye,
   FileDown,
+  FilterX,
   Globe2,
   Grid2X2,
   Group,
@@ -34,12 +37,16 @@ import {
   MoreHorizontal,
   Moon,
   Paintbrush,
+  PenLine,
   Plus,
   RotateCcw,
+  Rows2,
+  Rows3,
   Search,
   Settings,
   Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Trash2,
@@ -73,8 +80,6 @@ import {
   uploadProvisioningLogo,
   uploadWorkspaceLogo,
 } from "../../lib/knowhow-client";
-import { decryptSecretValue, encryptSecretValue } from "../../lib/crypto";
-import type { EncryptedSecretEnvelope } from "../../lib/domain";
 import type { NavigationGuard } from "../../lib/navigation-guard";
 import { isCapturedGuideSource } from "../../lib/guide-contracts";
 import {
@@ -89,6 +94,7 @@ import type {
   BootstrapResponse,
   DesktopCaptureDevice,
   Guide,
+  GuideRevisionView,
   GuideSearchResult,
   Invitation,
   OrganizationAdministration,
@@ -98,7 +104,6 @@ import type {
   SupportAccessGrant,
   SupportAccessRequest,
   SupportTicket,
-  VaultItem,
   WorkspaceGroup,
   WorkspaceMember,
   WorkspaceRole,
@@ -124,6 +129,7 @@ import { GuideShareDialog } from "./guide-share-dialog";
 import { GuideExportDialog, type GuideExportFormatChoice } from "./guide-export-dialog";
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { GuideReaderView } from "./guide-reader-view";
+import { GuideCreateMenu } from "./guide-create-menu";
 import { useConfirmDialog } from "./confirm-dialog";
 import { HexColorPicker, isValidHexColor } from "./hex-color-picker";
 import { SelectMenu } from "./select-menu";
@@ -154,6 +160,18 @@ import {
   CardContent,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import {
   Sidebar,
@@ -171,12 +189,10 @@ import {
 type View =
   | "Overview"
   | "Guides"
-  | "Capture"
   | "Groups"
   | "Members"
   | "Support"
   | "Organization"
-  | "Vault"
   | "Settings"
   | "Administration";
 
@@ -187,17 +203,15 @@ type DialogState =
   | { type: "plan" }
   | { type: "member"; member: WorkspaceMember }
   | { type: "extension" }
+  | { type: "desktop" }
   | { type: "share-guide"; guide: Guide }
   | { type: "export-guide"; guide: Guide }
   | { type: "account-security" }
-  | { type: "support-decision"; request: SupportAccessRequest }
-  | { type: "vault-editor"; item: VaultItem | null }
-  | { type: "vault-reveal"; item: VaultItem };
+  | { type: "support-decision"; request: SupportAccessRequest };
 
 const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
   { view: "Overview", icon: LayoutDashboard },
   { view: "Guides", icon: BookOpen },
-  { view: "Capture", icon: Sparkles },
   { view: "Groups", icon: Group },
   { view: "Members", icon: Users },
   { view: "Support", icon: LifeBuoy },
@@ -207,12 +221,10 @@ const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
 const NAV_LABELS: Record<View, string> = {
   Overview: "Home",
   Guides: "Library",
-  Capture: "Capture",
   Groups: "Groups",
   Members: "People & access",
   Support: "Support",
   Organization: "Organization",
-  Vault: "Vault",
   Settings: "Workspace settings",
   Administration: "KnowHow Administration",
 };
@@ -220,12 +232,10 @@ const NAV_LABELS: Record<View, string> = {
 const VIEW_TO_SECTION: Record<View, WorkspaceSection> = {
   Overview: "overview",
   Guides: "guides",
-  Capture: "capture",
   Groups: "groups",
   Members: "members",
   Support: "support",
   Organization: "organization",
-  Vault: "vault",
   Settings: "settings",
   Administration: "administration",
 };
@@ -233,12 +243,11 @@ const VIEW_TO_SECTION: Record<View, WorkspaceSection> = {
 const SECTION_TO_VIEW: Record<WorkspaceSection, View> = {
   overview: "Overview",
   guides: "Guides",
-  capture: "Capture",
+  capture: "Guides",
   groups: "Groups",
   members: "Members",
   support: "Support",
   organization: "Organization",
-  vault: "Vault",
   settings: "Settings",
   administration: "Administration",
 };
@@ -299,6 +308,25 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+/**
+ * Compact age for dense rows. Anything older than a fortnight falls back to
+ * the absolute date, because "63d ago" is harder to reason about than a date.
+ */
+function relativeDate(value?: string) {
+  if (!value) return "—";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "—";
+  const elapsed = Date.now() - then;
+  const day = 24 * 60 * 60 * 1000;
+  if (elapsed < 60_000) return "just now";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < day) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+  const days = Math.floor(elapsed / day);
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days}d ago`;
+  return formatDate(value);
+}
+
 function initials(name: string, email = "") {
   const source = name.trim() || email;
   return source
@@ -316,6 +344,10 @@ function titleCase(value: string) {
 }
 
 function audienceSuccessMessage(audiences: Audience[]) {
+  if (!audiences.length) return "no longer shared";
+  if (audiences.some((audience) => audience.kind === "link")) {
+    return "available to anyone with the link";
+  }
   if (audiences.some((audience) => audience.kind === "workspace")) {
     return "visible to the entire workspace";
   }
@@ -326,6 +358,15 @@ function audienceSuccessMessage(audiences: Audience[]) {
     personCount ? `${personCount} ${personCount === 1 ? "person" : "people"}` : "",
   ].filter(Boolean);
   return parts.length ? `visible to ${parts.join(" and ")}` : "kept private";
+}
+
+function liveGuideUrl(origin: string, workspaceSlug: string, guide: Guide) {
+  const token = guide.publishedRevision?.audiences.find(
+    (audience) => audience.kind === "link",
+  )?.subjectId;
+  return token
+    ? `${origin}/share/${encodeURIComponent(token)}`
+    : `${origin}${guideHref(workspaceSlug, guide.id, "published")}`;
 }
 
 function countPhrase(count: number, singular: string, plural = `${singular}s`) {
@@ -670,6 +711,7 @@ function SetupWizard({
   captureLockedByPlan,
   canManageAccess,
   chrome = "card",
+  onClose,
   onConfirmReadiness,
   onNavigate,
   onOpenExtension,
@@ -681,7 +723,8 @@ function SetupWizard({
   canCapture: boolean;
   captureLockedByPlan?: boolean;
   canManageAccess: boolean;
-  chrome?: "card" | "plain";
+  chrome?: "card" | "plain" | "popover";
+  onClose?: () => void;
   onConfirmReadiness: () => Promise<void>;
   onNavigate: (view: View) => void;
   onOpenExtension: () => void;
@@ -693,13 +736,14 @@ function SetupWizard({
   if (onboarding.completedAt) return null;
   const readiness = onboarding.steps.find((step) => step.id === "workspace_readiness");
   const checklist = onboarding.steps.filter((step) => step.id !== "workspace_readiness");
-  const completed = checklist.filter((step) => step.completed).length;
-  const percent = checklist.length
-    ? Math.round((completed / checklist.length) * 100)
+  const progressSteps = chrome === "popover" ? checklist : onboarding.steps;
+  const completed = progressSteps.filter((step) => step.completed).length;
+  const percent = progressSteps.length
+    ? Math.round((completed / progressSteps.length) * 100)
     : 0;
   const current = checklist.find((step) => !step.completed);
   const readinessPending = Boolean(readiness && !readiness.completed);
-  if (!current && !readinessPending) return null;
+  if (!current && !(readinessPending && chrome !== "popover")) return null;
   const continueBlocked =
     busy ||
     !current ||
@@ -723,7 +767,7 @@ function SetupWizard({
       return;
     }
     if (current.id === "first_capture") {
-      if (canCapture) onNavigate("Capture");
+      if (canCapture) onOpenExtension();
       else if (captureLockedByPlan) onNavigate("Guides");
       return;
     }
@@ -741,15 +785,18 @@ function SetupWizard({
           variant="ghost"
           size="icon-sm"
           type="button"
-          aria-label="Dismiss getting started"
+          aria-label={onClose ? "Close getting started" : "Dismiss getting started"}
           disabled={busy}
-          onClick={() => void onDismiss()}
+          onClick={() => {
+            if (onClose) onClose();
+            else void onDismiss();
+          }}
         >
           <X />
         </Button>
       </div>
       <DashboardProgress value={percent} label="Getting started progress" tone="accent" />
-      {readinessPending ? (
+      {readinessPending && chrome !== "popover" ? (
         <div className="onboarding-readiness">
           <strong>Confirm workspace readiness</strong>
           <label className="choice-row">
@@ -809,6 +856,7 @@ function SetupWizard({
               );
             })}
           </ul>
+          {chrome !== "popover" ? (
           <div className="onboarding-wizard-actions">
             {current.id === "extension_pin" ? (
               <Button
@@ -842,23 +890,27 @@ function SetupWizard({
               <ArrowRight />
             </Button>
           </div>
+          ) : null}
         </>
       ) : null}
       <div className="onboarding-wizard-footer">
         <Button
-          variant="ghost"
+          variant={onClose ? "outline" : "ghost"}
           size="sm"
           type="button"
           disabled={busy}
-          onClick={() => void onDismiss()}
+          onClick={() => {
+            if (onClose) onClose();
+            else void onDismiss();
+          }}
         >
-          Dismiss
+          {onClose ? "Close" : "Dismiss"}
         </Button>
       </div>
     </>
   );
 
-  if (chrome === "plain") {
+  if (chrome === "plain" || chrome === "popover") {
     return <div className="onboarding-wizard-body">{body}</div>;
   }
 
@@ -877,7 +929,8 @@ function OverviewView({
   captureLockedByPlan,
   canManageAccess,
   busy,
-  onNewGuide,
+  newGuideAction,
+  newGuideCardAction,
   onOpenGuide,
   onNavigate,
   onConfirmReadiness,
@@ -892,7 +945,8 @@ function OverviewView({
   captureLockedByPlan?: boolean;
   canManageAccess: boolean;
   busy: boolean;
-  onNewGuide: () => void;
+  newGuideAction: ReactNode;
+  newGuideCardAction: ReactNode;
   onOpenGuide: (guide: Guide) => void;
   onNavigate: (view: View) => void;
   onConfirmReadiness: () => Promise<void>;
@@ -917,20 +971,7 @@ function OverviewView({
           </div>
         </div>
         <div className="home-quick-actions">
-          {canCreate ? (
-            <Button type="button" onClick={onNewGuide}>
-              <Plus /> New guide
-            </Button>
-          ) : null}
-          {canCapture ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onNavigate("Capture")}
-            >
-              <Sparkles /> Capture workflow
-            </Button>
-          ) : null}
+          {canCreate ? newGuideAction : null}
           <Button
             type="button"
             variant="ghost"
@@ -966,25 +1007,12 @@ function OverviewView({
               <h2>Make this workspace useful in the next few minutes.</h2>
               <p>
                 {canCapture
-                  ? "Capture a real workflow, write the first guide, or invite someone to try it with you."
+                  ? "Record a real workflow, write the first guide, or invite someone to try it with you."
                   : "Write the first guide, then share it with the people who need it."}
               </p>
             </div>
             <div className="first-run-actions">
-              {canCapture ? (
-                <button type="button" onClick={() => onNavigate("Capture")}>
-                  <Sparkles />
-                  <strong>Capture a workflow</strong>
-                  <span>Record the steps in Chrome or Edge.</span>
-                </button>
-              ) : null}
-              {canCreate ? (
-                <button type="button" onClick={onNewGuide}>
-                  <Plus />
-                  <strong>Write a guide</strong>
-                  <span>Start a private draft from scratch.</span>
-                </button>
-              ) : null}
+              {canCreate ? newGuideCardAction : null}
               {canManageAccess ? (
                 <button type="button" onClick={() => onNavigate("Members")}>
                   <Users />
@@ -1053,9 +1081,70 @@ function OverviewView({
   );
 }
 
+type LibraryTab = "all" | "live" | "review" | "drafts" | "archived";
+type LibrarySort = "updated" | "title" | "steps" | "views";
+type LibraryDensity = "cosy" | "compact";
+type LibraryAudience = "any" | "workspace" | "restricted";
+
+const LIBRARY_TABS: Array<{ key: LibraryTab; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "live", label: "Live" },
+  { key: "review", label: "In review" },
+  { key: "drafts", label: "Drafts" },
+  { key: "archived", label: "Archived" },
+];
+
+const LIBRARY_SORTS: Array<{ value: LibrarySort; label: string }> = [
+  { value: "updated", label: "Recently updated" },
+  { value: "title", label: "Title A–Z" },
+  { value: "steps", label: "Step count" },
+  { value: "views", label: "Most viewed" },
+];
+
+function guideMatchesTab(guide: Guide, tab: LibraryTab) {
+  switch (tab) {
+    case "live":
+      return Boolean(guide.publishedRevision) && guide.status !== "archived";
+    case "review":
+      return guide.status === "review";
+    case "drafts":
+      return Boolean(guide.workingRevision) && guide.status !== "archived";
+    case "archived":
+      return guide.status === "archived";
+    default:
+      return true;
+  }
+}
+
+/** The revision a tab is about: "Live" shows what is published, others the draft. */
+function libraryRevision(guide: Guide, tab: LibraryTab) {
+  return tab === "live"
+    ? (guide.publishedRevision ?? guide.workingRevision)
+    : (guide.workingRevision ?? guide.publishedRevision);
+}
+
+function countValues(values: string[]) {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    if (!value) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort(
+    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+  );
+}
+
+/** Selections that still appear among the current tab's facet options. */
+function visibleSelection(chosen: string[], entries: Array<[string, number]>) {
+  if (!chosen.length) return chosen;
+  const available = new Set(entries.map(([value]) => value));
+  const kept = chosen.filter((value) => available.has(value));
+  return kept.length === chosen.length ? chosen : kept;
+}
+
 function GuidesView({
   guides,
-  onNew,
+  newGuideAction,
   onOpen,
   onEdit,
   onShare,
@@ -1065,7 +1154,7 @@ function GuidesView({
   canCreate,
 }: {
   guides: Guide[];
-  onNew: () => void;
+  newGuideAction: ReactNode;
   onOpen: (guide: Guide) => void;
   onEdit: (guide: Guide) => void;
   onShare: (guide: Guide) => void;
@@ -1078,43 +1167,344 @@ function GuidesView({
   busy: boolean;
   canCreate: boolean;
 }) {
+  const [tab, setTab] = useState<LibraryTab>("all");
   const [query, setQuery] = useState("");
-  const [libraryTab, setLibraryTab] = useState<"shared" | "drafts">(() =>
-    guides.some((guide) => guide.publishedRevision) ? "shared" : "drafts",
-  );
+  const [sort, setSort] = useState<LibrarySort>("updated");
+  const [sortAscending, setSortAscending] = useState(false);
   const [viewMode, setViewMode] = useState<"cards" | "list">("list");
-  const [sort, setSort] = useState("updated");
-  const [pageSize, setPageSize] = useState(10);
+  const [density, setDensity] = useState<LibraryDensity>("cosy");
+  const [audience, setAudience] = useState<LibraryAudience>("any");
+  const [categories, setCategories] = useState<string[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
+  const [owners, setOwners] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
-  const sharedCount = guides.filter((guide) => guide.publishedRevision).length;
-  const draftCount = guides.filter((guide) => guide.workingRevision).length;
-  const scopedGuides = guides.filter((guide) =>
-    libraryTab === "shared"
-      ? Boolean(guide.publishedRevision)
-      : Boolean(guide.workingRevision),
+
+  const scoped = guides.filter((guide) => guideMatchesTab(guide, tab));
+
+  const categoryCounts = countValues(
+    scoped.map((guide) => libraryRevision(guide, tab)?.category ?? ""),
   );
-  const filtered = scopedGuides
+  const tagCounts = countValues(
+    scoped.flatMap((guide) => libraryRevision(guide, tab)?.tags ?? []),
+  );
+  const ownerCounts = countValues(
+    scoped.map((guide) => libraryRevision(guide, tab)?.authorName ?? ""),
+  );
+
+  // Facets are scoped to the active tab, so a category chosen under "Drafts"
+  // may not exist under "Live". Keep the choice in state — switching back
+  // restores it — but only apply the parts still on screen, because a filter
+  // nobody can see emptying the table is impossible to recover from.
+  const activeCategories = visibleSelection(categories, categoryCounts);
+  const activeTags = visibleSelection(tags, tagCounts);
+  const activeOwners = visibleSelection(owners, ownerCounts);
+  const activeFacetCount =
+    activeCategories.length +
+    activeTags.length +
+    activeOwners.length +
+    (audience === "any" ? 0 : 1);
+
+  const filtered = scoped
     .filter((guide) => {
-      const revision =
-        libraryTab === "shared"
-          ? guide.publishedRevision
-          : guide.workingRevision;
-      const text =
-        `${guide.title} ${revision?.summary ?? ""} ${revision?.tags.join(" ") ?? ""}`.toLowerCase();
-      return text.includes(query.toLowerCase());
+      const revision = libraryRevision(guide, tab);
+      if (audience === "workspace" && guide.restricted) return false;
+      if (audience === "restricted" && !guide.restricted) return false;
+      if (
+        activeCategories.length &&
+        !activeCategories.includes(revision?.category ?? "")
+      ) {
+        return false;
+      }
+      if (
+        activeTags.length &&
+        !activeTags.some((tag) => revision?.tags.includes(tag))
+      ) {
+        return false;
+      }
+      if (
+        activeOwners.length &&
+        !activeOwners.includes(revision?.authorName ?? "")
+      ) {
+        return false;
+      }
+      const needle = query.trim().toLowerCase();
+      if (!needle) return true;
+      return [
+        revision?.title ?? guide.title,
+        revision?.summary ?? "",
+        revision?.category ?? "",
+        revision?.authorName ?? "",
+        ...(revision?.tags ?? []),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
     })
     .sort((left, right) => {
-      if (sort === "title") return left.title.localeCompare(right.title);
-      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
+      const direction = sortAscending ? 1 : -1;
+      switch (sort) {
+        case "title":
+          return (
+            (libraryRevision(left, tab)?.title ?? left.title).localeCompare(
+              libraryRevision(right, tab)?.title ?? right.title,
+            ) * direction
+          );
+        case "steps":
+          return (
+            ((libraryRevision(left, tab)?.steps.length ?? 0) -
+              (libraryRevision(right, tab)?.steps.length ?? 0)) *
+            direction
+          );
+        case "views":
+          return ((left.viewCount ?? 0) - (right.viewCount ?? 0)) * direction;
+        default:
+          return left.updatedAt.localeCompare(right.updatedAt) * direction;
+      }
     });
+
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
   const visibleGuides = filtered.slice(
     safePage * pageSize,
     (safePage + 1) * pageSize,
   );
+
+  // Whenever the result set itself changes — not merely its order — go back to
+  // the first page with nothing selected, so a bulk action can never reach a
+  // row the reader has stopped looking at. Adjusting during render is React's
+  // documented alternative to an effect here.
+  const resultKey = [
+    tab,
+    query.trim().toLowerCase(),
+    audience,
+    activeCategories.join("\u0000"),
+    activeTags.join("\u0000"),
+    activeOwners.join("\u0000"),
+  ].join("|");
+  const [lastResultKey, setLastResultKey] = useState(resultKey);
+  if (resultKey !== lastResultKey) {
+    setLastResultKey(resultKey);
+    setPage(0);
+    setSelected([]);
+  }
+
+  const previewGuide = previewId
+    ? (guides.find((guide) => guide.id === previewId) ?? null)
+    : null;
+  const selectedGuides = filtered.filter((guide) =>
+    selected.includes(guide.id),
+  );
+  const archivableSelection = selectedGuides.filter(
+    (guide) => guide.canArchive && guide.status !== "archived",
+  );
+  const allOnPageSelected =
+    visibleGuides.length > 0 &&
+    visibleGuides.every((guide) => selected.includes(guide.id));
+
+  const tabCounts: Record<LibraryTab, number> = {
+    all: guides.length,
+    live: guides.filter((guide) => guideMatchesTab(guide, "live")).length,
+    review: guides.filter((guide) => guideMatchesTab(guide, "review")).length,
+    drafts: guides.filter((guide) => guideMatchesTab(guide, "drafts")).length,
+    archived: guides.filter((guide) => guideMatchesTab(guide, "archived"))
+      .length,
+  };
+
+  function toggleFacet(
+    value: string,
+    chosen: string[],
+    setChosen: (next: string[]) => void,
+  ) {
+    setChosen(
+      chosen.includes(value)
+        ? chosen.filter((entry) => entry !== value)
+        : [...chosen, value],
+    );
+  }
+
+  const activeFilterChips: Array<{
+    key: string;
+    label: string;
+    onRemove: () => void;
+  }> = [
+    ...(audience === "any"
+      ? []
+      : [
+          {
+            key: "audience",
+            label:
+              audience === "workspace"
+                ? "Whole workspace"
+                : "Restricted audience",
+            onRemove: () => setAudience("any"),
+          },
+        ]),
+    ...activeCategories.map((value) => ({
+      key: `category:${value}`,
+      label: value || "Uncategorized",
+      onRemove: () => toggleFacet(value, categories, setCategories),
+    })),
+    ...activeTags.map((value) => ({
+      key: `tag:${value}`,
+      label: value,
+      onRemove: () => toggleFacet(value, tags, setTags),
+    })),
+    ...activeOwners.map((value) => ({
+      key: `owner:${value}`,
+      label: value,
+      onRemove: () => toggleFacet(value, owners, setOwners),
+    })),
+  ];
+
+  function clearFacets() {
+    setCategories([]);
+    setTags([]);
+    setOwners([]);
+    setAudience("any");
+  }
+
+  function sortBy(key: LibrarySort) {
+    setSortAscending(sort === key ? !sortAscending : key === "title");
+    setSort(key);
+  }
+
+  async function approveGuide(guide: Guide) {
+    const combined = guide.canPublish;
+    if (
+      !(await askToConfirm({
+        title: combined
+          ? "Approve and publish this revision?"
+          : "Approve this revision?",
+        description: combined
+          ? "Approve this revision and make it live for its audience."
+          : "Approve this revision for publication?",
+        confirmLabel: combined ? "Approve and publish" : "Approve",
+      }))
+    )
+      return;
+    await onAction(
+      "reviewGuide",
+      { guideId: guide.id, decision: "approved" },
+      combined ? "" : "Review approved",
+    ).catch(() => undefined);
+    if (combined) {
+      await onAction(
+        "publishGuide",
+        { guideId: guide.id },
+        "Guide shared",
+      ).catch(() => undefined);
+    }
+  }
+
+  async function requestChanges(guide: Guide) {
+    if (
+      !(await askToConfirm({
+        title: "Request changes?",
+        description: "Return this revision to its author for changes?",
+        confirmLabel: "Request changes",
+      }))
+    )
+      return;
+    await onAction(
+      "reviewGuide",
+      { guideId: guide.id, decision: "changes_requested" },
+      "Changes requested",
+    ).catch(() => undefined);
+  }
+
+  function guideMenu(guide: Guide) {
+    const revision = libraryRevision(guide, tab);
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className="icon-button"
+          type="button"
+          aria-label={`More actions for ${revision?.title ?? guide.title}`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <MoreHorizontal />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {guide.canShare && guide.status !== "archived" ? (
+            <DropdownMenuItem onClick={() => onShare(guide)}>
+              <Link2 /> Share
+            </DropdownMenuItem>
+          ) : null}
+          {guide.publishedRevision ? (
+            <DropdownMenuItem onClick={() => onExport(guide)}>
+              <Download /> Export
+            </DropdownMenuItem>
+          ) : null}
+          {guide.canReview && guide.status === "review" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() => void approveGuide(guide)}
+              >
+                <CheckCircle2 />
+                {guide.canPublish ? "Approve and publish" : "Approve"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() => void requestChanges(guide)}
+              >
+                <RotateCcw /> Request changes
+              </DropdownMenuItem>
+            </>
+          ) : null}
+          {guide.canPublish && guide.status === "review" && !guide.canReview ? (
+            <DropdownMenuItem
+              disabled={busy}
+              onClick={() =>
+                void onAction(
+                  "publishGuide",
+                  { guideId: guide.id },
+                  "Guide shared",
+                ).catch(() => undefined)
+              }
+            >
+              <ShieldCheck /> Publish
+            </DropdownMenuItem>
+          ) : null}
+          {guide.canArchive && guide.status !== "archived" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() =>
+                  void onAction(
+                    "archiveGuide",
+                    { guideId: guide.id },
+                    "Guide archived",
+                  )
+                }
+              >
+                <Archive /> Archive
+              </DropdownMenuItem>
+            </>
+          ) : null}
+          {guide.canDelete ? (
+            <DropdownMenuItem
+              className="danger-menu-item"
+              disabled={busy}
+              onClick={() => setDeleteTarget(guide)}
+            >
+              <Trash2 /> Delete
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
 
   return (
     <div className="view-stack">
@@ -1128,340 +1518,435 @@ function GuidesView({
           </p>
         </div>
       </div>
+
       <section className="card table-card library-card">
         <div className="library-view-bar">
-          <div className="library-tabs" role="tablist" aria-label="Guide collections">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={libraryTab === "shared"}
-              className={cn(libraryTab === "shared" && "is-active")}
-              onClick={() => {
-                setLibraryTab("shared");
-                setPage(0);
-              }}
-            >
-              Shared <span>{sharedCount}</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={libraryTab === "drafts"}
-              className={cn(libraryTab === "drafts" && "is-active")}
-              onClick={() => {
-                setLibraryTab("drafts");
-                setPage(0);
-              }}
-            >
-              Drafts <span>{draftCount}</span>
-            </button>
+          <div
+            className="library-tabs"
+            role="tablist"
+            aria-label="Guide collections"
+          >
+            {LIBRARY_TABS.map((entry) => (
+              <button
+                type="button"
+                role="tab"
+                key={entry.key}
+                aria-selected={tab === entry.key}
+                className={cn(tab === entry.key && "is-active")}
+                onClick={() => setTab(entry.key)}
+              >
+                {entry.label} <span>{tabCounts[entry.key]}</span>
+              </button>
+            ))}
           </div>
-          <div className="library-layout-toggle" aria-label="Guide layout">
-            <button
-              type="button"
-              className={cn(viewMode === "cards" && "is-active")}
-              aria-label="Card view"
-              aria-pressed={viewMode === "cards"}
-              onClick={() => setViewMode("cards")}
-            >
-              <Grid2X2 />
-            </button>
-            <button
-              type="button"
-              className={cn(viewMode === "list" && "is-active")}
-              aria-label="List view"
-              aria-pressed={viewMode === "list"}
-              onClick={() => setViewMode("list")}
-            >
-              <List />
-            </button>
+          <div className="library-view-controls">
+            <div className="library-layout-toggle" aria-label="Row density">
+              <button
+                type="button"
+                className={cn(density === "cosy" && "is-active")}
+                aria-label="Comfortable rows"
+                aria-pressed={density === "cosy"}
+                onClick={() => setDensity("cosy")}
+              >
+                <Rows2 />
+              </button>
+              <button
+                type="button"
+                className={cn(density === "compact" && "is-active")}
+                aria-label="Compact rows"
+                aria-pressed={density === "compact"}
+                onClick={() => setDensity("compact")}
+              >
+                <Rows3 />
+              </button>
+            </div>
+            <div className="library-layout-toggle" aria-label="Guide layout">
+              <button
+                type="button"
+                className={cn(viewMode === "list" && "is-active")}
+                aria-label="Table view"
+                aria-pressed={viewMode === "list"}
+                onClick={() => setViewMode("list")}
+              >
+                <List />
+              </button>
+              <button
+                type="button"
+                className={cn(viewMode === "cards" && "is-active")}
+                aria-label="Card view"
+                aria-pressed={viewMode === "cards"}
+                onClick={() => setViewMode("cards")}
+              >
+                <Grid2X2 />
+              </button>
+            </div>
           </div>
         </div>
+
         {guides.length ? (
           <div className="filter-bar">
             <label className="search-field">
               <Search />
               <input
                 value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setPage(0);
-                }}
-                placeholder="Search guides"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search titles, summaries, tags, and owners"
               />
             </label>
+            <Popover>
+              <PopoverTrigger
+                className="library-filter-trigger"
+                type="button"
+                aria-label={
+                  activeFacetCount
+                    ? `Filters, ${activeFacetCount} applied`
+                    : "Filters"
+                }
+              >
+                <SlidersHorizontal /> Filters
+                {activeFacetCount ? (
+                  <span className="library-filter-count">
+                    {activeFacetCount}
+                  </span>
+                ) : null}
+              </PopoverTrigger>
+              <PopoverContent align="start" className="library-filter-popover">
+                <div className="facet-group">
+                  <p className="facet-title">Audience</p>
+                  <div className="facet-list">
+                    {(
+                      [
+                        { value: "any", label: "Everyone with access" },
+                        { value: "workspace", label: "Whole workspace" },
+                        { value: "restricted", label: "Restricted audience" },
+                      ] as const
+                    ).map((option) => (
+                      <button
+                        className="facet-row"
+                        type="button"
+                        key={option.value}
+                        data-selected={audience === option.value}
+                        aria-pressed={audience === option.value}
+                        onClick={() => setAudience(option.value)}
+                      >
+                        <span className="facet-box">
+                          <Check />
+                        </span>
+                        <span className="facet-name">{option.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <FacetGroup
+                  title="Category"
+                  entries={categoryCounts}
+                  chosen={categories}
+                  emptyLabel="Uncategorized"
+                  onToggle={(value) =>
+                    toggleFacet(value, categories, setCategories)
+                  }
+                />
+                <FacetGroup
+                  title="Tag"
+                  entries={tagCounts}
+                  chosen={tags}
+                  onToggle={(value) => toggleFacet(value, tags, setTags)}
+                />
+                <FacetGroup
+                  title="Owner"
+                  entries={ownerCounts}
+                  chosen={owners}
+                  onToggle={(value) => toggleFacet(value, owners, setOwners)}
+                />
+              </PopoverContent>
+            </Popover>
             <SelectMenu
               className="filter-select"
               value={sort}
-              onChange={(value) => {
-                setSort(value);
-                setPage(0);
-              }}
+              onChange={(value) => setSort(value as LibrarySort)}
               ariaLabel="Sort guides"
-              options={[
-                { value: "updated", label: "Recently updated" },
-                { value: "title", label: "Title A–Z" },
-              ]}
+              options={LIBRARY_SORTS}
             />
             <span className="result-count">
               {filtered.length} {filtered.length === 1 ? "guide" : "guides"}
             </span>
           </div>
         ) : null}
-        {filtered.length ? (
-          <div
-            className={cn(
-              "guide-table",
-              viewMode === "cards" ? "is-card-view" : "is-list-view",
-            )}
-            role="tabpanel"
-          >
+
+        {/*
+          The facets live behind a button now, so what is currently applied has
+          to stay visible out here — otherwise a filter narrowing the table is
+          invisible until someone reopens the menu.
+        */}
+        {activeFilterChips.length ? (
+          <div className="library-active-filters">
+            {activeFilterChips.map((chip) => (
+              <button
+                className="library-chip"
+                type="button"
+                key={chip.key}
+                aria-label={`Remove filter ${chip.label}`}
+                onClick={chip.onRemove}
+              >
+                {chip.label} <X />
+              </button>
+            ))}
+            <button
+              className="button ghost small"
+              type="button"
+              onClick={clearFacets}
+            >
+              <FilterX /> Clear all
+            </button>
+          </div>
+        ) : null}
+
+        {visibleGuides.length === 0 ? (
+          <EmptyState
+            icon={query.trim() || activeFacetCount ? Search : BookOpen}
+            title={
+              query.trim() || activeFacetCount
+                ? "No matching guides"
+                : tab === "archived"
+                  ? "Nothing archived"
+                  : "No guides here yet"
+            }
+            description={
+              query.trim() || activeFacetCount
+                ? "Loosen a filter or clear the search to see the rest of the library."
+                : "Create a guide or capture a workflow to start a draft."
+            }
+            action={
+              query.trim() || activeFacetCount ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setQuery("");
+                    clearFacets();
+                  }}
+                >
+                  <FilterX /> Reset filters
+                </Button>
+              ) : canCreate ? (
+                newGuideAction
+              ) : undefined
+            }
+          />
+        ) : viewMode === "cards" ? (
+          <div className="library-gallery">
             {visibleGuides.map((guide) => {
-              const revision =
-                libraryTab === "shared"
-                  ? guide.publishedRevision
-                  : guide.workingRevision;
-              const live = guide.publishedRevision;
+              const revision = libraryRevision(guide, tab);
               return (
                 <article
-                  className="guide-card guide-card-clickable"
+                  className="library-gallery-card"
                   key={guide.id}
-                  role="link"
+                  role="button"
                   tabIndex={0}
-                  aria-label={`Open ${revision?.title ?? guide.title}`}
+                  aria-label={`Preview ${revision?.title ?? guide.title}`}
                   onClick={(event) => {
-                    if ((event.target as HTMLElement).closest("button, a, [role='menuitem']")) return;
-                    onOpen(guide);
+                    if (
+                      (event.target as HTMLElement).closest(
+                        "button, a, [role='menuitem']",
+                      )
+                    )
+                      return;
+                    setPreviewId(guide.id);
                   }}
                   onKeyDown={(event) => {
                     if (event.target !== event.currentTarget) return;
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      onOpen(guide);
+                      setPreviewId(guide.id);
                     }
                   }}
                 >
-                  <div className="guide-card-main">
-                    <span className="guide-icon large">
-                      <BookOpen />
-                    </span>
-                    <span className="guide-content">
-                      <span className="guide-title-line">
-                        <strong>{revision?.title ?? guide.title}</strong>
-                        {guide.restricted ? (
-                          <span className="restricted-label">
-                            <LockKeyhole /> Audience restricted
-                          </span>
-                        ) : (
-                          <span className="workspace-label">
-                            <Globe2 /> Workspace
-                          </span>
-                        )}
+                  <div className="library-gallery-top">
+                    <StatusBadge status={guide.status} />
+                    {guide.restricted ? (
+                      <span className="restricted-label">
+                        <LockKeyhole /> Restricted
                       </span>
-                      <span className="guide-summary">
-                        {revision?.summary || "No description yet."}
+                    ) : (
+                      <span className="workspace-label">
+                        <Globe2 /> Workspace
                       </span>
-                      <span className="guide-meta">
-                        {revision?.category || "Uncategorized"} ·{" "}
-                        {revision?.steps.length ?? 0}{" "}
-                        {(revision?.steps.length ?? 0) === 1 ? "step" : "steps"}
-                        {guide.publishedRevision
-                          ? ` · ${guide.viewCount ?? 0} ${(guide.viewCount ?? 0) === 1 ? "view" : "views"}`
-                          : ""}{" "}
-                        · Updated {formatDate(guide.updatedAt)}
-                      </span>
+                    )}
+                  </div>
+                  <strong className="library-gallery-title">
+                    {revision?.title ?? guide.title}
+                  </strong>
+                  <p className="library-gallery-summary">
+                    {revision?.summary || "No description yet."}
+                  </p>
+                  <div className="library-gallery-foot">
+                    <span>{revision?.authorName ?? "Unassigned"}</span>
+                    <span>
+                      {revision?.steps.length ?? 0}{" "}
+                      {(revision?.steps.length ?? 0) === 1 ? "step" : "steps"}{" "}
+                      · {relativeDate(guide.updatedAt)}
                     </span>
                   </div>
-                  <div className="guide-state-column">
-                    <StatusBadge
-                      status={libraryTab === "shared" ? "published" : guide.status}
-                    />
-                    {libraryTab === "drafts" && guide.workingRevision && live ? (
-                      <small>v{live.number} remains live</small>
-                    ) : revision ? (
-                      <small>Revision {revision.number}</small>
-                    ) : null}
-                  </div>
-                  <div className="guide-actions">
-                    {guide.canEdit && guide.status !== "archived" ? (
-                      <button
-                        className="button ghost small"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onEdit(guide);
-                        }}
-                      >
-                        Edit
-                      </button>
-                    ) : null}
-                    {guide.canShare && guide.status !== "archived" ? (
-                      <button
-                        className="button ghost small"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onShare(guide);
-                        }}
-                      >
-                        Share
-                      </button>
-                    ) : null}
-                    {guide.canReview && guide.status === "review" ? (
-                      <>
-                        <button
-                          className="button secondary small"
-                          disabled={busy}
-                          type="button"
-                          onClick={() => {
-                            void (async () => {
-                              const combined = guide.canPublish;
-                              if (
-                                !(await askToConfirm({
-                                  title: combined
-                                    ? "Approve and publish this revision?"
-                                    : "Approve this revision?",
-                                  description: combined
-                                    ? "Approve this revision and make it live for its audience."
-                                    : "Approve this revision for publication?",
-                                  confirmLabel: combined
-                                    ? "Approve and publish"
-                                    : "Approve",
-                                }))
-                              )
-                                return;
-                              await onAction(
-                                "reviewGuide",
-                                { guideId: guide.id, decision: "approved" },
-                                combined ? "" : "Review approved",
-                              ).catch(() => undefined);
-                              if (combined) {
-                                await onAction(
-                                  "publishGuide",
-                                  { guideId: guide.id },
-                                  "Guide shared",
-                                ).catch(() => undefined);
-                              }
-                            })();
-                          }}
-                        >
-                          {guide.canPublish ? "Approve and publish" : "Approve"}
-                        </button>
-                        <button
-                          className="button ghost small"
-                          disabled={busy}
-                          type="button"
-                          onClick={() => {
-                            void (async () => {
-                              if (
-                                !(await askToConfirm({
-                                  title: "Request changes?",
-                                  description:
-                                    "Return this revision to its author for changes?",
-                                  confirmLabel: "Request changes",
-                                }))
-                              )
-                                return;
-                              await onAction(
-                                "reviewGuide",
-                                {
-                                  guideId: guide.id,
-                                  decision: "changes_requested",
-                                },
-                                "Changes requested",
-                              ).catch(() => undefined);
-                            })();
-                          }}
-                        >
-                          Request changes
-                        </button>
-                      </>
-                    ) : null}
-                    {guide.canPublish &&
-                    guide.status === "review" &&
-                    !guide.canReview ? (
-                      <button
-                        className="button primary small"
-                        disabled={busy}
-                        type="button"
-                        onClick={() =>
-                          onAction(
-                            "publishGuide",
-                            { guideId: guide.id },
-                            "Guide shared",
-                          )
-                        }
-                      >
-                        Publish
-                      </button>
-                    ) : null}
-                    {(guide.publishedRevision || guide.canArchive || guide.canDelete) ? (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger
-                          className="icon-button"
-                          type="button"
-                          aria-label={`More actions for ${revision?.title ?? guide.title}`}
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <MoreHorizontal />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-                          {guide.publishedRevision ? (
-                            <DropdownMenuItem onClick={() => onExport(guide)}>
-                              <Download /> Export
-                            </DropdownMenuItem>
-                          ) : null}
-                          {guide.canArchive && guide.status !== "archived" ? (
-                            <DropdownMenuItem
-                              disabled={busy}
-                              onClick={() => void onAction("archiveGuide", { guideId: guide.id }, "Guide archived")}
-                            >
-                              <Archive /> Archive
-                            </DropdownMenuItem>
-                          ) : null}
-                          {guide.canDelete ? (
-                            <DropdownMenuItem
-                              className="danger-menu-item"
-                              disabled={busy}
-                              onClick={() => setDeleteTarget(guide)}
-                            >
-                              <Trash2 /> Delete
-                            </DropdownMenuItem>
-                          ) : null}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    ) : null}
+                  <div className="library-gallery-actions">
+                    {guideMenu(guide)}
                   </div>
                 </article>
               );
             })}
           </div>
         ) : (
-          <EmptyState
-            icon={guides.length ? Search : BookOpen}
-            title={
-              query.trim()
-                ? "No matching guides"
-                : libraryTab === "shared"
-                  ? "No shared guides yet"
-                  : "No drafts yet"
-            }
-            description={
-              query.trim()
-                ? "Try another search."
-                : libraryTab === "shared"
-                  ? "Published guides will appear here for the workspace."
-                  : "Create a guide or capture a workflow to start a draft."
-            }
-            action={
-              libraryTab === "drafts" && !query.trim() && canCreate ? (
-                <Button onClick={onNew}>
-                  <Plus /> Create guide
-                </Button>
-              ) : undefined
-            }
-          />
+          <div className="library-table-scroll">
+            <table className="library-table" data-density={density}>
+              <thead>
+                <tr>
+                  <th className="library-cell-pick">
+                    <Checkbox
+                      checked={allOnPageSelected}
+                      aria-label="Select every guide on this page"
+                      onCheckedChange={(checked) =>
+                        setSelected((current) => {
+                          const ids = visibleGuides.map((guide) => guide.id);
+                          return checked
+                            ? [...new Set([...current, ...ids])]
+                            : current.filter((id) => !ids.includes(id));
+                        })
+                      }
+                    />
+                  </th>
+                  <LibraryHeader
+                    label="Guide"
+                    sortKey="title"
+                    sort={sort}
+                    ascending={sortAscending}
+                    onSort={sortBy}
+                  />
+                  <th>Status</th>
+                  <th>Audience</th>
+                  <LibraryHeader
+                    label="Steps"
+                    sortKey="steps"
+                    sort={sort}
+                    ascending={sortAscending}
+                    onSort={sortBy}
+                  />
+                  <LibraryHeader
+                    label="Views"
+                    sortKey="views"
+                    sort={sort}
+                    ascending={sortAscending}
+                    onSort={sortBy}
+                  />
+                  <th>Owner</th>
+                  <LibraryHeader
+                    label="Updated"
+                    sortKey="updated"
+                    sort={sort}
+                    ascending={sortAscending}
+                    onSort={sortBy}
+                  />
+                  <th className="library-cell-actions">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleGuides.map((guide) => {
+                  const revision = libraryRevision(guide, tab);
+                  const isSelected = selected.includes(guide.id);
+                  return (
+                    <tr
+                      key={guide.id}
+                      data-selected={isSelected || undefined}
+                      onClick={() => setPreviewId(guide.id)}
+                    >
+                      <td
+                        className="library-cell-pick"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <Checkbox
+                          checked={isSelected}
+                          aria-label={`Select ${revision?.title ?? guide.title}`}
+                          onCheckedChange={() =>
+                            setSelected((current) =>
+                              current.includes(guide.id)
+                                ? current.filter((id) => id !== guide.id)
+                                : [...current, guide.id],
+                            )
+                          }
+                        />
+                      </td>
+                      <td>
+                        <div className="library-title-cell">
+                          <span className="guide-icon">
+                            {guide.restricted ? <LockKeyhole /> : <BookOpen />}
+                          </span>
+                          <span className="library-title-copy">
+                            <strong>{revision?.title ?? guide.title}</strong>
+                            <small>
+                              {revision?.summary || "No description yet."}
+                            </small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <StatusBadge status={guide.status} />
+                      </td>
+                      <td>
+                        {guide.restricted ? (
+                          <span className="restricted-label">
+                            <LockKeyhole /> Restricted
+                          </span>
+                        ) : (
+                          <span className="workspace-label">
+                            <Globe2 /> Workspace
+                          </span>
+                        )}
+                      </td>
+                      <td className="library-cell-number">
+                        {revision?.steps.length ?? 0}
+                      </td>
+                      <td className="library-cell-number">
+                        {guide.publishedRevision ? (guide.viewCount ?? 0) : "—"}
+                      </td>
+                      <td className="library-cell-muted">
+                        {revision?.authorName ?? "—"}
+                      </td>
+                      <td className="library-cell-muted">
+                        {relativeDate(guide.updatedAt)}
+                      </td>
+                      <td
+                        className="library-cell-actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="library-row-actions">
+                          <button
+                            className="icon-button"
+                            type="button"
+                            aria-label={`Open ${revision?.title ?? guide.title}`}
+                            onClick={() => onOpen(guide)}
+                          >
+                            <Eye />
+                          </button>
+                          {guide.canEdit && guide.status !== "archived" ? (
+                            <button
+                              className="icon-button"
+                              type="button"
+                              aria-label={`Edit ${revision?.title ?? guide.title}`}
+                              onClick={() => onEdit(guide)}
+                            >
+                              <PenLine />
+                            </button>
+                          ) : null}
+                          {guideMenu(guide)}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
+
         {filtered.length > pageSize ? (
           <ListPagination
             total={filtered.length}
@@ -1475,6 +1960,113 @@ function GuidesView({
           />
         ) : null}
       </section>
+
+      {selectedGuides.length ? (
+        <div className="library-bulk-bar" role="status">
+          <span className="library-bulk-count">
+            {selectedGuides.length} selected
+          </span>
+          <span className="library-bulk-divider" />
+          {selectedGuides.length === 1 &&
+          selectedGuides[0].canShare &&
+          selectedGuides[0].status !== "archived" ? (
+            <button
+              className="library-bulk-action"
+              type="button"
+              onClick={() => onShare(selectedGuides[0])}
+            >
+              <Link2 /> Share
+            </button>
+          ) : null}
+          {selectedGuides.length === 1 && selectedGuides[0].publishedRevision ? (
+            <button
+              className="library-bulk-action"
+              type="button"
+              onClick={() => onExport(selectedGuides[0])}
+            >
+              <Download /> Export
+            </button>
+          ) : null}
+          {archivableSelection.length ? (
+            <button
+              className="library-bulk-action"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  if (
+                    !(await askToConfirm({
+                      title:
+                        archivableSelection.length === 1
+                          ? "Archive this guide?"
+                          : `Archive ${archivableSelection.length} guides?`,
+                      description:
+                        "Archived guides stop being shared and move out of the working library. Published revisions stay readable in their history.",
+                      confirmLabel: "Archive",
+                      tone: "danger",
+                    }))
+                  )
+                    return;
+                  for (const guide of archivableSelection) {
+                    await onAction(
+                      "archiveGuide",
+                      { guideId: guide.id },
+                      "",
+                    ).catch(() => undefined);
+                  }
+                  toast.success(
+                    archivableSelection.length === 1
+                      ? "Guide archived"
+                      : `${archivableSelection.length} guides archived`,
+                  );
+                  setSelected([]);
+                })();
+              }}
+            >
+              <Archive /> Archive
+            </button>
+          ) : null}
+          <span className="library-bulk-divider" />
+          <button
+            className="library-bulk-action"
+            type="button"
+            onClick={() => setSelected([])}
+          >
+            <X /> Clear
+          </button>
+        </div>
+      ) : null}
+
+      <Sheet
+        open={Boolean(previewGuide)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewId(null);
+        }}
+      >
+        {previewGuide ? (
+          <SheetContent className="library-preview" side="right">
+            <LibraryPreview
+              guide={previewGuide}
+              revision={libraryRevision(previewGuide, tab)}
+              busy={busy}
+              onOpen={() => onOpen(previewGuide)}
+              onEdit={() => onEdit(previewGuide)}
+              onShare={() => onShare(previewGuide)}
+              onExport={() => onExport(previewGuide)}
+              onApprove={() => void approveGuide(previewGuide)}
+              onRequestChanges={() => void requestChanges(previewGuide)}
+              onPublish={() =>
+                void onAction(
+                  "publishGuide",
+                  { guideId: previewGuide.id },
+                  "Guide shared",
+                ).catch(() => undefined)
+              }
+            />
+          </SheetContent>
+        ) : null}
+      </Sheet>
+
       {deleteTarget ? (
         <GuideDeleteDialog
           busy={busy}
@@ -1491,6 +2083,276 @@ function GuidesView({
       ) : null}
       {confirmDialog}
     </div>
+  );
+}
+
+function LibraryHeader({
+  label,
+  sortKey,
+  sort,
+  ascending,
+  onSort,
+}: {
+  label: string;
+  sortKey: LibrarySort;
+  sort: LibrarySort;
+  ascending: boolean;
+  onSort: (key: LibrarySort) => void;
+}) {
+  const active = sort === sortKey;
+  return (
+    <th
+      aria-sort={active ? (ascending ? "ascending" : "descending") : "none"}
+      data-active={active || undefined}
+    >
+      <button type="button" onClick={() => onSort(sortKey)}>
+        {label}
+        {active ? ascending ? <ArrowUp /> : <ArrowDown /> : null}
+      </button>
+    </th>
+  );
+}
+
+function FacetGroup({
+  title,
+  entries,
+  chosen,
+  onToggle,
+  emptyLabel = "Untagged",
+}: {
+  title: string;
+  entries: Array<[string, number]>;
+  chosen: string[];
+  onToggle: (value: string) => void;
+  emptyLabel?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (!entries.length) return null;
+  const shown = expanded ? entries : entries.slice(0, 6);
+
+  return (
+    <div className="facet-group">
+      <p className="facet-title">{title}</p>
+      <div className="facet-list">
+        {shown.map(([value, count]) => (
+          <button
+            className="facet-row"
+            type="button"
+            key={value}
+            data-selected={chosen.includes(value)}
+            aria-pressed={chosen.includes(value)}
+            onClick={() => onToggle(value)}
+          >
+            <span className="facet-box">
+              <Check />
+            </span>
+            <span className="facet-name">{value || emptyLabel}</span>
+            <span className="facet-count">{count}</span>
+          </button>
+        ))}
+        {entries.length > 6 ? (
+          <button
+            className="facet-more"
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "Show fewer" : `Show ${entries.length - 6} more`}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LibraryPreview({
+  guide,
+  revision,
+  busy,
+  onOpen,
+  onEdit,
+  onShare,
+  onExport,
+  onApprove,
+  onRequestChanges,
+  onPublish,
+}: {
+  guide: Guide;
+  revision: GuideRevisionView | null;
+  busy: boolean;
+  onOpen: () => void;
+  onEdit: () => void;
+  onShare: () => void;
+  onExport: () => void;
+  onApprove: () => void;
+  onRequestChanges: () => void;
+  onPublish: () => void;
+}) {
+  const live = guide.publishedRevision;
+  const steps = revision?.steps ?? [];
+
+  return (
+    <>
+      <div className="library-preview-head">
+        <div className="library-preview-chips">
+          <StatusBadge status={guide.status} />
+          {guide.restricted ? (
+            <span className="restricted-label">
+              <LockKeyhole /> Restricted
+            </span>
+          ) : (
+            <span className="workspace-label">
+              <Globe2 /> Workspace
+            </span>
+          )}
+          {revision && isCapturedGuideSource(revision.source) ? (
+            <span className="workspace-label">
+              <Sparkles /> Captured
+            </span>
+          ) : null}
+        </div>
+        <SheetTitle className="library-preview-title">
+          {revision?.title ?? guide.title}
+        </SheetTitle>
+        <SheetDescription className="library-preview-summary">
+          {revision?.summary || "No description yet."}
+        </SheetDescription>
+      </div>
+
+      <div className="library-preview-body">
+        <dl className="library-preview-facts">
+          <div>
+            <dt>Owner</dt>
+            <dd>{revision?.authorName ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Category</dt>
+            <dd>{revision?.category || "Uncategorized"}</dd>
+          </div>
+          <div>
+            <dt>Revision</dt>
+            <dd>
+              {revision ? `Revision ${revision.number}` : "—"}
+              {live && guide.workingRevision && live.number !== revision?.number
+                ? ` · v${live.number} remains live`
+                : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Last updated</dt>
+            <dd>{formatDate(guide.updatedAt)}</dd>
+          </div>
+          <div>
+            <dt>Views</dt>
+            <dd>{live ? (guide.viewCount ?? 0) : "Not shared"}</dd>
+          </div>
+          <div>
+            <dt>Steps</dt>
+            <dd>{steps.length}</dd>
+          </div>
+        </dl>
+
+        {revision?.tags.length ? (
+          <div>
+            <p className="library-preview-label">Tags</p>
+            <div className="library-preview-tags">
+              {revision.tags.map((tag) => (
+                <span className="library-tag" key={tag}>
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div>
+          <p className="library-preview-label">
+            Procedure
+            {steps.length ? ` · first ${Math.min(6, steps.length)} steps` : ""}
+          </p>
+          {steps.length ? (
+            <ol className="library-preview-steps">
+              {steps.slice(0, 6).map((step) => (
+                <li key={step.id} data-kind={step.kind}>
+                  <span>{step.title.trim() || step.description.trim() || "Untitled step"}</span>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="library-preview-empty">
+              This revision has no steps yet.
+            </p>
+          )}
+          {steps.length > 6 ? (
+            <button className="button ghost small" type="button" onClick={onOpen}>
+              Read all {steps.length} steps <ArrowRight />
+            </button>
+          ) : null}
+        </div>
+
+        {guide.revisionHistory?.length ? (
+          <div>
+            <p className="library-preview-label">History</p>
+            <ul className="library-preview-history">
+              {guide.revisionHistory.slice(0, 5).map((entry) => (
+                <li key={entry.id}>
+                  <strong>Revision {entry.number}</strong>
+                  <span>
+                    {titleCase(entry.status)} · {entry.authorName} ·{" "}
+                    {formatDate(entry.publishedAt ?? entry.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="library-preview-foot">
+        <Button type="button" onClick={onOpen}>
+          <Eye /> Open guide
+        </Button>
+        {guide.canEdit && guide.status !== "archived" ? (
+          <Button variant="outline" type="button" onClick={onEdit}>
+            <PenLine /> Edit
+          </Button>
+        ) : null}
+        {guide.canShare && guide.status !== "archived" ? (
+          <Button variant="outline" type="button" onClick={onShare}>
+            <Link2 /> Share
+          </Button>
+        ) : null}
+        {guide.publishedRevision ? (
+          <Button variant="outline" type="button" onClick={onExport}>
+            <Download /> Export
+          </Button>
+        ) : null}
+        {guide.canReview && guide.status === "review" ? (
+          <>
+            <Button
+              variant="secondary"
+              type="button"
+              disabled={busy}
+              onClick={onApprove}
+            >
+              {guide.canPublish ? "Approve and publish" : "Approve"}
+            </Button>
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={busy}
+              onClick={onRequestChanges}
+            >
+              Request changes
+            </Button>
+          </>
+        ) : null}
+        {guide.canPublish && guide.status === "review" && !guide.canReview ? (
+          <Button type="button" disabled={busy} onClick={onPublish}>
+            Publish
+          </Button>
+        ) : null}
+      </div>
+    </>
   );
 }
 
@@ -1591,30 +2453,18 @@ function GuideViewer({
   );
 }
 
-function CaptureView({
-  browserAvailable,
-  desktopAvailable,
-  browserPlanEnabled,
-  desktopPlanEnabled,
+function DesktopCaptureDialog({
   desktopDevices,
   typedTextPolicy,
   busy,
-  onOpenExtension,
+  onClose,
   onRevokeDesktopDevice,
-  planLocked,
-  onOpenPlan,
 }: {
-  browserAvailable: boolean;
-  desktopAvailable: boolean;
-  browserPlanEnabled: boolean;
-  desktopPlanEnabled: boolean;
   desktopDevices: DesktopCaptureDevice[];
   typedTextPolicy: WorkspaceSettings["desktopTypedTextPolicy"];
   busy: boolean;
-  onOpenExtension: () => void;
+  onClose: () => void;
   onRevokeDesktopDevice: (deviceRecordId: string) => Promise<void>;
-  planLocked: boolean;
-  onOpenPlan?: () => void;
 }) {
   const desktopDownloads = [
     {
@@ -1639,197 +2489,123 @@ function CaptureView({
   );
 
   return (
-    <div className="view-stack">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Browser & Windows</p>
-          <h1>Capture a workflow</h1>
-          {planLocked ? (
-            <>
-              <p>
-                Browser and Windows capture, Smart Blur, redact, and annotate
-                are included on Pro.
-                Free workspaces stay on typed guides so unblurred screenshots
-                are never uploaded.
-              </p>
-              <p className="privacy-caption">
-                Start a 14-day Pro trial to install a capture tool and redact
-                locally before upload.
-              </p>
-              {onOpenPlan ? (
-                <button className="button primary" type="button" onClick={onOpenPlan}>
-                  View plans
-                </button>
-              ) : null}
-            </>
+    <Modal
+      title="Desktop capture"
+      eyebrow="Windows 10 & 11"
+      onClose={onClose}
+      wide
+    >
+      <div className="modal-form desktop-capture-dialog">
+        <section className="desktop-capture-intro">
+          <span className="desktop-capture-intro-icon">
+            <Laptop />
+          </span>
+          <div>
+            <strong>Record work across desktop applications</strong>
+            <p>
+              Choose an app, window, monitor, or all displays in KnowHow Capture.
+              Your finished recording opens as a private draft in the web editor.
+            </p>
+          </div>
+        </section>
+
+        <section className="desktop-capture-dialog-section">
+          <div className="desktop-capture-dialog-heading">
+            <div>
+              <p className="eyebrow">Get the app</p>
+              <h3>Install KnowHow Capture</h3>
+            </div>
+            <Badge variant="outline">Windows</Badge>
+          </div>
+          {desktopDownloads.length ? (
+            <div className="desktop-downloads">
+              {desktopDownloads.map((download) => (
+                <a
+                  className="button secondary small"
+                  href={download.href}
+                  key={download.label}
+                >
+                  <Download /> {download.label}
+                </a>
+              ))}
+            </div>
           ) : (
-            <>
-              <p>
-                Choose the recorder that matches the work. Both create an
-                editable private draft in the same governed editor.
-              </p>
-              {!browserAvailable && !desktopAvailable ? (
-                <p className="privacy-caption">
-                  Capture is not enabled for your role in this workspace.
-                </p>
-              ) : null}
-            </>
+            <p className="desktop-capture-dialog-empty">
+              Signed installers are not available on this release channel yet.
+            </p>
           )}
-        </div>
+        </section>
+
+        <section className="desktop-capture-dialog-section">
+          <div className="desktop-capture-dialog-heading">
+            <div>
+              <p className="eyebrow">Paired devices</p>
+              <h3>
+                {desktopDevices.length
+                  ? countPhrase(desktopDevices.length, "connected device")
+                  : "No connected devices"}
+              </h3>
+              <p>
+                Exact non-password text is{" "}
+                {typedTextPolicy === "allowed"
+                  ? "allowed when the author enables it"
+                  : "disabled by workspace policy"}
+                .
+              </p>
+            </div>
+          </div>
+          {desktopDevices.length ? (
+            <div className="desktop-device-list">
+              {desktopDevices.map((device) => (
+                <div className="desktop-device-row" key={device.id}>
+                  <span className="desktop-device-row-icon">
+                    <Laptop />
+                  </span>
+                  <div>
+                    <strong>{device.name}</strong>
+                    <small>
+                      {device.version} · {device.architecture.toUpperCase()} · Last
+                      used{" "}
+                      {device.lastUsedAt
+                        ? formatDate(device.lastUsedAt, true)
+                        : "never"}
+                    </small>
+                  </div>
+                  <Badge variant="outline">Connected</Badge>
+                  <button
+                    className="button ghost small"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void onRevokeDesktopDevice(device.id)}
+                  >
+                    <Trash2 /> Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="desktop-capture-dialog-empty">
+              Install the app, choose Connect workspace, and approve the named
+              device request in your browser.
+            </p>
+          )}
+        </section>
+
+        <p className="privacy-caption desktop-capture-dialog-privacy">
+          <ShieldCheck /> Passwords, clipboard contents, raw keys, and secure
+          Windows surfaces are always excluded. Smart Blur runs before upload.
+        </p>
+
+        <footer className="modal-footer">
+          <span />
+          <button className="button primary" type="button" onClick={onClose}>
+            Done
+          </button>
+        </footer>
       </div>
-      {planLocked ? null : (
-        <>
-          <section className="capture-source-grid">
-            <article className="card capture-source-card">
-              <div className="capture-source-heading">
-                <span><Globe2 /></span>
-                <div>
-                  <p className="eyebrow">Chrome & Edge</p>
-                  <h2>Browser capture</h2>
-                </div>
-                <Badge variant="outline">Extension</Badge>
-              </div>
-              <p>
-                Capture clicks and navigation inside a chosen browser scope,
-                review every screenshot locally, then upload a private draft.
-              </p>
-              <ul className="capture-source-points">
-                <li><Check /> Host-scoped recording indicator</li>
-                <li><Check /> Smart Blur before upload</li>
-                <li><Check /> Chrome side-panel guide companion</li>
-              </ul>
-              <button
-                className="button primary"
-                type="button"
-                disabled={busy || !browserAvailable}
-                onClick={onOpenExtension}
-              >
-                <Link2 /> Connect browser extension
-              </button>
-              {!browserPlanEnabled ? (
-                <small>Browser capture is not included on this plan.</small>
-              ) : null}
-            </article>
-
-            <article className="card capture-source-card desktop-capture-card">
-              <div className="capture-source-heading">
-                <span><Laptop /></span>
-                <div>
-                  <p className="eyebrow">Windows 10 & 11</p>
-                  <h2>Desktop capture</h2>
-                </div>
-                <Badge variant="outline">New</Badge>
-              </div>
-              <p>
-                Record meaningful actions across Windows applications with a
-                compact recorder, explicit target scope, and always-visible
-                controls.
-              </p>
-              <ul className="capture-source-points">
-                <li><Check /> App, window, monitor, or all displays</li>
-                <li><Check /> Pause, retry, finish, and discard from the HUD</li>
-                <li><Check /> Opens directly in the KnowHow web editor</li>
-              </ul>
-              {desktopDownloads.length ? (
-                <div className="desktop-downloads">
-                  {desktopDownloads.map((download) => (
-                    <a
-                      className="button secondary small"
-                      href={download.href}
-                      key={download.label}
-                    >
-                      <Download /> {download.label}
-                    </a>
-                  ))}
-                </div>
-              ) : (
-                <p className="privacy-caption">
-                  Signed installers will appear here when the release channel
-                  is configured.
-                </p>
-              )}
-              {!desktopPlanEnabled ? (
-                <small>Windows capture is not included on this plan.</small>
-              ) : !desktopAvailable ? (
-                <small>Your role cannot start captures in this workspace.</small>
-              ) : null}
-            </article>
-          </section>
-
-          {desktopPlanEnabled ? (
-            <section className="card paired-desktop-devices">
-              <div className="section-heading compact">
-                <div>
-                  <p className="eyebrow">Paired devices</p>
-                  <h2>Windows capture devices</h2>
-                  <p>
-                    Exact non-password text is {typedTextPolicy === "allowed" ? "allowed when the author enables it" : "disabled by workspace policy"}.
-                  </p>
-                </div>
-              </div>
-              {desktopDevices.length ? (
-                <div className="desktop-device-list">
-                  {desktopDevices.map((device) => (
-                    <div className="desktop-device-row" key={device.id}>
-                      <span className="desktop-device-row-icon"><Laptop /></span>
-                      <div>
-                        <strong>{device.name}</strong>
-                        <small>
-                          {device.version} · {device.architecture.toUpperCase()} · Last used {device.lastUsedAt ? formatDate(device.lastUsedAt, true) : "never"}
-                        </small>
-                      </div>
-                      <Badge variant="outline">Connected</Badge>
-                      <button
-                        className="button ghost small"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void onRevokeDesktopDevice(device.id)}
-                      >
-                        <Trash2 /> Revoke
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty-inline">
-                  No Windows devices are connected yet. Install the app and
-                  approve its named-device request in your browser.
-                </p>
-              )}
-            </section>
-          ) : null}
-
-      <section className="privacy-grid">
-        {[
-          {
-            icon: LockKeyhole,
-            title: "Always excluded",
-            copy: "Passwords, clipboard contents, raw keys, secure Windows surfaces, private browsing, and password managers.",
-          },
-          {
-            icon: Shield,
-            title: "Local Smart Blur",
-            copy: "Emails, selected form fields, configured number categories, and manual regions.",
-          },
-          {
-            icon: Eye,
-            title: "Human privacy gate",
-            copy: "Desktop drafts stay private and cannot be shared, exported, or published until the author completes privacy review.",
-          },
-        ].map(({ icon: Icon, title, copy }) => (
-          <article className="card privacy-card" key={title}>
-            <Icon />
-            <h3>{title}</h3>
-            <p>{copy}</p>
-          </article>
-        ))}
-      </section>
-        </>
-      )}
-    </div>
+    </Modal>
   );
 }
-
 function GroupsView({
   groups,
   busy,
@@ -1868,7 +2644,6 @@ function GroupsView({
             Organize who receives published guides without changing what they can do.
           </p>
         </div>
-        <span className="directory-context-pill"><ShieldCheck /> Audience controls</span>
       </div>
       <section className="directory-summary-grid" aria-label="Group summary">
         <article><span><Group /></span><div><strong>{groups.length}</strong><small>Total groups</small></div></article>
@@ -2210,7 +2985,6 @@ function MembersView({
             Manage workspace roles, audience membership, and secure invitations.
           </p>
         </div>
-        <span className="directory-context-pill"><Shield /> Role-based access</span>
       </div>
       <section className="directory-summary-grid members-summary-grid" aria-label="Member summary">
         <article><span><Users /></span><div><strong>{members.length}</strong><small>Total members</small></div></article>
@@ -2218,11 +2992,6 @@ function MembersView({
         <article><span><ShieldCheck /></span><div><strong>{adminCount}</strong><small>Administrators</small></div></article>
         <article><span><Mail /></span><div><strong>{activeInvitationCount}</strong><small>Pending invitations</small></div></article>
       </section>
-      <div className="access-guidance directory-guidance">
-        <Shield />
-        <div><strong>Access has two layers</strong><p>Roles control actions. Groups and direct audiences control which published guides each person receives.</p></div>
-        <span>Vault access is assigned separately</span>
-      </div>
       {pendingSupport.length ? (
         <section className="card table-card">
           <div className="section-heading compact">
@@ -2538,22 +3307,22 @@ function SupportDecisionDialog({
 
 function MemberDialog({
   member,
+  isCurrentUser,
+  isPlatformOwner,
   busy,
   onClose,
   onSave,
   onSuspend,
 }: {
   member: WorkspaceMember;
+  isCurrentUser: boolean;
+  isPlatformOwner: boolean;
   busy: boolean;
   onClose: () => void;
-  onSave: (
-    roles: WorkspaceRole[],
-    capabilities: Array<"vault">,
-  ) => Promise<void>;
+  onSave: (roles: WorkspaceRole[]) => Promise<void>;
   onSuspend: () => Promise<void>;
 }) {
   const [roles, setRoles] = useState(member.roles);
-  const [vaultEnabled, setVaultEnabled] = useState(member.capabilities?.includes("vault") ?? false);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   return (
     <Modal
@@ -2598,19 +3367,17 @@ function MemberDialog({
             </label>
           ))}
         </section>
-        <section className="role-picker capability-picker permission-section">
-          <div className="permission-section-heading">
-            <div><span className="field-label">Capabilities</span><small>Independent access outside workspace roles.</small></div>
-          </div>
-          <label className={`choice-row permission-option${vaultEnabled ? " selected" : ""}`}>
-            <input type="checkbox" checked={vaultEnabled} onChange={(event) => setVaultEnabled(event.target.checked)} />
-            <span><strong>Vault</strong><small>Access encrypted workspace credentials. This is independent of roles and guide audiences.</small></span>
-          </label>
-        </section>
         <PolicyNote icon={Shield} className="member-access-note">
           This member belongs to {countPhrase(member.groupIds.length, "group")} and may also receive workspace-wide or direct guide audiences.
         </PolicyNote>
-        <section className="member-danger-zone">
+        {isCurrentUser || isPlatformOwner ? (
+          <PolicyNote icon={ShieldCheck} className="member-protected-note">
+            {isPlatformOwner
+              ? "This KnowHow owner account is protected from workspace suspension."
+              : "You cannot suspend your own workspace account."}
+          </PolicyNote>
+        ) : (
+          <section className="member-danger-zone">
           <div><strong>{member.status === "suspended" ? "Restore workspace access" : "Suspend workspace access"}</strong><small>{member.status === "suspended" ? "The member can sign in again after restoration." : "The member loses workspace access immediately; their content remains."}</small></div>
           <button
             className={member.status === "suspended" ? "button secondary" : "button danger-button"}
@@ -2627,7 +3394,8 @@ function MemberDialog({
           >
             {member.status === "suspended" ? "Restore" : "Suspend"}
           </button>
-        </section>
+          </section>
+        )}
         <footer className="modal-footer">
           <span />
           <button className="button secondary" type="button" onClick={onClose}>
@@ -2637,9 +3405,7 @@ function MemberDialog({
             className="button primary"
             type="button"
             disabled={busy || roles.length === 0}
-            onClick={() =>
-              onSave(roles, vaultEnabled ? ["vault"] : [])
-            }
+            onClick={() => onSave(roles)}
           >
             <Check /> Save
           </button>
@@ -2826,7 +3592,7 @@ function InviteDialog({
                   ]}
                 />
                 <small>
-                  Roles are additive. Administrator and Vault access are assigned after membership.
+                  Roles are additive and can be adjusted after membership.
                 </small>
               </div>
               <div className="field">
@@ -3277,9 +4043,6 @@ function SettingsView({
             Manage how {workspaceName} looks, publishes, and protects its content.
           </p>
         </div>
-        <span className="settings-workspace-pill">
-          <ShieldCheck /> Workspace controls
-        </span>
       </div>
       <div className="settings-console">
         <aside className="settings-section-nav" aria-label="Workspace settings sections">
@@ -3583,370 +4346,6 @@ function SettingsView({
       </footer>
       {confirmDialog}
     </div>
-  );
-}
-
-function vaultMetadata(item: VaultItem | null) {
-  try {
-    const value = JSON.parse(item?.metadataJson ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    return {
-      username: typeof value.username === "string" ? value.username : "",
-      url: typeof value.url === "string" ? value.url : "",
-      notes: typeof value.notes === "string" ? value.notes : "",
-    };
-  } catch {
-    return { username: "", url: "", notes: "" };
-  }
-}
-
-function VaultView({
-  items,
-  busy,
-  onNew,
-  onEdit,
-  onReveal,
-  onDelete,
-}: {
-  items: VaultItem[];
-  busy: boolean;
-  onNew: () => void;
-  onEdit: (item: VaultItem) => void;
-  onReveal: (item: VaultItem) => void;
-  onDelete: (item: VaultItem) => void;
-}) {
-  return (
-    <div className="view-stack">
-      <div className="page-heading">
-        <div>
-          <p className="eyebrow">Encrypted credentials</p>
-          <h1>Vault</h1>
-          <p>
-            Keep credentials out of guides. Secrets are encrypted and decrypted
-            only in this browser with your passphrase.
-          </p>
-        </div>
-        <button
-          className="button primary"
-          type="button"
-          disabled={busy}
-          onClick={onNew}
-        >
-          <Plus /> New vault item
-        </button>
-      </div>
-      <section className="card table-card">
-        {items.length ? (
-          <div className="vault-list">
-            {items.map((item) => {
-              const metadata = vaultMetadata(item);
-              return (
-                <article className="vault-row" key={item.id}>
-                  <span className="vault-icon">
-                    <KeyRound />
-                  </span>
-                  <span className="member-main">
-                    <strong>{item.title}</strong>
-                    <small>
-                      {metadata.username ||
-                        metadata.url ||
-                        "Encrypted workspace credential"}{" "}
-                      · updated {formatDate(item.updatedAt)}
-                    </small>
-                  </span>
-                  <button
-                    className="button secondary small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onReveal(item)}
-                  >
-                    <Eye /> Reveal
-                  </button>
-                  <button
-                    className="button ghost small"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onEdit(item)}
-                  >
-                    Edit details
-                  </button>
-                  <button
-                    className="icon-button danger"
-                    type="button"
-                    disabled={busy}
-                    aria-label={`Delete ${item.title}`}
-                    onClick={() => onDelete(item)}
-                  >
-                    <Trash2 />
-                  </button>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState
-            icon={KeyRound}
-            title="No vault items"
-            description="Store the first encrypted credential instead of embedding it in a restricted guide."
-            action={
-              <button
-                className="button primary"
-                type="button"
-                disabled={busy}
-                onClick={onNew}
-              >
-                <Plus /> New vault item
-              </button>
-            }
-          />
-        )}
-      </section>
-      <p className="privacy-caption">
-        <ShieldCheck /> KnowHow stores only an authenticated encryption
-        envelope. Passphrases and plaintext are never sent to the server or
-        audit log.
-      </p>
-    </div>
-  );
-}
-
-function VaultEditorDialog({
-  item,
-  busy,
-  onClose,
-  onSave,
-}: {
-  item: VaultItem | null;
-  busy: boolean;
-  onClose: () => void;
-  onSave: (payload: {
-    id?: string;
-    title: string;
-    encryptedEnvelopeJson: string;
-    metadataJson: string;
-  }) => Promise<void>;
-}) {
-  const metadata = vaultMetadata(item);
-  const [title, setTitle] = useState(item?.title ?? "");
-  const [username, setUsername] = useState(metadata.username);
-  const [url, setUrl] = useState(metadata.url);
-  const [notes, setNotes] = useState(metadata.notes);
-  const [secret, setSecret] = useState("");
-  const [passphrase, setPassphrase] = useState("");
-  const [error, setError] = useState("");
-  return (
-    <Modal
-      title={item ? `Edit ${item.title}` : "New vault item"}
-      eyebrow="Client-side encryption"
-      onClose={onClose}
-    >
-      <form
-        className="modal-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setError("");
-          try {
-            let encryptedEnvelopeJson = item?.encryptedEnvelopeJson ?? "";
-            if (secret) {
-              if (passphrase.length < 12)
-                throw new Error(
-                  "Use a vault passphrase of at least 12 characters.",
-                );
-              encryptedEnvelopeJson = JSON.stringify(
-                await encryptSecretValue(secret, passphrase),
-              );
-            }
-            if (!encryptedEnvelopeJson)
-              throw new Error("Enter the secret value and a vault passphrase.");
-            await onSave({
-              ...(item ? { id: item.id } : {}),
-              title: title.trim(),
-              encryptedEnvelopeJson,
-              metadataJson: JSON.stringify({
-                username: username.trim(),
-                url: url.trim(),
-                notes: notes.trim(),
-              }),
-            });
-            setSecret("");
-            setPassphrase("");
-          } catch (nextError) {
-            setError(messageFromError(nextError));
-          }
-        }}
-      >
-        <label className="field">
-          <span>Title</span>
-          <input
-            required
-            minLength={2}
-            maxLength={160}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Microsoft 365 break-glass account"
-          />
-        </label>
-        <div className="form-grid two">
-          <label className="field">
-            <span>Username or account</span>
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="off"
-            />
-          </label>
-          <label className="field">
-            <span>Sign-in URL</span>
-            <input
-              type="url"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://login.example.com"
-            />
-          </label>
-        </div>
-        <label className="field">
-          <span>{item ? "Replacement secret (optional)" : "Secret value"}</span>
-          <textarea
-            required={!item}
-            rows={3}
-            value={secret}
-            onChange={(event) => setSecret(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <label className="field">
-          <span>
-            Vault passphrase{" "}
-            {item ? "(required only when replacing the secret)" : ""}
-          </span>
-          <input
-            type="password"
-            required={!item || Boolean(secret)}
-            minLength={12}
-            value={passphrase}
-            onChange={(event) => setPassphrase(event.target.value)}
-            autoComplete="new-password"
-          />
-        </label>
-        <label className="field">
-          <span>Non-secret notes</span>
-          <textarea
-            rows={3}
-            value={notes}
-            onChange={(event) => setNotes(event.target.value)}
-          />
-        </label>
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <footer className="modal-footer">
-          <span />
-          <button className="button secondary" type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || title.trim().length < 2}
-          >
-            {busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Encrypt
-            & save
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  );
-}
-
-function VaultRevealDialog({
-  item,
-  busy,
-  onClose,
-}: {
-  item: VaultItem;
-  busy: boolean;
-  onClose: () => void;
-}) {
-  const [passphrase, setPassphrase] = useState("");
-  const [plaintext, setPlaintext] = useState("");
-  const [error, setError] = useState("");
-  return (
-    <Modal
-      title={item.title}
-      eyebrow="Decrypt in this browser"
-      onClose={onClose}
-    >
-      <div className="modal-form">
-        {plaintext ? (
-          <div className="revealed-secret">
-            <span className="field-label">Decrypted value</span>
-            <pre>{plaintext}</pre>
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => void navigator.clipboard.writeText(plaintext)}
-            >
-              <Copy /> Copy value
-            </button>
-          </div>
-        ) : (
-          <>
-            <label className="field">
-              <span>Vault passphrase</span>
-              <input
-                type="password"
-                value={passphrase}
-                onChange={(event) => setPassphrase(event.target.value)}
-                autoComplete="current-password"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.preventDefault();
-                }}
-              />
-            </label>
-            <button
-              className="button primary"
-              type="button"
-              disabled={busy || !passphrase}
-              onClick={async () => {
-                setError("");
-                try {
-                  const envelope = JSON.parse(
-                    item.encryptedEnvelopeJson,
-                  ) as EncryptedSecretEnvelope;
-                  setPlaintext(await decryptSecretValue(envelope, passphrase));
-                  setPassphrase("");
-                } catch (nextError) {
-                  setError(messageFromError(nextError));
-                }
-              }}
-            >
-              <Eye /> Decrypt locally
-            </button>
-          </>
-        )}
-        {error ? (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <p className="privacy-caption">
-          <LockKeyhole /> Closing this dialog removes the decrypted value from
-          KnowHow&apos;s UI state.
-        </p>
-        <footer className="modal-footer">
-          <span />
-          <button className="button primary" type="button" onClick={onClose}>
-            Close
-          </button>
-        </footer>
-      </div>
-    </Modal>
   );
 }
 
@@ -5239,11 +5638,11 @@ export function KnowHowWorkspaceApp({
     supportGrants,
     supportTickets,
   } = active;
-  const vaultItems = active.vaultItems ?? [];
   const pendingSupportCount = supportRequests.filter(
     (item) => item.status === "pending",
   ).length;
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [setupMenuOpen, setSetupMenuOpen] = useState(false);
   const [shareDraft, setShareDraft] = useState<{
     audiences: Audience[];
     privacyReviewed: boolean;
@@ -5283,10 +5682,6 @@ export function KnowHowWorkspaceApp({
     canOpenSupport &&
     !busy &&
     (isAdmin || roles.includes("creator"));
-  const currentMember = members.find(
-    (member) => member.userId === data.viewer.id,
-  );
-  const canUseVault = currentMember?.capabilities?.includes("vault") ?? false;
   const organization = data.organizations?.find(
     (item) => item.id === workspace.organizationId,
   );
@@ -5307,6 +5702,11 @@ export function KnowHowWorkspaceApp({
     if (requestedView !== "Administration" || canOpenAdministration) return;
     onNavigate(workspaceHref(workspace.slug), { replace: true });
   }, [canOpenAdministration, onNavigate, requestedView, workspace.slug]);
+
+  useEffect(() => {
+    if (route.kind !== "workspace-section" || route.section !== "capture") return;
+    onNavigate(workspaceHref(workspace.slug, "guides"), { replace: true });
+  }, [onNavigate, route, workspace.slug]);
 
   const [extensionLink, setExtensionLink] = useState<
     "checking" | "missing" | "error" | "unavailable" | "connected"
@@ -5415,6 +5815,7 @@ export function KnowHowWorkspaceApp({
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       setDialog(null);
+      setSetupMenuOpen(false);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [workspace.id]);
@@ -5456,6 +5857,14 @@ export function KnowHowWorkspaceApp({
 
   async function shareGuideFromEditor(payload: GuideEditorPayload) {
     const saved = await saveGuide({ ...payload, transition: "draft" }, true);
+    if (!payload.audiences.length) {
+      await command(
+        "unshareGuide",
+        { guideId: saved.guideId },
+        "Guide is no longer shared",
+      );
+      return saved;
+    }
     await command(
       "shareGuide",
       {
@@ -5482,6 +5891,15 @@ export function KnowHowWorkspaceApp({
     setDialog({ type: "export-guide", guide });
   }
 
+  function toggleWorkspaceTheme() {
+    const theme = resolvedTheme === "dark" ? "light" : "dark";
+    window.localStorage.setItem(`knowhow-theme:${data.viewer.id}`, theme);
+    setPreference(theme);
+    void knowhowCommand("updateTheme", { theme }).catch((error) =>
+      onError(messageFromError(error)),
+    );
+  }
+
   function navigateToView(nextView: View) {
     onNavigate(workspaceHref(workspace.slug, VIEW_TO_SECTION[nextView]));
   }
@@ -5497,7 +5915,6 @@ export function KnowHowWorkspaceApp({
     route.kind === "guide-new" || route.kind === "guide-edit";
   const isGuideReaderRoute = route.kind === "guide-view";
   const canAccessCurrentView =
-    !(view === "Vault" && !canUseVault) &&
     !(["Groups", "Members", "Settings"].includes(view) && !isAdmin) &&
     !(view === "Organization" && !organization);
   const publishedRestricted = Boolean(
@@ -5576,13 +5993,12 @@ export function KnowHowWorkspaceApp({
   ]);
 
   const visibleNav = NAV_ITEMS.filter((item) => {
-      if (item.view === "Capture") return canCapture;
       if (item.view === "Support") return canOpenSupport;
       if (["Groups", "Members", "Settings"].includes(item.view)) return isAdmin;
       return true;
     });
   const workspaceNavigation = visibleNav.filter(({ view: item }) =>
-    ["Overview", "Guides", "Capture"].includes(item),
+    ["Overview", "Guides"].includes(item),
   );
   const peopleNavigation = visibleNav.filter(({ view: item }) =>
     ["Groups", "Members"].includes(item),
@@ -5592,17 +6008,39 @@ export function KnowHowWorkspaceApp({
   );
   const supportNavigation = visibleNav.filter(({ view: item }) => item === "Support");
   const onboardingAudience = isAdmin || canAnyCapture;
-  const onboardingRemaining = active.onboarding.steps.filter(
+  const onboardingChecklist = active.onboarding.steps.filter(
+    (step) => step.id !== "workspace_readiness",
+  );
+  const onboardingRemaining = onboardingChecklist.filter(
     (step) => !step.completed,
   ).length;
   const onboardingPercent = Math.round(
-    ((active.onboarding.steps.length - onboardingRemaining) /
-      Math.max(1, active.onboarding.steps.length)) *
+    ((onboardingChecklist.length - onboardingRemaining) /
+      Math.max(1, onboardingChecklist.length)) *
       100,
   );
   const showSetupNav =
-    onboardingAudience && !active.onboarding.completedAt;
+    onboardingAudience && onboardingRemaining > 0;
   const accessLabel = workspaceAccessLabel(roles);
+  const showGuideCreateMenu =
+    (view === "Overview" || view === "Guides") &&
+    canCreate &&
+    workspaceMutable;
+  const guideCreateMenuProps = {
+    busy,
+    browserPlanEnabled: entitlements.extensionEnabled,
+    browserAvailable: canCapture,
+    desktopPlanEnabled: entitlements.desktopCaptureEnabled,
+    desktopAvailable: canDesktopCapture,
+    extensionState: extensionLink,
+    desktopDeviceCount: (active.desktopCaptureDevices ?? []).length,
+    onManual: () => onNavigate(newGuideHref(workspace.slug)),
+    onBrowser: () => setDialog({ type: "extension" } as const),
+    onDesktop: () => setDialog({ type: "desktop" } as const),
+    onOpenPlan: isAdmin
+      ? () => setDialog({ type: "plan" } as const)
+      : undefined,
+  };
 
   let primaryAction: {
     label: string;
@@ -5625,31 +6063,6 @@ export function KnowHowWorkspaceApp({
       disabled: busy || !workspaceMutable,
       onClick: () => setDialog({ type: "group", group: null }),
     };
-  } else if (
-    (view === "Overview" || view === "Guides") &&
-    canCreate &&
-    workspaceMutable
-  ) {
-    primaryAction = {
-      label: "New guide",
-      icon: Plus,
-      disabled: busy,
-      onClick: () => onNavigate(newGuideHref(workspace.slug)),
-    };
-  } else if (view === "Capture" && canCapture) {
-    primaryAction = {
-      label: "Install and pair",
-      icon: Sparkles,
-      disabled: busy,
-      onClick: () => setDialog({ type: "extension" }),
-    };
-  } else if (view === "Vault" && canUseVault) {
-    primaryAction = {
-      label: "New vault item",
-      icon: KeyRound,
-      disabled: busy || !workspaceMutable,
-      onClick: () => setDialog({ type: "vault-editor", item: null }),
-    };
   }
   const PrimaryActionIcon = primaryAction?.icon;
   const sharingGuide = dialog?.type === "share-guide" ? dialog.guide : null;
@@ -5666,7 +6079,7 @@ export function KnowHowWorkspaceApp({
         workspaceName={workspace.name}
         liveUrl={
           sharingGuide.publishedRevision
-            ? `${window.location.origin}${guideHref(workspace.slug, sharingGuide.id, "published")}`
+            ? liveGuideUrl(window.location.origin, workspace.slug, sharingGuide)
             : ""
         }
         isLive={Boolean(sharingGuide.publishedRevision)}
@@ -5703,15 +6116,23 @@ export function KnowHowWorkspaceApp({
           )
         }
         onShare={async () => {
-          await command(
-            "shareGuide",
-            {
-              guideId: sharingGuide.id,
-              audiences: shareDraft.audiences,
-              privacyReviewed: shareDraft.privacyReviewed,
-            },
-            `${sharingGuide.publishedRevision ? "Audience updated" : "Guide published"} — ${audienceSuccessMessage(shareDraft.audiences)}`,
-          );
+          if (sharingGuide.publishedRevision && !shareDraft.audiences.length) {
+            await command(
+              "unshareGuide",
+              { guideId: sharingGuide.id },
+              "Guide is no longer shared",
+            );
+          } else {
+            await command(
+              "shareGuide",
+              {
+                guideId: sharingGuide.id,
+                audiences: shareDraft.audiences,
+                privacyReviewed: shareDraft.privacyReviewed,
+              },
+              `${sharingGuide.publishedRevision ? "Access updated" : "Guide published"} — ${audienceSuccessMessage(shareDraft.audiences)}`,
+            );
+          }
           setDialog(null);
           setShareDraft(null);
         }}
@@ -5831,7 +6252,11 @@ export function KnowHowWorkspaceApp({
           }
           liveUrl={
             editorGuide?.publishedRevision
-              ? `${typeof window === "undefined" ? "" : window.location.origin}${guideHref(workspace.slug, editorGuide.id, "published")}`
+              ? liveGuideUrl(
+                  typeof window === "undefined" ? "" : window.location.origin,
+                  workspace.slug,
+                  editorGuide,
+                )
               : ""
           }
           fileExportsEnabled={entitlements.fileExportsEnabled}
@@ -5930,7 +6355,7 @@ export function KnowHowWorkspaceApp({
           accentColor={workspace.settings.accentColor}
           clickTargetColor={workspace.settings.clickTargetColor}
           initialRevision={route.revision}
-          liveUrl={`${window.location.origin}${guideHref(workspace.slug, routeGuide.id, "published")}`}
+          liveUrl={liveGuideUrl(window.location.origin, workspace.slug, routeGuide)}
           canExport={
             Boolean(routeGuide.publishedRevision) &&
             (!publishedRestricted || workspace.settings.allowRestrictedExports)
@@ -6046,36 +6471,36 @@ export function KnowHowWorkspaceApp({
             </div>
             <p className="sidebar-section-label">Active workspace</p>
             <SelectMenu
-                  className="workspace-menu"
-                  contentClassName="workspace-menu-options"
-                  value={activeWorkspaceId}
-                  disabled={busy}
-                  onChange={(value) => void onSelectWorkspace(value)}
-                  ariaLabel="Switch workspace"
-                  options={data.workspaces.map((item) => ({
-                    value: item.id,
-                    label: item.name,
-                  }))}
-                  renderValue={() => (
-                    <>
-                      <WorkspaceLogo
-                        workspaceId={workspace.id}
-                        workspaceName={workspace.name}
-                        logoKey={workspace.settings.logoUrl}
-                        size="md"
-                      />
-                      <span className="workspace-menu-copy">
-                        <span className="workspace-menu-title">
-                          <strong>{workspace.name}</strong>
-                          <span className="workspace-plan-chip">
-                            {workspacePlanLabel(workspace.subscription)}
-                          </span>
-                        </span>
-                        <small>{workspaceAccessLabel(roles)}</small>
+              className="workspace-menu"
+              contentClassName="workspace-menu-options"
+              value={activeWorkspaceId}
+              disabled={busy}
+              onChange={(value) => void onSelectWorkspace(value)}
+              ariaLabel="Switch workspace"
+              options={data.workspaces.map((item) => ({
+                value: item.id,
+                label: item.name,
+              }))}
+              renderValue={() => (
+                <>
+                  <WorkspaceLogo
+                    workspaceId={workspace.id}
+                    workspaceName={workspace.name}
+                    logoKey={workspace.settings.logoUrl}
+                    size="md"
+                  />
+                  <span className="workspace-menu-copy">
+                    <span className="workspace-menu-title">
+                      <strong>{workspace.name}</strong>
+                      <span className="workspace-plan-chip">
+                        {workspacePlanLabel(workspace.subscription)}
                       </span>
-                    </>
-                  )}
-                />
+                    </span>
+                    <small>{workspaceAccessLabel(roles)}</small>
+                  </span>
+                </>
+              )}
+            />
           </SidebarHeader>
           <SidebarContent>
             <>
@@ -6100,18 +6525,6 @@ export function KnowHowWorkspaceApp({
                           ) : null}
                         </SidebarMenuItem>
                       ))}
-                      {showSetupNav ? (
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            type="button"
-                            onClick={() => navigateToView("Overview")}
-                          >
-                            <ClipboardCheck />
-                            <span>Getting started</span>
-                          </SidebarMenuButton>
-                          <SidebarMenuBadge>{onboardingPercent}%</SidebarMenuBadge>
-                        </SidebarMenuItem>
-                      ) : null}
                     </SidebarMenu>
                   </nav>
                 </SidebarGroup>
@@ -6182,10 +6595,89 @@ export function KnowHowWorkspaceApp({
                     </nav>
                   </SidebarGroup>
                 ) : null}
-                {supportNavigation.length ? (
+                {supportNavigation.length || showSetupNav ? (
                   <SidebarGroup className="workspace-nav-group support-nav-group">
                     <nav className="main-nav" aria-label="Help navigation">
                       <SidebarMenu>
+                        {showSetupNav ? (
+                          <SidebarMenuItem className="sidebar-setup-menu-item">
+                            <Popover open={setupMenuOpen} onOpenChange={setSetupMenuOpen}>
+                              <PopoverTrigger
+                                render={
+                                  <SidebarMenuButton
+                                    className="sidebar-setup-trigger"
+                                    isActive={setupMenuOpen}
+                                    type="button"
+                                  />
+                                }
+                              >
+                                <ClipboardCheck />
+                                <span>Getting started</span>
+                                <span className="sidebar-setup-meta">
+                                  <span
+                                    className="sidebar-setup-progress-ring"
+                                    style={{
+                                      "--setup-progress": `${onboardingPercent}%`,
+                                    } as React.CSSProperties}
+                                    aria-label={`${onboardingPercent}% complete`}
+                                  >
+                                    <span>{onboardingPercent}</span>
+                                  </span>
+                                  <ChevronRight className="sidebar-setup-chevron" />
+                                </span>
+                              </PopoverTrigger>
+                              <PopoverContent
+                                align="end"
+                                side="right"
+                                sideOffset={12}
+                                initialFocus={false}
+                                className="sidebar-onboarding-popover"
+                              >
+                                <SetupWizard
+                                  onboarding={active.onboarding}
+                                  busy={busy}
+                                  canCapture={canCapture}
+                                  captureLockedByPlan={!canAnyCapture && canCreate}
+                                  canManageAccess={isAdmin}
+                                  chrome="popover"
+                                  onClose={() => setSetupMenuOpen(false)}
+                                  onConfirmReadiness={() =>
+                                    command(
+                                      "confirmOnboardingReadiness",
+                                      {
+                                        ordinaryDataOnly: true,
+                                        policiesReviewed: true,
+                                      },
+                                      "Workspace readiness confirmed.",
+                                    )
+                                  }
+                                  onNavigate={(item) => {
+                                    setSetupMenuOpen(false);
+                                    navigateToView(item);
+                                  }}
+                                  onOpenExtension={() => {
+                                    setSetupMenuOpen(false);
+                                    setDialog({ type: "extension" });
+                                  }}
+                                  onPinExtension={() =>
+                                    command(
+                                      "confirmExtensionPinned",
+                                      {},
+                                      "Extension marked as pinned.",
+                                    )
+                                  }
+                                  onDismiss={() =>
+                                    command(
+                                      "dismissOnboarding",
+                                      {},
+                                      "Getting started dismissed.",
+                                    )
+                                  }
+                                />
+                              </PopoverContent>
+                            </Popover>
+                          </SidebarMenuItem>
+                        ) : null}
                         {supportNavigation.map(({ view: item, icon: Icon }) => (
                           <SidebarMenuItem key={item}>
                             <SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}>
@@ -6209,7 +6701,12 @@ export function KnowHowWorkspaceApp({
             </div>
             <div className="topbar-search-slot">
               {guides.length &&
-                !["Organization", "Settings", "Support", "Administration"].includes(view) ? (
+                ![
+                  "Organization",
+                  "Settings",
+                  "Support",
+                  "Administration",
+                ].includes(view) ? (
                 <GlobalGuideSearch guides={guides} onOpen={openGuide} />
               ) : null}
             </div>
@@ -6221,21 +6718,13 @@ export function KnowHowWorkspaceApp({
                 type="button"
                 aria-label={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
                 title={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
-                onClick={() => {
-                  const theme = resolvedTheme === "dark" ? "light" : "dark";
-                  window.localStorage.setItem(
-                    `knowhow-theme:${data.viewer.id}`,
-                    theme,
-                  );
-                  setPreference(theme);
-                  void knowhowCommand("updateTheme", { theme }).catch((error) =>
-                    onError(messageFromError(error)),
-                  );
-                }}
+                onClick={toggleWorkspaceTheme}
               >
                 {resolvedTheme === "dark" ? <Sun /> : <Moon />}
               </Button>
-              {primaryAction && PrimaryActionIcon ? (
+              {showGuideCreateMenu ? (
+                <GuideCreateMenu {...guideCreateMenuProps} />
+              ) : primaryAction && PrimaryActionIcon ? (
                 <Button
                   className="top-create topbar-primary-action"
                   size="sm"
@@ -6328,7 +6817,18 @@ export function KnowHowWorkspaceApp({
                 }
                 canManageAccess={isAdmin}
                 busy={busy}
-                onNewGuide={() => onNavigate(newGuideHref(workspace.slug))}
+                newGuideAction={
+                  <GuideCreateMenu
+                    {...guideCreateMenuProps}
+                    appearance="button"
+                  />
+                }
+                newGuideCardAction={
+                  <GuideCreateMenu
+                    {...guideCreateMenuProps}
+                    appearance="card"
+                  />
+                }
                 onOpenGuide={(guide) => openGuide(guide)}
                 onNavigate={navigateToView}
                 onConfirmReadiness={() =>
@@ -6354,7 +6854,13 @@ export function KnowHowWorkspaceApp({
               <GuidesView
                 guides={guides}
                 canCreate={canCreate && workspaceMutable}
-                onNew={() => onNavigate(newGuideHref(workspace.slug))}
+                newGuideAction={
+                  <GuideCreateMenu
+                    {...guideCreateMenuProps}
+                    appearance="button"
+                    label="Create guide"
+                  />
+                }
                 onOpen={(guide) => openGuide(guide)}
                 onEdit={(guide) =>
                   onNavigate(guideEditorHref(workspace.slug, guide.id))
@@ -6363,42 +6869,6 @@ export function KnowHowWorkspaceApp({
                 onExport={openExportGuide}
                 onAction={command}
                 busy={busy || !workspaceMutable}
-              />
-            ) : null}
-            {view === "Capture" ? (
-              <CaptureView
-                browserAvailable={canCapture}
-                desktopAvailable={canDesktopCapture}
-                browserPlanEnabled={entitlements.extensionEnabled}
-                desktopPlanEnabled={entitlements.desktopCaptureEnabled}
-                desktopDevices={active.desktopCaptureDevices ?? []}
-                typedTextPolicy={workspace.settings.desktopTypedTextPolicy}
-                busy={busy || !workspaceMutable}
-                onOpenExtension={() => setDialog({ type: "extension" })}
-                onRevokeDesktopDevice={async (deviceRecordId) => {
-                  if (
-                    !(await askToConfirm({
-                      title: "Revoke this Windows device?",
-                      description:
-                        "The app will be disconnected immediately and must be approved again before another capture.",
-                      confirmLabel: "Revoke device",
-                      tone: "danger",
-                    }))
-                  )
-                    return;
-                  await command(
-                    "revokeDesktopDevice",
-                    { deviceRecordId },
-                    "Windows capture device revoked",
-                  );
-                }}
-                planLocked={
-                  !entitlements.extensionEnabled &&
-                  !entitlements.desktopCaptureEnabled
-                }
-                onOpenPlan={
-                  isAdmin ? () => setDialog({ type: "plan" }) : undefined
-                }
               />
             ) : null}
             {view === "Groups" && isAdmin ? (
@@ -6450,33 +6920,6 @@ export function KnowHowWorkspaceApp({
                       "revokeSupportAccess",
                       { grantId: grant.id },
                       "Temporary support access revoked",
-                    ).catch(() => undefined);
-                  })();
-                }}
-              />
-            ) : null}
-            {view === "Vault" && canUseVault ? (
-              <VaultView
-                items={vaultItems}
-                busy={busy || !workspaceMutable}
-                onNew={() => setDialog({ type: "vault-editor", item: null })}
-                onEdit={(item) => setDialog({ type: "vault-editor", item })}
-                onReveal={(item) => setDialog({ type: "vault-reveal", item })}
-                onDelete={(item) => {
-                  void (async () => {
-                    if (
-                      !(await askToConfirm({
-                        title: "Delete vault item?",
-                        description: `Delete ${item.title}? This encrypted item cannot be recovered.`,
-                        confirmLabel: "Delete",
-                        tone: "danger",
-                      }))
-                    )
-                      return;
-                    await command(
-                      "deleteVaultItem",
-                      { vaultItemId: item.id },
-                      "Vault item deleted",
                     ).catch(() => undefined);
                   })();
                 }}
@@ -6643,15 +7086,19 @@ export function KnowHowWorkspaceApp({
         {dialog?.type === "member" && isAdmin && workspaceMutable ? (
           <MemberDialog
             member={dialog.member}
+            isCurrentUser={dialog.member.userId === data.viewer.id}
+            isPlatformOwner={Boolean(
+              dialog.member.userId === data.viewer.id &&
+                data.viewer.platformRoles?.includes("owner"),
+            )}
             busy={busy}
             onClose={() => setDialog(null)}
-            onSave={async (nextRoles, capabilities) => {
+            onSave={async (nextRoles) => {
               await command(
                 "updateMember",
                 {
                   memberId: dialog.member.id,
                   roles: nextRoles,
-                  capabilities,
                   status: dialog.member.status,
                 },
                 "Member access updated",
@@ -6664,7 +7111,6 @@ export function KnowHowWorkspaceApp({
                 {
                   memberId: dialog.member.id,
                   roles: dialog.member.roles,
-                  capabilities: dialog.member.capabilities ?? [],
                   status:
                     dialog.member.status === "suspended"
                       ? "active"
@@ -6774,6 +7220,31 @@ export function KnowHowWorkspaceApp({
             }
           />
         ) : null}
+        {dialog?.type === "desktop" && canDesktopCapture ? (
+          <DesktopCaptureDialog
+            desktopDevices={active.desktopCaptureDevices ?? []}
+            typedTextPolicy={workspace.settings.desktopTypedTextPolicy}
+            busy={busy || !workspaceMutable}
+            onClose={() => setDialog(null)}
+            onRevokeDesktopDevice={async (deviceRecordId) => {
+              if (
+                !(await askToConfirm({
+                  title: "Revoke this Windows device?",
+                  description:
+                    "The app will be disconnected immediately and must be approved again before another capture.",
+                  confirmLabel: "Revoke device",
+                  tone: "danger",
+                }))
+              )
+                return;
+              await command(
+                "revokeDesktopDevice",
+                { deviceRecordId },
+                "Windows capture device revoked",
+              );
+            }}
+          />
+        ) : null}
         {shareDialog}
         {exportDialog}
         {dialog?.type === "support-decision" && isAdmin ? (
@@ -6802,28 +7273,6 @@ export function KnowHowWorkspaceApp({
               );
               setDialog(null);
             }}
-          />
-        ) : null}
-        {dialog?.type === "vault-editor" && canUseVault && workspaceMutable ? (
-          <VaultEditorDialog
-            item={dialog.item}
-            busy={busy}
-            onClose={() => setDialog(null)}
-            onSave={async (payload) => {
-              await command(
-                "saveVaultItem",
-                payload,
-                "Vault item encrypted and saved",
-              );
-              setDialog(null);
-            }}
-          />
-        ) : null}
-        {dialog?.type === "vault-reveal" && canUseVault ? (
-          <VaultRevealDialog
-            item={dialog.item}
-            busy={busy}
-            onClose={() => setDialog(null)}
           />
         ) : null}
         {dialog?.type === "account-security" ? (

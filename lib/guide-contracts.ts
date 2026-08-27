@@ -8,10 +8,6 @@ export const WORKSPACE_ROLES = [
 
 export type WorkspaceRole = (typeof WORKSPACE_ROLES)[number];
 
-export const WORKSPACE_CAPABILITIES = ["vault"] as const;
-
-export type WorkspaceCapability = (typeof WORKSPACE_CAPABILITIES)[number];
-
 export type GuideLifecycleState =
   | "draft"
   | "review"
@@ -42,6 +38,11 @@ export interface WorkspaceAudience {
   readonly workspaceId: string;
 }
 
+export interface PrivateAudience {
+  readonly mode: "private";
+  readonly workspaceId: string;
+}
+
 export interface RestrictedAudienceTarget {
   readonly type: "group" | "user";
   readonly id: string;
@@ -54,7 +55,17 @@ export interface RestrictedAudience {
   readonly targets: readonly RestrictedAudienceTarget[];
 }
 
-export type GuideAudience = WorkspaceAudience | RestrictedAudience;
+export interface PublicLinkAudience {
+  readonly mode: "public-link";
+  readonly workspaceId: string;
+  readonly token: string;
+}
+
+export type GuideAudience =
+  | PrivateAudience
+  | WorkspaceAudience
+  | RestrictedAudience
+  | PublicLinkAudience;
 
 export interface NormalizedRectangle {
   readonly x: number;
@@ -1055,8 +1066,13 @@ function audience(
     return false;
   }
   identifier(value.workspaceId, `${path}.workspaceId`, issues);
-  if (value.mode === "workspace") {
+  if (value.mode === "private") {
     exactKeys(value, ["mode", "workspaceId"], path, issues);
+  } else if (value.mode === "workspace") {
+    exactKeys(value, ["mode", "workspaceId"], path, issues);
+  } else if (value.mode === "public-link") {
+    exactKeys(value, ["mode", "workspaceId", "token"], path, issues);
+    identifier(value.token, `${path}.token`, issues);
   } else if (value.mode === "restricted") {
     exactKeys(value, ["mode", "workspaceId", "targets"], path, issues);
     if (!Array.isArray(value.targets) || value.targets.length === 0) {
@@ -1084,7 +1100,11 @@ function audience(
       });
     }
   } else {
-    issue(issues, `${path}.mode`, "Audience mode must be workspace or restricted.");
+    issue(
+      issues,
+      `${path}.mode`,
+      "Audience mode must be private, workspace, restricted, or public-link.",
+    );
   }
   return true;
 }

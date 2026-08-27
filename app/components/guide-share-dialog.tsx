@@ -1,13 +1,17 @@
 "use client";
 
-import { Check, Link2, Send, Share2 } from "lucide-react";
+import { Check, Link2, Send, Share2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import type {
   Audience,
   WorkspaceGroup,
   WorkspaceMember,
 } from "../../lib/knowhow-types";
-import { GuideAudiencePicker } from "./guide-audience-picker";
+import {
+  GuideAudiencePicker,
+  isAnyoneWithLink,
+  isEntireWorkspace,
+} from "./guide-audience-picker";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +19,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { PolicyNote } from "./workspace-patterns";
 
 export function GuideShareDialog({
   open,
@@ -58,15 +61,32 @@ export function GuideShareDialog({
 }) {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
-  const shareBlocked =
+
+  // One reason, stated next to the button it disables. A greyed-out Publish
+  // with the explanation somewhere up the page is the thing people get stuck on.
+  const blockedReason = !canShare
+    ? "You do not have permission to share this guide."
+    : !audiences.length && !isLive
+      ? "Choose who can see it before publishing."
+      : captured && !privacyReviewed
+        ? "Confirm the privacy review before publishing."
+        : "";
+  const shareBlocked = busy || Boolean(blockedReason);
+  const reviewBlocked =
     busy ||
     !audiences.length ||
-    (captured && !privacyReviewed) ||
-    !canShare;
+    (captured && !privacyReviewed);
+  const linkToken = audiences.find((audience) => audience.kind === "link")
+    ?.subjectId;
+  const effectiveLiveUrl = linkToken
+    ? `${typeof window === "undefined" ? "" : window.location.origin}/share/${encodeURIComponent(linkToken)}`
+    : audiences.length
+      ? liveUrl
+      : "";
 
   async function copyLink() {
-    if (!liveUrl) return;
-    await navigator.clipboard.writeText(liveUrl);
+    if (!effectiveLiveUrl) return;
+    await navigator.clipboard.writeText(effectiveLiveUrl);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
   }
@@ -81,31 +101,43 @@ export function GuideShareDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
-      <DialogContent className="kh-dialog-content kh-dialog-wide sm:max-w-xl">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="kh-dialog-content kh-dialog-wide share-dialog sm:max-w-xl">
         <DialogHeader className="kh-dialog-header">
           <div>
-            <p className="eyebrow">Audience & live link</p>
+            <p className="eyebrow">Audience &amp; live link</p>
             <DialogTitle>Who can follow {title || "this guide"}?</DialogTitle>
           </div>
         </DialogHeader>
+
         <div className="share-dialog-body">
           <p className="share-dialog-lead">
-            Choose who can open the live guide. Recipients must be signed in
-            and included in this audience.
+            {isAnyoneWithLink(audiences)
+              ? "Anyone who receives the unlisted link can view this guide without signing in."
+              : audiences.length
+                ? "Choose the workspace members who can open the live guide."
+                : "This guide is private and visible only to people who can edit it."}
           </p>
-          <PolicyNote icon={Link2}>
-            Copying the link does not grant access.
-          </PolicyNote>
+
           <GuideAudiencePicker
             workspaceName={workspaceName}
             audiences={audiences}
             groups={groups}
             members={members}
+            allowPrivate={isLive}
             onChange={onAudiencesChange}
           />
+
           {captured ? (
-            <label className="choice-row emphasized">
+            <label
+              className="choice-row emphasized privacy-gate privacy-review-card"
+              data-pending={!privacyReviewed || undefined}
+            >
               <input
                 type="checkbox"
                 checked={privacyReviewed}
@@ -113,49 +145,76 @@ export function GuideShareDialog({
                   onPrivacyReviewedChange(event.target.checked)
                 }
               />
+              <span className="privacy-review-icon"><ShieldCheck /></span>
               <span>
                 <strong>I reviewed every capture</strong>
-                <small>Required before this guide can go live</small>
+                <small>
+                  Every screenshot is redacted and contains only what this
+                  audience may see. Required before the guide can go live.
+                </small>
               </span>
             </label>
           ) : null}
+
           {error ? (
             <p className="form-error" role="alert">
               {error}
             </p>
           ) : null}
-          <footer className="modal-footer share-dialog-footer">
+        </div>
+
+        <footer className="share-dialog-footer">
+          <p className="share-dialog-status" role="status">
+            {blockedReason ? (
+              <>
+                <ShieldAlert /> {blockedReason}
+              </>
+            ) : isLive ? (
+              audiences.length ? (
+                <><Check /> Live — updating changes who can open it.</>
+              ) : (
+                <><ShieldCheck /> Not shared — only editors can open it.</>
+              )
+            ) : (
+              <>
+                <Check /> Ready to publish to{" "}
+                {isAnyoneWithLink(audiences)
+                  ? "anyone with the link"
+                  : isEntireWorkspace(audiences)
+                  ? "the whole workspace"
+                  : `${audiences.length} ${audiences.length === 1 ? "audience" : "audiences"}`}
+                .
+              </>
+            )}
+          </p>
+          <div className="share-dialog-actions">
             {canRequestReview && onRequestReview ? (
               <Button
                 variant="ghost"
                 type="button"
-                disabled={busy || !audiences.length || (captured && !privacyReviewed)}
+                disabled={reviewBlocked}
                 onClick={() => void run(onRequestReview)}
               >
                 <Send /> Send for review
               </Button>
-            ) : (
-              <span />
-            )}
-            <div className="share-dialog-primary">
-              <Button
-                variant="outline"
-                type="button"
-                disabled={!isLive || !liveUrl}
-                onClick={() => void copyLink()}
-              >
-                {copied ? <Check /> : <Link2 />} {copied ? "Copied" : "Copy link"}
-              </Button>
-              <Button
-                type="button"
-                disabled={shareBlocked}
-                onClick={() => void run(onShare)}
-              >
-                <Share2 /> {isLive ? "Update audience" : "Publish"}
-              </Button>
-            </div>
-          </footer>
-        </div>
+            ) : null}
+            <Button
+              variant="outline"
+              type="button"
+              disabled={!isLive || !effectiveLiveUrl}
+              onClick={() => void copyLink()}
+            >
+              {copied ? <Check /> : <Link2 />} {copied ? "Copied" : "Copy link"}
+            </Button>
+            <Button
+              type="button"
+              disabled={shareBlocked}
+              onClick={() => void run(onShare)}
+            >
+              <Share2 /> {isLive ? (audiences.length ? "Update access" : "Stop sharing") : "Publish"}
+            </Button>
+          </div>
+        </footer>
       </DialogContent>
     </Dialog>
   );

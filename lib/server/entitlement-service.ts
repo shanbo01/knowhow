@@ -240,7 +240,7 @@ export class EntitlementService {
     });
     const creatorIds = new Set(
       members
-        .filter((row) => decodePayload<WorkspaceMemberRecord>(row, { name: "", roles: [], capabilities: [], groupIds: [] }).roles.some((role) => role === "creator" || role === "administrator"))
+        .filter((row) => decodePayload<WorkspaceMemberRecord>(row, { name: "", roles: [], groupIds: [] }).roles.some((role) => role === "creator" || role === "administrator"))
         .map((row) => String(row.user_id)),
     );
     if (userId) creatorIds.add(userId);

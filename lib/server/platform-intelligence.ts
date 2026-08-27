@@ -241,13 +241,3 @@ export function nextBestAction(
   }
   return { action: "none", reason: "No operator action required." };
 }
-
-export function actionLabel(action: PlatformNextAction) {
-  if (action === "grant_trial") return "Grant 14-day Pro trial";
-  if (action === "extend_trial") return "Extend trial";
-  if (action === "contact_churn") return "Contact — churn risk";
-  if (action === "enterprise_lead") return "Enterprise lead";
-  if (action === "offer_seats") return "Offer additional seats";
-  if (action === "expansion") return "Expansion opportunity";
-  return "No action";
-}

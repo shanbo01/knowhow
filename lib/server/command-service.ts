@@ -2579,7 +2579,6 @@ export class CommandService {
         const memberPayload: WorkspaceMemberRecord = {
           name: identity.name,
           roles: ["administrator"],
-          capabilities: [],
           groupIds: [],
           joinedAt: nowIso(),
         };
@@ -3172,7 +3171,6 @@ export class CommandService {
             {
               name: identity.name,
               roles: [claims.role],
-              capabilities: [],
               groupIds: [],
               joinedAt: nowIso(),
             } satisfies WorkspaceMemberRecord,
@@ -3208,37 +3206,6 @@ export class CommandService {
         "INVITATION_ONLY",
         "Pilot access is invitation-only.",
       );
-    }
-
-    if (action === "sweepExpiredSupportAccess") {
-      const platformRoles = await this.platformRoles(identity);
-      if (!platformMayManage(platformRoles))
-        throw new HttpError(
-          403,
-          "PLATFORM_OPERATIONS_REQUIRED",
-          "Platform operations access is required.",
-        );
-      let expired = 0;
-      for (const grant of await this.store.list(TABLES.supportGrants, {
-        filters: [{ field: "status", value: "active" }],
-      })) {
-        if (Date.parse(String(grant.expires_at)) <= Date.now()) {
-          const details = decodePayload<SupportGrantRecord>(
-            grant,
-            null as never,
-          );
-          await this.store.update(
-            TABLES.supportGrants,
-            grant.$id,
-            rowData(
-              { status: "expired", updated_by: identity.userId },
-              { ...details, endedAt: nowIso() },
-            ),
-          );
-          expired += 1;
-        }
-      }
-      return { expired };
     }
 
     if (action === "replySupportTicket" || action === "resolveSupportTicket") {
@@ -4613,16 +4580,30 @@ export class CommandService {
           "MEMBER_STATUS_INVALID",
           "Member status is invalid.",
         );
-      const capabilities = inputStringList(
-        payload.capabilities ?? [],
-        "Capabilities",
-        1,
-        32,
-      ).filter((item): item is "vault" => item === "vault");
       const current = decodePayload<WorkspaceMemberRecord>(
         member,
         null as never,
       );
+      const targetUserId = String(member.user_id ?? "");
+      if (nextStatus === "suspended" && targetUserId === identity.userId) {
+        throw new HttpError(
+          409,
+          "SELF_SUSPENSION_FORBIDDEN",
+          "You cannot suspend your own workspace access.",
+        );
+      }
+      if (nextStatus === "suspended") {
+        const targetPlatformRoles = await new AccessService(this.store).platformRoles(
+          targetUserId,
+        );
+        if (targetPlatformRoles.includes("owner")) {
+          throw new HttpError(
+            409,
+            "PLATFORM_OWNER_PROTECTED",
+            "The KnowHow owner account cannot be suspended from a workspace.",
+          );
+        }
+      }
       const entitlements = new EntitlementService(this.store, workspaceId);
       if (nextStatus === "active" && member.status !== "active") {
         await entitlements.assertMemberCapacity();
@@ -4662,7 +4643,12 @@ export class CommandService {
         memberId,
         rowData(
           { status: nextStatus, updated_by: identity.userId },
-          { ...current, roles: nextRoles, capabilities },
+          {
+            name: current.name,
+            roles: nextRoles,
+            groupIds: current.groupIds,
+            ...(current.joinedAt ? { joinedAt: current.joinedAt } : {}),
+          },
         ),
       );
       await appendAudit(this.store, identity, workspaceId, {
@@ -4670,17 +4656,9 @@ export class CommandService {
         targetType: "member",
         targetId: memberId,
         summary: "Workspace member access updated",
-        metadata: { roles: nextRoles, status: nextStatus, capabilities },
+        metadata: { roles: nextRoles, status: nextStatus },
       });
       return { updated: true };
-    }
-
-    if (action === "saveVaultItem" || action === "deleteVaultItem") {
-      throw new HttpError(
-        403,
-        "PILOT_DATA_CLASSIFICATION_BLOCKED",
-        "Credentials and secrets are prohibited in the external pilot.",
-      );
     }
 
     if (action === "recordGuideView" || action === "recordGuideCompletion") {
@@ -4980,6 +4958,7 @@ export class CommandService {
         "reviewGuide",
         "publishGuide",
         "shareGuide",
+        "unshareGuide",
         "archiveGuide",
         "deleteGuide",
         "restoreRevision",

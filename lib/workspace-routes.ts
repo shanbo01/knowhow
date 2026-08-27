@@ -6,7 +6,6 @@ export type WorkspaceSection =
   | "members"
   | "support"
   | "organization"
-  | "vault"
   | "settings"
   | "administration";
 
@@ -19,8 +18,6 @@ export type AppRoute =
   | { kind: "guide-view"; workspaceSlug: string; guideId: string; revision: GuideRevisionMode }
   | { kind: "guide-edit"; workspaceSlug: string; guideId: string }
   | { kind: "invalid" };
-
-export type WorkspaceRoute = Exclude<AppRoute, { kind: "root" | "invalid" }>;
 
 const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
   "overview",

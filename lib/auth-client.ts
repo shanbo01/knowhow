@@ -159,10 +159,6 @@ export function completeMfaChallenge(challengeId: string, otp: string) {
   });
 }
 
-export function getMfaRequirement() {
-  return authRequest("mfa/requirement");
-}
-
 export function beginMfaEnrollment() {
   return authRequest("mfa/enroll/start", { method: "POST", body: "{}" });
 }

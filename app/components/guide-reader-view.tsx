@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Download,
   Eye,
+  ExternalLink,
   Globe2,
   History,
   Link2,
@@ -19,6 +20,7 @@ import {
 import { useState, type ReactNode } from "react";
 import type { EditorBlock, Guide, GuideRevisionView } from "../../lib/knowhow-types";
 import type { GuideRevisionMode } from "../../lib/workspace-routes";
+import { parseStepLink } from "../../lib/step-links";
 import { AuthorizedMedia } from "./authorized-media";
 import { ScreenshotAnnotationPreview } from "./guide-editor";
 import { WorkspaceLogo } from "./workspace-logo";
@@ -57,6 +59,29 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function ReaderStepTitle({ step }: { step: EditorBlock }) {
+  const link = step.kind === "action" ? parseStepLink(step.title) : null;
+
+  if (!link) return <h2>{step.title}</h2>;
+
+  return (
+    <h2>
+      {link.before}
+      <a
+        className="step-title-inline-link document-step-title-link"
+        href={link.href}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={`Open ${link.label}`}
+      >
+        <span>{link.label}</span>
+        <ExternalLink />
+      </a>
+      {link.after}
+    </h2>
+  );
+}
+
 export type GuideReaderViewProps = {
   guide: Guide;
   revision: GuideRevisionView;
@@ -67,6 +92,9 @@ export type GuideReaderViewProps = {
   accentColor?: string;
   clickTargetColor?: string;
   liveUrl?: string;
+  audienceLabel?: string;
+  closeLabel?: string;
+  showEngagement?: boolean;
   canExport?: boolean;
   canRestore?: boolean;
   busy?: boolean;
@@ -76,6 +104,7 @@ export type GuideReaderViewProps = {
   maxSteps?: number;
   headingId?: string;
   renderScreenshot?: (step: EditorBlock, index: number) => ReactNode;
+  mediaSourceUrl?: (step: EditorBlock) => string | undefined;
   onClose?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -98,6 +127,9 @@ export function GuideReaderView({
   accentColor = "#ff5a12",
   clickTargetColor = "#ff5a12",
   liveUrl = "",
+  audienceLabel,
+  closeLabel = "Guides",
+  showEngagement = true,
   canExport = false,
   canRestore = false,
   busy = false,
@@ -107,6 +139,7 @@ export function GuideReaderView({
   maxSteps,
   headingId,
   renderScreenshot,
+  mediaSourceUrl,
   onClose,
   onEdit,
   onDelete,
@@ -176,7 +209,7 @@ export function GuideReaderView({
               aria-disabled={!interactive}
               onClick={() => run(onClose)}
             >
-              <ArrowLeft /> Guides
+              <ArrowLeft /> {closeLabel}
             </button>
             <span className="reader-header-divider" />
             <span className="reader-workspace">
@@ -300,7 +333,11 @@ export function GuideReaderView({
         <header className="document-header card">
           <div className="document-meta">
             <StatusBadge status={revision.status} />
-            {guide.restricted ? (
+            {audienceLabel ? (
+              <span>
+                <Link2 /> {audienceLabel}
+              </span>
+            ) : guide.restricted ? (
               <span>
                 <LockKeyhole /> Restricted audience
               </span>
@@ -320,7 +357,7 @@ export function GuideReaderView({
               <span>Published {formatDate(revision.publishedAt)}</span>
             ) : null}
           </div>
-          {guide.publishedRevision ? (
+          {guide.publishedRevision && showEngagement ? (
             <div className="guide-engagement">
               <span className="guide-view-count">
                 <Eye /> {viewCount} {viewCount === 1 ? "view" : "views"}
@@ -358,7 +395,7 @@ export function GuideReaderView({
                 <span className="document-step-number">{index + 1}</span>
               ) : null}
               <div className="document-step-body">
-                <h2>{step.title}</h2>
+                <ReaderStepTitle step={step} />
                 {step.description ? <p>{step.description}</p> : null}
                 {renderScreenshot ? (
                   <figure className="authorized-media">
@@ -380,6 +417,7 @@ export function GuideReaderView({
                   <AuthorizedMedia
                     workspaceId={workspaceId}
                     mediaId={step.screenshotMediaId}
+                    sourceUrl={mediaSourceUrl?.(step)}
                     alt={`Redacted screenshot for ${step.title}`}
                     crop={step.crop}
                     overlay={

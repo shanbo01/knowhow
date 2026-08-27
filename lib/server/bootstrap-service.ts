@@ -10,7 +10,6 @@ import type {
   SupportAccessGrant,
   SupportAccessRequest,
   SupportTicket,
-  VaultItem,
   WorkspaceBundle,
   WorkspaceGroup,
   WorkspaceMember,
@@ -59,7 +58,6 @@ function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
   const details = decodePayload<WorkspaceMemberRecord>(row, {
     name: stringValue(row.email),
     roles: [],
-    capabilities: [],
     groupIds: [],
   });
   return {
@@ -74,7 +72,6 @@ function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
           ? "invited"
           : "active",
     roles: details.roles,
-    capabilities: details.capabilities,
     groupIds: details.groupIds,
     joinedAt: details.joinedAt,
   };
@@ -195,7 +192,7 @@ function isAudienceMember(
       if (!audience) return false;
       if (audience.kind === "workspace") return true;
       if (audience.kind === "user") return audience.subjectId === userId;
-      return Boolean(audience.subjectId && groupIds.has(audience.subjectId));
+      return audience.kind === "group" && Boolean(audience.subjectId && groupIds.has(audience.subjectId));
     });
 }
 
@@ -268,7 +265,6 @@ function hydrateGuides(
     membershipStatus: access.membershipStatus,
     workspaceStatus: access.workspace.status,
     roles: access.roles,
-    capabilities: access.capabilities,
     ...(access.supportGrant
       ? {
           supportGrant: {
@@ -827,7 +823,6 @@ export class BootstrapService {
       supportGrants,
       supportTickets,
       audits,
-      vaultItems: [] as VaultItem[],
       onboarding: {
         startedAt:
           onboardingRecord.startedAt ??

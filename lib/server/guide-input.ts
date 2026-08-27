@@ -138,27 +138,40 @@ export function normalizeGuideSteps(value: unknown): EditorBlock[] {
 }
 
 export function normalizeGuideAudiences(value: unknown, workspaceId: string): Audience[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 100) {
-    throw new HttpError(400, "AUDIENCE_REQUIRED", "Select at least one audience.");
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new HttpError(400, "AUDIENCE_INVALID", "The guide audience is invalid.");
   }
   const audiences = value.map((candidate) => {
     const item = inputObject(candidate, "Audience");
-    if (item.kind !== "workspace" && item.kind !== "group" && item.kind !== "user") {
+    if (
+      item.kind !== "workspace" &&
+      item.kind !== "group" &&
+      item.kind !== "user" &&
+      item.kind !== "link"
+    ) {
       throw new HttpError(400, "AUDIENCE_INVALID", "An audience is invalid.");
     }
     const kind = item.kind;
     return {
       kind,
-      subjectId: kind === "workspace" ? workspaceId : inputText(item.subjectId, "Audience target", { min: 1, max: 36 }),
+      subjectId:
+        kind === "workspace"
+          ? workspaceId
+          : kind === "link" && item.subjectId === undefined
+            ? undefined
+            : inputText(item.subjectId, "Audience target", { min: 1, max: 36 }),
       label: item.label === undefined ? undefined : inputText(item.label, "Audience label", { max: 200 }),
     } satisfies Audience;
   });
   if (audiences.some((audience) => audience.kind === "workspace")) {
     return [{ kind: "workspace", subjectId: workspaceId, label: "Entire workspace" }];
   }
+  if (audiences.some((audience) => audience.kind === "link")) {
+    const link = audiences.find((audience) => audience.kind === "link")!;
+    return [{ ...link, label: "Anyone with the link" }];
+  }
   return audiences.filter(
     (audience, index, all) =>
       all.findIndex((candidate) => candidate.kind === audience.kind && candidate.subjectId === audience.subjectId) === index,
   );
 }
-

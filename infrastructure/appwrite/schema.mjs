@@ -153,6 +153,7 @@ const definitions = [
       index("by_revision_subject", ["subject_id", "kind", "user_id"]),
       index("by_workspace_kind", ["workspace_id", "kind"]),
       index("by_workspace_kind_user", ["workspace_id", "kind", "user_id"]),
+      index("by_kind_user_status", ["kind", "user_id", "status"]),
     ],
   ],
   [

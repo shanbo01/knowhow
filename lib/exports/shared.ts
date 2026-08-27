@@ -1,4 +1,3 @@
-import type { GuideActionMedia } from "../guide-contracts";
 import type {
   GuideExportAsset,
   GuideExportWatermark,
@@ -68,7 +67,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export function assetSource(
-  media: GuideActionMedia,
   asset: GuideExportAsset | undefined,
 ): string | undefined {
   if (asset?.bytes) {

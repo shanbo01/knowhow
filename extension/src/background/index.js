@@ -2906,7 +2906,7 @@ function waitForTabComplete(tabId, timeoutMs = 8_000) {
 /**
  * Recorded pages that open a link in a new tab (target=_blank, window.open,
  * ctrl/cmd-click) keep recording in that new tab under the same session,
- * matching Scribe's multi-tab capture behavior. A "Navigate to ..." step
+ * matching the extension's multi-tab capture behavior. A "Navigate to ..." step
  * marks the hand-off.
  */
 async function followNewTabNavigation(details) {

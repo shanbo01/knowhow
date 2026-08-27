@@ -81,7 +81,7 @@ export function GuideExportDialog({
           </div>
         </DialogHeader>
         <div className="modal-form guide-export-dialog">
-          <PolicyNote icon={FileDown}>
+          <PolicyNote icon={FileDown} className="export-policy-note">
             Exports are static copies. Live links keep audience checks.
           </PolicyNote>
           {blockedReason ? <p className="export-disabled-reason">{blockedReason}</p> : null}
@@ -110,9 +110,9 @@ export function GuideExportDialog({
             </div>
           ) : null}
           {error ? <p className="form-error" role="alert">{error}</p> : null}
-          <footer className="modal-footer">
+          <footer className="modal-footer export-dialog-footer">
             <span />
-            <Button variant="ghost" type="button" onClick={onClose}>Close</Button>
+            <Button className="export-close-button" variant="outline" type="button" onClick={onClose}>Close</Button>
           </footer>
         </div>
       </DialogContent>

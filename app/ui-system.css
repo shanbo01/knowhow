@@ -94,7 +94,6 @@
     .step-title-input,
     .step-description-input,
     .kh-select-trigger,
-    .select-menu-trigger,
     .date-range-filter,
     .search-field,
     .member-search
@@ -131,7 +130,6 @@
     .step-title-input,
     .step-description-input,
     .kh-select-trigger,
-    .select-menu-trigger,
     .search-field,
     .member-search
   ):focus,

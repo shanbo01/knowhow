@@ -2267,3 +2267,38 @@ button.administration-directory-row[data-selected] {
   flex: 1 0 auto;
   white-space: nowrap;
 }
+
+/* Workspace inspector: neutral data canvas with one deliberate brand signal. */
+.administration-client-inspector {
+  border-color: color-mix(in srgb, var(--foreground) 11%, var(--experience-line));
+  background: var(--card);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.05),
+    0 18px 50px rgb(0 0 0 / 0.12);
+}
+
+.administration-inspector-header {
+  border-bottom-color: color-mix(in srgb, var(--foreground) 9%, var(--experience-line));
+  background: color-mix(in srgb, var(--foreground) 2%, var(--card));
+}
+
+.administration-inspector-badges > span:not(.administration-health) {
+  border: 1px solid color-mix(in srgb, var(--foreground) 9%, var(--experience-line));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.administration-recommendation {
+  border-color: color-mix(in srgb, var(--brand) 32%, var(--experience-line));
+  background: color-mix(in srgb, var(--brand) 7%, var(--card));
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.administration-inspector-stats > div {
+  border-color: color-mix(in srgb, var(--foreground) 9%, var(--experience-line));
+  background: color-mix(in srgb, var(--foreground) 2%, var(--background));
+}
+
+.administration-inspector-section {
+  border-top-color: color-mix(in srgb, var(--foreground) 9%, var(--experience-line));
+}

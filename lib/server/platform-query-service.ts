@@ -205,7 +205,6 @@ function personFromMember(row: StoredRecord<RecordData>): PlatformPerson {
   const details = decodePayload<WorkspaceMemberRecord>(row, {
     name: stringValue(row.email),
     roles: [],
-    capabilities: [],
     groupIds: [],
   });
   return {
@@ -742,39 +741,6 @@ export class PlatformQueryService {
         occurredAt: stringValue(row.occurred_at, row.$createdAt),
       })),
       home,
-    };
-  }
-
-  private accountFromWorkspace(
-    row: StoredRecord<RecordData> | undefined,
-    names: Map<string, string>,
-    subscription: PlatformSubscriptionSummary | null,
-    seatLimit: number | null,
-  ): PlatformAccountSummary {
-    if (!row) {
-      return {
-        id: "",
-        organizationId: "",
-        organizationName: "",
-        name: "Workspace",
-        slug: "",
-        status: "archived",
-        createdAt: "",
-        subscription,
-        seatLimit,
-      };
-    }
-    const workspace = decodePayload<WorkspaceRecord>(row, null as never);
-    return {
-      id: row.$id,
-      organizationId: workspace?.organizationId ?? stringValue(row.organization_id),
-      organizationName: names.get(row.$id) ? workspace?.name ?? "Workspace" : workspace?.name ?? "Workspace",
-      name: workspace?.name ?? "Workspace",
-      slug: workspace?.slug ?? row.$id,
-      status: workspace?.status ?? stringValue(row.status, "active"),
-      createdAt: workspace?.createdAt ?? row.$createdAt,
-      subscription,
-      seatLimit,
     };
   }
 

@@ -478,6 +478,24 @@
     0 10px 22px color-mix(in srgb, var(--brand-fill, var(--experience-accent)) 48%, transparent) !important;
 }
 
+.experience-shell .new-guide-trigger {
+  gap: 0.42rem;
+}
+
+.experience-shell .new-guide-trigger .new-guide-chevron {
+  width: 0.72rem;
+  height: 0.72rem;
+  margin-left: 0.08rem;
+  opacity: 0.82;
+  transition: transform 140ms ease;
+}
+
+.experience-shell
+  .new-guide-trigger[aria-expanded="true"]
+  .new-guide-chevron {
+  transform: rotate(180deg);
+}
+
 .experience-shell .profile-button {
   max-width: 12rem;
   padding-inline: 0.25rem 0.45rem;
@@ -784,7 +802,6 @@
 .experience-shell .guide-icon,
 .experience-shell .group-icon,
 .experience-shell .invite-icon,
-.experience-shell .vault-icon,
 .experience-shell .empty-icon {
   border: 0 !important;
   border-radius: 0.65rem;
@@ -1698,8 +1715,7 @@
 }
 
 .invite-form :is(input, textarea),
-.group-editor-form :is(input, textarea),
-.invite-form .select-menu-trigger {
+.group-editor-form :is(input, textarea) {
   border-color: var(--border);
   background: var(--card);
   box-shadow: 0 1px 2px rgb(14 19 25 / 0.035);
@@ -2701,8 +2717,7 @@
 }
 
 .experience-shell .member-row,
-.experience-shell .invite-row,
-.experience-shell .vault-row {
+.experience-shell .invite-row {
   padding-inline: 0;
   padding-block: 0.7rem;
   border-bottom-color: var(--experience-line);
@@ -2710,8 +2725,7 @@
 }
 
 .experience-shell .member-row:hover,
-.experience-shell .invite-row:hover,
-.experience-shell .vault-row:hover {
+.experience-shell .invite-row:hover {
   background: color-mix(in srgb, var(--experience-accent) 4%, transparent);
 }
 
@@ -2726,7 +2740,6 @@
 .experience-shell[data-view="guides"] .guide-card,
 .experience-shell[data-view="capture"] .card,
 .experience-shell[data-view="support"] .card,
-.experience-shell[data-view="vault"] .card,
 .experience-shell[data-view="members"] .members-directory,
 .experience-shell[data-view="groups"] .group-grid,
 .experience-shell[data-view="settings"] .settings-grid,
@@ -3811,7 +3824,7 @@
 
 .experience-shell .first-run-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
   gap: 0.75rem;
 }
 
@@ -3847,6 +3860,313 @@
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.experience-shell .first-run-actions .new-guide-card-trigger {
+  display: flex;
+  min-height: 5.7rem;
+  align-items: center;
+  justify-items: initial;
+  gap: 0.75rem;
+}
+
+.experience-shell .new-guide-card-icon {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--experience-accent) 12%, var(--card));
+  color: var(--experience-accent) !important;
+}
+
+.experience-shell .new-guide-card-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.15rem;
+  color: var(--foreground) !important;
+}
+
+.experience-shell .new-guide-card-copy small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.experience-shell .first-run-actions .new-guide-card-arrow {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
+  color: var(--muted);
+}
+
+/*
+ * The creation menu is portalled outside .experience-shell, so it deliberately
+ * uses root surface tokens. Its richer rows keep capture choices scannable
+ * without recreating a separate setup page.
+ */
+.guide-create-menu {
+  width: min(24rem, calc(100vw - 1rem)) !important;
+  padding: 0.45rem !important;
+  border: 1px solid var(--border);
+  border-radius: 1rem !important;
+  background: var(--popover) !important;
+  box-shadow:
+    0 2px 6px rgb(14 19 25 / 0.1),
+    0 20px 48px rgb(14 19 25 / 0.16) !important;
+}
+
+.guide-create-menu:focus-visible {
+  outline: none;
+}
+
+.guide-create-menu-label {
+  padding: 0.35rem 0.45rem 0.3rem !important;
+  color: var(--muted-foreground) !important;
+  font-size: 0.65rem !important;
+  font-weight: 760 !important;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.guide-create-option {
+  display: grid !important;
+  min-height: 3.75rem;
+  grid-template-columns: 2.35rem minmax(0, 1fr) auto;
+  align-items: center !important;
+  gap: 0.7rem !important;
+  padding: 0.55rem 0.6rem !important;
+  border-radius: 0.75rem !important;
+  color: var(--foreground) !important;
+  cursor: pointer !important;
+}
+
+.guide-create-option:focus,
+.guide-create-option[data-highlighted] {
+  background: var(--surface-hover) !important;
+  color: var(--foreground) !important;
+}
+
+.guide-create-option[data-disabled] {
+  cursor: not-allowed !important;
+}
+
+.guide-create-option-icon {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  border-radius: 0.72rem;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+
+.guide-create-option-icon[data-kind="browser"] {
+  background: color-mix(in srgb, #2563eb 12%, var(--card));
+  color: #1d4ed8;
+}
+
+:root[data-theme="dark"] .guide-create-option-icon[data-kind="browser"],
+.dark .guide-create-option-icon[data-kind="browser"] {
+  color: #60a5fa;
+}
+
+.guide-create-option-icon[data-kind="desktop"] {
+  background: color-mix(in srgb, var(--purple) 12%, var(--card));
+  color: var(--purple);
+}
+
+.guide-create-option-icon[data-kind="manual"] {
+  background: color-mix(in srgb, var(--brand) 11%, var(--card));
+  color: var(--brand-contrast);
+}
+
+.guide-create-option-icon svg {
+  width: 1rem !important;
+  height: 1rem !important;
+}
+
+.guide-create-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.guide-create-option-copy strong {
+  color: var(--foreground) !important;
+  font-size: 0.84rem;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+
+.guide-create-option-copy small {
+  overflow: hidden;
+  color: var(--muted-foreground) !important;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guide-create-status {
+  display: inline-flex;
+  min-height: 1.35rem;
+  align-items: center;
+  padding-inline: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted-foreground) !important;
+  font-size: 0.62rem;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.guide-create-status[data-tone="ready"] {
+  border-color: color-mix(in srgb, var(--green) 22%, var(--border));
+  background: var(--green-soft);
+  color: var(--green) !important;
+}
+
+.guide-create-status[data-tone="setup"] {
+  border-color: color-mix(in srgb, var(--brand) 20%, var(--border));
+  background: var(--brand-soft);
+  color: var(--brand-contrast) !important;
+}
+
+.guide-create-status[data-tone="pro"] {
+  border-color: color-mix(in srgb, var(--purple) 20%, var(--border));
+  background: var(--purple-soft);
+  color: var(--purple) !important;
+}
+
+.guide-create-option-arrow {
+  width: 0.82rem !important;
+  height: 0.82rem !important;
+  color: var(--muted-foreground) !important;
+}
+
+.guide-create-separator {
+  margin: 0.38rem 0 !important;
+  background: var(--border) !important;
+}
+
+.guide-create-menu-note {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.4rem 0.15rem 0.05rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.65rem;
+  background: var(--surface-soft);
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.guide-create-menu-note svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: none;
+  color: var(--green);
+}
+
+.desktop-capture-dialog {
+  gap: 0.9rem;
+}
+
+.desktop-capture-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--purple) 18%, var(--border));
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--purple) 7%, var(--card));
+}
+
+.desktop-capture-intro-icon {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.72rem;
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+
+.desktop-capture-intro-icon svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.desktop-capture-intro strong {
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.desktop-capture-intro p,
+.desktop-capture-dialog-heading p,
+.desktop-capture-dialog-empty {
+  margin: 0.2rem 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.desktop-capture-dialog-section {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--card);
+}
+
+.desktop-capture-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.desktop-capture-dialog-heading h3 {
+  margin: 0.12rem 0 0;
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.desktop-capture-dialog-empty {
+  margin: 0;
+  padding: 0.7rem 0.75rem;
+  border-radius: 0.65rem;
+  background: var(--surface-soft);
+}
+
+.desktop-capture-dialog-privacy {
+  margin: 0;
+}
+
+@media (max-width: 560px) {
+  .experience-shell .new-guide-trigger .new-guide-chevron {
+    display: none;
+  }
+
+  .guide-create-menu {
+    width: calc(100vw - 1rem) !important;
+  }
+
+  .guide-create-option {
+    grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+    gap: 0.55rem !important;
+  }
+
+  .guide-create-option-copy small {
+    white-space: normal;
+  }
 }
 
 .experience-shell .status-review,
@@ -4297,7 +4617,154 @@
 }
 
 .experience-shell .support-nav-group {
+  position: relative;
   margin-top: auto;
+  padding-top: 0.75rem;
+}
+
+.experience-shell .support-nav-group::before {
+  position: absolute;
+  inset: 0 0.55rem auto;
+  height: 1px;
+  background: var(--experience-line);
+  content: "";
+}
+
+.experience-shell .sidebar-setup-trigger {
+  min-height: 2.65rem !important;
+}
+
+.experience-shell .main-nav .sidebar-setup-trigger[data-active="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.experience-shell .main-nav .sidebar-setup-trigger[data-active="true"]::before {
+  display: none;
+}
+
+.experience-shell .main-nav .sidebar-setup-trigger:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  box-shadow: none;
+}
+
+.experience-shell .sidebar-setup-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.experience-shell .sidebar-setup-progress-ring {
+  position: relative;
+  display: grid;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--experience-accent) var(--setup-progress),
+    color-mix(in srgb, var(--foreground) 11%, transparent) 0
+  );
+  color: var(--foreground);
+  font-size: 0.52rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.experience-shell .sidebar-setup-progress-ring::after {
+  position: absolute;
+  inset: 0.2rem;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--sidebar) 94%, var(--card));
+  content: "";
+}
+
+.experience-shell .sidebar-setup-progress-ring > span {
+  position: relative;
+  z-index: 1;
+}
+
+.experience-shell .sidebar-setup-chevron {
+  width: 0.85rem !important;
+  height: 0.85rem !important;
+  transition: transform 150ms ease;
+}
+
+.experience-shell .sidebar-setup-trigger[data-open] .sidebar-setup-chevron {
+  transform: rotate(180deg);
+}
+
+.sidebar-onboarding-popover {
+  width: min(22rem, calc(100vw - 2rem));
+  gap: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--card);
+  box-shadow: 0 22px 55px rgb(14 19 25 / 0.18);
+}
+
+.sidebar-onboarding-popover .onboarding-wizard-body {
+  gap: 0.9rem;
+}
+
+.sidebar-onboarding-popover .onboarding-wizard-header {
+  padding-bottom: 0.1rem;
+}
+
+.sidebar-onboarding-popover .onboarding-checklist-copy {
+  justify-content: space-between;
+  flex: 1;
+}
+
+.sidebar-onboarding-popover .onboarding-checklist-copy [data-slot="card-title"] {
+  font-size: 1rem;
+}
+
+.sidebar-onboarding-popover .onboarding-percent {
+  color: var(--foreground);
+  font-size: 0.9rem;
+}
+
+.sidebar-onboarding-popover .dashboard-progress {
+  height: 0.5rem;
+  background: color-mix(in srgb, var(--brand) 18%, var(--surface-soft));
+}
+
+.sidebar-onboarding-popover .onboarding-task-list {
+  gap: 0.25rem;
+  padding-block: 0.2rem;
+}
+
+.sidebar-onboarding-popover .onboarding-task-list li button {
+  min-height: 2.15rem;
+  padding: 0.45rem 0.35rem;
+  border-radius: 0.55rem;
+}
+
+.sidebar-onboarding-popover .onboarding-task-list li button:not(:disabled):hover {
+  background: var(--surface-soft);
+}
+
+.sidebar-onboarding-popover .onboarding-task-list li.complete strong {
+  text-decoration: none;
+}
+
+.sidebar-onboarding-popover .onboarding-wizard-footer {
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-onboarding-popover .onboarding-wizard-footer [data-slot="button"] {
+  width: 100%;
+}
+
+:root[data-theme="dark"] .sidebar-onboarding-popover,
+.dark .sidebar-onboarding-popover {
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.42);
 }
 
 .color-picker-hex[aria-invalid="true"] {
@@ -4341,5 +4808,1391 @@
 
   .experience-shell .overview-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* -------------------------------------------------------------------------
+ * Library workbench
+ *
+ * Controls are split by how often they change: status lives in the tabs
+ * (switched constantly), search sits directly over the table, and the
+ * narrowing facets sit behind one Filters button — a permanent rail cost the
+ * table a sixth of its width to show three checkboxes in a small workspace.
+ * ---------------------------------------------------------------------- */
+
+.experience-shell .library-view-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.experience-shell .library-filter-trigger {
+  display: inline-flex;
+  height: 2rem;
+  align-items: center;
+  gap: 0.35rem;
+  padding-inline: 0.65rem;
+  border: 1px solid var(--input);
+  border-radius: 0.55rem;
+  background: var(--card);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.experience-shell .library-filter-trigger svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.experience-shell .library-filter-trigger:hover,
+.experience-shell .library-filter-trigger[aria-expanded="true"] {
+  border-color: var(--line-strong);
+  color: var(--foreground);
+}
+
+.experience-shell .library-filter-count {
+  display: inline-grid;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  padding-inline: 0.25rem;
+  border-radius: 999px;
+  /* A raw accent is too light to carry white text at this size, and the accent
+     is workspace-configurable — deepening it toward the body colour keeps the
+     hue while guaranteeing the count stays legible in either theme. */
+  background: color-mix(in srgb, var(--experience-accent) 78%, var(--foreground));
+  color: var(--card);
+  font-size: 0.65rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.experience-shell .library-active-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.65rem var(--kh-card-pad-x);
+  border-bottom: 1px solid var(--experience-line);
+}
+
+.experience-shell .library-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.6rem;
+  padding-inline: 0.55rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 999px;
+  background: var(--experience-soft);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 560;
+}
+
+.experience-shell .library-chip svg {
+  width: 0.7rem;
+  height: 0.7rem;
+  color: var(--muted);
+}
+
+.experience-shell .library-chip:hover {
+  border-color: var(--line-strong);
+}
+
+.experience-shell .library-chip:hover svg {
+  color: var(--foreground);
+}
+
+/*
+ * The Filters popover portals to document.body, outside .experience-shell, so
+ * the facet rules below are deliberately unscoped and use base tokens only —
+ * --experience-* and --workspace-accent do not reach a portal.
+ */
+.library-filter-popover {
+  display: grid;
+  width: 17rem;
+  max-height: min(26rem, 70dvh);
+  gap: 0.85rem;
+  align-content: start;
+  padding: 0.75rem 0.6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.facet-title {
+  margin: 0 0 0.35rem;
+  padding-inline: 0.35rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.facet-list {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.facet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0.35rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.facet-row:hover {
+  background: var(--surface-soft);
+  color: var(--foreground);
+}
+
+.facet-row[data-selected="true"] {
+  color: var(--foreground);
+  font-weight: 620;
+}
+
+.facet-box {
+  display: grid;
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: none;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 0.3rem;
+  color: transparent;
+}
+
+.facet-box svg {
+  width: 0.6rem;
+  height: 0.6rem;
+  stroke-width: 3.5;
+}
+
+.facet-row[data-selected="true"] .facet-box {
+  border-color: var(--accent);
+  background: var(--accent);
+  /* The card colour inverts with the theme and the accent does not, so this
+     keeps the tick readable against a light or a dark accent alike. */
+  color: var(--card);
+}
+
+.facet-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facet-count {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.facet-more {
+  padding: 0.3rem 0.35rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  /* Bright accents are unreadable as small text; pulling it toward the body
+     colour keeps the hue and the contrast, in either theme. */
+  color: color-mix(in srgb, var(--accent) 60%, var(--foreground));
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.facet-more:hover {
+  background: var(--surface-soft);
+}
+
+/* Table ------------------------------------------------------------------ */
+
+.experience-shell .library-table-scroll {
+  overflow-x: auto;
+}
+
+.experience-shell .library-table {
+  width: 100%;
+  /* Below this the columns start crushing the title instead of the table
+     scrolling, which is how the guide names ended up as one letter. */
+  min-width: 52rem;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* The guide name absorbs whatever the fixed-width columns leave over. */
+.experience-shell .library-table th:nth-child(2) {
+  width: 100%;
+}
+
+.experience-shell .library-table th {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--experience-line);
+  background: var(--experience-panel);
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.experience-shell .library-table th:first-child {
+  padding-left: var(--kh-card-pad-x);
+}
+
+.experience-shell .library-table th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.experience-shell .library-table th button:hover,
+.experience-shell .library-table th[data-active] button {
+  color: var(--foreground);
+}
+
+.experience-shell .library-table th svg {
+  width: 0.7rem;
+  height: 0.7rem;
+}
+
+.experience-shell .library-table td {
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--experience-line);
+  vertical-align: middle;
+}
+
+.experience-shell .library-table[data-density="compact"] td {
+  padding-block: 0.3rem;
+}
+
+.experience-shell
+  .library-table[data-density="compact"]
+  .library-title-copy
+  small {
+  display: none;
+}
+
+.experience-shell .library-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.experience-shell .library-table tbody tr {
+  cursor: pointer;
+}
+
+.experience-shell .library-table tbody tr:hover {
+  background: var(--experience-soft);
+}
+
+.experience-shell .library-table tbody tr[data-selected] {
+  background: color-mix(in srgb, var(--experience-accent) 9%, var(--card));
+}
+
+.experience-shell .library-cell-pick {
+  width: 2.6rem;
+  padding-left: var(--kh-card-pad-x) !important;
+  padding-right: 0 !important;
+}
+
+.experience-shell .library-cell-number {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.experience-shell .library-cell-muted {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.experience-shell .library-cell-actions {
+  width: 1%;
+  padding-right: var(--kh-card-pad-x) !important;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.experience-shell .library-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.experience-shell .library-table tbody tr:hover .library-row-actions,
+.experience-shell .library-table tbody tr:focus-within .library-row-actions {
+  opacity: 1;
+}
+
+.experience-shell .library-title-cell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.experience-shell .library-title-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.experience-shell .library-title-copy strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.84rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experience-shell .library-title-copy small {
+  max-width: 60ch;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Gallery ---------------------------------------------------------------- */
+
+.experience-shell .library-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+  padding: 1rem var(--kh-card-pad-x);
+}
+
+.experience-shell .library-gallery-card {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.85rem;
+  background: var(--experience-panel);
+  cursor: pointer;
+}
+
+.experience-shell .library-gallery-card:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--experience-accent) 30%,
+    var(--experience-line)
+  );
+  transform: translateY(-1px);
+}
+
+.experience-shell .library-gallery-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-right: 2rem;
+}
+
+.experience-shell .library-gallery-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.9rem;
+  font-weight: 640;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.experience-shell .library-gallery-summary {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.experience-shell .library-gallery-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--experience-line);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.experience-shell .library-gallery-actions {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+}
+
+/* Bulk bar --------------------------------------------------------------- */
+
+.experience-shell .library-bulk-bar {
+  position: fixed;
+  bottom: 1.4rem;
+  left: calc(50% + var(--sidebar-width) / 2);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.85rem;
+  background: var(--foreground);
+  box-shadow: var(--shadow-lg);
+  color: var(--background);
+  transform: translateX(-50%);
+}
+
+.experience-shell .library-bulk-count {
+  font-size: 0.78rem;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.experience-shell .library-bulk-divider {
+  width: 1px;
+  height: 1.15rem;
+  background: color-mix(in srgb, var(--background) 26%, transparent);
+}
+
+.experience-shell .library-bulk-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 1.75rem;
+  padding-inline: 0.6rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: color-mix(in srgb, var(--background) 78%, transparent);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.experience-shell .library-bulk-action svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.experience-shell .library-bulk-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--background) 16%, transparent);
+  color: var(--background);
+}
+
+.experience-shell .library-bulk-action:disabled {
+  opacity: 0.5;
+}
+
+@media (max-width: 1100px) {
+  .experience-shell .library-bulk-bar {
+    left: 50%;
+  }
+}
+
+/*
+ * The preview drawer portals to document.body, outside .experience-shell, so
+ * these rules are deliberately unscoped — the shell's tokens would not reach
+ * it. Everything it uses is defined on :root.
+ */
+.library-preview {
+  display: grid;
+  width: min(34rem, 100vw) !important;
+  max-width: none !important;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: 0;
+  gap: 0;
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.library-preview-head {
+  padding: 1.25rem 1.35rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.library-preview-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.library-preview-title {
+  font-size: 1.05rem !important;
+  font-weight: 660 !important;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.library-preview-summary {
+  margin-top: 0.35rem;
+  color: var(--text-secondary) !important;
+}
+
+.library-preview-body {
+  display: grid;
+  align-content: start;
+  gap: 1.15rem;
+  padding: 1.1rem 1.35rem 1.4rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.library-preview-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.library-preview-facts > div {
+  padding: 0.6rem 0.75rem;
+  background: var(--card);
+}
+
+.library-preview-facts dt {
+  margin-bottom: 0.15rem;
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.library-preview-facts dd {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 560;
+}
+
+.library-preview-label {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.library-preview-tags {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.library-tag {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.library-preview-steps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: library-step;
+}
+
+.library-preview-steps li {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--surface-soft);
+  font-size: 0.8rem;
+}
+
+.library-preview-steps li::before {
+  counter-increment: library-step;
+  content: counter(library-step);
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+  border-radius: 0.35rem;
+  background: var(--foreground);
+  color: var(--background);
+  font-size: 0.62rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.library-preview-steps li[data-kind="warning"] {
+  border-color: color-mix(in srgb, var(--amber) 35%, transparent);
+  background: var(--amber-soft);
+}
+
+.library-preview-steps li[data-kind="warning"]::before {
+  background: var(--amber);
+  color: #fff;
+}
+
+.library-preview-steps li[data-kind="note"] {
+  border-color: color-mix(in srgb, var(--purple) 30%, transparent);
+  background: var(--purple-soft);
+}
+
+.library-preview-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.library-preview-history {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.library-preview-history li {
+  display: grid;
+  gap: 0.1rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+.library-preview-history strong {
+  font-size: 0.8rem;
+  font-weight: 620;
+}
+
+.library-preview-history span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.library-preview-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.35rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+/* -------------------------------------------------------------------------
+ * Share dialog
+ *
+ * Everything about who can see a guide lives here now, so the dialog is laid
+ * out as header / one scrolling body / pinned footer. The audience list used
+ * to scroll inside the already-scrolling body; a single scroll region is the
+ * point of the layout below. These rules are unscoped because the dialog
+ * portals to document.body.
+ * ---------------------------------------------------------------------- */
+
+.share-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.share-dialog .share-dialog-lead {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* Audience is one decision with two shapes, so it reads as two cards. */
+.audience-picker {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.audience-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.audience-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.audience-mode > svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--muted);
+}
+
+.audience-mode > span {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Selection is a border and a tint; the tick keeps it from being colour-only. */
+.audience-mode-tick {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--accent);
+}
+
+.audience-mode strong {
+  font-size: 0.82rem;
+  font-weight: 620;
+}
+
+.audience-mode small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.audience-mode:hover {
+  border-color: var(--line-strong);
+}
+
+.audience-mode[data-selected="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+}
+
+.audience-mode[data-selected="true"] > svg {
+  color: var(--accent-contrast, var(--accent));
+}
+
+.audience-mode:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.audience-choose {
+  display: grid;
+  gap: 0.6rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+/* What is already chosen stays visible without scrolling the list back up. */
+.audience-chosen {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.audience-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.6rem;
+  padding-inline: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.audience-chip svg {
+  width: 0.7rem;
+  height: 0.7rem;
+  color: var(--muted);
+}
+
+.audience-chip:hover {
+  border-color: var(--line-strong);
+}
+
+.audience-chip:hover svg {
+  color: var(--foreground);
+}
+
+.audience-results {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.audience-group-label {
+  margin: 0.35rem 0 0.15rem;
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.audience-group-label:first-child {
+  margin-top: 0;
+}
+
+.audience-results .choice-row {
+  margin: 0;
+  border-radius: 0.5rem;
+}
+
+.audience-empty {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.privacy-gate[data-pending] {
+  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  background: var(--amber-soft);
+}
+
+/* Footer ----------------------------------------------------------------- */
+
+.share-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  margin: 0 -1rem -1rem;
+  padding: 0.8rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+/* The reason Publish is unavailable belongs beside Publish, not up the page. */
+.share-dialog-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1 1 14rem;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.share-dialog-status svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
+}
+
+.share-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 560px) {
+  .audience-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .share-dialog-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* Access and sharing polish -------------------------------------------------
+ * Keep administrative surfaces neutral in both themes. Brand color signals
+ * selection and the primary action; it does not wash the whole dialog blue.
+ */
+.kh-dialog-content:has(.group-editor-form),
+.kh-dialog-content:has(.member-permissions-form) {
+  border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  background: var(--popover, var(--card));
+  color: var(--foreground);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.08),
+    0 24px 70px rgb(0 0 0 / 0.24);
+}
+
+.kh-dialog-content:has(.group-editor-form) {
+  width: min(52rem, calc(100vw - 2rem));
+  max-width: 52rem;
+  grid-template-rows: auto auto;
+}
+
+.kh-dialog-content > .group-editor-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem !important;
+  padding: 0.35rem 0 0 !important;
+  overflow: visible;
+}
+
+.group-editor-form .group-details-panel,
+.group-editor-form > .member-picker {
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.group-editor-form > .member-picker {
+  align-self: stretch;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.group-editor-form .group-member-options {
+  align-content: start;
+}
+
+.group-editor-form textarea {
+  resize: none;
+}
+
+.kh-dialog-content:has(.group-editor-form) .kh-dialog-header,
+.kh-dialog-content:has(.member-permissions-form) .kh-dialog-header {
+  border-bottom-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+}
+
+.group-details-panel,
+.group-editor-form > .member-picker,
+.member-permissions-form .permission-section,
+.member-permissions-form .identity-card {
+  border-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: var(--card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.035);
+}
+
+.group-editor-form :is(input:not([type="checkbox"]), textarea),
+.group-editor-form .search-field,
+.member-permissions-form :is(input:not([type="checkbox"]), textarea) {
+  border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.group-editor-form :is(input, textarea)::placeholder {
+  color: color-mix(in srgb, var(--muted-foreground) 82%, transparent);
+}
+
+.group-editor-form .group-restriction-option,
+.group-editor-form .group-member-option,
+.member-permissions-form .permission-option {
+  border-color: color-mix(in srgb, var(--foreground) 10%, var(--border)) !important;
+  background: var(--background) !important;
+}
+
+.group-editor-form .group-restriction-option:hover,
+.group-editor-form .group-member-option:hover,
+.member-permissions-form .permission-option:hover {
+  border-color: color-mix(in srgb, var(--brand) 46%, var(--border)) !important;
+  background: color-mix(in srgb, var(--brand) 3%, var(--background)) !important;
+}
+
+.group-editor-form .group-restriction-option.selected,
+.group-editor-form .group-member-option.selected,
+.member-permissions-form .permission-option.selected {
+  border-color: color-mix(in srgb, var(--brand) 62%, var(--border)) !important;
+  background: color-mix(in srgb, var(--brand) 8%, var(--background)) !important;
+  box-shadow: inset 3px 0 0 var(--brand) !important;
+}
+
+.group-editor-form input[type="checkbox"],
+.member-permissions-form input[type="checkbox"],
+.share-dialog input[type="checkbox"] {
+  accent-color: var(--brand);
+}
+
+.group-editor-form .member-choice-avatar,
+.form-section-icon,
+.member-permissions-form .identity-card .avatar.large {
+  color: var(--brand) !important;
+  background: color-mix(in srgb, var(--brand) 11%, var(--card)) !important;
+}
+
+.group-editor-form .modal-footer,
+.member-permissions-form .modal-footer {
+  margin: 0;
+  padding: 0.85rem 0 0.05rem;
+  border-top: 1px solid color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: var(--popover, var(--card));
+  backdrop-filter: none;
+}
+
+.group-editor-form .modal-footer {
+  position: static;
+}
+
+.group-editor-form .modal-footer .button.primary,
+.member-permissions-form .modal-footer .button.primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--kh-control-shadow);
+}
+
+.group-editor-form .modal-footer .button.secondary,
+.member-permissions-form .modal-footer .button.secondary {
+  border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.member-permissions-form .member-protected-note {
+  border-color: color-mix(in srgb, var(--green, #16a34a) 28%, var(--border));
+  background: color-mix(in srgb, var(--green, #16a34a) 7%, var(--card));
+  color: var(--foreground);
+}
+
+.experience-shell .member-table-heading {
+  border-block: 1px solid var(--experience-line);
+  background: var(--card);
+  color: var(--muted-foreground);
+}
+
+.library-preview-foot {
+  min-height: 4.25rem;
+  gap: 0.5rem;
+  border-top-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: var(--card);
+}
+
+.library-preview-foot > button:first-child {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.library-preview-foot > button:not(:first-child) {
+  border-color: color-mix(in srgb, var(--foreground) 11%, var(--border));
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.library-preview-foot > button:hover {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
+}
+
+.share-dialog {
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  background: var(--popover, var(--card));
+  color: var(--foreground);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 0.26);
+}
+
+.share-dialog .kh-dialog-header {
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 10%, var(--border));
+}
+
+.share-dialog-body {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.audience-modes {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.audience-mode {
+  min-height: 5.2rem;
+  align-items: center;
+  padding: 0.75rem;
+  border-color: color-mix(in srgb, var(--foreground) 11%, var(--border));
+  border-radius: 0.85rem;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.035);
+}
+
+.audience-mode:hover {
+  border-color: color-mix(in srgb, var(--brand) 42%, var(--border));
+  background: color-mix(in srgb, var(--brand) 3%, var(--card));
+}
+
+.audience-mode[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--brand) 70%, var(--border));
+  background: color-mix(in srgb, var(--brand) 8%, var(--card));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--brand) 18%, transparent),
+    0 5px 18px color-mix(in srgb, var(--brand) 8%, transparent);
+}
+
+.audience-mode-icon {
+  display: grid !important;
+  width: 2.1rem;
+  height: 2.1rem;
+  flex: 0 0 auto !important;
+  place-items: center;
+  border-radius: 0.65rem;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, var(--background));
+}
+
+.audience-mode-icon svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.audience-mode[data-selected="true"] .audience-mode-icon {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, var(--card));
+}
+
+.audience-mode > .audience-mode-tick {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  color: var(--brand);
+}
+
+.privacy-review-card {
+  display: grid !important;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center !important;
+  gap: 0.65rem !important;
+  min-height: 4.6rem;
+  padding: 0.75rem !important;
+  border-color: color-mix(in srgb, var(--foreground) 11%, var(--border)) !important;
+  background: var(--card) !important;
+}
+
+.privacy-review-card[data-pending] {
+  border-color: color-mix(in srgb, var(--brand) 38%, var(--border)) !important;
+  background: color-mix(in srgb, var(--brand) 6%, var(--card)) !important;
+}
+
+.privacy-review-icon {
+  display: grid !important;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.6rem;
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+}
+
+.privacy-review-icon svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.share-dialog-footer {
+  border-top-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: color-mix(in srgb, var(--foreground) 3%, var(--popover, var(--card)));
+}
+
+.step-title-display {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: var(--kh-control-height);
+  padding: 0.45rem 0.1rem 0.4rem;
+  color: var(--foreground);
+}
+
+.step-title-rendered {
+  min-width: 0;
+  flex: 1;
+  color: var(--foreground);
+  font-size: 1.12rem;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.step-title-inline-link {
+  display: inline-flex;
+  max-width: min(100%, 44rem);
+  align-items: center;
+  gap: 0.3rem;
+  margin-inline: 0.18rem;
+  padding: 0.08rem 0.38rem 0.12rem;
+  border: 1px solid color-mix(in srgb, var(--brand) 34%, var(--border));
+  border-radius: 0.38rem;
+  background: color-mix(in srgb, var(--brand) 7%, var(--card));
+  color: var(--brand-contrast, var(--brand));
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  vertical-align: baseline;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.step-title-inline-link:hover {
+  border-color: color-mix(in srgb, var(--brand) 72%, var(--border));
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  color: var(--brand-hover);
+}
+
+.step-title-inline-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-title-inline-link svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: none;
+}
+
+.document-step-title-link {
+  max-width: min(100%, 50rem);
+  font-size: inherit;
+  line-height: 1.3;
+}
+
+.step-title-edit-button {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.step-title-display:hover .step-title-edit-button,
+.step-title-edit-button:focus-visible {
+  opacity: 1;
+}
+
+.step-title-edit-button:hover {
+  background: var(--surface-soft);
+  color: var(--foreground);
+}
+
+.step-title-edit-button:focus-visible {
+  outline: 0;
+  box-shadow: var(--kh-focus-ring);
+}
+
+.step-title-edit-button svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.kh-dialog-content:has(.guide-export-dialog) {
+  border-color: color-mix(in srgb, var(--foreground) 12%, var(--border));
+  background: var(--popover, var(--card));
+}
+
+.guide-export-dialog {
+  gap: 0.8rem;
+  padding: 0.35rem 0 0;
+}
+
+.guide-export-dialog .export-policy-note {
+  align-items: center;
+  border-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: var(--card);
+  color: var(--muted-foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.035);
+}
+
+.guide-export-dialog .export-policy-note > svg {
+  margin-top: 0;
+  color: var(--brand);
+}
+
+.guide-export-dialog .export-dialog-footer {
+  position: static;
+  margin: 0;
+  padding: 0.85rem 0 0.05rem;
+  border-top-color: color-mix(in srgb, var(--foreground) 10%, var(--border));
+  background: var(--popover, var(--card));
+  backdrop-filter: none;
+}
+
+.guide-export-dialog .export-close-button[data-slot="button"] {
+  min-width: 5rem;
+  border-color: color-mix(in srgb, var(--foreground) 14%, var(--border));
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--kh-control-shadow);
+}
+
+.guide-export-dialog .export-close-button[data-slot="button"]:hover {
+  border-color: color-mix(in srgb, var(--foreground) 24%, var(--border));
+  background: var(--surface-soft);
+}
+
+.public-guide-shell {
+  min-height: 100dvh;
+  background: var(--background);
+}
+
+@media (max-width: 700px) {
+  .group-editor-form .modal-footer,
+  .member-permissions-form .modal-footer {
+    margin: 0;
+    padding-inline: 0;
+  }
+
+  .audience-modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-height: 700px) and (min-width: 701px) {
+  .kh-dialog-content > .group-editor-form {
+    overflow-y: auto;
   }
 }

@@ -108,7 +108,7 @@ function renderBlock(
       }</p>`
     : "";
   const mediaSource = block.media
-    ? assetSource(block.media, prepared.assets.get(block.media.mediaId))
+    ? assetSource(prepared.assets.get(block.media.mediaId))
     : undefined;
   const media = block.media
     ? mediaSource

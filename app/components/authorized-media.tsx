@@ -15,6 +15,7 @@ export function AuthorizedMedia({
   compact = false,
   crop,
   overlay,
+  sourceUrl,
 }: {
   workspaceId: string;
   mediaId: string;
@@ -22,15 +23,17 @@ export function AuthorizedMedia({
   compact?: boolean;
   crop?: { x: number; y: number; width: number; height: number };
   overlay?: ReactNode;
+  sourceUrl?: string;
 }) {
-  const mediaKey = `${workspaceId}:${mediaId}`;
+  const mediaKey = `${workspaceId}:${mediaId}:${sourceUrl ?? "private"}`;
   const [media, setMedia] = useState({ key: "", url: "", error: "" });
   const [dimensions, setDimensions] = useState({ key: "", width: 0, height: 0 });
   const decodeRetryRef = useRef("");
 
   useEffect(() => {
-    let active = true;
     decodeRetryRef.current = "";
+    if (sourceUrl) return;
+    let active = true;
     void acquireAuthorizedMediaUrl(workspaceId, mediaId)
       .then((nextUrl) => {
         if (active) setMedia({ key: mediaKey, url: nextUrl, error: "" });
@@ -51,9 +54,14 @@ export function AuthorizedMedia({
       active = false;
       releaseAuthorizedMediaUrl(workspaceId, mediaId);
     };
-  }, [mediaId, mediaKey, workspaceId]);
+  }, [mediaId, mediaKey, sourceUrl, workspaceId]);
 
-  const url = media.key === mediaKey ? media.url : "";
+  const sourceError = media.key === mediaKey ? media.error : "";
+  const url = sourceUrl && !sourceError
+    ? sourceUrl
+    : media.key === mediaKey
+      ? media.url
+      : "";
   const error = media.key === mediaKey ? media.error : "";
   const normalizedCrop = crop &&
     Number.isFinite(crop.x) &&
@@ -120,6 +128,14 @@ export function AuthorizedMedia({
               });
             }}
             onError={() => {
+              if (sourceUrl) {
+                setMedia({
+                  key: mediaKey,
+                  url: "",
+                  error: "The shared screenshot could not be displayed.",
+                });
+                return;
+              }
               if (decodeRetryRef.current === mediaKey) {
                 setMedia({
                   key: mediaKey,

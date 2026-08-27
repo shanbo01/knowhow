@@ -2629,6 +2629,15 @@
           "kind",
           "user_id"
         ]
+      },
+      {
+        "key": "by_kind_user_status",
+        "type": "key",
+        "columns": [
+          "kind",
+          "user_id",
+          "status"
+        ]
       }
     ]
   },

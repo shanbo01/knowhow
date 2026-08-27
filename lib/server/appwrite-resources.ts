@@ -49,5 +49,3 @@ export const TABLES = {
 } as const;
 
 export type TableName = (typeof TABLES)[keyof typeof TABLES];
-
-export const ALL_TABLES = Object.freeze(Object.values(TABLES));

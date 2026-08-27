@@ -523,7 +523,6 @@ export class SelfServiceProvisioningService {
     const member: WorkspaceMemberRecord = {
       name: identity.name,
       roles: ["administrator"],
-      capabilities: [],
       groupIds: [],
       joinedAt: startsAt,
     };
@@ -753,7 +752,6 @@ export class SelfServiceProvisioningService {
       const details = decodePayload<WorkspaceMemberRecord>(membership, {
         name: "",
         roles: [],
-        capabilities: [],
         groupIds: [],
       });
       if (!details.roles.includes("administrator")) continue;
