@@ -35,6 +35,7 @@ const REAUTHENTICATED_ACTIONS = new Set([
   "setWorkspaceStatus",
   "assignWorkspaceAdministrator",
   "appointOrganizationMember",
+  "createOrganizationWorkspace",
   "updateOrganizationMember",
   "resolveSupportRequest",
   "revokeSupportAccess",

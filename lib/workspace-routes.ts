@@ -1,13 +1,21 @@
-export type WorkspaceSection =
-  | "overview"
-  | "guides"
-  | "capture"
-  | "groups"
-  | "members"
-  | "support"
-  | "organization"
-  | "settings"
-  | "administration";
+/**
+ * The single source of truth for routable sections: the type is derived from
+ * this list, so a section can never exist in the type while the parser rejects
+ * its URL.
+ */
+export const WORKSPACE_SECTIONS = [
+  "overview",
+  "guides",
+  "capture",
+  "groups",
+  "members",
+  "support",
+  "organization",
+  "settings",
+  "administration",
+] as const;
+
+export type WorkspaceSection = (typeof WORKSPACE_SECTIONS)[number];
 
 export type GuideRevisionMode = "published" | "working";
 
@@ -18,17 +26,6 @@ export type AppRoute =
   | { kind: "guide-view"; workspaceSlug: string; guideId: string; revision: GuideRevisionMode }
   | { kind: "guide-edit"; workspaceSlug: string; guideId: string }
   | { kind: "invalid" };
-
-const WORKSPACE_SECTIONS: readonly WorkspaceSection[] = [
-  "overview",
-  "guides",
-  "capture",
-  "groups",
-  "members",
-  "support",
-  "settings",
-  "administration",
-];
 
 function safeSegment(value: string) {
   return encodeURIComponent(value);

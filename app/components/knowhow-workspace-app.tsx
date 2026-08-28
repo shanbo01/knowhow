@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  Bell,
   BookOpen,
   Building2,
   Check,
@@ -52,6 +53,7 @@ import {
   Trash2,
   UserCheck,
   UserCog,
+  Undo2,
   UserPlus,
   Users,
   Pin,
@@ -66,6 +68,7 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
+import { GuideFavicon } from "./guide-favicon";
 import {
   disableMfa,
   regenerateMfaRecoveryCodes,
@@ -79,6 +82,7 @@ import {
   knowhowCommand,
   uploadProvisioningLogo,
   uploadWorkspaceLogo,
+  KnowHowApiError,
 } from "../../lib/knowhow-client";
 import type { NavigationGuard } from "../../lib/navigation-guard";
 import { isCapturedGuideSource } from "../../lib/guide-contracts";
@@ -130,6 +134,8 @@ import { GuideExportDialog, type GuideExportFormatChoice } from "./guide-export-
 import { GuideDeleteDialog } from "./guide-delete-dialog";
 import { GuideReaderView } from "./guide-reader-view";
 import { GuideCreateMenu } from "./guide-create-menu";
+import { ProBadge, ProUpsell } from "./pro-badge";
+import { UsageMeter, usageTone } from "./plan-usage";
 import { useConfirmDialog } from "./confirm-dialog";
 import { HexColorPicker, isValidHexColor } from "./hex-color-picker";
 import { SelectMenu } from "./select-menu";
@@ -201,11 +207,12 @@ type DialogState =
   | { type: "group"; group: WorkspaceGroup | null }
   | { type: "invite" }
   | { type: "plan" }
+  | { type: "entitlement"; kind: string; message: string }
   | { type: "member"; member: WorkspaceMember }
   | { type: "extension" }
   | { type: "desktop" }
-  | { type: "share-guide"; guide: Guide }
-  | { type: "export-guide"; guide: Guide }
+  | { type: "share-guide"; guides: Guide[] }
+  | { type: "export-guide"; guides: Guide[] }
   | { type: "account-security" }
   | { type: "support-decision"; request: SupportAccessRequest };
 
@@ -215,6 +222,7 @@ const NAV_ITEMS: Array<{ view: View; icon: typeof LayoutDashboard }> = [
   { view: "Groups", icon: Group },
   { view: "Members", icon: Users },
   { view: "Support", icon: LifeBuoy },
+  { view: "Organization", icon: Building2 },
   { view: "Settings", icon: Settings },
 ];
 
@@ -288,6 +296,32 @@ function messageFromError(error: unknown) {
   return error instanceof Error
     ? error.message
     : "The operation could not be completed.";
+}
+
+const ENTITLEMENT_COPY: Record<string, string> = {
+  maximumGuides:
+    "This workspace has reached its guide limit. Archive a guide to free a slot, or upgrade for more.",
+  maximumUsers: "This workspace has reached its limit on people.",
+  maximumCreators: "This workspace has reached its limit on creators.",
+  storageBytes: "This workspace has reached its storage limit.",
+  extensionEnabled: "Browser extension capture is a Pro feature.",
+  desktopCaptureEnabled: "Windows desktop capture is a Pro feature.",
+  privacyToolsEnabled:
+    "Smart Blur, redaction, and annotations are Pro features.",
+  fileExportsEnabled: "PDF, PowerPoint, and HTML exports are Pro features.",
+  removeBranding: "Removing KnowHow branding is a Pro feature.",
+  supportEnabled: "In-app support is a Pro feature.",
+};
+
+/**
+ * The blocked entitlement when a request failed a plan check, so the caller can
+ * answer with an upgrade prompt instead of a bare error string.
+ */
+function entitlementFromError(error: unknown) {
+  if (!(error instanceof KnowHowApiError)) return null;
+  const kind = error.entitlement;
+  if (!kind) return null;
+  return { kind, message: ENTITLEMENT_COPY[kind] ?? error.message };
 }
 
 function formatDate(value?: string, withTime = false) {
@@ -427,9 +461,47 @@ function workspacePlanLabel(
   }
 }
 
+const PLAN_FEATURES: Array<{
+  key: keyof NonNullable<BootstrapResponse["activeWorkspace"]>["entitlements"];
+  label: string;
+  freeNote: string;
+}> = [
+  {
+    key: "privacyToolsEnabled",
+    label: "Smart Blur, redact, and annotate",
+    freeNote: "Click markers only on Free",
+  },
+  {
+    key: "extensionEnabled",
+    label: "Browser extension capture",
+    freeNote: "Manual guides only on Free",
+  },
+  {
+    key: "desktopCaptureEnabled",
+    label: "Windows desktop capture",
+    freeNote: "Manual guides only on Free",
+  },
+  {
+    key: "fileExportsEnabled",
+    label: "PDF, PowerPoint, and HTML exports",
+    freeNote: "Markdown only on Free",
+  },
+  {
+    key: "removeBranding",
+    label: "Remove KnowHow branding",
+    freeNote: "KnowHow branding shown on Free",
+  },
+  {
+    key: "supportEnabled",
+    label: "In-app support",
+    freeNote: "Contact form on Free",
+  },
+];
+
 function PlanDialog({
   subscription,
   entitlements,
+  metrics,
   busy,
   onClose,
   onStartTrial,
@@ -438,6 +510,7 @@ function PlanDialog({
 }: {
   subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"];
   entitlements: NonNullable<BootstrapResponse["activeWorkspace"]>["entitlements"];
+  metrics: NonNullable<BootstrapResponse["activeWorkspace"]>["metrics"];
   busy: boolean;
   onClose: () => void;
   onStartTrial: () => Promise<void>;
@@ -460,15 +533,52 @@ function PlanDialog({
           Online billing is not available yet. Contact sales and we will follow up
           before making any paid plan change.
         </p>
-        <ul className="privacy-caption">
-          <li>Capture, Smart Blur, redact, and annotate: {entitlements.privacyToolsEnabled ? "included" : "Pro"}</li>
-          <li>Custom subdomain: {entitlements.customSubdomainEnabled ? "included (preview)" : "Pro"}</li>
-          <li>In-app support: {entitlements.supportEnabled ? "included" : "contact form on Free"}</li>
-          <li>
-            Limits: {entitlements.maximumCreators} creator
-            {entitlements.maximumCreators === 1 ? "" : "s"}, {entitlements.maximumUsers} people
-          </li>
-        </ul>
+        <section className="plan-usage-section">
+          <h3 className="plan-section-heading">This workspace</h3>
+          <UsageMeter
+            label="Guides"
+            used={metrics.guides}
+            maximum={entitlements.maximumGuides}
+          />
+          <UsageMeter
+            label="People"
+            used={metrics.members}
+            maximum={entitlements.maximumUsers}
+          />
+          <UsageMeter
+            label="Storage"
+            used={metrics.storageBytes}
+            maximum={entitlements.storageBytes}
+            format={formatBytes}
+          />
+          <p className="privacy-caption">
+            Archiving a guide frees its slot. Creators are capped at{" "}
+            {entitlements.maximumCreators}.
+          </p>
+        </section>
+        <section className="plan-feature-section">
+          <h3 className="plan-section-heading">Features</h3>
+          <ul className="plan-feature-list">
+            {PLAN_FEATURES.map((feature) => {
+              const included = Boolean(entitlements[feature.key]);
+              return (
+                <li key={feature.key} data-included={included}>
+                  <span>{feature.label}</span>
+                  {included ? (
+                    <span className="plan-feature-included">Included</span>
+                  ) : (
+                    <span className="plan-feature-locked">
+                      <span className="plan-feature-note">
+                        {feature.freeNote}
+                      </span>
+                      <ProBadge size="sm" />
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
         <footer className="modal-footer">
           <button className="button secondary" type="button" onClick={onClose}>
             Close
@@ -1052,7 +1162,13 @@ function OverviewView({
                   >
                     <span className="home-guide-card-topline">
                       <span className="home-guide-icon">
-                        <BookOpen />
+                        <GuideFavicon
+                          workspaceId={guide.workspaceId}
+                          guideId={guide.id}
+                          revisionId={revision?.id}
+                          mediaId={guide.faviconMediaId}
+                          fallback={<BookOpen />}
+                        />
                       </span>
                       <StatusBadge status={guide.status} />
                     </span>
@@ -1112,7 +1228,7 @@ function guideMatchesTab(guide: Guide, tab: LibraryTab) {
     case "archived":
       return guide.status === "archived";
     default:
-      return true;
+      return guide.status !== "archived";
   }
 }
 
@@ -1145,6 +1261,7 @@ function visibleSelection(chosen: string[], entries: Array<[string, number]>) {
 function GuidesView({
   guides,
   newGuideAction,
+  guideLimitNotice,
   onOpen,
   onEdit,
   onShare,
@@ -1155,10 +1272,11 @@ function GuidesView({
 }: {
   guides: Guide[];
   newGuideAction: ReactNode;
+  guideLimitNotice: ReactNode;
   onOpen: (guide: Guide) => void;
   onEdit: (guide: Guide) => void;
-  onShare: (guide: Guide) => void;
-  onExport: (guide: Guide) => void;
+  onShare: (guides: Guide[]) => void;
+  onExport: (guides: Guide[]) => void;
   onAction: (
     action: string,
     payload: unknown,
@@ -1181,7 +1299,7 @@ function GuidesView({
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
-  const [deleteTarget, setDeleteTarget] = useState<Guide | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<Guide[]>([]);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
 
   const scoped = guides.filter((guide) => guideMatchesTab(guide, tab));
@@ -1302,12 +1420,19 @@ function GuidesView({
   const archivableSelection = selectedGuides.filter(
     (guide) => guide.canArchive && guide.status !== "archived",
   );
+  const shareableSelection = selectedGuides.filter(
+    (guide) => guide.canShare && guide.status !== "archived",
+  );
+  const exportableSelection = selectedGuides.filter(
+    (guide) => Boolean(guide.workingRevision ?? guide.publishedRevision),
+  );
+  const deletableSelection = selectedGuides.filter((guide) => guide.canDelete);
   const allOnPageSelected =
     visibleGuides.length > 0 &&
     visibleGuides.every((guide) => selected.includes(guide.id));
 
   const tabCounts: Record<LibraryTab, number> = {
-    all: guides.length,
+    all: guides.filter((guide) => guideMatchesTab(guide, "all")).length,
     live: guides.filter((guide) => guideMatchesTab(guide, "live")).length,
     review: guides.filter((guide) => guideMatchesTab(guide, "review")).length,
     drafts: guides.filter((guide) => guideMatchesTab(guide, "drafts")).length,
@@ -1417,6 +1542,45 @@ function GuidesView({
     ).catch(() => undefined);
   }
 
+  async function restoreGuideAsDraft(guide: Guide) {
+    const revision = libraryRevision(guide, "archived");
+    if (!revision || !guide.canRestore) return;
+    if (
+      !(await askToConfirm({
+        title: "Restore as a private draft?",
+        description:
+          "This creates a new editable draft from the archived revision. The archived version stays in history and nothing is published automatically.",
+        confirmLabel: "Restore as draft",
+      }))
+    )
+      return;
+    await onAction(
+      "restoreRevision",
+      { guideId: guide.id, revisionId: revision.id },
+      "Guide restored as a private draft",
+    );
+    setSelected([]);
+    setPreviewId(null);
+    setTab("drafts");
+  }
+
+  async function unpublishGuide(guide: Guide) {
+    if (!guide.canUnpublish) return;
+    if (
+      !(await askToConfirm({
+        title: "Return this guide to draft?",
+        description:
+          "The guide stops being readable by the people it was shared with and becomes an editable draft again. Publish it when you are ready to share it back.",
+        confirmLabel: "Return to draft",
+      }))
+    )
+      return;
+    await onAction("unpublishGuide", { guideId: guide.id }, "Guide returned to draft");
+    setSelected([]);
+    setPreviewId(null);
+    setTab("drafts");
+  }
+
   function guideMenu(guide: Guide) {
     const revision = libraryRevision(guide, tab);
     return (
@@ -1434,12 +1598,12 @@ function GuidesView({
           onClick={(event) => event.stopPropagation()}
         >
           {guide.canShare && guide.status !== "archived" ? (
-            <DropdownMenuItem onClick={() => onShare(guide)}>
+            <DropdownMenuItem onClick={() => onShare([guide])}>
               <Link2 /> Share
             </DropdownMenuItem>
           ) : null}
-          {guide.publishedRevision ? (
-            <DropdownMenuItem onClick={() => onExport(guide)}>
+          {guide.workingRevision ?? guide.publishedRevision ? (
+            <DropdownMenuItem onClick={() => onExport([guide])}>
               <Download /> Export
             </DropdownMenuItem>
           ) : null}
@@ -1475,6 +1639,31 @@ function GuidesView({
               <ShieldCheck /> Publish
             </DropdownMenuItem>
           ) : null}
+          {guide.canDuplicate ? (
+            <DropdownMenuItem
+              disabled={busy}
+              onClick={() =>
+                void onAction(
+                  "duplicateGuide",
+                  { guideId: guide.id },
+                  "Guide duplicated",
+                ).catch(() => undefined)
+              }
+            >
+              <Copy /> Duplicate
+            </DropdownMenuItem>
+          ) : null}
+          {guide.canUnpublish ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() => void unpublishGuide(guide)}
+              >
+                <Undo2 /> Return to draft
+              </DropdownMenuItem>
+            </>
+          ) : null}
           {guide.canArchive && guide.status !== "archived" ? (
             <>
               <DropdownMenuSeparator />
@@ -1492,11 +1681,22 @@ function GuidesView({
               </DropdownMenuItem>
             </>
           ) : null}
+          {guide.canRestore && guide.status === "archived" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() => void restoreGuideAsDraft(guide)}
+              >
+                <RotateCcw /> Restore as draft
+              </DropdownMenuItem>
+            </>
+          ) : null}
           {guide.canDelete ? (
             <DropdownMenuItem
               className="danger-menu-item"
               disabled={busy}
-              onClick={() => setDeleteTarget(guide)}
+              onClick={() => setDeleteTargets([guide])}
             >
               <Trash2 /> Delete
             </DropdownMenuItem>
@@ -1518,6 +1718,8 @@ function GuidesView({
           </p>
         </div>
       </div>
+
+      {guideLimitNotice}
 
       <section className="card table-card library-card">
         <div className="library-view-bar">
@@ -1877,7 +2079,15 @@ function GuidesView({
                       <td>
                         <div className="library-title-cell">
                           <span className="guide-icon">
-                            {guide.restricted ? <LockKeyhole /> : <BookOpen />}
+                            <GuideFavicon
+                              workspaceId={guide.workspaceId}
+                              guideId={guide.id}
+                              revisionId={revision?.id}
+                              mediaId={guide.faviconMediaId}
+                              fallback={
+                                guide.restricted ? <LockKeyhole /> : <BookOpen />
+                              }
+                            />
                           </span>
                           <span className="library-title-copy">
                             <strong>{revision?.title ?? guide.title}</strong>
@@ -1967,24 +2177,32 @@ function GuidesView({
             {selectedGuides.length} selected
           </span>
           <span className="library-bulk-divider" />
-          {selectedGuides.length === 1 &&
-          selectedGuides[0].canShare &&
-          selectedGuides[0].status !== "archived" ? (
+          {shareableSelection.length ? (
             <button
               className="library-bulk-action"
               type="button"
-              onClick={() => onShare(selectedGuides[0])}
+              onClick={() => onShare(shareableSelection)}
             >
               <Link2 /> Share
             </button>
           ) : null}
-          {selectedGuides.length === 1 && selectedGuides[0].publishedRevision ? (
+          {exportableSelection.length ? (
             <button
               className="library-bulk-action"
               type="button"
-              onClick={() => onExport(selectedGuides[0])}
+              onClick={() => onExport(exportableSelection)}
             >
               <Download /> Export
+            </button>
+          ) : null}
+          {deletableSelection.length ? (
+            <button
+              className="library-bulk-action"
+              type="button"
+              disabled={busy}
+              onClick={() => setDeleteTargets(deletableSelection)}
+            >
+              <Trash2 /> Delete
             </button>
           ) : null}
           {archivableSelection.length ? (
@@ -2012,7 +2230,7 @@ function GuidesView({
                       "archiveGuide",
                       { guideId: guide.id },
                       "",
-                    ).catch(() => undefined);
+                    );
                   }
                   toast.success(
                     archivableSelection.length === 1
@@ -2051,8 +2269,8 @@ function GuidesView({
               busy={busy}
               onOpen={() => onOpen(previewGuide)}
               onEdit={() => onEdit(previewGuide)}
-              onShare={() => onShare(previewGuide)}
-              onExport={() => onExport(previewGuide)}
+              onShare={() => onShare([previewGuide])}
+              onExport={() => onExport([previewGuide])}
               onApprove={() => void approveGuide(previewGuide)}
               onRequestChanges={() => void requestChanges(previewGuide)}
               onPublish={() =>
@@ -2062,22 +2280,32 @@ function GuidesView({
                   "Guide shared",
                 ).catch(() => undefined)
               }
+              onRestore={() => void restoreGuideAsDraft(previewGuide)}
             />
           </SheetContent>
         ) : null}
       </Sheet>
 
-      {deleteTarget ? (
+      {deleteTargets.length ? (
         <GuideDeleteDialog
           busy={busy}
-          onCancel={() => setDeleteTarget(null)}
+          count={deleteTargets.length}
+          onCancel={() => setDeleteTargets([])}
           onConfirm={async () => {
-            await onAction(
-              "deleteGuide",
-              { guideId: deleteTarget.id },
-              "Guide deleted",
+            for (const guide of deleteTargets) {
+              await onAction(
+                "deleteGuide",
+                { guideId: guide.id },
+                "",
+              );
+            }
+            toast.success(
+              deleteTargets.length === 1
+                ? "Guide deleted"
+                : `${deleteTargets.length} guides deleted`,
             );
-            setDeleteTarget(null);
+            setDeleteTargets([]);
+            setSelected([]);
           }}
         />
       ) : null}
@@ -2175,6 +2403,7 @@ function LibraryPreview({
   onApprove,
   onRequestChanges,
   onPublish,
+  onRestore,
 }: {
   guide: Guide;
   revision: GuideRevisionView | null;
@@ -2186,6 +2415,7 @@ function LibraryPreview({
   onApprove: () => void;
   onRequestChanges: () => void;
   onPublish: () => void;
+  onRestore: () => void;
 }) {
   const live = guide.publishedRevision;
   const steps = revision?.steps ?? [];
@@ -2349,6 +2579,16 @@ function LibraryPreview({
         {guide.canPublish && guide.status === "review" && !guide.canReview ? (
           <Button type="button" disabled={busy} onClick={onPublish}>
             Publish
+          </Button>
+        ) : null}
+        {guide.canRestore && guide.status === "archived" ? (
+          <Button
+            variant="outline"
+            type="button"
+            disabled={busy}
+            onClick={onRestore}
+          >
+            <RotateCcw /> Restore as draft
           </Button>
         ) : null}
       </div>
@@ -2593,7 +2833,8 @@ function DesktopCaptureDialog({
 
         <p className="privacy-caption desktop-capture-dialog-privacy">
           <ShieldCheck /> Passwords, clipboard contents, raw keys, and secure
-          Windows surfaces are always excluded. Smart Blur runs before upload.
+          Windows surfaces are always excluded. Password fields are masked
+          before upload; review each draft before you share it.
         </p>
 
         <footer className="modal-footer">
@@ -4015,21 +4256,21 @@ function SettingsView({
       label: "Branding",
       description: "Logo, colors, and exports",
       icon: Paintbrush,
-      status: settings.logoUrl ? "Logo added" : "Logo needed",
+      status: undefined,
     },
     {
       id: "publishing" as const,
       label: "Publishing",
       description: "Reviews and approvals",
       icon: ShieldCheck,
-      status: settings.requireReviewBeforePublish ? "Review required" : "Direct publish",
+      status: undefined,
     },
     {
       id: "exports" as const,
       label: "Exports",
       description: "Downloads and watermarks",
       icon: FileDown,
-      status: settings.allowRestrictedExports ? "Restricted allowed" : "Restricted blocked",
+      status: undefined,
     },
   ];
   const activeSection = settingsSections.find((item) => item.id === section)!;
@@ -4068,7 +4309,9 @@ function SettingsView({
                     <strong>{item.label}</strong>
                     <small>{item.description}</small>
                   </span>
-                  <span className="settings-nav-status">{item.status}</span>
+                  {item.status ? (
+                    <span className="settings-nav-status">{item.status}</span>
+                  ) : null}
                   <ChevronRight className="settings-nav-chevron" />
                 </button>
               );
@@ -4089,7 +4332,7 @@ function SettingsView({
               <p className="eyebrow">{activeSection.label} settings</p>
               <h2>{activeSection.description}</h2>
             </div>
-            <span>{activeSection.status}</span>
+            {activeSection.status ? <span>{activeSection.status}</span> : null}
           </header>
           <div
             className="settings-grid"
@@ -4108,8 +4351,6 @@ function SettingsView({
             </div>
             <div className="safeguard-list">
               <PolicyNote icon={ShieldCheck}>Captured screenshots require a recorded privacy review before publication.</PolicyNote>
-              <PolicyNote icon={LockKeyhole}>Administrator status does not grant guide access or bypass required review.</PolicyNote>
-              <PolicyNote icon={Archive}>Published revisions stay immutable; edits create a new working draft.</PolicyNote>
             </div>
             <div className="settings-divider" />
             <label className="choice-row emphasized settings-toggle-row">
@@ -4243,7 +4484,10 @@ function SettingsView({
           </div>
           <label className={`choice-row emphasized settings-toggle-row${removeBrandingEnabled ? "" : " locked-choice"}`}>
             <span className="settings-toggle-copy">
-              <strong>Remove KnowHow branding {!removeBrandingEnabled ? <Badge variant="outline">Pro</Badge> : null}</strong>
+              <strong>
+                Remove KnowHow branding
+                {!removeBrandingEnabled ? <ProBadge size="sm" /> : null}
+              </strong>
               <small>
                 {removeBrandingEnabled
                   ? "KnowHow branding is hidden on exports for this workspace."
@@ -4382,9 +4626,11 @@ export function OrganizationView({
   onAppoint,
   onUpdate,
   onRevokeAppointment,
+  onCreateWorkspace,
 }: {
   organization: OrganizationAdministration;
   busy: boolean;
+  onCreateWorkspace: (name: string) => Promise<unknown>;
   onAppoint: (payload: {
     emails: string[];
     roles: OrganizationRole[];
@@ -4404,9 +4650,13 @@ export function OrganizationView({
   onRevokeAppointment: (appointmentId: string) => Promise<unknown>;
 }) {
   const [appointing, setAppointing] = useState(false);
+  const [addingWorkspace, setAddingWorkspace] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const canManage = organization.roles.includes("owner");
+  // Adding a workspace is open to administrators too, unlike member changes.
+  const canAddWorkspace =
+    canManage || organization.roles.includes("administrator");
   const activeOwnerCount = organization.members.filter(
     (member) => member.status === "active" && member.roles.includes("owner"),
   ).length;
@@ -4463,7 +4713,18 @@ export function OrganizationView({
               {countPhrase(organization.workspaces.length, "workspace")}
             </h2>
           </div>
-          <ShieldCheck />
+          {canAddWorkspace ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => setAddingWorkspace(true)}
+            >
+              <Plus /> Add workspace
+            </Button>
+          ) : (
+            <ShieldCheck />
+          )}
         </div>
         {organization.workspaces.map((workspace) => (
           <div className="invite-row" key={workspace.id}>
@@ -4573,6 +4834,16 @@ export function OrganizationView({
           onAppoint={onAppoint}
         />
       ) : null}
+      {addingWorkspace ? (
+        <OrganizationWorkspaceDialog
+          busy={busy}
+          onClose={() => setAddingWorkspace(false)}
+          onCreate={async (name) => {
+            await onCreateWorkspace(name);
+            setAddingWorkspace(false);
+          }}
+        />
+      ) : null}
       {editingMember ? (
         <OrganizationMemberDialog
           member={editingMember}
@@ -4586,6 +4857,85 @@ export function OrganizationView({
       ) : null}
       {confirmDialog}
     </div>
+  );
+}
+
+function OrganizationWorkspaceDialog({
+  busy,
+  onClose,
+  onCreate,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const trimmed = name.trim();
+
+  async function submit() {
+    if (trimmed.length < 2) {
+      setError("Give the workspace a name of at least two characters.");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      await onCreate(trimmed);
+    } catch (caught) {
+      setError(messageFromError(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title="Add a workspace" eyebrow="Organization" onClose={onClose}>
+      <div className="modal-form">
+        <p className="privacy-caption">
+          A workspace is a separate library with its own members, guides, and
+          settings. Nothing is shared between workspaces, which makes them the
+          right fit for separate clients rather than separate teams — use groups
+          for teams inside one library.
+        </p>
+        <label className="field">
+          <span>Workspace name</span>
+          <input
+            value={name}
+            autoFocus
+            maxLength={128}
+            placeholder="Client or business unit"
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void submit();
+            }}
+          />
+        </label>
+        <p className="privacy-caption">
+          It starts on Free with you as its administrator, and inherits this
+          organization&apos;s branding. Upgrade it separately when it needs Pro.
+        </p>
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        <footer className="modal-footer">
+          <Button variant="outline" type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={busy || saving || trimmed.length < 2}
+            onClick={() => void submit()}
+          >
+            {saving ? <LoaderCircle className="spin" /> : <Plus />}
+            Create workspace
+          </Button>
+        </footer>
+      </div>
+    </Modal>
   );
 }
 
@@ -5660,13 +6010,13 @@ export function KnowHowWorkspaceApp({
   const entitlements = active.entitlements ?? {
     maximumUsers: 3,
     maximumCreators: 1,
+    maximumGuides: 15,
     storageBytes: 1_000_000_000,
     extensionEnabled: false,
     desktopCaptureEnabled: false,
     supportEnabled: false,
     removeBranding: false,
     privacyToolsEnabled: false,
-    customSubdomainEnabled: false,
     fileExportsEnabled: false,
   };
   const workspaceMutable =
@@ -5836,7 +6186,15 @@ export function KnowHowWorkspaceApp({
       if (success) toast.success(success);
       return result;
     } catch (error) {
-      onError(messageFromError(error));
+      const denial = entitlementFromError(error);
+      if (denial) {
+        // A plan limit is not a failure to debug — show what is blocked and
+        // how to lift it instead of a raw error string.
+        onError("");
+        setDialog({ type: "entitlement", ...denial });
+      } else {
+        onError(messageFromError(error));
+      }
       throw error;
     } finally {
       onBusyChange(false);
@@ -5877,18 +6235,27 @@ export function KnowHowWorkspaceApp({
     return saved;
   }
 
-  function openShareGuide(guide: Guide) {
+  function openShareGuides(guidesToShare: Guide[]) {
+    const guide = guidesToShare[0];
+    if (!guide) return;
     const revision = guide.workingRevision ?? guide.publishedRevision;
     const current = revision?.audiences ?? [];
     setShareDraft({
       audiences: current,
-      privacyReviewed: Boolean(revision?.privacyReviewedAt),
+      privacyReviewed: guidesToShare.every((item) =>
+        Boolean((item.workingRevision ?? item.publishedRevision)?.privacyReviewedAt),
+      ),
     });
-    setDialog({ type: "share-guide", guide });
+    setDialog({ type: "share-guide", guides: guidesToShare });
   }
 
-  function openExportGuide(guide: Guide) {
-    setDialog({ type: "export-guide", guide });
+  function openShareGuide(guide: Guide) {
+    openShareGuides([guide]);
+  }
+
+  function openExportGuides(guidesToExport: Guide[]) {
+    if (!guidesToExport.length) return;
+    setDialog({ type: "export-guide", guides: guidesToExport });
   }
 
   function toggleWorkspaceTheme() {
@@ -5923,14 +6290,9 @@ export function KnowHowWorkspaceApp({
       (item) => item.kind === "workspace",
     ),
   );
-  const routeGuideAuthor =
-    routeGuide?.workingRevision?.authorId ??
-    routeGuide?.publishedRevision?.authorId;
   const canRestoreRouteGuide = Boolean(
     workspaceMutable &&
-    routeGuide &&
-    routeGuideAuthor === data.viewer.id &&
-    (isAdmin || roles.includes("creator")),
+    routeGuide?.canRestore,
   );
   const publishedViewKey = useRef("");
   const missingGuideRefreshKey = useRef("");
@@ -5994,6 +6356,8 @@ export function KnowHowWorkspaceApp({
 
   const visibleNav = NAV_ITEMS.filter((item) => {
       if (item.view === "Support") return canOpenSupport;
+      // The organization view renders nothing without an active membership.
+      if (item.view === "Organization") return Boolean(organization);
       if (["Groups", "Members", "Settings"].includes(item.view)) return isAdmin;
       return true;
     });
@@ -6003,8 +6367,8 @@ export function KnowHowWorkspaceApp({
   const peopleNavigation = visibleNav.filter(({ view: item }) =>
     ["Groups", "Members"].includes(item),
   );
-  const governanceNavigation = visibleNav.filter(
-    ({ view: item }) => item === "Settings",
+  const governanceNavigation = visibleNav.filter(({ view: item }) =>
+    ["Organization", "Settings"].includes(item),
   );
   const supportNavigation = visibleNav.filter(({ view: item }) => item === "Support");
   const onboardingAudience = isAdmin || canAnyCapture;
@@ -6042,6 +6406,37 @@ export function KnowHowWorkspaceApp({
       : undefined,
   };
 
+  // Only surfaces once the workspace is close to the cap — a limit it is
+  // nowhere near is noise, not information.
+  const guideLimitTone = usageTone(
+    active.metrics.guides,
+    entitlements.maximumGuides,
+  );
+  const guideLimitNotice =
+    guideLimitTone === "ok" ? null : (
+      <div className="guide-limit-notice" data-tone={guideLimitTone}>
+        <UsageMeter
+          label="Guides used"
+          used={active.metrics.guides}
+          maximum={entitlements.maximumGuides}
+        />
+        <p>
+          {guideLimitTone === "full"
+            ? "This workspace cannot create more guides. Archive one to free a slot, or upgrade for more."
+            : "This workspace is close to its guide limit. Archiving a guide frees a slot."}
+        </p>
+        {isAdmin ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDialog({ type: "plan" })}
+          >
+            View plans
+          </Button>
+        ) : null}
+      </div>
+    );
+
   let primaryAction: {
     label: string;
     icon: typeof Plus;
@@ -6065,37 +6460,41 @@ export function KnowHowWorkspaceApp({
     };
   }
   const PrimaryActionIcon = primaryAction?.icon;
-  const sharingGuide = dialog?.type === "share-guide" ? dialog.guide : null;
-  const exportingGuide = dialog?.type === "export-guide" ? dialog.guide : null;
+  const sharingGuides = dialog?.type === "share-guide" ? dialog.guides : [];
+  const sharingGuide = sharingGuides[0] ?? null;
+  const exportingGuides = dialog?.type === "export-guide" ? dialog.guides : [];
+  const exportingGuide = exportingGuides[0] ?? null;
   const shareDialog =
     sharingGuide && shareDraft ? (
       <GuideShareDialog
         open
-        title={
-          sharingGuide.workingRevision?.title ??
-          sharingGuide.publishedRevision?.title ??
-          sharingGuide.title
-        }
+        title={sharingGuides.length > 1
+          ? `${sharingGuides.length} selected guides`
+          : sharingGuide.workingRevision?.title ??
+            sharingGuide.publishedRevision?.title ??
+            sharingGuide.title}
         workspaceName={workspace.name}
         liveUrl={
-          sharingGuide.publishedRevision
+          sharingGuides.length === 1 && sharingGuide.publishedRevision
             ? liveGuideUrl(window.location.origin, workspace.slug, sharingGuide)
             : ""
         }
-        isLive={Boolean(sharingGuide.publishedRevision)}
+        isLive={sharingGuides.every((guide) => Boolean(guide.publishedRevision))}
         audiences={shareDraft.audiences}
         groups={groups}
         members={members}
         captured={
-          isCapturedGuideSource(
-            (sharingGuide.workingRevision ?? sharingGuide.publishedRevision)
-              ?.source,
+          sharingGuides.some((guide) =>
+            isCapturedGuideSource(
+              (guide.workingRevision ?? guide.publishedRevision)?.source,
+            ),
           )
         }
         privacyReviewed={shareDraft.privacyReviewed}
-        canShare={sharingGuide.canShare}
+        canShare={sharingGuides.every((guide) => guide.canShare)}
         canRequestReview={Boolean(
-          workspace.settings.requireReviewBeforePublish &&
+          sharingGuides.length === 1 &&
+            workspace.settings.requireReviewBeforePublish &&
             sharingGuide.canEdit &&
             sharingGuide.workingRevision &&
             sharingGuide.workingRevision.status === "draft",
@@ -6116,23 +6515,26 @@ export function KnowHowWorkspaceApp({
           )
         }
         onShare={async () => {
-          if (sharingGuide.publishedRevision && !shareDraft.audiences.length) {
-            await command(
-              "unshareGuide",
-              { guideId: sharingGuide.id },
-              "Guide is no longer shared",
-            );
-          } else {
-            await command(
-              "shareGuide",
-              {
-                guideId: sharingGuide.id,
-                audiences: shareDraft.audiences,
-                privacyReviewed: shareDraft.privacyReviewed,
-              },
-              `${sharingGuide.publishedRevision ? "Access updated" : "Guide published"} — ${audienceSuccessMessage(shareDraft.audiences)}`,
-            );
+          for (const guide of sharingGuides) {
+            if (guide.publishedRevision && !shareDraft.audiences.length) {
+              await command("unshareGuide", { guideId: guide.id }, "");
+            } else {
+              await command(
+                "shareGuide",
+                {
+                  guideId: guide.id,
+                  audiences: shareDraft.audiences,
+                  privacyReviewed: shareDraft.privacyReviewed,
+                },
+                "",
+              );
+            }
           }
+          toast.success(
+            sharingGuides.length === 1
+              ? `${sharingGuide.publishedRevision ? "Access updated" : "Guide published"} — ${audienceSuccessMessage(shareDraft.audiences)}`
+              : `${sharingGuides.length} guides updated — ${audienceSuccessMessage(shareDraft.audiences)}`,
+          );
           setDialog(null);
           setShareDraft(null);
         }}
@@ -6168,27 +6570,31 @@ export function KnowHowWorkspaceApp({
   const exportDialog = exportingGuide ? (
     <GuideExportDialog
       open
-      title={
-        exportingGuide.workingRevision?.title ??
-        exportingGuide.publishedRevision?.title ??
-        exportingGuide.title
-      }
-      isLive={Boolean(exportingGuide.publishedRevision)}
-      restricted={Boolean(
-        exportingGuide.publishedRevision &&
-          !exportingGuide.publishedRevision.audiences.some((audience) => audience.kind === "workspace"),
-      )}
+      title={exportingGuides.length > 1
+        ? `${exportingGuides.length} selected guides`
+        : exportingGuide.workingRevision?.title ??
+          exportingGuide.publishedRevision?.title ??
+          exportingGuide.title}
+      restricted={exportingGuides.some((guide) => Boolean(
+        !guide.workingRevision && guide.publishedRevision &&
+          !guide.publishedRevision.audiences.some((audience) => audience.kind === "workspace"),
+      ))}
       fileExportsEnabled={entitlements.fileExportsEnabled}
-      canExport={Boolean(
-        exportingGuide.publishedRevision &&
-          (exportingGuide.publishedRevision.audiences.some((audience) => audience.kind === "workspace") ||
-            workspace.settings.allowRestrictedExports),
-      )}
+      canExport={exportingGuides.every((guide) => Boolean(
+        guide.workingRevision ||
+          (guide.publishedRevision &&
+            (guide.publishedRevision.audiences.some((audience) => audience.kind === "workspace") ||
+              workspace.settings.allowRestrictedExports)),
+      ))}
       busy={busy || !workspaceMutable}
       onClose={() => setDialog(null)}
       onExport={async (format: GuideExportFormatChoice) => {
-        await downloadAuthorizedExport(workspace.id, exportingGuide.id, format);
-        toast.success("Export ready");
+        for (const guide of exportingGuides) {
+          await downloadAuthorizedExport(workspace.id, guide.id, format);
+        }
+        toast.success(exportingGuides.length === 1
+          ? "Export ready"
+          : `${exportingGuides.length} exports ready`);
       }}
       onStartTrial={isAdmin ? () => setDialog({ type: "plan" }) : undefined}
     />
@@ -6261,8 +6667,11 @@ export function KnowHowWorkspaceApp({
           }
           fileExportsEnabled={entitlements.fileExportsEnabled}
           canExport={
-            Boolean(editorGuide?.publishedRevision) &&
-            (!publishedRestricted || workspace.settings.allowRestrictedExports)
+            Boolean(editorGuide?.workingRevision) ||
+            Boolean(
+              editorGuide?.publishedRevision &&
+                (!publishedRestricted || workspace.settings.allowRestrictedExports),
+            )
           }
           onExport={
             editorGuide
@@ -6357,8 +6766,11 @@ export function KnowHowWorkspaceApp({
           initialRevision={route.revision}
           liveUrl={liveGuideUrl(window.location.origin, workspace.slug, routeGuide)}
           canExport={
-            Boolean(routeGuide.publishedRevision) &&
-            (!publishedRestricted || workspace.settings.allowRestrictedExports)
+            Boolean(routeGuide.workingRevision) ||
+            Boolean(
+              routeGuide.publishedRevision &&
+                (!publishedRestricted || workspace.settings.allowRestrictedExports),
+            )
           }
           canRestore={canRestoreRouteGuide}
           busy={busy || !workspaceMutable}
@@ -6393,7 +6805,11 @@ export function KnowHowWorkspaceApp({
               "Guide marked complete",
             ).catch(() => undefined);
           }}
-          onShare={() => openShareGuide(routeGuide)}
+          onShare={
+            routeGuide.status !== "archived"
+              ? () => openShareGuide(routeGuide)
+              : undefined
+          }
           onReact={(reaction) => {
             void knowhowCommand("recordGuideReaction", {
               workspaceId: workspace.id,
@@ -6421,21 +6837,30 @@ export function KnowHowWorkspaceApp({
             }
           }}
           onRestore={(revisionId) => {
-            void command(
-              "restoreRevision",
-              { guideId: routeGuide.id, revisionId },
-              "Revision restored as a private draft",
-            )
-              .then(() =>
-                onNavigate(guideEditorHref(workspace.slug, routeGuide.id), {
-                  replace: true,
-                }),
+            void (async () => {
+              if (
+                !(await askToConfirm({
+                  title: "Restore as a private draft?",
+                  description:
+                    "This creates a new editable draft from the selected revision. The archived version stays in history and nothing is published automatically.",
+                  confirmLabel: "Restore as draft",
+                }))
               )
-              .catch(() => undefined);
+                return;
+              await command(
+                "restoreRevision",
+                { guideId: routeGuide.id, revisionId },
+                "Guide restored as a private draft",
+              );
+              onNavigate(guideEditorHref(workspace.slug, routeGuide.id), {
+                replace: true,
+              });
+            })().catch(() => undefined);
           }}
         />
         {shareDialog}
         {exportDialog}
+        {confirmDialog}
         {busy ? (
           <div className="busy-indicator" role="status">
             <LoaderCircle className="spin" /> Working securely…
@@ -6466,8 +6891,19 @@ export function KnowHowWorkspaceApp({
       >
         <Sidebar className="sidebar" collapsible="offcanvas">
           <SidebarHeader className="workspace-sidebar-header">
-            <div className="sidebar-brand">
-              <ProductBrand compact />
+            <div className="sidebar-brand-row">
+              <div className="sidebar-brand">
+                <ProductBrand compact />
+              </div>
+              <button
+                className="sidebar-notifications-button"
+                type="button"
+                aria-label="Notifications"
+                title="Notifications"
+                onClick={() => toast("Notifications are coming soon")}
+              >
+                <Bell aria-hidden="true" />
+              </button>
             </div>
             <p className="sidebar-section-label">Active workspace</p>
             <SelectMenu
@@ -6861,12 +7297,13 @@ export function KnowHowWorkspaceApp({
                     label="Create guide"
                   />
                 }
+                guideLimitNotice={guideLimitNotice}
                 onOpen={(guide) => openGuide(guide)}
                 onEdit={(guide) =>
                   onNavigate(guideEditorHref(workspace.slug, guide.id))
                 }
-                onShare={openShareGuide}
-                onExport={openExportGuide}
+                onShare={openShareGuides}
+                onExport={openExportGuides}
                 onAction={command}
                 busy={busy || !workspaceMutable}
               />
@@ -6972,6 +7409,20 @@ export function KnowHowWorkspaceApp({
               <OrganizationView
                 organization={organization}
                 busy={busy}
+                onCreateWorkspace={async (name) => {
+                  const created = await command<{ workspaceId: string }>(
+                    "createOrganizationWorkspace",
+                    {
+                      organizationId: organization.id,
+                      workspaceId: undefined,
+                      name,
+                    },
+                    `${name} workspace created`,
+                  );
+                  // Land the admin in the workspace they just made.
+                  await onSelectWorkspace(created.workspaceId);
+                  return created;
+                }}
                 onAppoint={async ({ emails, roles, anchorWorkspaceId }) => {
                   onBusyChange(true);
                   onError("");
@@ -7124,10 +7575,39 @@ export function KnowHowWorkspaceApp({
             }}
           />
         ) : null}
+        {dialog?.type === "entitlement" ? (
+          <Modal
+            title="Upgrade required"
+            eyebrow="Workspace plan"
+            onClose={() => setDialog(null)}
+          >
+            <div className="modal-form">
+              <ProUpsell
+                onUpgrade={
+                  isAdmin ? () => setDialog({ type: "plan" }) : undefined
+                }
+                upgradeLabel="See plan options"
+              >
+                {dialog.message}
+              </ProUpsell>
+              <footer className="modal-footer">
+                <span />
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => setDialog(null)}
+                >
+                  Close
+                </Button>
+              </footer>
+            </div>
+          </Modal>
+        ) : null}
         {dialog?.type === "plan" && isAdmin ? (
           <PlanDialog
             subscription={workspace.subscription}
             entitlements={entitlements}
+            metrics={active.metrics}
             busy={busy}
             onClose={() => setDialog(null)}
             onStartTrial={async () => {

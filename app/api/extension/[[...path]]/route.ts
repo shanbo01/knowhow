@@ -106,6 +106,15 @@ async function dispatch(request: Request, context: RouteContext) {
     return captures.discard(request, safePathId(path[1], "Capture"));
   }
   if (
+    request.method === "PUT" && path.length === 3 && path[0] === "captures" &&
+    path[2] === "favicon"
+  ) {
+    return captures.uploadFavicon(
+      request,
+      safePathId(path[1], "Capture"),
+    );
+  }
+  if (
     request.method === "PUT" && path.length === 5 && path[0] === "captures" &&
     path[2] === "steps" && path[4] === "screenshot"
   ) {

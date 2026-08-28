@@ -81,7 +81,6 @@ pub struct ForegroundContext {
     pub window_title: String,
     pub bounds: Bounds,
     pub window_id: String,
-    pub root_owner_id: String,
     pub process_id: u32,
     pub monitor_id: String,
     pub protected: bool,
@@ -97,27 +96,12 @@ pub struct MonitorDescriptor {
     pub index: usize,
 }
 
-#[derive(Clone, Debug)]
-pub struct ExcludedRegion {
-    pub bounds: Bounds,
-    pub reason: &'static str,
-}
-
-#[derive(Clone, Debug)]
-pub struct PrivacyRegion {
-    pub bounds: Bounds,
-    pub control_role: Option<String>,
-    pub text: Option<String>,
-    pub password_status: PasswordStatus,
-}
-
 pub trait UiAutomationClient {
     fn element_at(&self, x: i32, y: i32) -> Result<ElementMetadata>;
     fn focused_element(&self) -> Result<ElementMetadata>;
     fn focused_element_semantic(&self) -> Result<ElementMetadata> {
         self.focused_element()
     }
-    fn privacy_regions(&self, window_id: &str) -> Result<Vec<PrivacyRegion>>;
 }
 
 pub trait RawInputRegistration: Send {
@@ -137,8 +121,8 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     WindowsRawInput as NativeRawInput, WindowsUia as NativeUia, capture_target_previews,
-    capture_targets, excluded_regions, foreground_context, initialize_process, monitor_descriptors,
-    new_scope, quit_capture_choice, windows_device_name,
+    capture_targets, foreground_context, initialize_process, monitor_descriptors, new_scope,
+    quit_capture_choice, recorder_window_bounds, windows_device_name,
 };
 
 #[cfg(not(windows))]
@@ -177,9 +161,6 @@ mod unsupported {
         fn focused_element_semantic(&self) -> Result<ElementMetadata> {
             anyhow::bail!("KnowHow Capture supports Windows only")
         }
-        fn privacy_regions(&self, _window_id: &str) -> Result<Vec<PrivacyRegion>> {
-            anyhow::bail!("KnowHow Capture supports Windows only")
-        }
     }
 
     pub fn initialize_process() -> Result<()> {
@@ -196,8 +177,8 @@ mod unsupported {
     pub fn monitor_descriptors() -> Result<Vec<MonitorDescriptor>> {
         Ok(Vec::new())
     }
-    pub fn excluded_regions() -> Result<Vec<ExcludedRegion>> {
-        Ok(Vec::new())
+    pub fn recorder_window_bounds() -> Vec<Bounds> {
+        Vec::new()
     }
     pub fn foreground_context() -> Result<ForegroundContext> {
         anyhow::bail!("KnowHow Capture supports Windows only")
@@ -219,6 +200,11 @@ mod unsupported {
 #[cfg(not(windows))]
 pub use unsupported::*;
 
+/// Whether an action belongs to the capture the author chose to record.
+///
+/// Protected surfaces (password managers, UAC, the lock screen) and elevated
+/// windows are never recorded: KnowHow cannot read their contents reliably, so
+/// it declines them rather than photographing something it does not understand.
 pub fn scope_accepts(
     scope: &DesktopScope,
     foreground: &ForegroundContext,
@@ -229,22 +215,11 @@ pub fn scope_accepts(
     }
     match scope {
         DesktopScope::Application { process_id, .. } => foreground.process_id == *process_id,
-        DesktopScope::Window {
-            window_id,
-            include_owned_dialogs,
-            ..
-        } => {
-            foreground.window_id == *window_id
-                || (*include_owned_dialogs && foreground.root_owner_id == *window_id)
-        }
         DesktopScope::Monitor {
             monitor_id, bounds, ..
         } => {
             let (x, y) = point.unwrap_or((foreground.bounds.x, foreground.bounds.y));
             foreground.monitor_id == *monitor_id && bounds.contains(x, y)
-        }
-        DesktopScope::AllDisplays { monitor_ids, .. } => {
-            monitor_ids.iter().any(|id| id == &foreground.monitor_id)
         }
     }
 }
@@ -259,30 +234,32 @@ mod tests {
             application_name: "Notepad".into(),
             window_title: "Notes".into(),
             bounds: Bounds {
-                x: -900,
-                y: 20,
+                x: 0,
+                y: 0,
                 width: 800,
                 height: 600,
             },
-            window_id: "hwnd:2".into(),
-            root_owner_id: "hwnd:1".into(),
+            window_id: "hwnd:1".into(),
             process_id: 42,
-            monitor_id: "monitor:left".into(),
+            monitor_id: "monitor:1".into(),
             protected: false,
             elevated: false,
         }
     }
 
     #[test]
-    fn window_scope_follows_owned_dialogs() {
-        let scope = DesktopScope::Window {
-            window_id: "hwnd:1".into(),
+    fn an_application_scope_follows_every_window_of_that_process() {
+        let scope = DesktopScope::Application {
             application_name: "Notepad".into(),
-            window_title: None,
-            include_owned_dialogs: true,
+            process_id: 42,
             excluded_window_ids: Vec::new(),
         };
         assert!(scope_accepts(&scope, &foreground(), None));
+        let other = ForegroundContext {
+            process_id: 43,
+            ..foreground()
+        };
+        assert!(!scope_accepts(&scope, &other, None));
     }
 
     #[test]
@@ -292,11 +269,32 @@ mod tests {
             process_id: 42,
             excluded_window_ids: Vec::new(),
         };
-        let mut target = foreground();
-        target.protected = true;
-        assert!(!scope_accepts(&scope, &target, None));
-        target.protected = false;
-        target.elevated = true;
-        assert!(!scope_accepts(&scope, &target, None));
+        let protected = ForegroundContext {
+            protected: true,
+            ..foreground()
+        };
+        let elevated = ForegroundContext {
+            elevated: true,
+            ..foreground()
+        };
+        assert!(!scope_accepts(&scope, &protected, None));
+        assert!(!scope_accepts(&scope, &elevated, None));
+    }
+
+    #[test]
+    fn a_display_scope_only_accepts_actions_on_that_display() {
+        let scope = DesktopScope::Monitor {
+            monitor_id: "monitor:1".into(),
+            monitor_name: Some("Display 1".into()),
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            excluded_window_ids: Vec::new(),
+        };
+        assert!(scope_accepts(&scope, &foreground(), Some((100, 100))));
+        assert!(!scope_accepts(&scope, &foreground(), Some((3000, 100))));
     }
 }

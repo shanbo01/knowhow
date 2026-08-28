@@ -4,10 +4,13 @@ export type SafeImageType = "image/png" | "image/jpeg";
 
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const MAX_LOGO_BYTES = 1024 * 1024;
+const MAX_FAVICON_BYTES = 256 * 1024;
 const MAX_SCREENSHOT_DIMENSION = 16_384;
 const MAX_SCREENSHOT_PIXELS = 64_000_000;
 const MAX_LOGO_DIMENSION = 4_096;
 const MAX_LOGO_PIXELS = 16_000_000;
+const MAX_FAVICON_DIMENSION = 256;
+const MAX_FAVICON_PIXELS = MAX_FAVICON_DIMENSION * MAX_FAVICON_DIMENSION;
 
 function detectedType(bytes: Uint8Array): SafeImageType | null {
   if (
@@ -61,7 +64,7 @@ async function digest(bytes: Uint8Array) {
 async function validate(
   bytes: Uint8Array,
   claimedType: string,
-  limits: { bytes: number; dimension: number; pixels: number; label: "screenshot" | "logo" },
+  limits: { bytes: number; dimension: number; pixels: number; label: "screenshot" | "logo" | "favicon" },
 ) {
   if (bytes.byteLength === 0 || bytes.byteLength > limits.bytes) {
     throw new HttpError(413, limits.label === "logo" ? "LOGO_SIZE_INVALID" : "MEDIA_SIZE_INVALID", `The ${limits.label} size is not allowed.`);
@@ -114,6 +117,18 @@ export function validateLogo(bytes: Uint8Array, claimedType: string) {
     dimension: MAX_LOGO_DIMENSION,
     pixels: MAX_LOGO_PIXELS,
     label: "logo",
+  });
+}
+
+export async function validateFavicon(bytes: Uint8Array, claimedType: string) {
+  if (claimedType !== "image/png") {
+    throw new HttpError(415, "MEDIA_TYPE_INVALID", "Use a rasterized PNG favicon.");
+  }
+  return validate(bytes, claimedType, {
+    bytes: MAX_FAVICON_BYTES,
+    dimension: MAX_FAVICON_DIMENSION,
+    pixels: MAX_FAVICON_PIXELS,
+    label: "favicon",
   });
 }
 

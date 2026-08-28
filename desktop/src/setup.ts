@@ -10,20 +10,18 @@ export function targetsForScope(
 ) {
   return targets.filter((target) => target.kind === scope);
 }
-export function selectedTarget(
-  targets: CaptureTarget[],
-  requestedId: string,
-) {
+
+// Keeps a chosen source selected while it is still open, and otherwise falls
+// back to the first one, so the Start button is never blocked by a selection
+// that quietly disappeared.
+export function selectedTarget(targets: CaptureTarget[], requestedId: string) {
   return (
-    targets.find(
-      (target) => target.id === requestedId && !target.protected,
-    ) ?? targets.find((target) => !target.protected) ?? null
+    targets.find((target) => target.id === requestedId) ?? targets[0] ?? null
   );
 }
 
 export function typedTextEnabled(settings: RecorderSettings) {
   return (
-    settings.desktopTypedTextPolicy === "allowed" &&
-    settings.captureTypedText
+    settings.desktopTypedTextPolicy === "allowed" && settings.captureTypedText
   );
 }

@@ -1,4 +1,5 @@
 import { TABLES } from "./appwrite-resources";
+import { PRO_ENTITLEMENTS } from "./commercial-plan";
 import {
   decodePayload,
   rowData,
@@ -36,12 +37,6 @@ const DEFAULT_FEATURES: CatalogEntitlementItem[] = [
     label: "Smart Blur, redact, and annotate",
     included: true,
     note: "Local screenshot privacy tools before anything is uploaded.",
-  },
-  {
-    key: "custom_subdomain",
-    label: "Custom subdomain",
-    included: true,
-    note: "team.knowhow.app preview. DNS is provisioned separately.",
   },
   {
     key: "remove_branding",
@@ -467,6 +462,7 @@ export function catalogEntitlements(catalog: PricingCatalogRecord) {
   return {
     maximumUsers: catalog.baseWorkspace.includedActiveUsers,
     maximumCreators: catalog.baseWorkspace.includedActiveCreators,
+    maximumGuides: PRO_ENTITLEMENTS.maximumGuides,
     storageBytes: catalog.baseWorkspace.includedStorageBytes,
     extensionEnabled: included(catalog.features, "browser_extension"),
     desktopCaptureEnabled: hasDesktopCaptureSetting
@@ -475,7 +471,6 @@ export function catalogEntitlements(catalog: PricingCatalogRecord) {
     supportEnabled: included(catalog.services, "in_app_support"),
     removeBranding: included(catalog.features, "remove_branding"),
     privacyToolsEnabled: included(catalog.features, "privacy_tools"),
-    customSubdomainEnabled: included(catalog.features, "custom_subdomain"),
     publicSignup: false,
     payments: false,
     ssoScim: catalog.futureOptions.ssoScim.included,

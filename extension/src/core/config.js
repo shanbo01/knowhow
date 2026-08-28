@@ -4,6 +4,7 @@ export const KNOWHOW_ORIGIN =
 export const API_PREFIX = "/api/extension";
 export const CONTENT_GEOMETRY_PATH = "src/content/blur-geometry.js";
 export const CONTENT_SETTLED_PATH = "src/content/page-settled.js";
+export const CONTENT_TYPED_FIELDS_PATH = "src/content/typed-fields.js";
 export const CONTENT_SCRIPT_PATH = "src/content/capture.js";
 export const CONTENT_STYLE_PATH = "src/content/capture.css";
 export const OFFSCREEN_DOCUMENT_PATH = "src/offscreen/offscreen.html";

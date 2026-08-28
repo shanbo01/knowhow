@@ -374,8 +374,13 @@ function WorkspaceOnboarding({
   onAppointOrganizationMember,
   onUpdateOrganizationMember,
   onRevokeAppointment,
+  onCreateOrganizationWorkspace,
   onSignOut,
 }: {
+  onCreateOrganizationWorkspace: (
+    organizationId: string,
+    name: string,
+  ) => Promise<unknown>;
   viewerName: string;
   canCreateWorkspace: boolean;
   platform?: NonNullable<BootstrapResponse["platform"]>;
@@ -562,6 +567,9 @@ function WorkspaceOnboarding({
               )
             }
             onRevokeAppointment={onRevokeAppointment}
+            onCreateWorkspace={(name) =>
+              onCreateOrganizationWorkspace(organization.id, name)
+            }
           />
         </section>
       ))}
@@ -1608,6 +1616,24 @@ export default function Home() {
                 await loadBootstrap(activeWorkspaceId || undefined);
                 return created;
               }
+              throw nextError;
+            } finally {
+              setBusy(false);
+            }
+          }}
+          onCreateOrganizationWorkspace={async (organizationId, name) => {
+            setBusy(true);
+            setError("");
+            try {
+              const result = await knowhowCommand<{ workspaceId: string }>(
+                "createOrganizationWorkspace",
+                { organizationId, name },
+              );
+              // Land the admin in the workspace they just made.
+              await loadBootstrap(result.workspaceId);
+              return result;
+            } catch (nextError) {
+              setError(errorMessage(nextError));
               throw nextError;
             } finally {
               setBusy(false);

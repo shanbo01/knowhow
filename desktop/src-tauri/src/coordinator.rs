@@ -1,5 +1,4 @@
 use std::{
-    io::Cursor,
     sync::{
         Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -8,12 +7,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Local, Utc};
-use image::{codecs::jpeg::JpegEncoder, imageops::FilterType};
 use parking_lot::Mutex;
 use rand::RngCore;
 use serde::Serialize;
@@ -29,8 +24,8 @@ use crate::{
     model::{
         ActiveCapture, AppSnapshot, CaptureContext, CaptureTarget, CommitPayload, ConnectionState,
         DESKTOP_POLICY_VERSION, DeviceIdentity, PendingAuthorization, PrivacyAttestation,
-        RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput, StepStatus,
-        TypedTextPolicy, UpdateState, UpdateStatus,
+        RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput, TypedTextPolicy,
+        UpdateState, UpdateStatus,
     },
     platform::{
         QuitChoice, capture_targets, monitor_descriptors, new_scope, quit_capture_choice,
@@ -38,6 +33,12 @@ use crate::{
     },
     secure_store::{RecoveredSession, SecureStore},
 };
+
+/// The floating recorder is one fixed-size bar. It has no expanded or
+/// retracted state to get stuck in — it shows the capture it is recording and
+/// the three controls that act on it.
+const HUD_WIDTH: f64 = 560.0;
+const HUD_HEIGHT: f64 = 76.0;
 
 struct Inner {
     connection: ConnectionState,
@@ -128,7 +129,7 @@ impl Coordinator {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             connection: inner.connection.clone(),
             recorder: inner.recorder.clone(),
-            settings: inner.settings.clone(),
+            settings: inner.settings,
             update: inner.update.clone(),
         }
     }
@@ -334,16 +335,14 @@ impl Coordinator {
                 "none"
             }
             .to_owned(),
-            smart_blur: input.smart_blur.clone(),
         };
         if let Err(error) = self.store.create_session(&active) {
             let _ = self.api.discard(&started.capture_id).await;
             return Err(error);
         }
-        let mut settings = self.inner.lock().settings.clone();
+        let mut settings = self.inner.lock().settings;
         settings.capture_typed_text = capture_text;
         settings.desktop_typed_text_policy = context.desktop_typed_text_policy;
-        settings.smart_blur = input.smart_blur;
         self.store.save_settings(&settings)?;
         let weak_for_step: Weak<Self> = Arc::downgrade(self);
         let on_step = Arc::new(move |step, image| {
@@ -357,7 +356,7 @@ impl Coordinator {
                 coordinator.set_status_message(message);
             }
         });
-        let engine = match CaptureEngine::start(scope, settings.clone(), true, on_step, on_status) {
+        let engine = match CaptureEngine::start(scope, settings, true, on_step, on_status) {
             Ok(engine) => engine,
             Err(error) => {
                 let _ = self.api.discard(&started.capture_id).await;
@@ -399,7 +398,7 @@ impl Coordinator {
             }
             // Put Tauri's windows into their final recording state before reclaiming the
             // process-wide mouse and keyboard Raw Input registrations.
-            let _ = coordinator.show_hud("compact");
+            let _ = coordinator.show_hud();
             if let Some(main) = coordinator.app.get_webview_window("main") {
                 let _ = main.hide();
             }
@@ -545,13 +544,6 @@ impl Coordinator {
             self.recovery_error("Some accepted steps are still processing. Retry Finish.");
             bail!("Some accepted steps are still processing.");
         }
-        if stored
-            .iter()
-            .any(|(_, _, state)| state == "retry" || state == "deleting")
-        {
-            self.recovery_error("Retry or delete the flagged step before finishing.");
-            bail!("Retry or delete the flagged step before finishing.");
-        }
         for (index, (step, _, _)) in stored.iter_mut().enumerate() {
             step.order = index;
         }
@@ -585,21 +577,11 @@ impl Coordinator {
                 .upload_step(&active.capture_id, &active.session_id, step, image.clone())
                 .await
             {
-                self.store
-                    .mark_step(&active.session_id, &step.id, "retry")?;
-                {
-                    let mut inner = self.inner.lock();
-                    if let Some(summary) = inner
-                        .recorder
-                        .steps
-                        .iter_mut()
-                        .find(|item| item.id == step.id)
-                    {
-                        summary.status = StepStatus::Retry;
-                    }
-                }
+                // Uploads carry an idempotency key, so pressing Finish again
+                // re-sends the whole capture safely and the steps that already
+                // landed are accepted a second time without duplicating.
                 self.recovery_error(
-                    "One step needs a retry. The encrypted capture remains on this device.",
+                    "A step could not be uploaded. Your encrypted capture is ready to retry.",
                 );
                 return Err(error);
             }
@@ -693,78 +675,10 @@ impl Coordinator {
         Ok(self.snapshot())
     }
 
-    /// A small preview of one step's already-captured, already-masked
-    /// screenshot, for the HUD's step feed. `step_id` always resolves against
-    /// the session currently being recorded — it can never read another
-    /// session's image, matching how delete/retry are already scoped — so
-    /// once recording ends this becomes permanently unavailable. Nothing
-    /// decrypted here is ever written back to disk; this is a pure in-memory
-    /// round trip per request, the same pattern `capture_target_previews`
-    /// already uses for the picker's live thumbnails.
-    pub fn step_thumbnail(&self, step_id: &str) -> Result<String> {
-        let session_id = self
-            .inner
-            .lock()
-            .active
-            .as_ref()
-            .map(|active| active.session_id.clone())
-            .ok_or_else(|| anyhow!("no capture is active"))?;
-        let jpeg = self.store.load_step_image(&session_id, step_id)?;
-        encode_step_thumbnail(&jpeg)
-    }
-
-    pub fn delete_step(&self, step_id: &str) -> Result<AppSnapshot> {
-        let active = {
-            let inner = self.inner.lock();
-            if !matches!(
-                inner.recorder.status,
-                RecorderStatus::Recording | RecorderStatus::Paused
-            ) {
-                bail!("Steps can only be deleted before upload begins.");
-            }
-            inner
-                .active
-                .clone()
-                .ok_or_else(|| anyhow!("active capture is unavailable"))?
-        };
-        self.store.delete_step(&active.session_id, step_id)?;
-        {
-            let mut inner = self.inner.lock();
-            inner.recorder.steps.retain(|step| step.id != step_id);
-            for (index, step) in inner.recorder.steps.iter_mut().enumerate() {
-                step.order = index;
-            }
-        }
-        self.emit();
-        Ok(self.snapshot())
-    }
-
-    pub fn retry_step(&self, step_id: &str) -> Result<AppSnapshot> {
-        let active = self
-            .inner
-            .lock()
-            .active
-            .clone()
-            .ok_or_else(|| anyhow!("active capture is unavailable"))?;
-        self.store.mark_step(&active.session_id, step_id, "ready")?;
-        {
-            let mut inner = self.inner.lock();
-            let summary = inner
-                .recorder
-                .steps
-                .iter_mut()
-                .find(|step| step.id == step_id)
-                .ok_or_else(|| anyhow!("capture step is unavailable"))?;
-            summary.status = StepStatus::Ready;
-            inner.recorder.status_message =
-                Some("Step is ready. Choose Finish to retry upload.".to_owned());
-        }
-        self.emit();
-        Ok(self.snapshot())
-    }
-
     pub fn update_settings(&self, mut settings: RecorderSettings) -> Result<AppSnapshot> {
         let mut inner = self.inner.lock();
+        // Typed-text capture is the workspace's call, not this device's: when
+        // the workspace disables it, the toggle cannot be turned back on here.
         if inner.settings.desktop_typed_text_policy == TypedTextPolicy::Disabled {
             settings.capture_typed_text = false;
             settings.desktop_typed_text_policy = TypedTextPolicy::Disabled;
@@ -801,7 +715,7 @@ impl Coordinator {
             // after a deletion jumps ahead of the list it is joining. The upload
             // re-indexes by insertion order regardless; this keeps the number the
             // recorder shows the author honest in the meantime.
-            let mut summary = step.summary(StepStatus::Ready);
+            let mut summary = step.summary();
             summary.order = inner.recorder.steps.len();
             inner.recorder.steps.push(summary);
             inner.recorder.status_message = Some("Step captured".to_owned());
@@ -844,80 +758,48 @@ impl Coordinator {
         Ok(())
     }
 
-    pub fn show_hud(&self, mode: &str) -> Result<()> {
-        self.layout_hud(mode, true)
-    }
-
-    pub fn set_hud_mode(&self, mode: &str) -> Result<()> {
-        self.layout_hud(mode, false)
-    }
-
-    fn layout_hud(&self, mode: &str, show: bool) -> Result<()> {
+    /// Shows the floating recorder, placing it near the bottom of the display
+    /// the first time it appears and leaving it wherever the author dragged it
+    /// on every later capture.
+    pub fn show_hud(&self) -> Result<()> {
         let window = self
             .app
             .get_webview_window("hud")
             .ok_or_else(|| anyhow!("capture controls are unavailable"))?;
         let scale = window.scale_factor().unwrap_or(1.0);
-        let (logical_width, logical_height) = match mode {
-            "retracted" => (238.0, 72.0),
-            "compact" => (520.0, 72.0),
-            "expanded" => (520.0, 345.0),
-            _ => bail!("unsupported recorder control mode"),
-        };
-        let was_visible = window.is_visible().unwrap_or(false);
-        let old_position = window.outer_position().ok();
-        let old_size = window.outer_size().ok();
-        let width = (logical_width * scale) as i32;
-        let height = (logical_height * scale) as i32;
-        let mut next_position = None;
-        if let Ok(Some(monitor)) = window
-            .current_monitor()
-            .or_else(|_| window.primary_monitor())
+        let width = (HUD_WIDTH * scale) as i32;
+        let height = (HUD_HEIGHT * scale) as i32;
+        if !window.is_visible().unwrap_or(false)
+            && let Ok(Some(monitor)) = window
+                .current_monitor()
+                .or_else(|_| window.primary_monitor())
         {
             let size = monitor.size();
             let origin = monitor.position();
-            let monitor_width = i32::try_from(size.width).unwrap_or(width);
-            let monitor_height = i32::try_from(size.height).unwrap_or(height);
-            let (work_origin, work_size) =
-                monitor_work_area((origin.x, origin.y), (monitor_width, monitor_height));
-            let gap = (8.0 * scale) as i32;
-            if !was_visible {
-                let bottom_gap = (24.0 * scale) as i32;
-                next_position = Some(clamp_hud_position(
-                    (
-                        work_origin.0 + (work_size.0 - width) / 2,
-                        work_origin.1 + work_size.1 - height - bottom_gap,
-                    ),
-                    (width, height),
-                    work_origin,
-                    work_size,
-                    gap,
-                ));
-            } else if let (Some(position), Some(old_size)) = (old_position, old_size) {
-                next_position = Some(resize_hud_position(
-                    (position.x, position.y),
-                    (
-                        i32::try_from(old_size.width).unwrap_or(width),
-                        i32::try_from(old_size.height).unwrap_or(height),
-                    ),
-                    (width, height),
-                    work_origin,
-                    work_size,
-                    gap,
-                    (24.0 * scale) as i32,
-                ));
-            }
+            let (work_origin, work_size) = monitor_work_area(
+                (origin.x, origin.y),
+                (
+                    i32::try_from(size.width).unwrap_or(width),
+                    i32::try_from(size.height).unwrap_or(height),
+                ),
+            );
+            let (x, y) = clamp_hud_position(
+                (
+                    work_origin.0 + (work_size.0 - width) / 2,
+                    work_origin.1 + work_size.1 - height - (24.0 * scale) as i32,
+                ),
+                (width, height),
+                work_origin,
+                work_size,
+                (8.0 * scale) as i32,
+            );
+            window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
         }
         window.set_size(Size::Physical(PhysicalSize::new(
             u32::try_from(width.max(1))?,
             u32::try_from(height.max(1))?,
         )))?;
-        if let Some((x, y)) = next_position {
-            window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
-        }
-        if show {
-            window.show()?;
-        }
+        window.show()?;
         Ok(())
     }
 
@@ -1063,43 +945,6 @@ fn monitor_work_area(
         .unwrap_or((monitor_origin, monitor_size))
 }
 
-fn resize_hud_position(
-    position: (i32, i32),
-    old_size: (i32, i32),
-    new_size: (i32, i32),
-    work_origin: (i32, i32),
-    work_size: (i32, i32),
-    gap: i32,
-    snap_threshold: i32,
-) -> (i32, i32) {
-    let (old_min_x, old_max_x, old_min_y, old_max_y) =
-        hud_limits(old_size, work_origin, work_size, gap);
-    let (new_min_x, new_max_x, new_min_y, new_max_y) =
-        hud_limits(new_size, work_origin, work_size, gap);
-    let x = if (position.0 - old_max_x).abs() <= snap_threshold {
-        new_max_x
-    } else if (position.0 - old_min_x).abs() <= snap_threshold {
-        new_min_x
-    } else {
-        position.0
-    };
-    let y = if (position.1 - old_max_y).abs() <= snap_threshold {
-        new_max_y
-    } else if (position.1 - old_min_y).abs() <= snap_threshold {
-        new_min_y
-    } else {
-        position.1
-    };
-    snap_hud_position(
-        (x, y),
-        new_size,
-        work_origin,
-        work_size,
-        gap,
-        snap_threshold,
-    )
-}
-
 fn snap_hud_position(
     position: (i32, i32),
     window_size: (i32, i32),
@@ -1179,7 +1024,7 @@ fn recovery_state(recovery: Option<RecoveredSession>) -> (RecorderState, Option<
     let steps = recovery
         .steps
         .iter()
-        .map(|(step, _)| step.summary(StepStatus::Ready))
+        .map(|(step, _)| step.summary())
         .collect();
     let recorder = RecorderState {
         status: RecorderStatus::Recovery,
@@ -1216,28 +1061,6 @@ fn user_error(error: &anyhow::Error) -> String {
 
 // Small enough that a HUD feed of several thumbnails costs nothing to hold,
 // large enough to still show what was on screen.
-const STEP_THUMBNAIL_WIDTH: u32 = 96;
-const STEP_THUMBNAIL_HEIGHT: u32 = 54;
-
-/// The stored step image is already a fully encoded JPEG (`rasterize`
-/// produces it once, at capture time) — this decodes it, shrinks it, and
-/// re-encodes at a lower quality for a thumbnail, rather than serving the
-/// full-resolution capture to the HUD.
-fn encode_step_thumbnail(jpeg: &[u8]) -> Result<String> {
-    let image = image::load_from_memory(jpeg).context("decode stored step screenshot")?;
-    let resized = image.resize(
-        STEP_THUMBNAIL_WIDTH,
-        STEP_THUMBNAIL_HEIGHT,
-        FilterType::Triangle,
-    );
-    let mut encoded = Cursor::new(Vec::new());
-    JpegEncoder::new_with_quality(&mut encoded, 60).encode_image(&resized)?;
-    Ok(format!(
-        "data:image/jpeg;base64,{}",
-        STANDARD.encode(encoded.into_inner())
-    ))
-}
-
 fn update_endpoint() -> Result<Url> {
     let endpoint = option_env!("KNOWHOW_DESKTOP_UPDATE_ENDPOINT").unwrap_or("");
     if endpoint.trim().is_empty() {
@@ -1256,43 +1079,7 @@ fn update_endpoint() -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        STEP_THUMBNAIL_HEIGHT, STEP_THUMBNAIL_WIDTH, clamp_hud_position, encode_step_thumbnail,
-        resize_hud_position,
-    };
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    use image::{ImageEncoder, Rgb, RgbImage, codecs::jpeg::JpegEncoder};
-
-    #[test]
-    fn a_stored_step_screenshot_shrinks_to_a_thumbnail() {
-        // Stands in for what rasterize() actually stores: a full-resolution,
-        // already-encoded JPEG — not raw pixels.
-        let source = RgbImage::from_pixel(640, 360, Rgb([32, 64, 96]));
-        let mut stored = Vec::new();
-        let Ok(()) = JpegEncoder::new_with_quality(&mut stored, 85).write_image(
-            source.as_raw(),
-            640,
-            360,
-            image::ExtendedColorType::Rgb8,
-        ) else {
-            panic!("encoding a fixture JPEG must succeed");
-        };
-
-        let Ok(data_url) = encode_step_thumbnail(&stored) else {
-            panic!("a valid stored screenshot must produce a thumbnail");
-        };
-        let Some(encoded) = data_url.strip_prefix("data:image/jpeg;base64,") else {
-            panic!("thumbnail must be a JPEG data URL");
-        };
-        let Ok(bytes) = STANDARD.decode(encoded) else {
-            panic!("thumbnail payload must be valid base64");
-        };
-        let Ok(thumbnail) = image::load_from_memory(&bytes) else {
-            panic!("the thumbnail itself must decode as an image");
-        };
-        assert!(thumbnail.width() <= STEP_THUMBNAIL_WIDTH);
-        assert!(thumbnail.height() <= STEP_THUMBNAIL_HEIGHT);
-    }
+    use super::{clamp_hud_position, snap_hud_position};
 
     #[test]
     fn keeps_the_hud_inside_the_lower_right_screen_edge() {
@@ -1313,40 +1100,16 @@ mod tests {
     #[test]
     fn pins_oversized_hud_to_the_safe_origin() {
         assert_eq!(
-            clamp_hud_position((900, 700), (1_200, 900), (0, 0), (1_000, 800), 8),
+            clamp_hud_position((400, 400), (2_400, 1_400), (0, 0), (1_920, 1_080), 8),
             (8, 8)
         );
     }
 
     #[test]
-    fn taskbar_work_area_keeps_the_hud_above_the_taskbar() {
+    fn a_drag_near_an_edge_snaps_the_hud_flush_to_it() {
         assert_eq!(
-            clamp_hud_position((1_300, 1_020), (520, 72), (0, 0), (1_920, 1_040), 8),
-            (1_300, 960)
+            snap_hud_position((1_390, 1_004), (520, 72), (0, 0), (1_920, 1_080), 8, 24),
+            (1_392, 1_000)
         );
-    }
-
-    #[test]
-    fn right_and_bottom_edge_snaps_survive_retract_and_expand() {
-        let expanded = resize_hud_position(
-            (1_674, 960),
-            (238, 72),
-            (520, 345),
-            (0, 0),
-            (1_920, 1_040),
-            8,
-            24,
-        );
-        assert_eq!(expanded, (1_392, 687));
-        let retracted = resize_hud_position(
-            expanded,
-            (520, 345),
-            (238, 72),
-            (0, 0),
-            (1_920, 1_040),
-            8,
-            24,
-        );
-        assert_eq!(retracted, (1_674, 960));
     }
 }

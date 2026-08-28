@@ -20,13 +20,12 @@ use self::frames::{DesktopFrame, FrameHub};
 use crate::{
     model::{
         Bounds, CapturedStep, DesktopScope, MAX_SCREENSHOT_BYTES, MAX_STEPS, RecorderSettings,
-        ServerAnnotation, ServerCrop, SmartBlurSettings,
+        ServerAnnotation, ServerCrop,
     },
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
-        PointerButton, PrivacyRegion, RawEvent, RawInputEvent, RawInputRegistration,
-        UiAutomationClient, excluded_regions, foreground_context, monitor_descriptors,
-        scope_accepts,
+        PointerButton, RawEvent, RawInputEvent, RawInputRegistration, UiAutomationClient,
+        foreground_context, monitor_descriptors, recorder_window_bounds, scope_accepts,
     },
 };
 
@@ -176,7 +175,6 @@ struct PendingPointer {
     frame: DesktopFrame,
     metadata: ElementMetadata,
     foreground: ForegroundContext,
-    privacy_regions: Vec<PrivacyRegion>,
 }
 
 /// A keyboard action whose screenshot has to wait for the destination
@@ -206,10 +204,6 @@ enum MeaningfulAction {
     RightClick {
         point: (i32, i32),
     },
-    Drag {
-        from: (i32, i32),
-        to: (i32, i32),
-    },
     TextEntry,
     Enter,
     Tab,
@@ -224,8 +218,6 @@ struct PendingEmission {
     metadata: ElementMetadata,
     foreground: ForegroundContext,
     exact_text: Option<String>,
-    privacy_regions: Vec<PrivacyRegion>,
-    settings: RecorderSettings,
 }
 
 struct EmissionPipeline {
@@ -365,9 +357,6 @@ fn process_without_uia(
         fn focused_element(&self) -> Result<ElementMetadata> {
             bail!("UI Automation unavailable")
         }
-        fn privacy_regions(&self, _window_id: &str) -> Result<Vec<PrivacyRegion>> {
-            bail!("UI Automation unavailable")
-        }
     }
     let uia = UnavailableUia;
     let mut state = ProcessorState {
@@ -450,9 +439,7 @@ fn handle_event<U: UiAutomationClient>(
 ) {
     // Steps are recorded in the order the author performed them, so anything
     // still parked is emitted before the event that arrived after it.
-    flush_keyboard(
-        state, uia, scope, settings, frames, order, emissions, on_status,
-    );
+    flush_keyboard(state, uia, scope, frames, order, emissions, on_status);
     match event {
         RawEvent::PointerDown { button, x, y } => {
             // A pointer action closes the previous typing group. This preserves the user's
@@ -485,7 +472,6 @@ fn handle_event<U: UiAutomationClient>(
             let metadata = uia
                 .element_at(x, y)
                 .unwrap_or_else(|_| fallback_metadata(&foreground));
-            let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
             state.pending_pointer = Some(PendingPointer {
                 button,
                 point: (x, y),
@@ -493,7 +479,6 @@ fn handle_event<U: UiAutomationClient>(
                 frame,
                 metadata,
                 foreground,
-                privacy_regions,
             });
         }
         RawEvent::PointerUp { button, x, y } => {
@@ -506,23 +491,14 @@ fn handle_event<U: UiAutomationClient>(
             state.last_focus = Some(pointer.metadata.clone());
             state.last_focus_poll = at;
             let distance = squared_distance(pointer.point, (x, y));
+            // A press that travels is a drag — a text selection, a scrollbar, a
+            // window move. KnowHow records clicks, typing and shortcuts, so the
+            // gesture itself is not a step; whatever it produced shows up in the
+            // screenshot of the action the author takes next.
             if button == PointerButton::Left && distance > 64 {
-                emit(
-                    MeaningfulAction::Drag {
-                        from: pointer.point,
-                        to: (x, y),
-                    },
-                    pointer.frame,
-                    pointer.metadata,
-                    pointer.foreground,
-                    None,
-                    pointer.privacy_regions,
-                    settings,
-                    order,
-                    emissions,
-                    on_status,
-                );
-            } else if button == PointerButton::Right {
+                return;
+            }
+            if button == PointerButton::Right {
                 emit(
                     MeaningfulAction::RightClick {
                         point: pointer.point,
@@ -531,8 +507,6 @@ fn handle_event<U: UiAutomationClient>(
                     pointer.metadata,
                     pointer.foreground,
                     None,
-                    pointer.privacy_regions,
-                    settings,
                     order,
                     emissions,
                     on_status,
@@ -551,14 +525,12 @@ fn handle_event<U: UiAutomationClient>(
                         first.metadata,
                         first.foreground,
                         None,
-                        first.privacy_regions,
-                        settings,
                         order,
                         emissions,
                         on_status,
                     );
                 } else {
-                    emit_pending_click(first, settings, order, emissions, on_status);
+                    emit_pending_click(first, order, emissions, on_status);
                     state.pending_click = Some(pointer);
                 }
             } else {
@@ -569,7 +541,7 @@ fn handle_event<U: UiAutomationClient>(
             // Once typing begins, the preceding pointer action cannot become a double-click.
             // Emit it now so Start -> type -> Enter cannot be reordered as type -> Enter -> Start.
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, settings, order, emissions, on_status);
+                emit_pending_click(click, order, emissions, on_status);
             }
             let now = at;
             if let Some(pending) = &mut state.pending_text {
@@ -603,7 +575,7 @@ fn handle_event<U: UiAutomationClient>(
         }
         RawEvent::Enter | RawEvent::Tab => {
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, settings, order, emissions, on_status);
+                emit_pending_click(click, order, emissions, on_status);
             }
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
@@ -619,7 +591,6 @@ fn handle_event<U: UiAutomationClient>(
                 },
                 uia,
                 scope,
-                settings,
                 frames,
                 order,
                 emissions,
@@ -634,7 +605,7 @@ fn handle_event<U: UiAutomationClient>(
         }
         RawEvent::Shortcut(shortcut) => {
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, settings, order, emissions, on_status);
+                emit_pending_click(click, order, emissions, on_status);
             }
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
@@ -684,7 +655,6 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     action: MeaningfulAction,
     uia: &U,
     scope: &DesktopScope,
-    settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
@@ -709,15 +679,12 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     let metadata = uia
         .focused_element_semantic()
         .unwrap_or_else(|_| fallback_metadata(&foreground));
-    let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
     emit(
         action,
         frame,
         metadata,
         foreground,
         None,
-        privacy_regions,
-        settings,
         order,
         emissions,
         on_status,
@@ -730,7 +697,6 @@ fn flush_keyboard<U: UiAutomationClient>(
     state: &mut ProcessorState,
     uia: &U,
     scope: &DesktopScope,
-    settings: &RecorderSettings,
     frames: &Arc<Mutex<FrameHub>>,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
@@ -743,9 +709,8 @@ fn flush_keyboard<U: UiAutomationClient>(
         action, retries, ..
     } = pending;
     // A returned action means the display ring had nothing to photograph yet.
-    if let Some(action) = emit_keyboard_action(
-        action, uia, scope, settings, frames, order, emissions, on_status,
-    ) {
+    if let Some(action) = emit_keyboard_action(action, uia, scope, frames, order, emissions, on_status)
+    {
         if retries >= MAX_FRAME_RETRIES {
             on_status(
                 "A keyboard action could not be captured: no display frame was available."
@@ -780,9 +745,7 @@ fn flush_due<U: UiAutomationClient>(
     on_status: &StatusCallback,
 ) {
     if keyboard_action_is_due(state) {
-        flush_keyboard(
-            state, uia, scope, settings, frames, order, emissions, on_status,
-        );
+        flush_keyboard(state, uia, scope, frames, order, emissions, on_status);
     }
     if state
         .pending_click
@@ -790,7 +753,7 @@ fn flush_due<U: UiAutomationClient>(
         .is_some_and(|click| click.started_at.elapsed() > Duration::from_millis(500))
         && let Some(click) = state.pending_click.take()
     {
-        emit_pending_click(click, settings, order, emissions, on_status);
+        emit_pending_click(click, order, emissions, on_status);
     }
     if state
         .pending_text
@@ -814,11 +777,9 @@ fn flush_all<U: UiAutomationClient>(
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
-    flush_keyboard(
-        state, uia, scope, settings, frames, order, emissions, on_status,
-    );
+    flush_keyboard(state, uia, scope, frames, order, emissions, on_status);
     if let Some(click) = state.pending_click.take() {
-        emit_pending_click(click, settings, order, emissions, on_status);
+        emit_pending_click(click, order, emissions, on_status);
     }
     flush_text(
         state, uia, scope, settings, frames, order, emissions, on_status,
@@ -827,7 +788,6 @@ fn flush_all<U: UiAutomationClient>(
 
 fn emit_pending_click(
     click: PendingPointer,
-    settings: &RecorderSettings,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
@@ -842,8 +802,6 @@ fn emit_pending_click(
         click.metadata,
         click.foreground,
         None,
-        click.privacy_regions,
-        settings,
         order,
         emissions,
         on_status,
@@ -926,15 +884,12 @@ fn flush_text<U: UiAutomationClient>(
     } else {
         None
     };
-    let privacy_regions = privacy_regions_or_fail_closed(uia, &foreground, on_status);
     emit(
         MeaningfulAction::TextEntry,
         frame,
         after,
         foreground,
         exact_text,
-        privacy_regions,
-        settings,
         order,
         emissions,
         on_status,
@@ -948,8 +903,6 @@ fn emit(
     metadata: ElementMetadata,
     foreground: ForegroundContext,
     exact_text: Option<String>,
-    privacy_regions: Vec<PrivacyRegion>,
-    settings: &RecorderSettings,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
@@ -967,8 +920,6 @@ fn emit(
             metadata,
             foreground,
             exact_text,
-            privacy_regions,
-            settings: settings.clone(),
         },
         on_status,
     );
@@ -992,29 +943,12 @@ fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status
         metadata,
         foreground,
         exact_text,
-        privacy_regions,
-        settings,
     } = emission;
-    // Redacted once, then reused for both the instruction text and the stored
-    // exact-text field, so the two can never disagree about what was scrubbed.
-    let exact_text = exact_text.map(|text| redact_sensitive_text(&text, &settings.smart_blur));
-    let (title, instructions, source_event) = deterministic_instruction(
-        &action,
-        &metadata,
-        &foreground,
-        exact_text.as_deref(),
-        &settings.smart_blur,
-    );
+    let (title, instructions, source_event) =
+        deterministic_instruction(&action, &metadata, &foreground, exact_text.as_deref());
     let annotations = annotations(&action, &metadata, &frame);
     let crop = contextual_crop(&action, &metadata, &frame);
-    match rasterize(
-        &frame,
-        &metadata,
-        &privacy_regions,
-        &foreground,
-        &action,
-        &settings,
-    ) {
+    match rasterize(&frame, &metadata, &foreground, &action) {
         Ok(processed) => {
             let text = if metadata.password_status == PasswordStatus::NotPassword {
                 exact_text
@@ -1057,57 +991,28 @@ fn fallback_metadata(foreground: &ForegroundContext) -> ElementMetadata {
     }
 }
 
-fn privacy_regions_or_fail_closed<U: UiAutomationClient>(
-    uia: &U,
-    foreground: &ForegroundContext,
-    on_status: &StatusCallback,
-) -> Vec<PrivacyRegion> {
-    match uia.privacy_regions(&foreground.window_id) {
-        Ok(regions) => regions,
-        Err(_) => {
-            on_status(
-                "Live Smart Blur is preparing this app; the current window was masked.".to_owned(),
-            );
-            vec![PrivacyRegion {
-                bounds: foreground.bounds,
-                control_role: Some("text field".to_owned()),
-                text: None,
-                password_status: PasswordStatus::Unknown,
-            }]
-        }
-    }
-}
-
 fn deterministic_instruction(
     action: &MeaningfulAction,
     metadata: &ElementMetadata,
     foreground: &ForegroundContext,
     exact_text: Option<&str>,
-    blur: &SmartBlurSettings,
 ) -> (String, String, &'static str) {
     let application = if metadata.application_name.is_empty() {
         &foreground.application_name
     } else {
         &metadata.application_name
     };
-    // Window titles and control labels are arbitrary on-screen text — whatever
-    // an app's accessibility tree happens to expose as a Name, which can carry
-    // anything the author was looking at. Smart Blur's content heuristics
-    // already decide what counts as sensitive for the image; running the same
-    // decision over this text is what keeps the two promises in sync.
-    let window_title = redact_sensitive_text(&metadata.window_title, blur);
+    let window_title = metadata.window_title.as_str();
     let location =
         if window_title.trim().is_empty() || window_title.eq_ignore_ascii_case(application) {
             application.to_owned()
         } else {
-            format!("{} in {application}", truncate(&window_title, 80))
+            format!("{} in {application}", truncate(window_title, 80))
         };
-    let raw_target = metadata
+    let target = metadata
         .control_label
         .as_deref()
         .filter(|label| !label.trim().is_empty());
-    let redacted_label = raw_target.map(|label| redact_sensitive_text(label, blur));
-    let target = redacted_label.as_deref();
     let role = metadata.control_role.as_deref().unwrap_or("control");
     let described = target
         .map(|label| format!("the “{}” {role}", truncate(label, 120)))
@@ -1118,9 +1023,7 @@ fn deterministic_instruction(
             destination_application,
             ..
         } => {
-            // Checked against the original label, ahead of redaction, so this
-            // comparison never depends on what the heuristics below did to it.
-            let opens_start = raw_target.is_some_and(|label| {
+            let opens_start = target.is_some_and(|label| {
                 matches!(
                     label.trim().to_ascii_lowercase().as_str(),
                     "start" | "windows"
@@ -1164,11 +1067,6 @@ fn deterministic_instruction(
             ),
             format!("Right-click {described}."),
             "right-click",
-        ),
-        MeaningfulAction::Drag { .. } => (
-            "Drag the selected item".to_owned(),
-            format!("Drag {described} to the highlighted destination."),
-            "drag",
         ),
         MeaningfulAction::TextEntry => {
             let instruction = exact_text.map_or_else(
@@ -1256,23 +1154,6 @@ fn annotations(
                 y,
                 width: Some(0.035),
                 height: None,
-                x2: None,
-                y2: None,
-                color: Some("#ff5a12".to_owned()),
-            }]
-        }
-        MeaningfulAction::Drag { from, to } => {
-            let (x, y) = normalize_point(*from, frame.monitor_bounds);
-            let (x2, y2) = normalize_point(*to, frame.monitor_bounds);
-            vec![ServerAnnotation {
-                id: format!("annotation_{}", Uuid::new_v4().simple()),
-                kind: "arrow".to_owned(),
-                x,
-                y,
-                width: None,
-                height: None,
-                x2: Some(x2),
-                y2: Some(y2),
                 color: Some("#ff5a12".to_owned()),
             }]
         }
@@ -1286,8 +1167,6 @@ fn annotations(
                 y,
                 width: Some(width),
                 height: Some(height),
-                x2: None,
-                y2: None,
                 color: Some("#ff5a12".to_owned()),
             })
             .into_iter()
@@ -1305,7 +1184,6 @@ fn contextual_crop(
         MeaningfulAction::LeftClick { point, .. } | MeaningfulAction::RightClick { point } => {
             Some(normalize_point(*point, frame.monitor_bounds))
         }
-        MeaningfulAction::Drag { to, .. } => Some(normalize_point(*to, frame.monitor_bounds)),
         MeaningfulAction::TextEntry
         | MeaningfulAction::Enter
         | MeaningfulAction::Tab
@@ -1386,13 +1264,18 @@ struct ProcessedImage {
     mask_count: usize,
 }
 
+/// Turns one captured display frame into the JPEG stored for a step.
+///
+/// Two things are painted out before the image is ever written to disk: the
+/// recorder's own windows, so KnowHow never appears in its own guides, and any
+/// password field involved in the action. A field whose password state UI
+/// Automation could not report is treated as a password — the recorder masks
+/// what it cannot vouch for rather than photographing it.
 fn rasterize(
     frame: &DesktopFrame,
     metadata: &ElementMetadata,
-    privacy_regions: &[PrivacyRegion],
     foreground: &ForegroundContext,
     action: &MeaningfulAction,
-    settings: &RecorderSettings,
 ) -> Result<ProcessedImage> {
     let expected = usize::try_from(frame.width)?
         .checked_mul(usize::try_from(frame.height)?)
@@ -1420,71 +1303,27 @@ fn rasterize(
         ..frame.clone()
     };
     let mut mask_count = 0_usize;
-    let mut masked_bounds = Vec::new();
-    for excluded in excluded_regions().unwrap_or_default() {
-        let _reason = excluded.reason;
-        if let Some(bounds) = global_to_image_bounds(excluded.bounds, &mask_frame) {
+    for recorder_window in recorder_window_bounds() {
+        if let Some(bounds) = global_to_image_bounds(recorder_window, &mask_frame) {
             solid_mask(&mut image, bounds);
             mask_count += 1;
-            masked_bounds.push(bounds);
         }
     }
-    if matches!(action, MeaningfulAction::TextEntry)
-        && metadata.password_status != PasswordStatus::NotPassword
-    {
-        let fail_closed = metadata.bounds.unwrap_or(foreground.bounds);
-        if let Some(bounds) = global_to_image_bounds(fail_closed, &mask_frame) {
-            solid_mask(&mut image, bounds);
-            mask_count += 1;
-            masked_bounds.push(bounds);
+    let password_bounds = match metadata.password_status {
+        // A text entry KnowHow cannot confirm is not a password is masked at the
+        // focused control, falling back to the whole window when even its bounds
+        // are unavailable.
+        PasswordStatus::Unknown if matches!(action, MeaningfulAction::TextEntry) => {
+            Some(metadata.bounds.unwrap_or(foreground.bounds))
         }
-    } else if metadata.password_status == PasswordStatus::Password
-        && let Some(bounds) = metadata
-            .bounds
-            .and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
+        PasswordStatus::Password => metadata.bounds,
+        _ => None,
+    };
+    if let Some(bounds) =
+        password_bounds.and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
     {
         solid_mask(&mut image, bounds);
         mask_count += 1;
-        masked_bounds.push(bounds);
-    }
-    if should_smart_blur(
-        metadata.control_role.as_deref(),
-        metadata.value.as_deref(),
-        settings,
-    ) && let Some(bounds) = metadata
-        .bounds
-        .and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
-        && !contains_bounds(&masked_bounds, bounds)
-    {
-        blur_region(&mut image, bounds);
-        mask_count += 1;
-        masked_bounds.push(bounds);
-    }
-    // Smart Blur is applied to every visible UI Automation region in the foreground window,
-    // not only the control that was clicked. Password and uncertain form controls are always
-    // solid-masked before a screenshot can enter encrypted storage.
-    for region in privacy_regions {
-        let Some(bounds) = global_to_image_bounds(region.bounds, &mask_frame) else {
-            continue;
-        };
-        if contains_bounds(&masked_bounds, bounds) {
-            continue;
-        }
-        let role = region.control_role.as_deref();
-        let mandatory_mask = region.password_status == PasswordStatus::Password
-            || (region.password_status == PasswordStatus::Unknown
-                && matches!(role, Some("text field" | "combo box")));
-        if mandatory_mask {
-            solid_mask(&mut image, bounds);
-            mask_count += 1;
-            masked_bounds.push(bounds);
-        } else if region.password_status == PasswordStatus::NotPassword
-            && should_smart_blur(role, region.text.as_deref(), settings)
-        {
-            blur_region(&mut image, bounds);
-            mask_count += 1;
-            masked_bounds.push(bounds);
-        }
     }
     let (jpeg, width, height) = encode_bounded(image)?;
     Ok(ProcessedImage {
@@ -1506,178 +1345,6 @@ fn processing_dimensions(width: u32, height: u32) -> (u32, u32) {
         (f64::from(width) * scale).round().max(1.0) as u32,
         (f64::from(height) * scale).round().max(1.0) as u32,
     )
-}
-
-fn should_smart_blur(
-    control_role: Option<&str>,
-    text: Option<&str>,
-    settings: &RecorderSettings,
-) -> bool {
-    let role = control_role.unwrap_or("");
-    let value = text.unwrap_or("");
-    (settings.smart_blur.form_fields && matches!(role, "text field" | "combo box"))
-        || (settings.smart_blur.images && role == "image")
-        || (settings.smart_blur.table_rows && matches!(role, "table" | "data grid" | "list item"))
-        || (settings.smart_blur.emails && looks_like_email(value))
-        || (settings.smart_blur.phone_numbers && looks_like_phone(value))
-        || (settings.smart_blur.financial_numbers && looks_like_financial(value))
-        || (settings.smart_blur.identifiers && looks_like_identifier(value))
-        || (settings.smart_blur.long_text && value.chars().count() >= 80)
-}
-
-fn contains_bounds(regions: &[Bounds], candidate: Bounds) -> bool {
-    regions.iter().any(|bounds| {
-        bounds.x == candidate.x
-            && bounds.y == candidate.y
-            && bounds.width == candidate.width
-            && bounds.height == candidate.height
-    })
-}
-
-fn looks_like_email(value: &str) -> bool {
-    value.split_whitespace().any(|word| {
-        let mut parts = word.split('@');
-        parts.next().is_some_and(|left| !left.is_empty())
-            && parts.next().is_some_and(|right| right.contains('.'))
-            && parts.next().is_none()
-    })
-}
-
-fn looks_like_phone(value: &str) -> bool {
-    let digits = value.chars().filter(char::is_ascii_digit).count();
-    digits >= 7 && digits * 2 >= value.chars().count().max(1)
-}
-
-fn looks_like_financial(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    (lower.contains('$') || lower.contains('€') || lower.contains('£') || lower.contains("qar"))
-        && value.chars().filter(char::is_ascii_digit).count() >= 2
-}
-
-fn looks_like_identifier(value: &str) -> bool {
-    value.chars().count() >= 12
-        && value.chars().filter(char::is_ascii_alphanumeric).count() >= 10
-        && !value.contains(' ')
-}
-
-/// A maximal non-whitespace run in `text`, with its byte range.
-struct TextToken<'a> {
-    text: &'a str,
-    start: usize,
-    end: usize,
-}
-
-fn tokenize(text: &str) -> Vec<TextToken<'_>> {
-    let mut tokens = Vec::new();
-    let mut start = None;
-    for (index, ch) in text.char_indices() {
-        if ch.is_whitespace() {
-            if let Some(begin) = start.take() {
-                tokens.push(TextToken {
-                    text: &text[begin..index],
-                    start: begin,
-                    end: index,
-                });
-            }
-        } else if start.is_none() {
-            start = Some(index);
-        }
-    }
-    if let Some(begin) = start {
-        tokens.push(TextToken {
-            text: &text[begin..],
-            start: begin,
-            end: text.len(),
-        });
-    }
-    tokens
-}
-
-/// True for a token made only of digits and the punctuation a phone number or
-/// a plain amount can contain. Used only to decide whether an adjacent token
-/// may extend a candidate run — never to redact on its own — so it can be
-/// permissive without risking pulling a real word into a run.
-fn is_numeric_run_token(word: &str) -> bool {
-    !word.is_empty()
-        && word.chars().any(|character| character.is_ascii_digit())
-        && word
-            .chars()
-            .all(|character| matches!(character, '0'..='9' | '+' | '(' | ')' | '-' | '.'))
-}
-
-fn is_financial_marker_token(word: &str) -> bool {
-    word.contains('$')
-        || word.contains('€')
-        || word.contains('£')
-        || word.to_ascii_lowercase().contains("qar")
-}
-
-/// Redacts substrings that Smart Blur's existing content heuristics
-/// (`looks_like_email` and friends) would flag, using those exact predicates
-/// so text redaction and image redaction never disagree about what counts as
-/// sensitive — this is what `should_smart_blur` already applies to
-/// screenshot pixels; nothing analogous ran over instruction/typed-text
-/// strings before this function existed.
-///
-/// A phone number or a monetary amount often spans more than one
-/// whitespace-delimited token (`"+974 5555 0101"`), so adjacent
-/// numeric/currency tokens are merged into one candidate before the
-/// predicate is applied. Email addresses and long identifiers never contain
-/// whitespace, so each token is also tested on its own. Only the four
-/// content-based detectors apply here — `formFields`/`images`/`tableRows`
-/// are UI-role gates and `longText` is a pure length gate, neither of which
-/// says anything meaningful about a free-form sentence; applying `longText`
-/// in particular would redact almost any real typed sentence, so it is
-/// deliberately not included.
-fn redact_sensitive_text(text: &str, blur: &SmartBlurSettings) -> String {
-    if !(blur.emails || blur.phone_numbers || blur.financial_numbers || blur.identifiers) {
-        return text.to_owned();
-    }
-    let tokens = tokenize(text);
-    if tokens.is_empty() {
-        return text.to_owned();
-    }
-    let mut redacted = String::with_capacity(text.len());
-    let mut cursor = 0;
-    let mut index = 0;
-    while index < tokens.len() {
-        let start_token = &tokens[index];
-        let mut run_end = index;
-        if is_numeric_run_token(start_token.text) || is_financial_marker_token(start_token.text) {
-            run_end = index + 1;
-            while run_end < tokens.len()
-                && (is_numeric_run_token(tokens[run_end].text)
-                    || is_financial_marker_token(tokens[run_end].text))
-            {
-                run_end += 1;
-            }
-        }
-        if run_end > index + 1 {
-            let run = &text[start_token.start..tokens[run_end - 1].end];
-            let matched = (blur.phone_numbers && looks_like_phone(run))
-                || (blur.financial_numbers && looks_like_financial(run));
-            if matched {
-                redacted.push_str(&text[cursor..start_token.start]);
-                redacted.push_str("[redacted]");
-                cursor = tokens[run_end - 1].end;
-                index = run_end;
-                continue;
-            }
-        }
-        let word = start_token.text;
-        let matched = (blur.emails && looks_like_email(word))
-            || (blur.identifiers && looks_like_identifier(word))
-            || (blur.phone_numbers && looks_like_phone(word))
-            || (blur.financial_numbers && looks_like_financial(word));
-        if matched {
-            redacted.push_str(&text[cursor..start_token.start]);
-            redacted.push_str("[redacted]");
-            cursor = start_token.end;
-        }
-        index += 1;
-    }
-    redacted.push_str(&text[cursor..]);
-    redacted
 }
 
 fn global_to_image_bounds(bounds: Bounds, frame: &DesktopFrame) -> Option<Bounds> {
@@ -1712,24 +1379,6 @@ fn solid_mask(image: &mut RgbaImage, bounds: Bounds) {
             image.put_pixel(x, y, Rgba([27, 32, 30, 255]));
         }
     }
-}
-
-fn blur_region(image: &mut RgbaImage, bounds: Bounds) {
-    if bounds.width == 0 || bounds.height == 0 {
-        return;
-    }
-    let x = bounds.x.max(0) as u32;
-    let y = bounds.y.max(0) as u32;
-    let width = bounds.width.min(image.width().saturating_sub(x));
-    let height = bounds.height.min(image.height().saturating_sub(y));
-    let source = imageops::crop_imm(image, x, y, width, height).to_image();
-    // A true Gaussian blur costs work proportional to the kernel radius, and at
-    // this radius a screenshot with a few dozen covered regions took seconds to
-    // process — long enough for the step feed to fall behind the author. This
-    // approximation runs three box passes in time independent of the radius and
-    // is visually indistinguishable at these sizes.
-    let blurred = imageops::fast_blur(&source, 16.0);
-    imageops::replace(image, &blurred, i64::from(x), i64::from(y));
 }
 
 fn encode_bounded(image: RgbaImage) -> Result<(Vec<u8>, u32, u32)> {
@@ -1830,15 +1479,52 @@ fn truncate(value: &str, maximum: usize) -> String {
 mod tests {
     use super::{
         MeaningfulAction, contextual_crop_for_geometry, deterministic_instruction, encode_bounded,
-        inserted_text, is_duplicate, looks_like_email, looks_like_phone, processing_dimensions,
-        redact_sensitive_text, shortcut_instruction, should_smart_blur, verified_inserted_text,
+        inserted_text, is_duplicate, processing_dimensions, shortcut_instruction,
+        verified_inserted_text,
     };
     use crate::{
-        model::{Bounds, RecorderSettings, SmartBlurSettings},
+        model::Bounds,
         platform::{ElementMetadata, ForegroundContext, PasswordStatus},
     };
     use image::{Rgba, RgbaImage};
     use std::time::{Duration, Instant};
+
+    fn metadata() -> ElementMetadata {
+        ElementMetadata {
+            application_name: "Windows Explorer".to_owned(),
+            window_title: "Taskbar".to_owned(),
+            control_role: Some("button".to_owned()),
+            control_label: Some("Start".to_owned()),
+            bounds: Some(Bounds {
+                x: 0,
+                y: 0,
+                width: 48,
+                height: 48,
+            }),
+            password_status: PasswordStatus::NotPassword,
+            value: None,
+            window_id: "1".to_owned(),
+            process_id: 1,
+        }
+    }
+
+    fn foreground() -> ForegroundContext {
+        ForegroundContext {
+            application_name: "Windows Explorer".to_owned(),
+            window_title: "Taskbar".to_owned(),
+            bounds: Bounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            window_id: "1".to_owned(),
+            process_id: 1,
+            monitor_id: "display-1".to_owned(),
+            protected: false,
+            elevated: false,
+        }
+    }
 
     #[test]
     fn processed_rgba_frames_encode_as_jpeg() {
@@ -1858,7 +1544,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_clicks_receive_the_browser_style_contextual_crop() {
+    fn clicks_receive_a_contextual_crop_centred_on_the_pointer() {
         let Some(crop) = contextual_crop_for_geometry(Some((0.72, 0.44)), None, 3440, 1440) else {
             panic!("an ultrawide click must produce a contextual crop");
         };
@@ -1867,6 +1553,17 @@ mod tests {
         assert!(crop.y <= 0.44 && crop.y + crop.height >= 0.44);
         let ratio = (3440.0 * crop.width) / (1440.0 * crop.height);
         assert!((ratio - 16.0 / 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_clicked_control_keeps_the_whole_control_inside_the_crop() {
+        let Some(crop) =
+            contextual_crop_for_geometry(Some((0.5, 0.5)), Some((0.42, 0.46, 0.16, 0.08)), 1920, 1080)
+        else {
+            panic!("a click on a known control must produce a contextual crop");
+        };
+        assert!(crop.x <= 0.42 && crop.x + crop.width >= 0.58);
+        assert!(crop.y <= 0.46 && crop.y + crop.height >= 0.54);
     }
 
     #[test]
@@ -1895,9 +1592,25 @@ mod tests {
         );
         assert_eq!(verified_inserted_text("p", "powershell", 10), None);
         assert_eq!(
-            verified_inserted_text("PS C:\\> ", "PS C:\\> ls", 2).as_deref(),
+            verified_inserted_text(r"PS C:\> ", r"PS C:\> ls", 2).as_deref(),
             Some("ls")
         );
+    }
+
+    #[test]
+    fn typed_text_appears_verbatim_in_the_instruction() {
+        let step = deterministic_instruction(
+            &MeaningfulAction::TextEntry,
+            &ElementMetadata {
+                control_role: Some("text field".to_owned()),
+                control_label: Some("Search".to_owned()),
+                ..metadata()
+            },
+            &foreground(),
+            Some("quarterly report"),
+        );
+        assert_eq!(step.2, "text-entry");
+        assert!(step.1.contains("quarterly report"));
     }
 
     #[test]
@@ -1917,50 +1630,28 @@ mod tests {
     }
 
     #[test]
+    fn an_unmapped_chord_still_reads_as_a_shortcut_step() {
+        let step = deterministic_instruction(
+            &MeaningfulAction::Shortcut("Ctrl+Shift+P".to_owned()),
+            &metadata(),
+            &foreground(),
+            None,
+        );
+        assert_eq!(step.0, "Press Ctrl+Shift+P");
+        assert_eq!(step.2, "shortcut");
+    }
+
+    #[test]
     fn start_click_and_mouse_app_transition_keep_click_semantics() {
-        let metadata = ElementMetadata {
-            application_name: "Windows Explorer".to_owned(),
-            window_title: "Taskbar".to_owned(),
-            control_role: Some("button".to_owned()),
-            control_label: Some("Start".to_owned()),
-            bounds: Some(Bounds {
-                x: 0,
-                y: 0,
-                width: 48,
-                height: 48,
-            }),
-            password_status: PasswordStatus::NotPassword,
-            value: None,
-            window_id: "1".to_owned(),
-            process_id: 1,
-        };
-        let foreground = ForegroundContext {
-            application_name: "Windows Explorer".to_owned(),
-            window_title: "Taskbar".to_owned(),
-            bounds: Bounds {
-                x: 0,
-                y: 0,
-                width: 1920,
-                height: 1080,
-            },
-            window_id: "1".to_owned(),
-            root_owner_id: "1".to_owned(),
-            process_id: 1,
-            monitor_id: "display-1".to_owned(),
-            protected: false,
-            elevated: false,
-        };
-        let no_blur = SmartBlurSettings::default();
         let start = deterministic_instruction(
             &MeaningfulAction::LeftClick {
                 point: (24, 1050),
                 double: false,
                 destination_application: Some("Start".to_owned()),
             },
-            &metadata,
-            &foreground,
+            &metadata(),
+            &foreground(),
             None,
-            &no_blur,
         );
         assert_eq!(start.0, "Open Start");
         assert_eq!(start.2, "left-click");
@@ -1973,11 +1664,10 @@ mod tests {
             },
             &ElementMetadata {
                 control_label: Some("Word".to_owned()),
-                ..metadata
+                ..metadata()
             },
-            &foreground,
+            &foreground(),
             None,
-            &no_blur,
         );
         assert_eq!(open_word.0, "Open Microsoft Word");
         assert_eq!(open_word.2, "left-click");
@@ -1995,149 +1685,6 @@ mod tests {
             &mut last,
             "shortcut:Ctrl+P",
             Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn smart_blur_detection_is_local_and_deterministic() {
-        assert!(looks_like_email("author@example.com"));
-        assert!(looks_like_phone("+974 5555 0101"));
-        assert!(!looks_like_phone("Step 12"));
-    }
-
-    #[test]
-    fn text_redaction_uses_the_same_heuristics_as_image_blurring() {
-        let mut blur = SmartBlurSettings::default();
-
-        // Off by default: nothing is redacted until the author turns a
-        // detector on, exactly like the image path.
-        assert_eq!(
-            redact_sensitive_text("Contact author@example.com for access", &blur),
-            "Contact author@example.com for access",
-        );
-
-        blur.emails = true;
-        assert_eq!(
-            redact_sensitive_text("Contact author@example.com for access", &blur),
-            "Contact [redacted] for access",
-        );
-
-        // A phone number spanning multiple whitespace-delimited tokens is
-        // redacted as one unit, matching the existing looks_like_phone
-        // fixture shape.
-        blur = SmartBlurSettings {
-            phone_numbers: true,
-            ..SmartBlurSettings::default()
-        };
-        assert_eq!(
-            redact_sensitive_text("Call +974 5555 0101 today", &blur),
-            "Call [redacted] today",
-        );
-        assert_eq!(
-            redact_sensitive_text("Step 12 of 40", &blur),
-            "Step 12 of 40",
-            "short numbers that don't look like a phone number are left alone",
-        );
-
-        blur = SmartBlurSettings {
-            financial_numbers: true,
-            ..SmartBlurSettings::default()
-        };
-        assert_eq!(
-            redact_sensitive_text("Enter $4,500.00 as the amount", &blur),
-            "Enter [redacted] as the amount",
-        );
-
-        blur = SmartBlurSettings {
-            identifiers: true,
-            ..SmartBlurSettings::default()
-        };
-        assert_eq!(
-            redact_sensitive_text("Order ABCD1234EFGH shipped", &blur),
-            "Order [redacted] shipped",
-        );
-
-        // Multiple independent matches in one string.
-        blur = SmartBlurSettings {
-            emails: true,
-            phone_numbers: true,
-            ..SmartBlurSettings::default()
-        };
-        assert_eq!(
-            redact_sensitive_text("Reach author@example.com or +974 5555 0101", &blur),
-            "Reach [redacted] or [redacted]",
-        );
-    }
-
-    #[test]
-    fn instruction_text_is_redacted_like_the_screenshot_is() {
-        // The regression this fix exists for: a UI Automation accessible
-        // name that happens to carry an email address must not appear
-        // verbatim in the step's title/instructions when the matching Smart
-        // Blur detector is on, exactly as it would already be masked in the
-        // screenshot pixels.
-        let metadata = ElementMetadata {
-            application_name: "Mail".to_owned(),
-            window_title: String::new(),
-            control_role: Some("button".to_owned()),
-            control_label: Some("author@example.com".to_owned()),
-            bounds: None,
-            password_status: PasswordStatus::NotPassword,
-            value: None,
-            window_id: "1".to_owned(),
-            process_id: 1,
-        };
-        let foreground = ForegroundContext {
-            application_name: "Mail".to_owned(),
-            window_title: "Mail".to_owned(),
-            bounds: Bounds {
-                x: 0,
-                y: 0,
-                width: 1920,
-                height: 1080,
-            },
-            window_id: "1".to_owned(),
-            root_owner_id: "1".to_owned(),
-            process_id: 1,
-            monitor_id: "display-1".to_owned(),
-            protected: false,
-            elevated: false,
-        };
-        let blur = SmartBlurSettings {
-            emails: true,
-            ..SmartBlurSettings::default()
-        };
-        let (title, instructions, _) = deterministic_instruction(
-            &MeaningfulAction::LeftClick {
-                point: (10, 10),
-                double: false,
-                destination_application: None,
-            },
-            &metadata,
-            &foreground,
-            None,
-            &blur,
-        );
-        assert!(!title.contains("author@example.com"));
-        assert!(!instructions.contains("author@example.com"));
-        assert!(instructions.contains("[redacted]"));
-    }
-
-    #[test]
-    fn live_smart_blur_applies_to_every_enabled_region_kind() {
-        let mut settings = RecorderSettings::default();
-        settings.smart_blur.form_fields = true;
-        settings.smart_blur.emails = true;
-        assert!(should_smart_blur(Some("text field"), None, &settings));
-        assert!(should_smart_blur(
-            Some("text"),
-            Some("author@example.com"),
-            &settings
-        ));
-        assert!(!should_smart_blur(
-            Some("text"),
-            Some("Public heading"),
-            &settings
         ));
     }
 }

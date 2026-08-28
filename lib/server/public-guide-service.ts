@@ -153,6 +153,7 @@ export async function loadPublicGuide(
   const guide: Guide = {
     id: rows.guideRow.$id,
     workspaceId,
+    faviconMediaId: rows.guide.faviconMediaId,
     title: rows.guide.title,
     status: "published",
     restricted: false,
@@ -161,6 +162,9 @@ export async function loadPublicGuide(
     canPublish: false,
     canShare: false,
     canArchive: false,
+    canUnpublish: false,
+    canDuplicate: false,
+    canRestore: false,
     canDelete: false,
     createdAt: rows.guide.createdAt,
     updatedAt: rows.guide.updatedAt,

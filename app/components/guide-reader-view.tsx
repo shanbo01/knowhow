@@ -48,6 +48,14 @@ function titleCase(value: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function normalizedStepCopy(value: string) {
+  return value
+    .trim()
+    .replace(/[.!?]+$/u, "")
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase();
+}
+
 function StatusBadge({ status }: { status: string }) {
   return (
     <Badge
@@ -279,7 +287,7 @@ export function GuideReaderView({
                   <Link2 /> Copy live link
                 </button>
               ) : null}
-              {canExport && guide.publishedRevision && interactive ? (
+              {canExport && (guide.workingRevision ?? guide.publishedRevision) && interactive ? (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     className="button secondary small"
@@ -322,6 +330,17 @@ export function GuideReaderView({
                   onClick={() => run(onDelete)}
                 >
                   <Trash2 /> Delete
+                </button>
+              ) : null}
+              {canRestore && guide.status === "archived" ? (
+                <button
+                  className="button secondary small"
+                  type="button"
+                  disabled={busy}
+                  aria-disabled={!interactive}
+                  onClick={() => run(() => onRestore?.(revision.id))}
+                >
+                  <RotateCcw /> Restore as draft
                 </button>
               ) : null}
             </div>
@@ -396,7 +415,11 @@ export function GuideReaderView({
               ) : null}
               <div className="document-step-body">
                 <ReaderStepTitle step={step} />
-                {step.description ? <p>{step.description}</p> : null}
+                {step.description &&
+                normalizedStepCopy(step.description) !==
+                  normalizedStepCopy(step.title) ? (
+                  <p>{step.description}</p>
+                ) : null}
                 {renderScreenshot ? (
                   <figure className="authorized-media">
                     <div className="authorized-media-frame">
@@ -476,7 +499,9 @@ export function GuideReaderView({
                     <Globe2 /> {formatDate(item.publishedAt)}
                   </span>
                 ) : null}
-                {canRestore && !guide.workingRevision && interactive ? (
+                {canRestore &&
+                (!guide.workingRevision || guide.status === "archived") &&
+                interactive ? (
                   <button
                     className="button ghost small"
                     disabled={busy}

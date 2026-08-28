@@ -269,6 +269,7 @@ export type GuideRecord = {
   title: string;
   slug: string;
   authorUserId: string;
+  faviconMediaId?: string;
   publishedRevisionId: string | null;
   workingRevisionId: string | null;
   screenshotsLockedAt: string | null;
@@ -317,6 +318,19 @@ export type PrivateMediaRecord = {
   sha256: string;
   redactionState: "pending" | "redacted";
   sourceRasterized: boolean;
+  uploadedBy: string;
+  createdAt: string;
+  deletedAt: string | null;
+};
+
+export type FaviconMediaRecord = {
+  storageFileId: string;
+  filename: string;
+  contentType: "image/png";
+  byteSize: number;
+  width: number;
+  height: number;
+  sha256: string;
   uploadedBy: string;
   createdAt: string;
   deletedAt: string | null;

@@ -594,12 +594,6 @@
   gap: 0.5rem;
 }
 
-.share-export-paywall {
-  display: grid;
-  gap: 0.75rem;
-  justify-items: start;
-}
-
 .extension-install-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3694,40 +3688,40 @@ button.member-row:hover {
   pointer-events: auto;
 }
 
+/* The blur has to occupy exactly the rectangle the author drew. It used to be
+   painted onto a canvas inset by -8px — 16px wider and taller than the region —
+   while still being given only the region's pixels, so the blurred content was
+   stretched and shifted off the thing it was covering. A radial mask then faded
+   the edges out, which left the corners of every rectangle unblurred and made
+   the whole thing read as a soft oval smudge instead of a redaction. */
+/* Not `overflow: hidden`: the four resize handles are deliberately centred on
+   the corners with translate(±50%, ±50%), so clipping the region would cut each
+   of them in quarters. The canvas rounds its own corners instead. */
 .shot-redaction {
   overflow: visible;
   isolation: isolate;
-  background: rgba(127, 127, 132, 0.03);
   border: 0;
   border-radius: clamp(2px, 0.35vw, 6px);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.28), 0 0 0 1px rgb(0 0 0 / 0.35);
   cursor: move;
 }
 
 .shot-redaction-preview {
   position: absolute;
   z-index: 0;
-  inset: -8px;
+  inset: 0;
   display: block;
-  width: calc(100% + 16px);
-  height: calc(100% + 16px);
-  border-radius: clamp(4px, 0.5vw, 10px);
-  -webkit-mask-image: radial-gradient(closest-side, #000 62%, rgb(0 0 0 / 0.92) 76%, rgb(0 0 0 / 0.3) 92%, transparent 100%);
-  mask-image: radial-gradient(closest-side, #000 62%, rgb(0 0 0 / 0.92) 76%, rgb(0 0 0 / 0.3) 92%, transparent 100%);
+  width: 100%;
+  height: 100%;
+  border-radius: clamp(2px, 0.35vw, 6px);
   pointer-events: none;
   user-select: none;
-}
-
-.shot-redaction-tint {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  background: rgba(127, 127, 132, 0.03);
-  pointer-events: none;
 }
 
 .shot-redaction.applied {
   pointer-events: none;
   border: 0;
+  box-shadow: none;
   background: transparent;
 }
 
@@ -4545,8 +4539,14 @@ button.member-row:hover {
 
 .authorized-media {
   display: grid;
+  justify-items: center;
   gap: 7px;
   margin: 14px 0 0;
+}
+
+.authorized-media-frame {
+  width: 100%;
+  margin-inline: auto;
 }
 
 .authorized-media-frame {
@@ -4618,20 +4618,6 @@ button.member-row:hover {
   font-weight: 750;
   line-height: 1.1;
   overflow: hidden;
-}
-
-.authorized-media figcaption {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.authorized-media figcaption svg {
-  width: 13px;
-  height: 13px;
-  color: var(--accent);
 }
 
 .authorized-media.compact img {
@@ -5896,6 +5882,11 @@ button.member-row:hover {
   margin-top: 13px;
 }
 
+.document-action .authorized-media {
+  position: relative;
+  left: -26px;
+}
+
 .document-step .authorized-media-frame,
 .document-step .authorized-media img,
 .document-step .authorized-media-overlay {
@@ -5913,17 +5904,12 @@ button.member-row:hover {
   touch-action: none;
 }
 
+/* No transition. The markers layered over this image are positioned in
+   percentages that update on the same frame as the crop, so animating only the
+   picture slid it out from under every ring and blur region for the length of
+   the animation — which read as the ring wandering off its target on zoom. */
 .shot-image {
   will-change: left, top, width, height;
-  transition:
-    width 180ms ease,
-    height 180ms ease,
-    left 180ms ease,
-    top 180ms ease;
-}
-
-.shot-image.panning {
-  transition: none;
 }
 
 .shot-canvas-pen {
@@ -11779,17 +11765,18 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
   background: var(--surface-soft);
 }
 
-/* Matches the extension's live preview: a heavy frost in a tight rect, so a
-   covered region looks the same while recording, while reviewing, and in the
-   published guide. */
+/* Matches the extension's live preview, which stopped being an opaque slab: a
+   region reads as blurred content in every surface — while recording, in the
+   step list, in the editor, and in the published guide — rather than as a grey
+   block in one of them and a blur in the next. */
 .annotation-preview-redaction {
   position: absolute;
   z-index: 4;
   border: 0;
   border-radius: 2px;
-  background: rgba(72, 72, 78, 0.9);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(37, 45, 57, 0.14);
+  backdrop-filter: blur(8px) saturate(72%) contrast(95%);
+  -webkit-backdrop-filter: blur(8px) saturate(72%) contrast(95%);
 }
 
 /* Browser-feedback visual pass: use elevation for surface hierarchy instead of

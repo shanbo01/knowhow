@@ -16,10 +16,12 @@ import {
 
 export function GuideDeleteDialog({
   busy,
+  count = 1,
   onCancel,
   onConfirm,
 }: {
   busy: boolean;
+  count?: number;
   onCancel: () => void;
   onConfirm: () => Promise<void>;
 }) {
@@ -32,13 +34,17 @@ export function GuideDeleteDialog({
         <AlertDialogHeader>
           <AlertDialogMedia className="danger-confirm-icon"><Trash2 /></AlertDialogMedia>
           <p className="eyebrow">Permanent action</p>
-          <AlertDialogTitle>Delete this guide?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {count === 1 ? "Delete this guide?" : `Delete ${count} guides?`}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            This permanently deletes every revision and stored screenshot. It cannot be undone.
+            {count === 1
+              ? "This permanently deletes every revision and stored screenshot. It cannot be undone."
+              : "This permanently deletes every revision and stored screenshot for the selected guides. It cannot be undone."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <label className="field danger-confirm-field">
-          <span>Type <strong>delete</strong> to confirm</span>
+          <span>Type <strong>“delete”</strong> to confirm</span>
           <input
             value={confirmation}
             onChange={(event) => setConfirmation(event.target.value)}
@@ -54,7 +60,7 @@ export function GuideDeleteDialog({
             disabled={busy || !confirmed}
             onClick={() => void onConfirm().catch(() => undefined)}
           >
-            <Trash2 /> Delete guide
+            <Trash2 /> {count === 1 ? "Delete guide" : "Delete guides"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

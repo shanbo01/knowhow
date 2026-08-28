@@ -331,15 +331,27 @@ function hydrateGuides(
     };
     const working = permitted(source.workingRevisionId);
     const published = permitted(source.publishedRevisionId);
-    if (!working && !published) continue;
-    const active = (working ?? published)!;
+    const latestArchivedRow = source.archivedAt || row.status === "archived"
+      ? revisionRows.findLast(
+          (revisionRow) =>
+            revisionSources.get(revisionRow.$id)?.status === "archived",
+        )
+      : undefined;
+    const archived =
+      !working && !published && latestArchivedRow
+        ? permitted(latestArchivedRow.$id)
+        : null;
+    if (!working && !published && !archived) continue;
+    const active = (working ?? published ?? archived)!;
     const workingView = working
       ? revisionView(working.row, working.source, rows, memberNames)
-      : null;
+      : archived
+        ? revisionView(archived.row, archived.source, rows, memberNames)
+        : null;
     const publishedView = published
       ? revisionView(published.row, published.source, rows, memberNames)
       : null;
-    const editFacts = working?.facts ?? {
+    const editFacts = working?.facts ?? archived?.facts ?? {
       revisionStatus: "draft" as const,
       isAuthor: source.authorUserId === identity.userId,
       requireReviewBeforePublish,
@@ -359,6 +371,7 @@ function hydrateGuides(
     guides.push({
       id: row.$id,
       workspaceId: access.workspaceRow.$id,
+      faviconMediaId: source.faviconMediaId,
       title: source.title,
       status: active.source.status,
       restricted: Boolean(
@@ -380,6 +393,23 @@ function hydrateGuides(
       canPublish: canPublishWorking,
       canShare: canPublishWorking || canChangeLiveAudience,
       canArchive: authorize("guide.archive", accessServiceContext).allowed,
+      // Only offered on a live guide with no draft already open, which is the
+      // one state the command can act on.
+      canUnpublish:
+        Boolean(published) &&
+        !source.workingRevisionId &&
+        !source.archivedAt &&
+        published !== null &&
+        authorize("guide.unpublish", {
+          ...accessServiceContext,
+          guide: published.facts,
+        }).allowed,
+      canDuplicate:
+        Boolean(source.publishedRevisionId ?? source.workingRevisionId) &&
+        authorize("guide.create", accessServiceContext).allowed,
+      canRestore:
+        source.authorUserId === identity.userId &&
+        (access.roles.includes("creator") || access.roles.includes("administrator")),
       canDelete:
         access.roles.includes("publisher") ||
         (source.authorUserId === identity.userId &&
@@ -421,6 +451,8 @@ function metricView(
   return {
     members: members.filter((member) => member.status === "active").length,
     groups: groups.length,
+    // Matches EntitlementService.guideUsage: archived guides free their slot.
+    guides: guides.filter((guide) => guide.status !== "archived").length,
     drafts: guides.filter((guide) => guide.workingRevision?.status === "draft")
       .length,
     reviews: guides.filter(
@@ -805,13 +837,13 @@ export class BootstrapService {
       entitlements: {
         maximumUsers: entitlements.maximumUsers,
         maximumCreators: entitlements.maximumCreators,
+        maximumGuides: entitlements.maximumGuides,
         storageBytes: entitlements.storageBytes,
         extensionEnabled: entitlements.extensionEnabled,
         desktopCaptureEnabled: entitlements.desktopCaptureEnabled,
         supportEnabled: entitlements.supportEnabled,
         removeBranding: entitlements.removeBranding,
         privacyToolsEnabled: entitlements.privacyToolsEnabled,
-        customSubdomainEnabled: entitlements.customSubdomainEnabled,
         fileExportsEnabled: entitlements.fileExportsEnabled,
       },
       metrics,
@@ -1140,6 +1172,9 @@ export class BootstrapService {
               canPublish: false,
               canShare: false,
               canArchive: false,
+              canUnpublish: false,
+              canDuplicate: false,
+              canRestore: false,
               canDelete: false,
               createdAt: value.createdAt,
               updatedAt: value.updatedAt,

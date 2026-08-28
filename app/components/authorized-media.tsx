@@ -1,6 +1,6 @@
 "use client";
 
-import { ImageOff, LoaderCircle, ShieldCheck } from "lucide-react";
+import { ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   acquireAuthorizedMediaUrl,
@@ -164,7 +164,6 @@ export function AuthorizedMedia({
           {overlay ? <div className="authorized-media-overlay" aria-hidden="true">{overlay}</div> : null}
         </div>
       </div>
-      <figcaption><ShieldCheck /> Locally redacted before upload</figcaption>
     </figure>
   );
 }

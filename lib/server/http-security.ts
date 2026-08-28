@@ -7,18 +7,24 @@ export class HttpError extends Error {
   readonly status: number;
   readonly code: string;
   readonly expose: boolean;
+  /**
+   * Set when the failure is an entitlement denial. Carried to the client so the
+   * UI can name the blocked feature and offer the matching upgrade path.
+   */
+  readonly entitlement?: string;
 
   constructor(
     status: number,
     code: string,
     message: string,
-    options: { expose?: boolean; cause?: unknown } = {},
+    options: { expose?: boolean; cause?: unknown; entitlement?: string } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = "HttpError";
     this.status = status;
     this.code = code;
     this.expose = options.expose ?? status < 500;
+    this.entitlement = options.entitlement;
   }
 }
 export function requireBearerToken(request: Request): string {
@@ -242,6 +248,7 @@ export function toErrorResponse(error: unknown, requestId?: string): Response {
     {
       error: failure.expose ? failure.message : "The request could not be completed.",
       code: failure.code,
+      ...(failure.entitlement ? { entitlement: failure.entitlement } : {}),
       ...(requestId ? { requestId } : {}),
     },
     { status: failure.status },

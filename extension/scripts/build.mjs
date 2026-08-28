@@ -212,6 +212,10 @@ export async function buildKnowHowCapturePackage({
       resolve(extensionRoot, "src/core/capture-store.js"),
       "utf8",
     );
+    const typedFieldSource = await readFile(
+      resolve(extensionRoot, "src/content/typed-fields.js"),
+      "utf8",
+    );
 
     if (manifest.manifest_version !== 3) {
       throw new Error("KnowHow Capture must remain a Manifest V3 extension.");
@@ -259,17 +263,66 @@ export async function buildKnowHowCapturePackage({
         throw new Error("Forbidden permission: " + forbiddenPermission);
       }
     }
-    for (const forbiddenContentPattern of [
-      ["clipboard", /clipboard/i],
-      ["form value read", /\.value\b/],
+    if (/clipboard/i.test(contentSource)) {
+      throw new Error(
+        "Content capture contains a forbidden clipboard operation.",
+      );
+    }
+    // Capturing what an author types is the whole point of a "type this here"
+    // step, so the content script does read a field's contents — but from
+    // exactly one function, and only for fields it has already classified as
+    // ordinary. These checks pin that shape in place: a stray `.value` read
+    // anywhere else in the script, or a `typedFieldText` that stops refusing
+    // every classification but "text", fails the build rather than shipping.
+    const fieldReaderStart = contentSource.indexOf(
+      "function typedFieldText(element, kind)",
+    );
+    const fieldReaderEnd = contentSource.indexOf("\n  }", fieldReaderStart + 1);
+    if (fieldReaderStart < 0 || fieldReaderEnd < 0) {
+      throw new Error("Content capture must read typed text from typedFieldText.");
+    }
+    const fieldReader = contentSource.slice(fieldReaderStart, fieldReaderEnd);
+    if (!/if \(kind !== "text"\) return "";/.test(fieldReader)) {
+      throw new Error(
+        "typedFieldText must refuse every field classification except \"text\".",
+      );
+    }
+    if (!/return sanitizedText\(raw\);/.test(fieldReader)) {
+      throw new Error(
+        "Typed text must pass through the session redaction policy before it leaves the page.",
+      );
+    }
+    const fieldValueReads = contentSource.match(/\.value\b/g) || [];
+    if (
+      fieldValueReads.length !== (fieldReader.match(/\.value\b/g) || []).length
+    ) {
+      throw new Error(
+        "Content capture may read a form field only inside typedFieldText.",
+      );
+    }
+    // The rule that decides which fields may be read lives in its own script so
+    // it can be tested without a browser. These checks keep each exclusion in
+    // place; the tests in scripts/test-capture-core.mjs cover what they mean.
+    for (const requiredFieldGuard of [
+      ['password fields', 'if (isTextInput && inputType === "password") return "password";'],
+      ['password autocomplete', 'if (autocomplete.includes("password")) return "password";'],
+      ['username fields', 'if (autocomplete === "username") return "username";'],
+      ["credential forms", "signals?.inCredentialForm === true"],
+      ["credential-named fields", "CREDENTIAL_FIELD_HINT.test(hint)"],
+      ["one-time codes and card numbers", 'autocomplete.startsWith("cc-")'],
     ]) {
-      if (forbiddenContentPattern[1].test(contentSource)) {
+      if (!typedFieldSource.includes(requiredFieldGuard[1])) {
         throw new Error(
-          "Content capture contains a forbidden " +
-            forbiddenContentPattern[0] +
-            " operation.",
+          "Field classification must keep its " +
+            requiredFieldGuard[0] +
+            " exclusion.",
         );
       }
+    }
+    if (!contentSource.includes("typedFields.classifyField({")) {
+      throw new Error(
+        "Content capture must classify a field before reading it.",
+      );
     }
     const keyboardListeners =
       contentSource.match(/addEventListener\(\s*["']key(?:down|up|press)/g) || [];
@@ -287,15 +340,55 @@ export async function buildKnowHowCapturePackage({
       pickerHandlerEnd < 0 ? undefined : pickerHandlerEnd,
     );
     if (
-      keyboardListeners.length !== 1 ||
+      keyboardListeners.length !== 2 ||
       !contentSource.includes(pickerEscapeListener) ||
       pickerHandlerStart < 0 ||
       !pickerHandler.includes('event.key !== "Escape"') ||
       /send\s*\(|CAPTURE|record/i.test(pickerHandler)
     ) {
       throw new Error(
-        "Content capture may listen only for Escape while the element picker is active.",
+        "Content capture may listen for keys only to close the element picker and to recognise a shortcut.",
       );
+    }
+    // The second listener records keyboard shortcuts. It is allowed to exist
+    // only in this shape: every decision about what may be recorded belongs to
+    // classifyShortcut, which refuses bare printable keys and password fields,
+    // and the handler itself never reaches for a field's contents.
+    const shortcutListener =
+      'document.addEventListener("keydown", onShortcutKeyDown, true)';
+    const shortcutHandlerStart = contentSource.indexOf(
+      "function onShortcutKeyDown(event)",
+    );
+    const shortcutHandlerEnd = contentSource.indexOf(
+      "\n  function ",
+      shortcutHandlerStart + 1,
+    );
+    const shortcutHandler = contentSource.slice(
+      shortcutHandlerStart,
+      shortcutHandlerEnd < 0 ? undefined : shortcutHandlerEnd,
+    );
+    if (
+      !contentSource.includes(shortcutListener) ||
+      shortcutHandlerStart < 0 ||
+      !shortcutHandler.includes("typedFields.classifyShortcut({") ||
+      /\.value\b/.test(shortcutHandler)
+    ) {
+      throw new Error(
+        "Keyboard shortcut capture must classify every key press through classifyShortcut.",
+      );
+    }
+    for (const requiredShortcutGuard of [
+      ["password fields", 'if (signals?.fieldKind === "password") return null;'],
+      ["held keys", "if (signals?.repeat === true) return null;"],
+      ["bare printable keys", "if (!named) return null;"],
+    ]) {
+      if (!typedFieldSource.includes(requiredShortcutGuard[1])) {
+        throw new Error(
+          "Shortcut classification must keep its " +
+            requiredShortcutGuard[0] +
+            " exclusion.",
+        );
+      }
     }
     const captureVisibleTabCalls =
       backgroundSource.match(/chrome\.tabs\.captureVisibleTab\s*\(/g) || [];

@@ -1039,7 +1039,7 @@ export function GuideEditor({
           <button className="button secondary" type="submit" disabled={busy || flattening} onClick={() => setTransition("draft")}>
             <Save /> Save private draft
           </button>
-          {guide?.publishedRevision && onExport ? (
+          {guide && onExport ? (
             <button className="button secondary" type="button" disabled={busy || flattening} onClick={() => setExportOpen(true)}>
               <Download /> Export
             </button>
@@ -1102,13 +1102,12 @@ export function GuideEditor({
           onRequestReview={() => shareOrReview("review")}
         />
       ) : null}
-      {exportOpen && guide?.publishedRevision && onExport ? (
+      {exportOpen && guide && onExport ? (
         <GuideExportDialog
           open
           title={title.trim() || guide.title}
-          isLive={Boolean(guide.publishedRevision)}
           restricted={Boolean(
-            guide.publishedRevision &&
+            !guide.workingRevision && guide.publishedRevision &&
               !guide.publishedRevision.audiences.some((audience) => audience.kind === "workspace"),
           )}
           fileExportsEnabled={fileExportsEnabled}

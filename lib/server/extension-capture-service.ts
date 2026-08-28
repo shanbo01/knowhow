@@ -10,6 +10,7 @@ import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
   decodePayload,
+  type FaviconMediaRecord,
   rowData,
   type GuideRecord,
   type PrivateMediaRecord,
@@ -24,7 +25,7 @@ import { normalizeGuideSteps } from "./guide-input";
 import { HttpError, readJsonObject } from "./http-security";
 import { resourceId } from "./ids";
 import { inputInteger, inputObject, inputText, slugify } from "./input";
-import { sha256Bytes, validateScreenshot } from "./media-validation";
+import { sha256Bytes, validateFavicon, validateScreenshot } from "./media-validation";
 import { TABLES } from "./appwrite-resources";
 import { EntitlementService } from "./entitlement-service";
 import type { PrivateObjectStore } from "./private-object-store";
@@ -34,6 +35,7 @@ export const CAPTURE_POLICY_VERSION = "privacy-v2-redacted";
 export const DESKTOP_CAPTURE_POLICY_VERSION = "desktop-v2-redacted";
 const MAX_CAPTURE_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
+const MAX_FAVICON_BYTES = 256 * 1024;
 const SAFE_CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export type CaptureRecord = {
@@ -51,6 +53,7 @@ export type CaptureRecord = {
   desktopScope?: DesktopCaptureScope;
   textInputCapture?: "none" | "exact-non-password";
   sanitizedOrigin?: string;
+  faviconMediaId?: string;
   expectedSteps: number;
   status: "recording" | "paused" | "finished" | "discarded";
   startedAt: string;
@@ -200,12 +203,16 @@ function safeOrigin(input: unknown) {
   return url.origin;
 }
 
-async function boundedBytes(request: Request) {
+async function boundedBytes(
+  request: Request,
+  maximum = MAX_SCREENSHOT_BYTES,
+  label = "redacted screenshot",
+) {
   const advertised = Number(request.headers.get("content-length") ?? 0);
-  if (Number.isFinite(advertised) && advertised > MAX_SCREENSHOT_BYTES) {
-    throw new HttpError(413, "MEDIA_TOO_LARGE", "The redacted screenshot is too large.");
+  if (Number.isFinite(advertised) && advertised > maximum) {
+    throw new HttpError(413, "MEDIA_TOO_LARGE", `The ${label} is too large.`);
   }
-  if (!request.body) throw new HttpError(400, "MEDIA_EMPTY", "A redacted screenshot is required.");
+  if (!request.body) throw new HttpError(400, "MEDIA_EMPTY", `A ${label} is required.`);
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -213,9 +220,9 @@ async function boundedBytes(request: Request) {
     const { value: chunk, done } = await reader.read();
     if (done) break;
     total += chunk.byteLength;
-    if (total > MAX_SCREENSHOT_BYTES) {
+    if (total > maximum) {
       await reader.cancel();
-      throw new HttpError(413, "MEDIA_TOO_LARGE", "The redacted screenshot is too large.");
+      throw new HttpError(413, "MEDIA_TOO_LARGE", `The ${label} is too large.`);
     }
     chunks.push(chunk);
   }
@@ -469,6 +476,7 @@ export class ExtensionCaptureService {
         expectedSteps: existing.expectedSteps,
       };
     }
+    await new EntitlementService(this.store, workspaceId).assertGuideCapacity();
     const guideId = resourceId("guide");
     const revisionId = resourceId("revision");
     const timestamp = new Date().toISOString();
@@ -585,6 +593,128 @@ export class ExtensionCaptureService {
       await appendAudit(transaction, credential.identity, current.capture.workspaceId, { action: `capture.${transition}d`, targetType: "capture", targetId: captureId, targetLabel: current.capture.title, summary: `${current.capture.title} capture ${transition}d` });
     });
     return { captureId, status: target };
+  }
+
+  async uploadFavicon(request: Request, captureId: string) {
+    if (this.kind !== "browser") {
+      throw new HttpError(404, "CAPTURE_FAVICON_UNAVAILABLE", "Favicons are available only for browser captures.");
+    }
+    const credential = await this.credential(request, true);
+    const current = await this.capture(captureId, credential);
+    if (current.capture.status !== "recording" && current.capture.status !== "paused") {
+      throw new HttpError(409, "CAPTURE_NOT_RECORDING", "This capture no longer accepts a favicon.");
+    }
+    assertFresh(current.capture);
+    const idempotency = inputText(request.headers.get("idempotency-key"), "Idempotency key", { min: 8, max: 256 });
+    if (idempotency !== `${current.capture.sessionId}:favicon`) {
+      throw new HttpError(400, "IDEMPOTENCY_KEY_INVALID", "The favicon idempotency key is invalid.");
+    }
+    const bytes = await boundedBytes(request, MAX_FAVICON_BYTES, "favicon");
+    const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
+    const validated = await validateFavicon(bytes, contentType);
+    // Content-addressing is workspace-scoped so every guide in a workspace
+    // reuses one object for identical bytes without weakening tenant deletion
+    // and storage-accounting boundaries.
+    const mediaId = await stableId(
+      "favicon",
+      `${current.capture.workspaceId}:${validated.sha256}`,
+    );
+    const storageFileId = mediaId;
+    if (current.capture.faviconMediaId && current.capture.faviconMediaId !== mediaId) {
+      throw new HttpError(409, "CAPTURE_FAVICON_CONFLICT", "This capture already has a different favicon.");
+    }
+
+    let mediaRow = await this.store.get(TABLES.privateMedia, mediaId);
+    let deduplicated = Boolean(mediaRow);
+
+    const matches = (row: Awaited<ReturnType<RecordStore["get"]>>) => {
+      const media = row ? decodePayload<FaviconMediaRecord>(row, null as never) : null;
+      return Boolean(
+        row &&
+        row.workspace_id === current.capture.workspaceId &&
+        row.status === "ready" &&
+        row.kind === "favicon" &&
+        media &&
+        media.storageFileId === storageFileId &&
+        media.sha256 === validated.sha256 &&
+        media.deletedAt === null,
+      );
+    };
+    if (mediaRow && !matches(mediaRow)) {
+      throw new HttpError(500, "MEDIA_INTEGRITY_FAILURE", "A favicon identifier collision occurred.", { expose: false });
+    }
+    if (!mediaRow) {
+      await new EntitlementService(this.store, current.capture.workspaceId).assertStorageCapacity(
+        validated.byteSize,
+      );
+      const object = await this.objects.get(storageFileId);
+      if (object) {
+        deduplicated = true;
+        if (object.contentType !== validated.contentType || (await sha256Bytes(object.bytes)) !== validated.sha256) {
+          throw new HttpError(500, "MEDIA_INTEGRITY_FAILURE", "A favicon object collision occurred.", { expose: false });
+        }
+      } else {
+        try {
+          await this.objects.put({
+            id: storageFileId,
+            bytes,
+            filename: "favicon.png",
+            contentType: validated.contentType,
+          });
+        } catch (error) {
+          const concurrent = await this.objects.get(storageFileId);
+          if (!concurrent || concurrent.contentType !== validated.contentType || (await sha256Bytes(concurrent.bytes)) !== validated.sha256) {
+            throw error;
+          }
+          deduplicated = true;
+        }
+      }
+      const timestamp = new Date().toISOString();
+      const media: FaviconMediaRecord = {
+        storageFileId,
+        filename: "favicon.png",
+        contentType: "image/png",
+        byteSize: validated.byteSize,
+        width: validated.width,
+        height: validated.height,
+        sha256: validated.sha256,
+        uploadedBy: credential.identity.userId,
+        createdAt: timestamp,
+        deletedAt: null,
+      };
+      try {
+        mediaRow = await this.store.create(
+          TABLES.privateMedia,
+          mediaId,
+          rowData({
+            organization_id: current.capture.organizationId,
+            workspace_id: current.capture.workspaceId,
+            subject_id: validated.sha256,
+            user_id: credential.identity.userId,
+            status: "ready",
+            kind: "favicon",
+            idempotency_key: idempotency,
+            created_by: credential.identity.userId,
+          }, media),
+        );
+      } catch (error) {
+        mediaRow = await this.store.get(TABLES.privateMedia, mediaId);
+        if (!matches(mediaRow)) throw error;
+      }
+    }
+
+    if (!current.capture.faviconMediaId) {
+      const timestamp = new Date().toISOString();
+      await this.store.update(
+        TABLES.captures,
+        captureId,
+        rowData(
+          { updated_by: credential.identity.userId },
+          { ...current.capture, faviconMediaId: mediaId, updatedAt: timestamp },
+        ),
+      );
+    }
+    return { captureId, mediaId, deduplicated };
   }
 
   private async captureMedia(capture: CaptureRecord) {
@@ -747,7 +877,12 @@ export class ExtensionCaptureService {
       }
       const mediaRow = mediaByStep.get(id);
       if (step.order !== index) throw new HttpError(400, "CAPTURE_STEPS_INVALID", "Capture step ordering is invalid.");
-      if (!mediaRow && sourceEvent !== "navigation") {
+      // A step may arrive without a screenshot in two cases: a navigation the
+      // capture recorded for the author, and an action whose screenshot could
+      // not be taken — the browser allows two a second, and losing the author's
+      // step over that is not a trade worth making. Anything else missing its
+      // media is still a broken upload, so the client has to say so.
+      if (!mediaRow && sourceEvent !== "navigation" && step.screenshotMissing !== true) {
         throw new HttpError(409, "CAPTURE_MEDIA_INCOMPLETE", "Every illustrated capture step needs one redacted screenshot.");
       }
       const click = step.clickTarget === undefined ? null : inputObject(step.clickTarget, "Click target");
@@ -847,7 +982,7 @@ export class ExtensionCaptureService {
       const guideRow = await transaction.get(TABLES.guides, current.capture.guideId);
       if (!guideRow) throw new HttpError(409, "CAPTURE_GUIDE_UNAVAILABLE", "The capture guide is unavailable.");
       const guide = decodePayload<GuideRecord>(guideRow, null as never);
-      await transaction.update(TABLES.guides, guideRow.$id, rowData({ status: "draft", updated_by: credential.identity.userId }, { ...guide, title: current.capture.title, updatedAt: timestamp }));
+      await transaction.update(TABLES.guides, guideRow.$id, rowData({ status: "draft", updated_by: credential.identity.userId }, { ...guide, title: current.capture.title, ...(current.capture.faviconMediaId ? { faviconMediaId: current.capture.faviconMediaId } : {}), updatedAt: timestamp }));
       await transaction.update(TABLES.captures, captureId, rowData({ status: "finished", updated_by: credential.identity.userId }, { ...current.capture, status: "finished", finishedAt: timestamp, updatedAt: timestamp }));
       await transaction.create(TABLES.usageEvents, resourceId("usage"), rowData({ organization_id: current.capture.organizationId, workspace_id: current.capture.workspaceId, user_id: credential.identity.userId, subject_id: current.capture.guideId, kind: "capture.completed", status: "recorded", occurred_at: timestamp, created_by: credential.identity.userId }, { stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount, source: this.source, privacyReviewPending: this.kind === "desktop" }));
       await appendAudit(transaction, credential.identity, current.capture.workspaceId, { action: "capture.finished", targetType: "guide", targetId: current.capture.guideId, targetLabel: current.capture.title, summary: `${current.capture.title} saved as a private redacted draft`, metadata: { revisionId: current.capture.revisionId, stepCount: normalizedSteps.length, automaticMaskCount, manualMaskCount, originalMediaRetained: false, source: this.source, privacyReviewPending: this.kind === "desktop" } });

@@ -331,6 +331,21 @@ export function createThumbnailUrlCache(
   };
 }
 
+/**
+ * The instruction line is a full sentence and the title is the same phrase
+ * without its full stop, so a plain inequality let every card print `Click
+ * "Support"` directly above `Click "Support".` Comparing without the trailing
+ * punctuation keeps the second line for instructions that actually say
+ * something the title does not.
+ */
+function saysTheSameThing(left, right) {
+  const bare = (value) =>
+    String(value || "")
+      .replace(/[.!?\s]+$/, "")
+      .toLowerCase();
+  return bare(left) === bare(right);
+}
+
 export function stepCopy(step) {
   if (step?.captureStatus === "capturing") {
     return {
@@ -352,7 +367,10 @@ export function stepCopy(step) {
     const instructions = String(step?.instructions || "").trim();
     return {
       title: title || (url ? "Navigate to " + url : "Navigate to the next page"),
-      detail: instructions && instructions !== title ? instructions : "",
+      detail:
+        instructions && !saysTheSameThing(instructions, title)
+          ? instructions
+          : "",
     };
   }
 
@@ -360,7 +378,10 @@ export function stepCopy(step) {
   const instructions = String(step?.instructions || "").trim();
   return {
     title,
-    detail: instructions && instructions !== title ? instructions : "",
+    detail:
+        instructions && !saysTheSameThing(instructions, title)
+          ? instructions
+          : "",
   };
 }
 
@@ -376,7 +397,14 @@ export function captureFeedSteps(state, storedSteps = []) {
   const feed = entries.map((entry) => {
     const stored = storedById.get(entry.stepId);
     if (entry.status === "ready" && stored) {
-      return { ...stored, entryId: entry.id, captureStatus: "ready" };
+      return {
+        ...stored,
+        entryId: entry.id,
+        captureStatus: "ready",
+        ...(entry.showsResultOfAction === true
+          ? { showsResultOfAction: true }
+          : {}),
+      };
     }
     return {
       id: entry.stepId || `entry:${entry.id}`,
@@ -389,6 +417,13 @@ export function captureFeedSteps(state, storedSteps = []) {
       instructions: entry.context?.instructions || "",
       sanitizedUrl: entry.context?.sanitizedUrl || "",
       error: entry.error || "",
+      ...(Array.isArray(entry.context?.keys) && entry.context.keys.length
+        ? { keys: entry.context.keys }
+        : {}),
+      ...(entry.screenshotMissing === true ? { screenshotMissing: true } : {}),
+      ...(entry.showsResultOfAction === true
+        ? { showsResultOfAction: true }
+        : {}),
     };
   });
   for (const step of storedSteps) {

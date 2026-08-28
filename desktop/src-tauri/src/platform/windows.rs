@@ -5,11 +5,7 @@ use std::{
     io::Cursor,
     mem::size_of,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Sender, SyncSender},
-    },
+    sync::{Arc, mpsc::{self, Sender}},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -56,17 +52,14 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
-                IUIAutomationTextPattern, IUIAutomationValuePattern, TreeScope_Element,
-                UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
-                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
-                UIA_DataGridControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-                UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_IsOffscreenPropertyId,
-                UIA_IsPasswordPropertyId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-                UIA_MenuItemControlTypeId, UIA_NamePropertyId, UIA_PaneControlTypeId,
-                UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId,
-                UIA_TextControlTypeId, UIA_TextPatternId, UIA_TreeItemControlTypeId,
-                UIA_ValuePatternId,
+                CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+                IUIAutomationValuePattern, UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId,
+                UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DocumentControlTypeId,
+                UIA_EditControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+                UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuItemControlTypeId,
+                UIA_PaneControlTypeId, UIA_RadioButtonControlTypeId, UIA_TabItemControlTypeId,
+                UIA_TableControlTypeId, UIA_TextControlTypeId, UIA_TextPatternId,
+                UIA_TreeItemControlTypeId, UIA_ValuePatternId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::{
@@ -83,7 +76,7 @@ use windows::{
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-                GA_ROOTOWNER, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetCursorPos,
+                GW_OWNER, GWL_EXSTYLE, GetCursorPos,
                 GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
                 GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HWND_MESSAGE, IDNO,
                 IDYES, IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION, MB_YESNOCANCEL, MSG,
@@ -109,9 +102,8 @@ use windows_capture::{
 };
 
 use super::{
-    ElementMetadata, ExcludedRegion, ForegroundContext, MonitorDescriptor, PasswordStatus,
-    PointerButton, PrivacyRegion, QuitChoice, RawEvent, RawInputEvent, RawInputRegistration,
-    UiAutomationClient,
+    ElementMetadata, ForegroundContext, MonitorDescriptor, PasswordStatus, PointerButton,
+    QuitChoice, RawEvent, RawInputEvent, RawInputRegistration, UiAutomationClient,
 };
 use crate::model::{Bounds, CaptureTarget, CaptureTargetPreview, DesktopScope, ScopeKind};
 
@@ -140,7 +132,6 @@ const PREVIEW_TIMEOUT: Duration = Duration::from_millis(400);
 #[derive(Clone, Debug)]
 struct WindowRecord {
     id: String,
-    root_owner_id: String,
     process_id: u32,
     application_name: String,
     title: String,
@@ -230,41 +221,34 @@ pub fn capture_targets() -> Result<Vec<CaptureTarget>> {
     capture_targets_from(enumerate_windows()?, monitor_descriptors()?)
 }
 
+/// One entry per recordable application, plus one per display.
+///
+/// A source the recorder cannot photograph or read is left out of the list
+/// entirely rather than shown as a tile that refuses to be selected: the
+/// author's own windows, password managers and other protected surfaces, and
+/// anything running elevated.
 fn capture_targets_from(
     windows: Vec<WindowRecord>,
     monitors: Vec<MonitorDescriptor>,
 ) -> Result<Vec<CaptureTarget>> {
     let mut seen_processes = HashSet::new();
-    let mut applications = Vec::new();
-    for window in &windows {
+    let mut targets = Vec::new();
+    for window in windows {
         if window.process_id == std::process::id() || window.protected || window.elevated {
             continue;
         }
-        if seen_processes.insert(window.process_id) {
-            applications.push(window);
+        if !seen_processes.insert(window.process_id) {
+            continue;
         }
-    }
-    let mut targets = applications
-        .into_iter()
-        .map(|window| CaptureTarget {
+        targets.push(CaptureTarget {
             id: format!("process:{}", window.process_id),
             kind: ScopeKind::Application,
-            label: window.application_name.clone(),
-            detail: window.title.clone(),
+            label: window.application_name,
+            detail: window.title,
             process_id: Some(window.process_id),
             bounds: Some(window.bounds),
-            protected: false,
-        })
-        .collect::<Vec<_>>();
-    targets.extend(windows.into_iter().map(|window| CaptureTarget {
-        id: window.id,
-        kind: ScopeKind::Window,
-        label: window.title,
-        detail: window.application_name,
-        process_id: Some(window.process_id),
-        bounds: Some(window.bounds),
-        protected: window.protected || window.elevated || window.process_id == std::process::id(),
-    }));
+        });
+    }
     targets.extend(monitors.into_iter().map(|monitor| CaptureTarget {
         id: monitor.id,
         kind: ScopeKind::Monitor,
@@ -272,7 +256,6 @@ fn capture_targets_from(
         detail: format!("{} × {}", monitor.bounds.width, monitor.bounds.height),
         process_id: None,
         bounds: Some(monitor.bounds),
-        protected: false,
     }));
     Ok(targets)
 }
@@ -292,10 +275,7 @@ pub fn capture_target_previews(target_ids: &[String]) -> Result<Vec<CaptureTarge
     let targets = capture_targets_from(windows.clone(), monitors.clone())?;
     let mut jobs = Vec::new();
     for target_id in target_ids {
-        let Some(target) = targets
-            .iter()
-            .find(|target| target.id == *target_id && !target.protected)
-        else {
+        let Some(target) = targets.iter().find(|target| target.id == *target_id) else {
             continue;
         };
         let source = match target.kind {
@@ -308,14 +288,10 @@ pub fn capture_target_previews(target_ids: &[String]) -> Result<Vec<CaptureTarge
                     .and_then(|window| hwnd_from_id(&window.id))
                     .map(|hwnd| PreviewSource::Window(hwnd.0 as usize))
             }),
-            ScopeKind::Window => {
-                hwnd_from_id(&target.id).map(|hwnd| PreviewSource::Window(hwnd.0 as usize))
-            }
             ScopeKind::Monitor => monitors
                 .iter()
                 .find(|monitor| monitor.id == target.id)
                 .map(|monitor| PreviewSource::Monitor(monitor.bounds)),
-            ScopeKind::AllDisplays => None,
         };
         if let Some(source) = source {
             jobs.push((target.id.clone(), source));
@@ -528,16 +504,6 @@ pub fn new_scope(kind: ScopeKind, target: Option<&CaptureTarget>) -> Result<Desk
                 excluded_window_ids,
             })
         }
-        ScopeKind::Window => {
-            let target = valid_target(target, ScopeKind::Window)?;
-            Ok(DesktopScope::Window {
-                window_id: target.id.clone(),
-                application_name: target.detail.clone(),
-                window_title: Some(target.label.clone()),
-                include_owned_dialogs: true,
-                excluded_window_ids,
-            })
-        }
         ScopeKind::Monitor => {
             let target = valid_target(target, ScopeKind::Monitor)?;
             Ok(DesktopScope::Monitor {
@@ -549,20 +515,13 @@ pub fn new_scope(kind: ScopeKind, target: Option<&CaptureTarget>) -> Result<Desk
                 excluded_window_ids,
             })
         }
-        ScopeKind::AllDisplays => Ok(DesktopScope::AllDisplays {
-            monitor_ids: monitor_descriptors()?
-                .into_iter()
-                .map(|monitor| monitor.id)
-                .collect(),
-            excluded_window_ids,
-        }),
     }
 }
 
 fn valid_target(target: Option<&CaptureTarget>, kind: ScopeKind) -> Result<&CaptureTarget> {
     let target = target.ok_or_else(|| anyhow!("Choose a capture target."))?;
-    if target.kind != kind || target.protected {
-        bail!("The selected capture target is protected or no longer available.");
+    if target.kind != kind {
+        bail!("The selected capture target is no longer available.");
     }
     Ok(target)
 }
@@ -624,7 +583,6 @@ pub fn foreground_context() -> Result<ForegroundContext> {
         window_title: record.title,
         bounds: record.bounds,
         window_id: record.id,
-        root_owner_id: record.root_owner_id,
         process_id: record.process_id,
         monitor_id: monitor_id(monitor),
         protected: record.protected || record.process_id == std::process::id(),
@@ -632,25 +590,47 @@ pub fn foreground_context() -> Result<ForegroundContext> {
     })
 }
 
-pub fn excluded_regions() -> Result<Vec<ExcludedRegion>> {
-    Ok(enumerate_windows()?
-        .into_iter()
-        .filter_map(|window| {
-            let reason = if window.process_id == std::process::id() {
-                Some("knowhow-window")
-            } else if window.protected {
-                Some("protected-window")
-            } else if window.elevated {
-                Some("elevated-window")
-            } else {
-                None
-            }?;
-            Some(ExcludedRegion {
-                bounds: window.bounds,
-                reason,
-            })
-        })
-        .collect())
+/// Where the recorder's own windows are right now.
+///
+/// The floating recorder sits on top of the work being captured, so the
+/// display mirror photographs it along with everything else. These bounds are
+/// painted out of every screenshot, which is what keeps KnowHow from appearing
+/// in its own guides. This walks visible top-level windows without opening any
+/// process — it runs once per captured step.
+pub fn recorder_window_bounds() -> Vec<Bounds> {
+    unsafe extern "system" fn callback(hwnd: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: data is a valid Vec pointer during synchronous EnumWindows.
+        let bounds = unsafe { &mut *(data.0 as *mut Vec<Bounds>) };
+        // SAFETY: hwnd is supplied by EnumWindows and remains valid here.
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return BOOL(1);
+        }
+        let mut process_id = 0_u32;
+        // SAFETY: HWND comes from Windows and output points to initialized storage.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut process_id)) };
+        if process_id != std::process::id() {
+            return BOOL(1);
+        }
+        let mut rect = RECT::default();
+        // SAFETY: HWND comes from Windows and rect is writable.
+        if unsafe { GetWindowRect(hwnd, &raw mut rect) }.is_ok() {
+            let window = rect_bounds(rect);
+            if window.width > 0 && window.height > 0 {
+                bounds.push(window);
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut bounds = Vec::new();
+    // SAFETY: callback uses the Vec pointer only during this synchronous call.
+    let _ = unsafe {
+        EnumWindows(
+            Some(callback),
+            LPARAM((&raw mut bounds).cast::<c_void>() as isize),
+        )
+    };
+    bounds
 }
 
 fn enumerate_windows() -> Result<Vec<WindowRecord>> {
@@ -733,20 +713,45 @@ fn window_record(hwnd: HWND) -> Result<WindowRecord> {
     let mut rect = RECT::default();
     // SAFETY: HWND comes from Windows and rect is writable.
     unsafe { GetWindowRect(hwnd, &raw mut rect) }.context("read window bounds")?;
-    // SAFETY: HWND is valid; returned root owner is borrowed.
-    let root_owner = unsafe { GetAncestor(hwnd, GA_ROOTOWNER) };
     let protected = is_known_protected(&application_name, &title);
     Ok(WindowRecord {
         id: window_id(hwnd),
-        root_owner_id: window_id(root_owner),
         process_id,
         application_name,
         title,
         bounds: rect_bounds(rect),
         protected,
-        elevated: process_id != std::process::id()
-            && process_is_elevated(process_id).unwrap_or(true),
+        elevated: process_id != std::process::id() && process_is_elevated_cached(process_id),
     })
+}
+
+/// A process cannot change its own elevation, so asking Windows again for every
+/// window of every application on every picker refresh only costs an
+/// `OpenProcess` and a token query apiece. The answer is remembered briefly
+/// instead — long enough to cover a picker session, short enough that a reused
+/// process identifier corrects itself.
+fn process_is_elevated_cached(process_id: u32) -> bool {
+    const ELEVATION_CACHE_MAX_AGE: Duration = Duration::from_secs(60);
+    static ELEVATION: Mutex<Option<(Instant, HashMap<u32, bool>)>> = Mutex::new(None);
+
+    let mut cache = ELEVATION.lock();
+    let stale = cache
+        .as_ref()
+        .is_none_or(|(filled_at, _)| filled_at.elapsed() >= ELEVATION_CACHE_MAX_AGE);
+    if stale {
+        *cache = Some((Instant::now(), HashMap::new()));
+    }
+    let Some((_, entries)) = cache.as_mut() else {
+        return process_is_elevated(process_id).unwrap_or(true);
+    };
+    if let Some(elevated) = entries.get(&process_id) {
+        return *elevated;
+    }
+    // Fail closed: a process KnowHow cannot inspect is treated as elevated and
+    // left out of the picker rather than captured blind.
+    let elevated = process_is_elevated(process_id).unwrap_or(true);
+    entries.insert(process_id, elevated);
+    elevated
 }
 
 fn window_text(hwnd: HWND) -> String {
@@ -931,16 +936,6 @@ fn utf16_z(buffer: &[u16]) -> String {
 pub struct WindowsUia {
     automation: IUIAutomation,
     initialized: bool,
-    privacy_requests: SyncSender<String>,
-    privacy_cache: Arc<Mutex<HashMap<String, PrivacyCacheEntry>>>,
-    privacy_stop: Arc<AtomicBool>,
-    privacy_join: Option<JoinHandle<()>>,
-}
-
-#[derive(Clone)]
-struct PrivacyCacheEntry {
-    regions: Vec<PrivacyRegion>,
-    captured_at: Instant,
 }
 
 impl WindowsUia {
@@ -952,22 +947,9 @@ impl WindowsUia {
         // SAFETY: CUIAutomation is an in-process COM class and IUIAutomation is its interface.
         let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
             .context("create Windows UI Automation client")?;
-        let (privacy_requests, privacy_receiver) = mpsc::sync_channel::<String>(8);
-        let privacy_cache = Arc::new(Mutex::new(HashMap::new()));
-        let privacy_stop = Arc::new(AtomicBool::new(false));
-        let worker_cache = Arc::clone(&privacy_cache);
-        let worker_stop = Arc::clone(&privacy_stop);
-        let privacy_join = thread::Builder::new()
-            .name("knowhow-uia-privacy".to_owned())
-            .spawn(move || privacy_worker(privacy_receiver, worker_cache, worker_stop))
-            .context("start UI Automation privacy worker")?;
         Ok(Self {
             automation,
             initialized: true,
-            privacy_requests,
-            privacy_cache,
-            privacy_stop,
-            privacy_join: Some(privacy_join),
         })
     }
 
@@ -1109,232 +1091,15 @@ impl UiAutomationClient for WindowsUia {
             .context("look up focused UI Automation element")?;
         self.metadata(&element, false)
     }
-
-    fn privacy_regions(&self, window_id: &str) -> Result<Vec<PrivacyRegion>> {
-        const CACHE_MAX_AGE: Duration = Duration::from_secs(2);
-        const FIRST_SNAPSHOT_BUDGET: Duration = Duration::from_millis(120);
-
-        let cached = || {
-            self.privacy_cache
-                .lock()
-                .get(window_id)
-                .filter(|entry| entry.captured_at.elapsed() <= CACHE_MAX_AGE)
-                .map(|entry| entry.regions.clone())
-        };
-        if let Some(regions) = cached() {
-            let _ = self.privacy_requests.try_send(window_id.to_owned());
-            return Ok(regions);
-        }
-        let _ = self.privacy_requests.try_send(window_id.to_owned());
-        let deadline = Instant::now() + FIRST_SNAPSHOT_BUDGET;
-        while Instant::now() < deadline {
-            if let Some(regions) = cached() {
-                return Ok(regions);
-            }
-            thread::sleep(Duration::from_millis(8));
-        }
-        bail!("UI Automation privacy snapshot is still preparing")
-    }
 }
 
 impl Drop for WindowsUia {
     fn drop(&mut self) {
-        self.privacy_stop.store(true, Ordering::Release);
-        if let Some(join) = self.privacy_join.take()
-            && join.is_finished()
-        {
-            let _ = join.join();
-        }
         if self.initialized {
             // SAFETY: balances CoInitializeEx on the same worker thread.
             unsafe { CoUninitialize() };
         }
     }
-}
-
-fn privacy_worker(
-    requests: mpsc::Receiver<String>,
-    cache: Arc<Mutex<HashMap<String, PrivacyCacheEntry>>>,
-    stop: Arc<AtomicBool>,
-) {
-    // SAFETY: the automation client and every provider object remain on this worker thread.
-    if unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_err() {
-        return;
-    }
-    let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) };
-    let Ok(automation) = automation else {
-        // SAFETY: balances the successful initialization above.
-        unsafe { CoUninitialize() };
-        return;
-    };
-    // Keeping the foreground window's regions warm is what lets a click be
-    // masked without stalling on a tree walk. Doing it unconditionally, forever,
-    // is what made every application the author was recording feel sluggish: a
-    // UI Automation walk forces accessibility providers awake in the target
-    // process, and browsers in particular slow down dramatically while one is
-    // running. So the worker only self-drives while the author is actually
-    // producing actions, and goes quiet the moment they stop.
-    const SELF_DRIVE_WINDOW: Duration = Duration::from_secs(6);
-    const SELF_DRIVE_REFRESH: Duration = Duration::from_millis(1_100);
-    let mut last_request = Instant::now();
-    while !stop.load(Ordering::Acquire) {
-        let active = last_request.elapsed() < SELF_DRIVE_WINDOW;
-        let idle_wait = if active {
-            Duration::from_millis(200)
-        } else {
-            Duration::from_millis(500)
-        };
-        let requested = match requests.recv_timeout(idle_wait) {
-            Ok(window_id) => {
-                last_request = Instant::now();
-                Some(window_id)
-            }
-            // Between requests the worker only tops up the window the author is
-            // working in, and only once it is close to going stale.
-            Err(_) if active => foreground_context().ok().map(|context| context.window_id),
-            Err(_) => None,
-        };
-        let Some(window_id) = requested else {
-            continue;
-        };
-        if cache
-            .lock()
-            .get(&window_id)
-            .is_some_and(|entry| entry.captured_at.elapsed() < SELF_DRIVE_REFRESH)
-        {
-            continue;
-        }
-        if let Ok(regions) = collect_privacy_regions(&automation, &window_id) {
-            let mut cache = cache.lock();
-            cache.insert(
-                window_id,
-                PrivacyCacheEntry {
-                    regions,
-                    captured_at: Instant::now(),
-                },
-            );
-            cache.retain(|_, entry| entry.captured_at.elapsed() < Duration::from_secs(10));
-        }
-    }
-    // SAFETY: balances initialization on this worker thread.
-    unsafe { CoUninitialize() };
-}
-
-/// Builds the cache request that lets one cross-process call return every
-/// property the privacy pass needs for a whole level of the tree.
-fn privacy_cache_request(automation: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
-    // SAFETY: the request is used only on this COM worker thread.
-    let request = unsafe { automation.CreateCacheRequest() }
-        .context("create UI Automation privacy cache request")?;
-    // SAFETY: every call below configures the request created above.
-    unsafe {
-        request.SetTreeScope(TreeScope_Element)?;
-        request.AddProperty(UIA_BoundingRectanglePropertyId)?;
-        request.AddProperty(UIA_IsOffscreenPropertyId)?;
-        request.AddProperty(UIA_IsPasswordPropertyId)?;
-        request.AddProperty(UIA_ControlTypePropertyId)?;
-        request.AddProperty(UIA_NamePropertyId)?;
-        request.AddPattern(UIA_ValuePatternId)?;
-    }
-    Ok(request)
-}
-
-/// Reads one element's privacy-relevant properties out of the cache the caller
-/// already fetched. Every read here is local: no cross-process call is made.
-fn cached_privacy_region(element: &IUIAutomationElement) -> Option<PrivacyRegion> {
-    // SAFETY: the element was returned by a cached query, so these accessors read
-    // the local cache rather than calling back into the provider.
-    let offscreen = unsafe { element.CachedIsOffscreen() }
-        .map(|value| value.as_bool())
-        .unwrap_or(false);
-    if offscreen {
-        return None;
-    }
-    let bounds = unsafe { element.CachedBoundingRectangle() }
-        .ok()
-        .map(rect_bounds)
-        .filter(|bounds| bounds.width > 0 && bounds.height > 0)?;
-    let password_status = match unsafe { element.CachedIsPassword() } {
-        Ok(value) if value.as_bool() => PasswordStatus::Password,
-        Ok(_) => PasswordStatus::NotPassword,
-        Err(_) => PasswordStatus::Unknown,
-    };
-    let control_role = unsafe { element.CachedControlType() }
-        .ok()
-        .map(control_role);
-    let text = if password_status == PasswordStatus::NotPassword {
-        unsafe {
-            element
-                .GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                .and_then(|pattern| pattern.CachedValue())
-        }
-        .ok()
-        .map(|value| value.to_string())
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            unsafe { element.CachedName() }
-                .ok()
-                .map(|name| name.to_string())
-                .filter(|name| !name.trim().is_empty())
-        })
-    } else {
-        None
-    };
-    Some(PrivacyRegion {
-        bounds,
-        control_role,
-        text,
-        password_status,
-    })
-}
-
-fn collect_privacy_regions(
-    automation: &IUIAutomation,
-    window_id: &str,
-) -> Result<Vec<PrivacyRegion>> {
-    const MAX_ELEMENTS: usize = 240;
-    let hwnd =
-        hwnd_from_id(window_id).ok_or_else(|| anyhow!("UI Automation window is unavailable"))?;
-    let request = privacy_cache_request(automation)?;
-    // SAFETY: HWND was resolved from a current window and COM is confined to this worker.
-    let root = unsafe { automation.ElementFromHandle(hwnd) }
-        .context("look up UI Automation privacy root")?;
-    // SAFETY: the root and the cache request live on this COM apartment.
-    let root =
-        unsafe { root.BuildUpdatedCache(&request) }.context("read UI Automation privacy root")?;
-    let walker =
-        unsafe { automation.ControlViewWalker() }.context("create UI Automation privacy walker")?;
-    let mut pending = vec![root];
-    let mut regions = Vec::new();
-    let mut visited = 0_usize;
-    while let Some(element) = pending.pop() {
-        if visited >= MAX_ELEMENTS {
-            break;
-        }
-        visited += 1;
-        if let Some(region) = cached_privacy_region(&element) {
-            regions.push(region);
-        }
-        // Navigation and property reads share one cross-process round trip per
-        // element. Reading each property separately — the obvious way — costs a
-        // round trip apiece, which is what made a privacy pass slow enough to
-        // drag down the application being recorded. The traversal itself is
-        // unchanged: the same control view, in the same order, to the same
-        // bound, so exactly the same regions are covered.
-        //
-        // SAFETY: walker and elements remain on this COM apartment. Provider
-        // failures prune only the unavailable branch instead of blocking the
-        // action processor.
-        let mut child = unsafe { walker.GetFirstChildElementBuildCache(&element, &request) }.ok();
-        while let Some(element) = child {
-            child = unsafe { walker.GetNextSiblingElementBuildCache(&element, &request) }.ok();
-            pending.push(element);
-            if pending.len() + visited >= MAX_ELEMENTS {
-                break;
-            }
-        }
-    }
-    Ok(regions)
 }
 
 fn control_role(control_type: windows::Win32::UI::Accessibility::UIA_CONTROLTYPE_ID) -> String {

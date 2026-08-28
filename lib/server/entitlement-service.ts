@@ -2,6 +2,7 @@ import { TABLES } from "./appwrite-resources";
 import {
   effectiveCommercialPlan,
   entitlementsForPlan,
+  WORKSPACES_PER_PLAN,
   type PlanEntitlements,
 } from "./commercial-plan";
 import {
@@ -24,7 +25,7 @@ export class EntitlementDeniedError extends HttpError {
     message: string,
     entitlementKind: string,
   ) {
-    super(status, code, message);
+    super(status, code, message, { entitlement: entitlementKind });
     this.name = "EntitlementDeniedError";
     this.entitlementKind = entitlementKind;
   }
@@ -71,13 +72,13 @@ export type EntitlementOverridePayload = {
 const DEFAULTS: Record<string, EntitlementValue> = {
   maximumUsers: 3,
   maximumCreators: 1,
+  maximumGuides: 15,
   storageBytes: 1_000_000_000,
   extensionEnabled: false,
   desktopCaptureEnabled: false,
   supportEnabled: false,
   removeBranding: false,
   privacyToolsEnabled: false,
-  customSubdomainEnabled: false,
   publicSignup: false,
   payments: false,
   ssoScim: false,
@@ -87,17 +88,84 @@ const DEFAULTS: Record<string, EntitlementValue> = {
 export const OVERRIDABLE_ENTITLEMENTS = [
   "maximumUsers",
   "maximumCreators",
+  "maximumGuides",
   "storageBytes",
   "extensionEnabled",
   "desktopCaptureEnabled",
   "supportEnabled",
   "removeBranding",
   "privacyToolsEnabled",
-  "customSubdomainEnabled",
   "fileExportsEnabled",
 ] as const;
 
 export type OverridableEntitlement = (typeof OVERRIDABLE_ENTITLEMENTS)[number];
+
+/**
+ * How many workspaces an organization may hold. Organization-scoped rather than
+ * workspace-scoped, so it lives on its own row (`workspace_id` null) instead of
+ * in the per-workspace snapshot.
+ */
+export const ORGANIZATION_ENTITLEMENTS = ["maximumWorkspaces"] as const;
+
+const ORGANIZATION_DEFAULTS: Record<string, EntitlementValue> = {
+  maximumWorkspaces: 1,
+};
+
+export async function organizationEntitlement(
+  store: RecordStore,
+  organizationId: string,
+  kind: (typeof ORGANIZATION_ENTITLEMENTS)[number],
+  fallback?: number,
+): Promise<number> {
+  const rows = await store.list(TABLES.entitlements, {
+    filters: [
+      { field: "organization_id", value: organizationId },
+      { field: "kind", value: kind },
+    ],
+    limit: 10,
+  });
+  const now = Date.now();
+  for (const row of rows) {
+    // Only the organization-scoped row counts; per-workspace rows share the
+    // organization id but describe a single workspace.
+    if (row.status !== "active" || row.workspace_id) continue;
+    const payload = decodePayload<EntitlementOverridePayload>(row, {
+      value: false,
+    });
+    if (payload.value === undefined || isExpiredOverride(payload, now)) continue;
+    if (typeof payload.value === "number") return payload.value;
+  }
+  return fallback ?? (ORGANIZATION_DEFAULTS[kind] as number);
+}
+
+/**
+ * How many workspaces the organization may hold: an explicit entitlement row
+ * when one exists, otherwise derived from its best-funded workspace. Buying Pro
+ * for one workspace is what unlocks adding more.
+ */
+export async function organizationWorkspaceLimit(
+  store: RecordStore,
+  organizationId: string,
+) {
+  const rows = await store.list(TABLES.subscriptions, {
+    filters: [{ field: "organization_id", value: organizationId }],
+    limit: 200,
+  });
+  let allowed = WORKSPACES_PER_PLAN.free;
+  for (const row of rows) {
+    if (row.status === "cancelled") continue;
+    const subscription = decodePayload<SubscriptionRecord>(row, null as never);
+    if (!subscription) continue;
+    const plan = effectiveCommercialPlan(subscription);
+    allowed = Math.max(allowed, WORKSPACES_PER_PLAN[plan]);
+  }
+  return organizationEntitlement(
+    store,
+    organizationId,
+    "maximumWorkspaces",
+    allowed,
+  );
+}
 
 function isExpiredOverride(payload: EntitlementOverridePayload, now: number) {
   if (payload.source !== "override") return false;
@@ -205,7 +273,6 @@ export class EntitlementService {
       | "supportEnabled"
       | "removeBranding"
       | "privacyToolsEnabled"
-      | "customSubdomainEnabled"
       | "fileExportsEnabled",
   ) {
     if (!(await this.value<boolean>(kind, false))) {
@@ -252,6 +319,35 @@ export class EntitlementService {
         "The workspace has reached its active-creator entitlement.",
       );
     }
+  }
+
+  /**
+   * Live guides — archived and deleted ones are excluded, so archiving frees a
+   * slot the same way deleting one does.
+   */
+  async guideUsage() {
+    const maximum = await this.value<number>("maximumGuides", 15);
+    const rows = await this.store.list(TABLES.guides, {
+      filters: [{ field: "workspace_id", value: this.workspaceId }],
+      limit: 10_001,
+    });
+    const used = rows.filter(
+      (row) => row.status !== "deleted" && row.status !== "archived",
+    ).length;
+    return { used, maximum };
+  }
+
+  async assertGuideCapacity(additional = 1) {
+    const { used, maximum } = await this.guideUsage();
+    if (used + additional > maximum) {
+      await this.deny(
+        "maximumGuides",
+        409,
+        "GUIDE_ENTITLEMENT_EXCEEDED",
+        `This workspace has reached its limit of ${maximum} guides.`,
+      );
+    }
+    return { used, maximum };
   }
 
   async assertStorageCapacity(additionalBytes: number, replacingMediaId?: string) {

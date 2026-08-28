@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ProBadge } from "./pro-badge";
 
 type ExtensionState =
   | "checking"
@@ -34,6 +35,15 @@ type CaptureStatus = {
   label: string;
   tone: "ready" | "setup" | "pro" | "muted";
 };
+
+function CaptureStatusChip({ status }: { status: CaptureStatus }) {
+  if (status.tone === "pro") return <ProBadge size="sm" />;
+  return (
+    <span className="guide-create-status" data-tone={status.tone}>
+      {status.label}
+    </span>
+  );
+}
 
 export function GuideCreateMenu({
   appearance = "topbar",
@@ -156,12 +166,7 @@ export function GuideCreateMenu({
               <strong>Browser extension</strong>
               <small>Capture clicks and pages in Chrome or Edge.</small>
             </span>
-            <span
-              className="guide-create-status"
-              data-tone={browserStatus.tone}
-            >
-              {browserStatus.label}
-            </span>
+            <CaptureStatusChip status={browserStatus} />
           </DropdownMenuItem>
           <DropdownMenuItem
             className="guide-create-option"
@@ -177,12 +182,7 @@ export function GuideCreateMenu({
               <strong>Desktop app</strong>
               <small>Capture steps across Windows apps.</small>
             </span>
-            <span
-              className="guide-create-status"
-              data-tone={desktopStatus.tone}
-            >
-              {desktopStatus.label}
-            </span>
+            <CaptureStatusChip status={desktopStatus} />
           </DropdownMenuItem>
         </DropdownMenuGroup>
 

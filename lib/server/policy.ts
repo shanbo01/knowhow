@@ -22,6 +22,7 @@ export type PolicyAction =
   | "guide.submit"
   | "guide.review"
   | "guide.publish"
+  | "guide.unpublish"
   | "guide.archive"
   | "guide.export"
   | "capture.create"
@@ -276,6 +277,23 @@ export function authorize(
       : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
   }
 
+  // Taking a guide down for editing is the mirror of putting it up, so it is
+  // granted to exactly whoever could have published it in the first place:
+  // publishers always, and an author who is allowed to share their own work
+  // directly when the workspace does not require review.
+  if (action === "guide.unpublish") {
+    const guide = context.guide;
+    if (roles.has("publisher")) {
+      return allow("Publishers may return a guide to draft.");
+    }
+    const isAuthorCreator =
+      guide?.isAuthor === true && hasAnyRole(roles, "creator", "administrator");
+    if (isAuthorCreator && guide?.requireReviewBeforePublish !== true) {
+      return allow("The author may return their own directly-shared guide to draft.");
+    }
+    return deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+  }
+
   if (action === "guide.archive") {
     return roles.has("publisher")
       ? allow("Publishers may archive guide revisions.")
@@ -285,7 +303,9 @@ export function authorize(
   if (action === "guide.export") {
     const guide = context.guide;
     const canRead = authorize("guide.read", context).allowed;
-    return canRead && guide?.exportAllowed === true
+    const isWorkingRevision =
+      guide?.revisionStatus === "draft" || guide?.revisionStatus === "review";
+    return canRead && (isWorkingRevision || guide?.exportAllowed === true)
       ? allow("The actor may read the guide and its export policy permits export.")
       : deny("EXPORT_NOT_ALLOWED", "This guide cannot be exported by the actor.");
   }

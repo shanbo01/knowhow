@@ -129,6 +129,7 @@ export type GuideRevisionView = {
 export type Guide = {
   id: string;
   workspaceId: string;
+  faviconMediaId?: string;
   title: string;
   status: RevisionStatus;
   restricted: boolean;
@@ -137,6 +138,9 @@ export type Guide = {
   canPublish: boolean;
   canShare: boolean;
   canArchive: boolean;
+  canUnpublish: boolean;
+  canDuplicate: boolean;
+  canRestore: boolean;
   canDelete: boolean;
   createdAt: string;
   updatedAt: string;
@@ -690,6 +694,8 @@ export type AuditEvent = {
 export type WorkspaceMetrics = {
   members: number;
   groups: number;
+  /** Live guides — archived and deleted ones are excluded. */
+  guides: number;
   drafts: number;
   reviews: number;
   published: number;
@@ -868,13 +874,13 @@ export type Viewer = {
 export type WorkspaceEntitlements = {
   maximumUsers: number;
   maximumCreators: number;
+  maximumGuides: number;
   storageBytes: number;
   extensionEnabled: boolean;
   desktopCaptureEnabled: boolean;
   supportEnabled: boolean;
   removeBranding: boolean;
   privacyToolsEnabled: boolean;
-  customSubdomainEnabled: boolean;
   fileExportsEnabled: boolean;
 };
 

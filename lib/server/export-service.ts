@@ -144,15 +144,15 @@ export async function buildPublishedExport(
   },
 ) {
   const { workspaceId, guideRow, guide, revisionRow, revision } = input;
+  const isPublishedRevision = revision.status === "published";
   if (
-    guide.publishedRevisionId !== revisionRow.$id ||
-    revision.status !== "published" ||
-    !revision.publishedAt ||
-    !revision.publishedBy
+    (isPublishedRevision && guide.publishedRevisionId !== revisionRow.$id) ||
+    (isPublishedRevision && (!revision.publishedAt || !revision.publishedBy))
   ) {
-    throw new HttpError(404, "PUBLISHED_GUIDE_NOT_FOUND", "The published guide is unavailable.");
+    throw new HttpError(404, "GUIDE_REVISION_NOT_FOUND", "The guide revision is unavailable.");
   }
   if (
+    isPublishedRevision &&
     isCapturedGuideSource(revision.source) &&
     (!revision.privacyReviewedAt || !revision.privacyReviewedBy)
   ) {
@@ -179,13 +179,16 @@ export async function buildPublishedExport(
     ? { ...DEFAULT_WORKSPACE_SETTINGS, ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}) }
     : DEFAULT_WORKSPACE_SETTINGS;
   const review = reviewRows.find((row) => row.status === "approved");
-  if (!review && settings.requireReviewBeforePublish) {
+  if (isPublishedRevision && !review && settings.requireReviewBeforePublish) {
     throw new HttpError(409, "REVIEW_APPROVAL_REQUIRED", "The published revision has no approved review receipt.");
   }
-  const submittedAt = revision.submittedAt ?? revision.publishedAt;
-  const submittedBy = revision.submittedBy ?? revision.publishedBy;
-  const reviewedAt = revision.reviewedAt ?? revision.publishedAt;
-  const reviewedBy = revision.reviewedBy ?? revision.publishedBy;
+  const exportedAt = new Date().toISOString();
+  const submittedAt = revision.submittedAt ?? revision.publishedAt ?? exportedAt;
+  const submittedBy = revision.submittedBy ?? revision.publishedBy ?? revision.authorId;
+  const reviewedAt = revision.reviewedAt ?? revision.publishedAt ?? exportedAt;
+  const reviewedBy = revision.reviewedBy ?? revision.publishedBy ?? revision.authorId;
+  const publishedAt = revision.publishedAt ?? exportedAt;
+  const publishedBy = revision.publishedBy ?? revision.authorId;
   const media = new Map(
     mediaRows.map((row) => [row.$id, decodePayload<PrivateMediaRecord>(row, null as never)]),
   );
@@ -213,7 +216,7 @@ export async function buildPublishedExport(
         })),
       };
   const actor = (userId: string) => ({ userId, displayName: names.get(userId) ?? "Former member" });
-  const restricted = audience.mode === "restricted";
+  const restricted = isPublishedRevision && audience.mode === "restricted";
   const candidate: PublishedGuideRevision = {
     schemaVersion: 1,
     guideId: guideRow.$id,
@@ -226,15 +229,15 @@ export async function buildPublishedExport(
     createdAt: revision.createdAt,
     createdBy: actor(revision.authorId),
     blocks: blocks(stepRows, media, settings),
-    audience,
+    audience: isPublishedRevision ? audience : { mode: "workspace", workspaceId },
     privacyReview:
       isCapturedGuideSource(revision.source)
         ? {
             required: true,
             status: "approved",
             originalMediaRetained: false,
-            reviewedAt: revision.privacyReviewedAt!,
-            reviewedBy: actor(revision.privacyReviewedBy!),
+            reviewedAt: revision.privacyReviewedAt ?? exportedAt,
+            reviewedBy: actor(revision.privacyReviewedBy ?? revision.authorId),
             findingsResolved: true,
           }
         : { required: false, status: "not-required", originalMediaRetained: false },
@@ -261,8 +264,8 @@ export async function buildPublishedExport(
     submittedBy: actor(submittedBy),
     reviewedAt,
     reviewedBy: actor(reviewedBy),
-    publishedAt: revision.publishedAt,
-    publishedBy: actor(revision.publishedBy),
+    publishedAt,
+    publishedBy: actor(publishedBy),
   };
   const parsed = parsePublishedGuideRevision(candidate);
   const assets: GuideExportAsset[] = [];

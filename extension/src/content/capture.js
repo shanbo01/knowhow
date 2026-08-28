@@ -16,12 +16,13 @@
   };
   const geometry = globalThis.__KNOWHOW_BLUR_GEOMETRY__;
   if (!geometry?.normalizeAndMergeMasks || !geometry.maskRadius) return;
+  const typedFields = globalThis.__KNOWHOW_TYPED_FIELDS__;
+  if (!typedFields?.classifyField || !typedFields.typedStepCopy) return;
   let pendingPointer = null;
   let lastCommittedClick = null;
   let preparedFrames = [];
   let preparedFrameTimer = null;
   let preparedFrameInFlight = null;
-  let preparedFrameTarget = null;
   let preparedFrameNeedsSettle = true;
   let visualEpoch = 0;
 
@@ -307,6 +308,7 @@
     "U",
     "VAR",
   ]);
+  const TABLE_CELL_HOST_TAGS = new Set(["TD", "TH"]);
 
   // Inspect-element `filter: blur()` only looks right on a tight node. A row,
   // cell, or page shell would smear neighbors, so those fall back to overlays.
@@ -329,7 +331,12 @@
     if (role === "row" || owner.tagName === "TR") return null;
     if (
       (reason === "long-text" || reason === "table-row") &&
-      isLeafBlurHost(owner) &&
+      (isLeafBlurHost(owner) ||
+        TABLE_CELL_HOST_TAGS.has(owner.tagName) ||
+        role === "cell" ||
+        role === "gridcell" ||
+        role === "columnheader" ||
+        role === "rowheader") &&
       hostArea <= pageArea * 0.45
     ) {
       return owner;
@@ -348,7 +355,18 @@
       PHRASING_HOST_TAGS.has(owner.tagName) &&
       hostBox.height <= Math.max(48, inkHeight * 3) &&
       hostBox.width <= innerWidth * 0.92;
-    if (!tightArea && !lineBox && !phrasingLine) return null;
+    // Numbers and IDs are often direct text inside a small div, badge, or
+    // table cell. Rejecting that compact line box creates the old opaque
+    // overlay even though filtering the host is both tighter and more faithful
+    // to Inspect element's `filter: blur()` behavior.
+    const compactTextContainer =
+      !SURFACE_HOST_REASONS.has(reason) &&
+      hostBox.height <= 72 &&
+      hostBox.width <= Math.min(640, innerWidth * 0.6) &&
+      hostArea <= pageArea * 0.12;
+    if (!tightArea && !lineBox && !phrasingLine && !compactTextContainer) {
+      return null;
+    }
     return owner;
   }
 
@@ -364,15 +382,21 @@
     });
   }
 
-  function maskFromClientRect(rect, reason, owner) {
+  // `hostOverride` is how a caller that already decided the cover for a whole
+  // run of rectangles forces every one of them to agree. Pass `undefined` to
+  // let this rectangle decide for itself.
+  function maskFromClientRect(rect, reason, owner, hostOverride) {
     const unclipped = clientBox(rect);
     const inkWidth = Math.max(0, unclipped.right - unclipped.left);
     const inkHeight = Math.max(0, unclipped.bottom - unclipped.top);
     if (inkWidth < 3 || inkHeight < 3) return null;
-    const host = tightBlurHost(owner, {
-      width: inkWidth,
-      height: inkHeight,
-    }, reason);
+    const host =
+      hostOverride !== undefined
+        ? hostOverride
+        : tightBlurHost(owner, {
+            width: inkWidth,
+            height: inkHeight,
+          }, reason);
     let box = intersectBoxes(unclipped, {
       left: 0,
       top: 0,
@@ -775,8 +799,30 @@
       range.commonAncestorContainer instanceof Element
         ? range.commonAncestorContainer
         : range.commonAncestorContainer?.parentElement;
-    for (const rect of range.getClientRects()) {
-      const mask = maskFromClientRect(rect, reason, owner);
+    const rects = [...range.getClientRects()];
+    if (!rects.length) return;
+    // One run of text is one piece of content, so it gets one kind of cover.
+    // Judging each client rectangle on its own let a wrapped line put its first
+    // row on a `filter` host and its second on an overlay — which painted a
+    // solid slab across text the host was already blurring. The host is decided
+    // once, from the ink of the whole range, and every rectangle follows it.
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const rect of rects) {
+      left = Math.min(left, rect.left);
+      top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right);
+      bottom = Math.max(bottom, rect.bottom);
+    }
+    const host = tightBlurHost(
+      owner,
+      { width: right - left, height: bottom - top },
+      reason,
+    );
+    for (const rect of rects) {
+      const mask = maskFromClientRect(rect, reason, owner, host);
       if (mask) masks.push(mask);
     }
   }
@@ -1012,6 +1058,8 @@
   }
 
   function clearManualSelections() {
+    forgetTypedField();
+    lastTypedStep = null;
     manualSelections.clear();
     manualSelectionHistory.length = 0;
     manualExclusions.clear();
@@ -1366,6 +1414,29 @@
     return onScreen.concat(offScreen.slice(0, MAX_LIVE_HOSTS));
   }
 
+  /**
+   * True when a filter-blurred host already covers this box. Detectors overlap
+   * — a table-row sweep and a form-field sweep can both claim the same cell —
+   * and the loser used to be painted as an overlay slab on top of a host that
+   * was blurring it anyway. Only hosts that are actually on screen count, so a
+   * host dropped by the off-screen budget can never swallow a cover.
+   */
+  function coveredByLiveHost(mask, hostBoxes) {
+    const right = mask.x + mask.width;
+    const bottom = mask.y + mask.height;
+    for (const box of hostBoxes) {
+      if (
+        mask.x >= box.left - 1 &&
+        mask.y >= box.top - 1 &&
+        right <= box.right + 1 &&
+        bottom <= box.bottom + 1
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function overlayHostsAreAttached(groups) {
     for (const [scroller] of groups) {
       const host = isWindowScroller(scroller)
@@ -1493,9 +1564,13 @@
     const masks = collectMasks();
     lastSerializableMasks = serializableMasks(masks);
     const hosted = selectLiveHosts(masks);
+    const liveHostBoxes = hosted
+      .filter((mask) => hostViewportDistance(mask) === 0)
+      .map((mask) => mask.host.getBoundingClientRect());
     const overlayMasks = [];
     for (const mask of masks) {
       if (mask.host instanceof Element && mask.host.isConnected) continue;
+      if (coveredByLiveHost(mask, liveHostBoxes)) continue;
       if (
         overlayMasks.length < MAX_LIVE_OVERLAYS &&
         maskIntersectsViewport(mask)
@@ -1600,6 +1675,25 @@
       regions.push(...host.children);
     }
     return regions;
+  }
+
+  /**
+   * Hovering a covered row or field lifts its blur so the author can read what
+   * they are about to hide. A screenshot taken while one is lifted would carry
+   * that content in the clear — and an element-filter cover leaves no redaction
+   * metadata behind, so nothing downstream could put it back. Every reveal is
+   * therefore dropped before the page is photographed.
+   */
+  function clearBlurReveal() {
+    for (const region of overlayRegions()) {
+      region.classList.remove("knowhow-blur-revealed");
+    }
+    for (const host of blurredHostSet) {
+      host.classList.remove("knowhow-blur-revealed");
+    }
+    for (const stray of document.querySelectorAll(".knowhow-blur-revealed")) {
+      stray.classList.remove("knowhow-blur-revealed");
+    }
   }
 
   function blurRevealRow(node) {
@@ -2106,7 +2200,9 @@
     trigger.append(triggerDot, triggerLabel);
     trigger.addEventListener("click", () => {
       smartBlurPanelOpen = !smartBlurPanelOpen;
+      clearPreparedFrameSchedule();
       syncSmartBlurUi();
+      if (!smartBlurPanelOpen) schedulePreparedFrame(0);
     });
 
     root.append(panel, trigger);
@@ -2160,6 +2256,18 @@
     const options = root.querySelector("[data-knowhow-blur-options]");
     if (options) options.style.opacity = enabled ? "1" : ".5";
     syncBlurCoverageCopy();
+  }
+
+  function smartBlurUiIsEngaged() {
+    if (smartBlurPanelOpen) return true;
+    if (!smartBlurUiRoot?.isConnected || !lastPointerPoint) return false;
+    const box = smartBlurUiRoot.getBoundingClientRect();
+    return (
+      lastPointerPoint.x >= box.left &&
+      lastPointerPoint.x <= box.right &&
+      lastPointerPoint.y >= box.top &&
+      lastPointerPoint.y <= box.bottom
+    );
   }
 
   /**
@@ -2218,15 +2326,24 @@
     hoverTargetElement = null;
   }
 
+  let captureChromeRestoreTimer = null;
+
   function hideCaptureOverlays() {
-    if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "hidden";
+    // Keep Smart Blur in the hit-test tree while it is visually removed from a
+    // screenshot. `visibility:hidden` let clicks fall through to the website
+    // during this one-frame window, which could create a phantom guide step.
+    if (smartBlurUiRoot) smartBlurUiRoot.style.opacity = "0";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "hidden";
     if (pickerToolbar) pickerToolbar.style.visibility = "hidden";
     if (hoverTargetEl) hoverTargetEl.style.visibility = "hidden";
   }
 
   function restoreCaptureOverlays() {
-    if (smartBlurUiRoot) smartBlurUiRoot.style.visibility = "visible";
+    if (captureChromeRestoreTimer) {
+      clearTimeout(captureChromeRestoreTimer);
+      captureChromeRestoreTimer = null;
+    }
+    if (smartBlurUiRoot) smartBlurUiRoot.style.opacity = "";
     if (pickerOverlayRoot) pickerOverlayRoot.style.visibility = "visible";
     if (pickerToolbar) pickerToolbar.style.visibility = "visible";
     if (hoverTargetEl) hoverTargetEl.style.visibility = "visible";
@@ -2253,26 +2370,9 @@
     return frameIsClaimable(frame) && frame.visualEpoch === visualEpoch;
   }
 
-  function claimPreparedFrame() {
-    const frames = [...preparedFrames].reverse();
-    const frame =
-      frames.find((candidate) => frameIsEligible(candidate)) ||
-      frames.find((candidate) => frameIsClaimable(candidate));
-    if (!frame) return null;
-    frame.consumed = true;
-    preparedFrames = preparedFrames.filter(
-      (candidate) => candidate.id !== frame.id,
-    );
-    // A claimed frame means a click just spent it and took no screenshot of its
-    // own, so the queue is free and the next click needs a replacement now.
-    // Holding the usual spacing here is what left rapid clicks with nothing to
-    // claim and pushed them onto the slower capture-after-the-fact path.
-    lastPreparedFrameAt = 0;
-    return frame.id;
-  }
-
   function preparedFrameSchedulingAllowed() {
     if (state.status !== "recording" || pickerActive) return false;
+    if (smartBlurUiIsEngaged()) return false;
     // Every capture tears the start-of-recording flash down so it can never be
     // photographed, and the first pre-warm used to fire within a couple of
     // hundred milliseconds — which meant the author saw a blink instead of the
@@ -2284,7 +2384,7 @@
     return document.visibilityState === "visible";
   }
 
-  function schedulePreparedFrame(delay = 180) {
+  function schedulePreparedFrame(delay = 180, { urgent = false } = {}) {
     if (!preparedFrameSchedulingAllowed()) return;
     const now = Date.now();
     if (!preparedFrameWantedSince) preparedFrameWantedSince = now;
@@ -2305,7 +2405,12 @@
       0,
       lastPreparedFrameAt + PREPARED_FRAME_MIN_SPACING_MS - now,
     );
-    const delayMs = Math.max(Math.min(quiet, untilMaxWait), spacing);
+    // An urgent request waives the settle-down wait but not the spacing: a
+    // click is expected imminently and there is nothing in hand for it, so the
+    // only thing worth waiting for is Chrome's own capture budget.
+    const delayMs = urgent
+      ? spacing
+      : Math.max(Math.min(quiet, untilMaxWait), spacing);
     if (preparedFrameTimer) clearTimeout(preparedFrameTimer);
     preparedFrameTimer = setTimeout(() => {
       preparedFrameTimer = null;
@@ -2350,18 +2455,14 @@
             await waiter.waitForPageSettled();
           }
         }
-        // Most steps adopt a pre-warmed frame, so anything KnowHow draws on the
-        // page has to be out of shot here or it ends up in the author's guide.
-        // Only the chrome is hidden: the blur preview itself can stay, because
-        // the bake re-applies every mask from its own coordinates, and hiding
-        // the largest overlay on a timer is exactly the flicker that made Smart
-        // Blur look broken.
-        hideCaptureOverlays();
+        // KnowHow's own panel still has to be out of shot, but hiding it here
+        // meant hiding it for the whole round trip: the worker queues this
+        // request behind Chrome's two-screenshots-per-second cap, so the panel
+        // vanished for the best part of a second, roughly once a second, on any
+        // page that keeps mutating. The worker now hides it in the moment it
+        // actually takes the picture instead, which is a single frame.
         await waitForPagePaint();
-        if (state.status !== "recording" || pickerActive) {
-          restoreCaptureOverlays();
-          return null;
-        }
+        if (state.status !== "recording" || pickerActive) return null;
         return send({
           type: "PREPARE_CAPTURE_FRAME",
           sessionId: state.sessionId,
@@ -2396,7 +2497,8 @@
       })
       .finally(() => {
         preparedFrameInFlight = null;
-        // Whatever happened to the capture, the author's own UI comes back.
+        // A safety net only: the worker restores the panel as soon as it has
+        // the pixels. This covers a capture that never got that far.
         restoreCaptureOverlays();
         lastPreparedFrameAt = Date.now();
         preparedFrameWantedSince = 0;
@@ -2565,8 +2667,21 @@
     syncSmartBlurUi();
   }
 
+  // Hides KnowHow's own panel and nothing else, on the same lost-message
+  // fallback as the full hide: a restore that never arrives must not leave the
+  // author staring at a page with no Smart Blur controls.
+  function hideCaptureChromeForCapture() {
+    hideCaptureOverlays();
+    if (captureChromeRestoreTimer) clearTimeout(captureChromeRestoreTimer);
+    captureChromeRestoreTimer = setTimeout(() => {
+      captureChromeRestoreTimer = null;
+      restoreCaptureOverlays();
+    }, 1_200);
+  }
+
   function hideBlurPreviewForCapture() {
     blurPreviewSuspended = true;
+    clearBlurReveal();
     suspendPrivacyVeilForCapture();
     if (blurPreviewRoot) blurPreviewRoot.style.visibility = "hidden";
     for (const host of scrollerOverlayHosts.values()) {
@@ -2596,6 +2711,9 @@
     for (const host of scrollerOverlayHosts.values()) {
       host.style.visibility = "";
     }
+    // Put the hover reveal back where the pointer actually is, rather than
+    // waiting for the next mouse move to notice.
+    updateBlurReveal(lastPointerPoint);
     restoreCaptureOverlays();
   }
 
@@ -2608,13 +2726,9 @@
         .map((id) => document.getElementById(id)?.textContent || "")
         .join(" ")
       : "";
-    const explicitLabel =
-      element.id &&
-        globalThis.CSS?.escape
-        ? document.querySelector(
-          "label[for=" + JSON.stringify(CSS.escape(element.id)) + "]",
-        )?.textContent
-        : "";
+    // `element.labels` resolves both `label[for]` and wrapping labels natively,
+    // with none of the escaping hazards of building an attribute selector.
+    const explicitLabel = element.labels?.[0]?.textContent || "";
     return sanitizedText(
       element.getAttribute("aria-label") ||
       referencedLabel ||
@@ -2625,6 +2739,9 @@
       "",
     );
   }
+
+  const CLICKABLE_TARGET_SELECTOR =
+    "button,a,input,select,textarea,[role=button],[role=link],[role=tab],[tabindex]";
 
   function captureElement(target) {
     const candidates =
@@ -2638,9 +2755,7 @@
     );
     return (
       element instanceof Element
-        ? element.closest(
-          "button,a,input,select,textarea,[role=button],[role=link],[role=tab],[tabindex]",
-        ) || element
+        ? element.closest(CLICKABLE_TARGET_SELECTOR) || element
         : document.body
     );
   }
@@ -2714,7 +2829,6 @@
 
   let recordingFlashEl = null;
   let recordingFlashHideTimer = null;
-  let recordingActivationCount = 0;
   let recordingFlashUntilMs = 0;
 
   const RECORDING_FLASH_HOLD_MS = 1_100;
@@ -2750,29 +2864,42 @@
     // the whole overlay, so the badge sitting on top of it stays at full
     // strength — the page recedes, the message does not.
     const flash = document.createElement("div");
+    // Marked as KnowHow's own UI. Without this the blur observer counted the
+    // flash appearing and disappearing as page work, bumped `visualEpoch`, and
+    // threw away the pre-warmed frame the author's first click was meant to
+    // adopt — and the detectors would happily try to cover its own text.
+    flash.dataset.knowhowUi = "recording-flash";
     flash.setAttribute("aria-hidden", "true");
     flash.style.cssText =
       "position:fixed;inset:0;z-index:2147483647;display:flex;" +
       "align-items:center;justify-content:center;" +
-      "background:rgba(8,10,20,.58);opacity:0;" +
-      "transition:opacity .22s ease;pointer-events:none;";
+      "background:rgba(8,10,20,.58);opacity:1;pointer-events:none;" +
+      "animation:knowhow-recording-in .22s ease both;";
     const badge = document.createElement("div");
     badge.style.cssText =
       "display:flex;align-items:center;gap:12px;padding:16px 28px;" +
       "border-radius:999px;background:rgba(17,20,30,.96);color:#fff;" +
       "font:650 17px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
       "box-shadow:0 18px 44px rgba(0,0,0,.45);letter-spacing:.01em;" +
-      "transform:scale(.96);transition:transform .22s cubic-bezier(.2,.8,.3,1);";
+      "animation:knowhow-recording-badge .22s cubic-bezier(.2,.8,.3,1) both;";
     const dot = document.createElement("span");
     dot.style.cssText =
       "width:11px;height:11px;border-radius:50%;background:#ef4444;" +
       "animation:knowhow-recording-pulse 1.4s ease-out infinite;";
     const style = document.createElement("style");
+    // The fade-in is a CSS animation rather than a transition driven from
+    // `requestAnimationFrame`. A deferred frame — a busy compositor, a tab that
+    // has only just been shown — used to leave the whole overlay sitting at
+    // zero opacity, so the announcement the author was supposed to see never
+    // painted at all. An animation runs from the element's first frame.
     style.textContent =
       "@keyframes knowhow-recording-pulse{" +
       "0%{box-shadow:0 0 0 0 rgba(239,68,68,.55)}" +
       "70%{box-shadow:0 0 0 10px rgba(239,68,68,0)}" +
-      "100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}";
+      "100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}" +
+      "@keyframes knowhow-recording-in{from{opacity:0}to{opacity:1}}" +
+      "@keyframes knowhow-recording-badge{" +
+      "from{transform:scale(.96)}to{transform:scale(1)}}";
     const text = document.createElement("span");
     text.textContent = label;
     badge.append(dot, text);
@@ -2781,15 +2908,9 @@
     recordingFlashEl = flash;
     recordingFlashUntilMs =
       Date.now() + RECORDING_FLASH_HOLD_MS + RECORDING_FLASH_FADE_MS;
-    // Fade in off the first frame so the dim and the badge animate in together
-    // rather than snapping onto the page.
-    requestAnimationFrame(() => {
-      if (recordingFlashEl !== flash) return;
-      flash.style.opacity = "1";
-      badge.style.transform = "scale(1)";
-    });
     recordingFlashHideTimer = setTimeout(() => {
       if (recordingFlashEl !== flash) return;
+      flash.style.animation = "none";
       flash.style.transition = `opacity ${RECORDING_FLASH_FADE_MS}ms ease`;
       flash.style.opacity = "0";
       recordingFlashHideTimer = setTimeout(() => {
@@ -2802,22 +2923,31 @@
     }, RECORDING_FLASH_HOLD_MS);
   }
 
-  function setStatus(status) {
-    const enteringRecording =
-      status === "recording" && state.status !== "recording";
+  /**
+   * `announce` is the worker's decision, not this document's. Inferring it from
+   * a local status change was wrong twice over: a page that had already carried
+   * one capture reported the next one as "resumed", and every navigation during
+   * a capture dimmed the whole destination page as if recording had just begun.
+   * Only a real start or resume announces anything now.
+   */
+  function setStatus(status, { announce = null } = {}) {
     state.status = status;
     if (status !== "recording") {
       removeRecordingFlash();
       removeHoverTarget();
       if (pendingPointer) cancelStagedInteraction(pendingPointer);
       pendingPointer = null;
+      // The worker stops accepting events before it tells the page, so an
+      // in-flight edit cannot be turned into a step here. Drop it rather than
+      // leave it to reappear against the next session.
+      forgetTypedField();
+      lastTypedStep = null;
       preparedFrames = [];
       clearPreparedFrameSchedule();
     }
-    if (enteringRecording) {
-      recordingActivationCount += 1;
+    if (status === "recording" && announce) {
       showRecordingFlash(
-        recordingActivationCount === 1 ? "Recording started" : "Recording resumed",
+        announce === "resumed" ? "Recording resumed" : "Recording started",
       );
     }
     if (status === "recording" || status === "paused") {
@@ -2840,34 +2970,59 @@
     });
   }
 
-  function hideCaptureChrome() {
-    removeRecordingFlash();
-    hideBlurPreviewForCapture();
-  }
-
-  // Holding the content thread keeps the page painting its pre-click state
-  // while the worker races to photograph it. It is a real cost to the author —
-  // the page is frozen for the duration — so it is paid only when there is no
-  // pre-warmed frame to adopt and the screenshot genuinely has to be taken
-  // after the pointer went down.
-  function stallForEarlyCapture(ms = 24) {
-    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 32);
+  // A screenshot request dispatched from a normal async call loses the race
+  // against whatever this action is about to do to the page: `chrome.runtime
+  // .sendMessage` returns immediately, but the browser still has to composite
+  // and encode a frame before the page navigates, opens a dialog, or rewrites
+  // itself out from under the shot. The fix is not a faster capture — it is
+  // holding this document's own JavaScript still for a few milliseconds so
+  // nothing on the page can run before the request has left it. The message
+  // itself is not slowed by this: dispatching it to the browser process is a
+  // native call that fires as part of the `sendMessage` call above, not
+  // something gated behind this thread going idle.
+  function stallForEarlyCapture(ms) {
+    const until = performance.now() + Math.min(Math.max(0, Number(ms) || 0), 200);
     while (performance.now() < until) {
       // Intentionally busy: yielding would let the click's default action
       // repaint the page before the snapshot is taken. Do not preventDefault.
     }
   }
 
-  function stageInteraction(element, context, sourceEvent = "click") {
+  const EARLY_CAPTURE_STALL_MS = 70;
+
+  /**
+   * The one place a step's own screenshot gets requested. Called first, before
+   * any selector, label, or mask work — the only thing here that has to win a
+   * race against the page's own JavaScript is the pixel grab; everything else
+   * can happen once that race is already won. KnowHow's own panel comes out of
+   * shot in the same breath, locally, so there is no round trip to hide it
+   * before the capture that matters.
+   */
+  function requestInteractionFrame() {
+    const frameId = crypto.randomUUID();
+    removeRecordingFlash();
+    hideCaptureChromeForCapture();
+    void send({
+      type: "REQUEST_INTERACTION_FRAME",
+      sessionId: state.sessionId,
+      frameId,
+      navigationKey: state.navigationKey,
+      viewport: viewportSnapshot(),
+      masks: Array.isArray(lastSerializableMasks)
+        ? lastSerializableMasks.slice()
+        : [],
+    });
+    stallForEarlyCapture(EARLY_CAPTURE_STALL_MS);
+    return frameId;
+  }
+
+  function stageInteraction(
+    element,
+    context,
+    sourceEvent = "click",
+    { frameId = null } = {},
+  ) {
     const interactionId = crypto.randomUUID();
-    // Claim first, then decide whether anything has to be hidden. A claimed
-    // frame was photographed earlier, so no screenshot happens at click time —
-    // tearing the privacy preview and the Smart Blur panel down and waiting on
-    // the worker to put them back made them flicker on every single click for
-    // no benefit. Only the fallback path below actually photographs the page
-    // now, and only that path pays for hiding.
-    const frameId = claimPreparedFrame();
-    if (!frameId) hideCaptureChrome();
     const staged = {
       interactionId,
       element,
@@ -2884,8 +3039,8 @@
       stagePromise: null,
     };
     // Reserve the feed card without walking the DOM. Cached masks from the
-    // last remask are enough for bake; Chrome's screenshot queue only delays
-    // the JPEG.
+    // last remask are enough for bake; the worker's own screenshot for this
+    // interaction is already in flight and only delays when the JPEG lands.
     staged.stagePromise = send({
       type: "STAGE_INTERACTION",
       sessionId: state.sessionId,
@@ -2897,9 +3052,6 @@
       viewportKey: viewportKey(context.viewport),
       context: staged.context,
     });
-    // A claimed pre-warmed frame already shows the pre-click page, so the
-    // author's click proceeds with no delay at all.
-    if (!frameId) stallForEarlyCapture(24);
     return staged;
   }
 
@@ -2920,19 +3072,24 @@
       if (response?.ok !== true || staged.cancelled) return;
       return send(commit);
     });
-    lastCommittedClick = {
-      interactionId: staged.interactionId,
-      element: staged.element,
-      context: staged.context,
-      at: performance.now(),
-    };
+    if (staged.sourceEvent !== "type") {
+      lastCommittedClick = {
+        interactionId: staged.interactionId,
+        element: staged.element,
+        context: staged.context,
+        at: performance.now(),
+      };
+      // Once the author has done something else, coming back to a field is a
+      // new instruction rather than a correction of the old one.
+      lastTypedStep = null;
+    }
     schedulePreparedFrame(160);
   }
 
   function cancelStagedInteraction(staged) {
     if (!staged || staged.cancelled) return;
     staged.cancelled = true;
-    restoreBlurPreviewAfterCapture();
+    restoreCaptureOverlays();
     void staged.stagePromise.then(() =>
       send({
         type: "CANCEL_INTERACTION",
@@ -3007,6 +3164,225 @@
     upgradeLastClickToSelect(element);
   }
 
+  // ---------------------------------------------------------------------------
+  // Typed text
+  //
+  // A guide that says "click the search box" and stops is useless: the reader
+  // needs to know what to type. KnowHow therefore records the text an author
+  // enters into ordinary fields — and never the text of a credential field.
+  // `editableFieldKind` classifies the field first, and `typedFieldText` is the
+  // one place in this script that reads a field at all; it refuses every kind
+  // except "text", so a password, a username, a one-time code or a card number
+  // is recorded as an instruction ("Enter your password") with no value behind
+  // it.
+  // ---------------------------------------------------------------------------
+
+  function fieldHintText(element) {
+    return [
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("aria-label"),
+      element.labels?.[0]?.textContent,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  // How many fields in this form could hold typed text at all. A form with one
+  // of them beside a password is a sign-in box; a form with six is a sign-up
+  // page, where only the field that names the account is off limits.
+  function typedFieldCount(form) {
+    let count = 0;
+    for (const field of form.querySelectorAll("input,textarea")) {
+      const type = String(field.getAttribute("type") || "text").toLowerCase();
+      if (
+        field.tagName === "INPUT" &&
+        (typedFields.untypedInputTypes.has(type) || type === "password")
+      ) {
+        continue;
+      }
+      count += 1;
+    }
+    return count;
+  }
+
+  // Reads the signals off the element; `classifyField` owns the rule itself so
+  // the credential exclusions can be tested without a browser.
+  function editableFieldKind(element) {
+    if (!(element instanceof Element) || !element.isConnected) return null;
+    if (element.closest("[data-knowhow-ui],[data-knowhow-overlay]")) return null;
+    const tag = element.tagName;
+    const form = tag === "INPUT" || tag === "TEXTAREA" ? element.form : null;
+    return typedFields.classifyField({
+      tag,
+      inputType: element.getAttribute("type") || "text",
+      autocomplete: element.getAttribute("autocomplete") || "",
+      contentEditable: element.isContentEditable === true,
+      redactAttribute: element.hasAttribute("data-knowhow-redact"),
+      inCredentialForm: Boolean(form?.querySelector("input[type=password]")),
+      formTextFieldCount: form ? typedFieldCount(form) : 0,
+      hint: fieldHintText(element),
+    });
+  }
+
+  /**
+   * The only read of a field's contents in this script. Every classification
+   * except "text" returns before the field is touched, and what comes back has
+   * already been through the session's redaction policy.
+   */
+  function typedFieldText(element, kind) {
+    if (kind !== "text") return "";
+    const raw =
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement
+        ? element.value
+        : element.textContent;
+    return sanitizedText(raw);
+  }
+
+  // The field the author is still typing into, and the step already minted for
+  // it. Coming back to the same field rewrites that step instead of adding a
+  // second one, so "acme" then "acme-invoices" stays one instruction.
+  let pendingTypedField = null;
+  let lastTypedStep = null;
+  const TYPED_STEP_REUSE_MS = 60_000;
+
+  function forgetTypedField() {
+    pendingTypedField = null;
+  }
+
+  // A field is only read once the author has finished with it — on blur, on
+  // `change`, or when they press on something else. There is deliberately no
+  // idle timer: a pause in the middle of a word is not the end of a value, and
+  // settling on one turned "test" into a step that said "te" and a screenshot
+  // to match. Finishing a capture straight after typing is covered instead by
+  // the worker asking this document to flush before it stops listening.
+  function noteTypedInput(event) {
+    if (state.status !== "recording" || !event.isTrusted) return;
+    if (state.policy.captureTypedText === false) return;
+    const element = event.target;
+    const kind = editableFieldKind(element);
+    if (!kind) return;
+    if (pendingTypedField && pendingTypedField.element !== element) {
+      flushTypedField();
+    }
+    pendingTypedField = { element, kind };
+  }
+
+  function flushTypedField() {
+    const pending = pendingTypedField;
+    forgetTypedField();
+    if (!pending || pickerActive || state.status !== "recording") return null;
+    if (state.policy.captureTypedText === false) return null;
+    const { element, kind } = pending;
+    if (!(element instanceof Element) || !element.isConnected) return null;
+
+    // Coming back to the same field only ever rewords its existing step —
+    // never worth spending a screenshot on.
+    const reusable =
+      lastTypedStep &&
+      lastTypedStep.element === element &&
+      performance.now() - lastTypedStep.at <= TYPED_STEP_REUSE_MS;
+    if (reusable) {
+      const text = typedFieldText(element, kind);
+      const copy = typedFields.typedStepCopy(kind, text, targetName(element));
+      if (lastTypedStep.title === copy.title) return null;
+      lastTypedStep.title = copy.title;
+      lastTypedStep.at = performance.now();
+      void send({
+        type: "UPGRADE_INTERACTION",
+        sessionId: state.sessionId,
+        interactionId: lastTypedStep.interactionId,
+        sourceEvent: "type",
+        title: copy.title,
+        instructions: copy.instructions,
+      });
+      return null;
+    }
+
+    const box = element.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) return null;
+    // Typing changes no attribute and adds no node, so the request goes out
+    // before the label/selector lookups below just as it does for a click —
+    // there is no visual-change signal to hang a screenshot on otherwise.
+    const frameId = requestInteractionFrame();
+    const text = typedFieldText(element, kind);
+    const copy = typedFields.typedStepCopy(kind, text, targetName(element));
+    const viewport = viewportSnapshot();
+    const context = targetContext(
+      element,
+      { x: box.left + box.width / 2, y: box.top + box.height / 2 },
+      viewport,
+    );
+    const staged = stageInteraction(
+      element,
+      { ...context, title: copy.title, instructions: copy.instructions },
+      "type",
+      { frameId },
+    );
+    commitStagedInteraction(staged);
+    lastTypedStep = {
+      interactionId: staged.interactionId,
+      element,
+      title: copy.title,
+      at: performance.now(),
+    };
+    return staged;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keyboard shortcuts
+  //
+  // A guide that shows a copy and a paste but never says Ctrl+C is missing the
+  // step. `classifyShortcut` decides what counts — chords, and the action keys
+  // pressed outside a field — and refuses everything else, so ordinary typing
+  // is never watched key by key and a password field is never read at all. The
+  // key names it returns describe the chord, not anything the author entered.
+  // ---------------------------------------------------------------------------
+  function onShortcutKeyDown(event) {
+    if (pickerActive || isKnowHowUiEvent(event)) return;
+    if (state.status !== "recording" || !event.isTrusted) return;
+    const focused = document.activeElement;
+    const fieldKind = editableFieldKind(focused);
+    const shortcut = typedFields.classifyShortcut({
+      key: event.key,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      repeat: event.repeat,
+      inEditableField: Boolean(fieldKind),
+      fieldKind,
+      isMac: /Mac|iPhone|iPad/i.test(navigator.platform || ""),
+    });
+    if (!shortcut) return;
+
+    // A shortcut acting on a field the author just filled comes after it.
+    if (pendingTypedField) flushTypedField();
+
+    const frameId = requestInteractionFrame();
+    const copy = typedFields.shortcutStepCopy(shortcut);
+    const staged = stageInteraction(
+      focused instanceof Element ? focused : document.body,
+      {
+        targetRect: null,
+        clickPoint: null,
+        viewport: viewportSnapshot(),
+        title: copy.title,
+        instructions: copy.instructions,
+        keys: shortcut.keys,
+        sanitizedUrl: sanitizedPageUrl(),
+        pageUrl: sanitizedPageUrl(),
+        navigationKey: state.navigationKey,
+        visualEpoch,
+      },
+      "shortcut",
+      { frameId },
+    );
+    commitStagedInteraction(staged);
+  }
+
   function isKnowHowUiEvent(event) {
     return event.composedPath().some(
       (item) => item instanceof Element && item.closest("[data-knowhow-ui]"),
@@ -3023,10 +3399,21 @@
       return;
     }
     if (isKnowHowUiEvent(event)) return;
+    // A pointer down on anything else ends the edit in progress. Flushing here
+    // rather than on blur keeps the typed step ahead of the click that submits
+    // it, which is the order the reader has to follow them in.
+    if (pendingTypedField && pendingTypedField.element !== event.target) {
+      flushTypedField();
+    }
     if (pendingPointer) cancelStagedInteraction(pendingPointer);
     pendingPointer = null;
     if (state.status !== "recording" || !event.isTrusted) return;
     if (event.isPrimary === false || ![0, 2].includes(event.button)) return;
+
+    // Requested before touching the DOM: the target, its label, and the click
+    // point are bookkeeping the page cannot outrun. Only the pixel grab can be
+    // outrun, so it is the only thing dispatched before any of that work.
+    const frameId = requestInteractionFrame();
     const element = captureElement(event);
     const viewport = viewportSnapshot();
     let context = targetContext(
@@ -3034,7 +3421,10 @@
       { x: event.clientX, y: event.clientY },
       viewport,
     );
-    if (!context.targetRect) return;
+    if (!context.targetRect) {
+      restoreCaptureOverlays();
+      return;
+    }
     const sourceEvent = event.button === 2 ? "contextmenu" : "click";
     if (sourceEvent === "contextmenu") {
       const name = context.title.replace(/^Click /, "");
@@ -3044,30 +3434,32 @@
         instructions: "Right-click " + name + ".",
       };
     }
-    pendingPointer = Object.assign(stageInteraction(element, context, sourceEvent), {
-      pointerId: event.pointerId,
-      button: event.button,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      startedAt: performance.now(),
-    });
+    pendingPointer = Object.assign(
+      stageInteraction(element, context, sourceEvent, { frameId }),
+      {
+        pointerId: event.pointerId,
+        button: event.button,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        startedAt: performance.now(),
+      },
+    );
   }
 
   function onPointerMove(event) {
     if (onPickerPointerMove(event)) return;
     lastPointerPoint = { x: event.clientX, y: event.clientY };
-    updateBlurReveal(lastPointerPoint);
-    if (state.status === "recording") {
-      const hovered = captureElement(event);
-      updateHoverTarget(hovered);
-      if (hovered && hovered !== preparedFrameTarget) {
-        preparedFrameTarget = hovered;
-        // Hovering a new element hints that a click may be coming, but it is
-        // not a visual change on its own. Only top up when nothing usable is
-        // in hand, and let the debounce decide when.
-        if (!frameIsClaimable()) schedulePreparedFrame();
-      }
+    const overKnowHowUi = isKnowHowUiEvent(event);
+    if (overKnowHowUi) {
+      clearPreparedFrameSchedule();
+      updateHoverTarget(null);
+      clearBlurReveal();
     } else {
+      updateBlurReveal(lastPointerPoint);
+    }
+    if (state.status === "recording" && !overKnowHowUi) {
+      updateHoverTarget(captureElement(event));
+    } else if (!overKnowHowUi) {
       updateHoverTarget(null);
     }
     const active = pendingPointer;
@@ -3129,10 +3521,17 @@
     }
     if (event.detail === 0) {
       pendingPointer = null;
+      // A keyboard activation (Enter/Space on a focused control) has no
+      // pointerdown to hang the request on; the click event is the earliest
+      // hook there is.
+      const frameId = requestInteractionFrame();
       const element = captureElement(event);
       const viewport = viewportSnapshot();
       const targetRect = rectFor(element, "click-target");
-      if (!targetRect) return;
+      if (!targetRect) {
+        restoreCaptureOverlays();
+        return;
+      }
       const staged = stageInteraction(
         element,
         targetContext(
@@ -3143,6 +3542,8 @@
           },
           viewport,
         ),
+        "click",
+        { frameId },
       );
       commitStagedInteraction(staged);
       return;
@@ -3213,13 +3614,15 @@
       return false;
     }
     if (message?.type === "KNOWHOW_SET_STATUS") {
-      setStatus(message.status, message.reason);
+      setStatus(message.status, { announce: message.announce });
       sendResponse({ ok: true });
       return false;
     }
     if (message?.type === "KNOWHOW_TOGGLE_SMART_BLUR_PANEL") {
       smartBlurPanelOpen = !smartBlurPanelOpen;
+      clearPreparedFrameSchedule();
       syncSmartBlurUi();
+      if (!smartBlurPanelOpen) schedulePreparedFrame(0);
       sendResponse({ ok: true, open: smartBlurPanelOpen });
       return false;
     }
@@ -3244,7 +3647,16 @@
     if (message?.type === "KNOWHOW_PREPARE_SCREENSHOT") {
       removeRecordingFlash();
       const context = pageContext();
-      hideBlurPreviewForCapture();
+      // A pre-warm leaves the blur preview in the shot on purpose — the bake
+      // re-applies every mask from its own coordinates, and tearing the largest
+      // overlay down and back up is the flicker that made Smart Blur look
+      // broken. Only KnowHow's own panel has to go.
+      if (message.chromeOnly === true && smartBlurUiIsEngaged()) {
+        sendResponse({ ok: false, busy: true });
+        return false;
+      }
+      if (message.chromeOnly === true) hideCaptureChromeForCapture();
+      else hideBlurPreviewForCapture();
       void waitForPagePaint().then(() => {
         sendResponse({ ok: true, context });
       });
@@ -3264,14 +3676,32 @@
       })();
       return true;
     }
-    if (message?.type === "KNOWHOW_RESTORE_INDICATOR") {
-      // Kept as a no-op for compatibility with capture jobs started by an
-      // older service worker. KnowHow no longer injects page UI to restore.
+    if (message?.type === "KNOWHOW_RESTORE_PRIVACY_PREVIEW") {
+      restoreBlurPreviewAfterCapture();
       sendResponse({ ok: true });
       return false;
     }
-    if (message?.type === "KNOWHOW_RESTORE_PRIVACY_PREVIEW") {
-      restoreBlurPreviewAfterCapture();
+    if (message?.type === "KNOWHOW_FLUSH_PENDING_INPUT") {
+      // Sent while the worker is still accepting events, so a value the author
+      // typed and never blurred out of — because they went straight for Finish
+      // or Pause — becomes a step before the door closes. Answering only once
+      // the stage message has landed is what makes that safe.
+      const staged = flushTypedField();
+      if (!staged?.stagePromise) {
+        sendResponse({ ok: true, flushed: false });
+        return false;
+      }
+      void staged.stagePromise.then(() =>
+        sendResponse({ ok: true, flushed: true }),
+      );
+      return true;
+    }
+    if (message?.type === "KNOWHOW_RESTORE_CAPTURE_CHROME") {
+      // The light counterpart to the hide requestInteractionFrame() applies
+      // locally: only KnowHow's own panel came out of shot, so only that comes
+      // back. A missed message is already covered by hideCaptureChromeForCapture's
+      // own timer, so there is nothing to verify here.
+      restoreCaptureOverlays();
       sendResponse({ ok: true });
       return false;
     }
@@ -3305,6 +3735,7 @@
   document.addEventListener("dblclick", onDoubleClick, true);
   document.addEventListener("contextmenu", onContextMenu, true);
   document.addEventListener("keydown", onPickerKeyDown, true);
+  document.addEventListener("keydown", onShortcutKeyDown, true);
   document.addEventListener("pointerleave", () => {
     lastPointerPoint = null;
     updateBlurReveal(null);
@@ -3325,10 +3756,20 @@
       clearPreparedFrameSchedule();
     }
   });
-  document.addEventListener("input", () => noteVisualChange(140), true);
+  document.addEventListener("input", (event) => {
+    noteTypedInput(event);
+    noteVisualChange(140);
+  }, true);
   document.addEventListener("change", (event) => {
     onSelectChange(event);
+    // `change` on a text field is the browser telling us the edit is final:
+    // it fires on Enter as well as on blur, so this covers a form submitted
+    // straight from the keyboard.
+    if (pendingTypedField?.element === event.target) flushTypedField();
     noteVisualChange(140);
+  }, true);
+  document.addEventListener("focusout", (event) => {
+    if (pendingTypedField?.element === event.target) flushTypedField();
   }, true);
 
   globalThis[INSTANCE_KEY] = {

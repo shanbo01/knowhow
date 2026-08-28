@@ -38,6 +38,20 @@ import type { AuthenticatedIdentity } from "./session-identity";
 const RESOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const SHARE_TOKEN = /^share_[A-Za-z0-9]{20,30}$/;
 const MAX_MEDIA_CLONES = 50;
+
+/**
+ * Names a copy so a library of them stays readable: "Report" becomes
+ * "Report (copy)", and copying that again gives "Report (copy 2)" rather than
+ * "Report (copy) (copy)".
+ */
+function duplicateTitle(title: string) {
+  const base = String(title ?? "").trim() || "Untitled guide";
+  const existing = base.match(/^(.*?)\s*\(copy(?:\s+(\d+))?\)$/);
+  if (!existing) return `${base} (copy)`.slice(0, 200);
+  const stem = existing[1].trim() || "Untitled guide";
+  const next = Math.max(2, (Number(existing[2]) || 1) + 1);
+  return `${stem} (copy ${next})`.slice(0, 200);
+}
 const MAX_TRANSACTION_MUTATIONS = 900;
 
 type GuideCommandOptions = {
@@ -208,6 +222,12 @@ export class GuideCommandService {
     }
     if (action === "unshareGuide") {
       return this.unshare(identity, payload, workspaceAccess);
+    }
+    if (action === "unpublishGuide") {
+      return this.unpublish(identity, payload, workspaceAccess, context);
+    }
+    if (action === "duplicateGuide") {
+      return this.duplicate(identity, payload, workspaceAccess, context, options);
     }
     if (action === "archiveGuide") {
       return this.archive(identity, payload, workspaceAccess, context);
@@ -380,6 +400,49 @@ export class GuideCommandService {
     }
   }
 
+  /**
+   * Ids of every element the `privacyToolsEnabled` entitlement covers: redaction
+   * regions and every annotation except the free click marker.
+   */
+  private privacyElementIds(steps: EditorBlock[]) {
+    const ids = new Set<string>();
+    for (const step of steps) {
+      for (const redaction of step.redactions ?? []) ids.add(redaction.id);
+      for (const annotation of step.annotations ?? []) {
+        if (annotation.kind !== "click") ids.add(annotation.id);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Privacy tools are a paid feature, so a workspace without the entitlement
+   * cannot add new redactions or non-click annotations. Elements the guide
+   * already carried stay saveable — a workspace that drops to Free keeps
+   * working on guides it built while entitled instead of being locked out.
+   */
+  private async assertPrivacyToolsAllowed(
+    workspaceId: string,
+    steps: EditorBlock[],
+    baselineRevisionId: string | null,
+  ) {
+    const incoming = this.privacyElementIds(steps);
+    if (!incoming.size) return;
+    const entitlements = new EntitlementService(this.store, workspaceId);
+    if (await entitlements.value<boolean>("privacyToolsEnabled", false)) return;
+
+    const rows = baselineRevisionId
+      ? await this.store.list(TABLES.guideSteps, {
+          filters: [{ field: "subject_id", value: baselineRevisionId }],
+        })
+      : [];
+    const existing = this.privacyElementIds(
+      rows.map((row) => decodePayload<EditorBlock>(row, null as never)).filter(Boolean),
+    );
+    if ([...incoming].every((id) => existing.has(id))) return;
+    await entitlements.requireFeature("privacyToolsEnabled");
+  }
+
   private async save(
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
@@ -429,9 +492,9 @@ export class GuideCommandService {
     let createRevision = true;
     if (!existing) {
       requireAuthorized("guide.create", context);
-      await new EntitlementService(this.store, workspaceId).assertCreatorCapacity(
-        identity.userId,
-      );
+      const entitlements = new EntitlementService(this.store, workspaceId);
+      await entitlements.assertCreatorCapacity(identity.userId);
+      await entitlements.assertGuideCapacity();
       revisionId = resourceId("revision");
     } else if (existing.workingRevisionId) {
       working = await this.loadRevision(existing.workingRevisionId, guideId, workspaceId);
@@ -477,6 +540,13 @@ export class GuideCommandService {
     if (firstReviewSubmission && hasUnappliedRedaction) {
       throw new HttpError(409, "REDACTIONS_NOT_FLATTENED", "Flatten every redaction before requesting review.");
     }
+    await this.assertPrivacyToolsAllowed(
+      workspaceId,
+      steps,
+      createRevision
+        ? existing?.workingRevisionId ?? existing?.publishedRevisionId ?? null
+        : revisionId,
+    );
 
     const referencedMediaIds = [...new Set(
       steps.map((step) => step.screenshotMediaId).filter((id): id is string => Boolean(id)),
@@ -1147,6 +1217,314 @@ export class GuideCommandService {
     return { unshared: true };
   }
 
+  /**
+   * Returns a published guide to an editable draft.
+   *
+   * Archiving was the only way out of the published state, which is a
+   * different intent entirely: archiving retires a guide, while this is how an
+   * author corrects one that is already live. The published revision goes back
+   * to draft and becomes the working revision again, and its audience is
+   * cleared, so a guide taken down for editing is not still readable by the
+   * people it was shared with while it is being rewritten.
+   */
+  private async unpublish(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.publishedRevisionId || guide.deletedAt || guide.archivedAt) {
+      throw new HttpError(409, "UNPUBLISH_NOT_AVAILABLE", "This guide is not live.");
+    }
+    if (guide.workingRevisionId) {
+      throw new HttpError(
+        409,
+        "WORKING_DRAFT_EXISTS",
+        "This guide already has a draft in progress. Finish or archive it first.",
+      );
+    }
+    const revision = await this.loadRevision(guide.publishedRevisionId, guideId, workspaceId);
+    const facts = await this.guideFacts(identity, workspaceAccess, guide, revision);
+    requireAuthorized("guide.unpublish", { ...context, guide: facts });
+
+    await this.replaceAudiences(identity, workspaceAccess, revision.row.$id, []);
+    const changedAt = nowIso();
+    await this.store.update(
+      TABLES.guideRevisions,
+      revision.row.$id,
+      rowData(
+        { status: "draft", updated_by: identity.userId },
+        {
+          ...revision.value,
+          status: "draft",
+          publishedAt: undefined,
+          publishedBy: undefined,
+          updatedAt: changedAt,
+        },
+      ),
+    );
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData(
+        { status: "draft", updated_by: identity.userId },
+        {
+          ...guide,
+          publishedRevisionId: null,
+          workingRevisionId: revision.row.$id,
+          updatedAt: changedAt,
+        },
+      ),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.unpublished",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} returned to draft`,
+      metadata: { revisionId: revision.row.$id },
+    });
+    return { unpublished: true, revisionId: revision.row.$id };
+  }
+
+  /**
+   * Copies a guide into a new private draft, screenshots included.
+   *
+   * The media is cloned rather than shared: every guide owns its own objects,
+   * so deleting or archiving one can never pull the pictures out from under
+   * the other. Whichever revision the reader would currently see is the one
+   * copied, so duplicating a live guide gives back what is live, not a
+   * half-finished draft that happened to be lying next to it.
+   */
+  private async duplicate(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+    options: GuideCommandOptions,
+  ) {
+    requireAuthorized("guide.create", context);
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const sourceGuideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, sourceGuideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const source = decodePayload<GuideRecord>(guideRow, null as never);
+    if (source.deletedAt) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    const sourceRevisionId = source.publishedRevisionId ?? source.workingRevisionId;
+    if (!sourceRevisionId) {
+      throw new HttpError(409, "GUIDE_EMPTY", "This guide has no revision to copy.");
+    }
+    const revision = await this.loadRevision(sourceRevisionId, sourceGuideId, workspaceId);
+    const facts = await this.guideFacts(identity, workspaceAccess, source, revision);
+    requireAuthorized("guide.read", { ...context, guide: facts });
+
+    const [stepRows, mediaRows] = await Promise.all([
+      this.store.list(TABLES.guideSteps, {
+        filters: [{ field: "subject_id", value: sourceRevisionId }],
+      }),
+      this.store.list(TABLES.privateMedia, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "subject_id", value: sourceRevisionId },
+        ],
+      }),
+    ]);
+    const sourceSteps = stepRows
+      .sort((left, right) => Number(left.sequence) - Number(right.sequence))
+      .map((row) => decodePayload<EditorBlock>(row, null as never));
+    const referencedIds = [
+      ...new Set(
+        sourceSteps
+          .map((step) => step.screenshotMediaId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (referencedIds.length > MAX_MEDIA_CLONES) {
+      throw new HttpError(
+        413,
+        "GUIDE_MEDIA_LIMIT",
+        `A duplicated guide can contain at most ${MAX_MEDIA_CLONES} screenshots.`,
+      );
+    }
+    const byId = new Map(mediaRows.map((row) => [row.$id, row]));
+    if (referencedIds.some((id) => !byId.has(id) || byId.get(id)!.status !== "ready")) {
+      throw new HttpError(
+        409,
+        "REVISION_MEDIA_INCOMPLETE",
+        "A private screenshot required by this guide is missing.",
+      );
+    }
+    if (referencedIds.length && !this.objects) {
+      throw new HttpError(
+        503,
+        "PRIVATE_STORAGE_UNAVAILABLE",
+        "Private media storage is unavailable.",
+        { expose: false },
+      );
+    }
+
+    const guideId = resourceId("guide");
+    const revisionId = resourceId("revision");
+    const createdAt = nowIso();
+    const title = duplicateTitle(source.title);
+    const idMap = new Map<string, string>();
+    const createdFiles: string[] = [];
+    try {
+      for (const sourceId of referencedIds) {
+        const media = mediaValue(byId.get(sourceId)!);
+        const nextId = resourceId("media");
+        await this.objects!.clone(media.storageFileId, nextId, media.filename);
+        createdFiles.push(nextId);
+        idMap.set(sourceId, nextId);
+      }
+      const copiedSteps = sourceSteps.map((step) =>
+        step.screenshotMediaId
+          ? { ...step, screenshotMediaId: idMap.get(step.screenshotMediaId)! }
+          : step,
+      );
+      const guide: GuideRecord = {
+        ...source,
+        title,
+        authorUserId: identity.userId,
+        workingRevisionId: revisionId,
+        publishedRevisionId: null,
+        archivedAt: null,
+        // A copy has never been reviewed or locked, whatever the original was.
+        screenshotsLockedAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      delete guide.deletedAt;
+      await this.store.create(
+        TABLES.guides,
+        guideId,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            user_id: identity.userId,
+            status: "draft",
+            created_by: identity.userId,
+          },
+          guide,
+        ),
+      );
+      const copiedRevision: RevisionRecord = {
+        ...revision.value,
+        guideId,
+        title,
+        number: 1,
+        status: "draft",
+        authorId: identity.userId,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      delete copiedRevision.reviewedBy;
+      delete copiedRevision.reviewedAt;
+      delete copiedRevision.submittedBy;
+      delete copiedRevision.submittedAt;
+      delete copiedRevision.publishedBy;
+      delete copiedRevision.publishedAt;
+      await this.store.create(
+        TABLES.guideRevisions,
+        revisionId,
+        rowData(
+          {
+            organization_id: workspaceAccess.workspace.organizationId,
+            workspace_id: workspaceId,
+            subject_id: guideId,
+            status: "draft",
+            version: 1,
+            created_by: identity.userId,
+          },
+          copiedRevision,
+        ),
+      );
+      for (const [sequence, step] of copiedSteps.entries()) {
+        await this.store.create(
+          TABLES.guideSteps,
+          resourceId("step"),
+          rowData(
+            {
+              organization_id: workspaceAccess.workspace.organizationId,
+              workspace_id: workspaceId,
+              subject_id: revisionId,
+              status: "active",
+              kind: step.kind,
+              sequence,
+              created_by: identity.userId,
+            },
+            step,
+          ),
+        );
+      }
+      // Audiences are deliberately not copied: a duplicate starts private, and
+      // is shared on purpose rather than by inheritance.
+      for (const sourceId of referencedIds) {
+        const sourceMedia = mediaValue(byId.get(sourceId)!);
+        const mediaId = idMap.get(sourceId)!;
+        const media: PrivateMediaRecord = {
+          ...sourceMedia,
+          guideId,
+          revisionId,
+          stepId:
+            copiedSteps.find((step) => step.screenshotMediaId === mediaId)?.id ?? null,
+          storageFileId: mediaId,
+          uploadedBy: identity.userId,
+          createdAt,
+          deletedAt: null,
+        };
+        await this.store.create(
+          TABLES.privateMedia,
+          mediaId,
+          rowData(
+            {
+              organization_id: workspaceAccess.workspace.organizationId,
+              workspace_id: workspaceId,
+              subject_id: revisionId,
+              user_id: identity.userId,
+              status: "ready",
+              kind: media.contentType,
+              created_by: identity.userId,
+            },
+            media,
+          ),
+        );
+      }
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "guide.duplicated",
+        targetType: "guide",
+        targetId: guideId,
+        targetLabel: title,
+        summary: `${source.title} duplicated as ${title}`,
+        metadata: {
+          sourceGuideId,
+          sourceRevisionId,
+          revisionId,
+          clonedMediaCount: referencedIds.length,
+          requestId: options.requestId,
+        },
+      });
+      return { guideId, revisionId };
+    } catch (error) {
+      if (this.objects) {
+        await Promise.all(
+          createdFiles.map((id) => this.objects!.delete(id).catch(() => undefined)),
+        );
+      }
+      throw error;
+    }
+  }
+
   private async archive(
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
@@ -1170,7 +1548,7 @@ export class GuideCommandService {
         await this.store.update(TABLES.guideRevisions, row.$id, rowData({ status: "archived", updated_by: identity.userId }, { ...value, status: "archived", updatedAt: archivedAt }));
       }
     }
-    await this.store.update(TABLES.guides, guideId, rowData({ status: "archived", updated_by: identity.userId }, { ...guide, workingRevisionId: null, archivedAt, updatedAt: archivedAt }));
+    await this.store.update(TABLES.guides, guideId, rowData({ status: "archived", updated_by: identity.userId }, { ...guide, archivedAt, updatedAt: archivedAt }));
     await appendAudit(this.store, identity, workspaceId, {
       action: "guide.archived",
       targetType: "guide",
@@ -1242,7 +1620,9 @@ export class GuideCommandService {
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) throw new HttpError(409, "GUIDE_QUARANTINED", "A quarantined guide requires a lifecycle recovery case.");
-    if (guide.workingRevisionId) throw new HttpError(409, "WORKING_DRAFT_EXISTS", "Finish or archive the current draft first.");
+    if (guide.workingRevisionId && !guide.archivedAt) {
+      throw new HttpError(409, "WORKING_DRAFT_EXISTS", "Finish or archive the current draft first.");
+    }
     const mayRestore =
       guide.authorUserId === identity.userId &&
       (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator"));
@@ -1306,7 +1686,20 @@ export class GuideCommandService {
       delete revision.publishedBy;
       delete revision.publishedAt;
       await this.store.create(TABLES.guideRevisions, revisionId, rowData({ organization_id: workspaceAccess.workspace.organizationId, workspace_id: workspaceId, subject_id: guideId, status: "draft", version: revisionNumber, created_by: identity.userId }, revision));
-      await this.store.update(TABLES.guides, guideId, rowData({ status: "draft", updated_by: identity.userId }, { ...guide, workingRevisionId: revisionId, archivedAt: null, updatedAt: restoredAt }));
+      await this.store.update(
+        TABLES.guides,
+        guideId,
+        rowData(
+          { status: "draft", updated_by: identity.userId },
+          {
+            ...guide,
+            workingRevisionId: revisionId,
+            publishedRevisionId: null,
+            archivedAt: null,
+            updatedAt: restoredAt,
+          },
+        ),
+      );
       for (const [sequence, step] of restoredSteps.entries()) {
         await this.store.create(TABLES.guideSteps, resourceId("step"), rowData({ organization_id: workspaceAccess.workspace.organizationId, workspace_id: workspaceId, subject_id: revisionId, status: "active", kind: step.kind, sequence, created_by: identity.userId }, step));
       }

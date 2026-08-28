@@ -283,6 +283,20 @@ export function discardRemoteCapture(captureId) {
   });
 }
 
+export function uploadRemoteFavicon(captureId, sessionId, favicon) {
+  return authorizedFetch(
+    "/captures/" + encodeURIComponent(captureId) + "/favicon",
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "image/png",
+        "Idempotency-Key": sessionId + ":favicon",
+      },
+      body: favicon,
+    },
+  );
+}
+
 export function preparePrivateDraftSteps(steps, policy = {}) {
   return steps.map((step) => ({
     ...step,
@@ -304,9 +318,10 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
   }
 
   for (const step of preparedSteps) {
-    if (step.sourceEvent === "navigation" && !(step.imageBlob instanceof Blob)) {
-      continue;
-    }
+    // Steps with no screenshot still belong in the guide: a navigation KnowHow
+    // recorded for the author, and an action whose picture could not be taken
+    // in time. They upload their text and skip this part.
+    if (!(step.imageBlob instanceof Blob)) continue;
     const imageType = step.imageBlob?.type || "";
     if (!isAcceptedScreenshotType(imageType)) {
       throw new Error("KnowHow accepts only locally rasterized JPEG or PNG screenshots.");
@@ -353,6 +368,12 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
           ...(step.crop ? { crop: step.crop } : {}),
           automaticMaskCount: step.automaticMaskCount || 0,
           manualMaskCount: step.manualMaskCount || 0,
+          ...(step.imageBlob instanceof Blob
+            ? {}
+            : { screenshotMissing: true }),
+          ...(step.showsResultOfAction === true
+            ? { showsResultOfAction: true }
+            : {}),
           redactions: Array.isArray(step.pendingRedactions)
             ? step.pendingRedactions
             : [],

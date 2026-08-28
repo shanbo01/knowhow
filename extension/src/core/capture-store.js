@@ -205,12 +205,6 @@ export async function listCapturedSteps(sessionId) {
   });
 }
 
-export async function getCapturedStep(sessionId, stepId) {
-  if (!sessionId || !stepId) return null;
-  const [step] = await getCapturedSteps(sessionId, [stepId]);
-  return step || null;
-}
-
 export async function getCapturedSteps(sessionId, stepIds) {
   if (!sessionId || !Array.isArray(stepIds) || !stepIds.length) return [];
   const requestedIds = [
@@ -250,31 +244,6 @@ export async function deleteCapturedStep(sessionId, stepId) {
   return withStore("readwrite", (store) =>
     requestResult(store.delete([sessionId, stepId])),
   );
-}
-
-export async function deleteCapturedStepAndCompact(
-  sessionId,
-  stepId,
-  orderedStepIds,
-) {
-  if (!sessionId || !stepId) return;
-  const remainingIds = Array.isArray(orderedStepIds)
-    ? [...new Set(orderedStepIds.filter(Boolean))]
-    : [];
-  return withStore("readwrite", async (store) => {
-    await requestResult(store.delete([sessionId, stepId]));
-    for (const [order, remainingId] of remainingIds.entries()) {
-      const current = await requestResult(store.get([sessionId, remainingId]));
-      if (!current || current.order === order) continue;
-      await requestResult(
-        store.put({
-          ...current,
-          order,
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-    }
-  });
 }
 
 export async function deleteCaptureSession(sessionId) {

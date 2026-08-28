@@ -104,38 +104,6 @@ async fn discard_capture(state: State<'_, Arc<Coordinator>>) -> CommandResult<Ap
     state.discard_capture().await.map_err(command_error)
 }
 
-// Decoding, resizing and re-encoding a screenshot is real work — cheap
-// individually, but the HUD may ask for one per visible step. Offloading it
-// keeps the main thread free the same way capture_targets/previews already
-// do for the picker.
-#[tauri::command]
-async fn capture_step_thumbnail(
-    state: State<'_, Arc<Coordinator>>,
-    step_id: String,
-) -> CommandResult<String> {
-    let coordinator = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || coordinator.step_thumbnail(&step_id))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(command_error)
-}
-
-#[tauri::command]
-fn delete_capture_step(
-    state: State<'_, Arc<Coordinator>>,
-    step_id: String,
-) -> CommandResult<AppSnapshot> {
-    state.delete_step(&step_id).map_err(command_error)
-}
-
-#[tauri::command]
-fn retry_capture_step(
-    state: State<'_, Arc<Coordinator>>,
-    step_id: String,
-) -> CommandResult<AppSnapshot> {
-    state.retry_step(&step_id).map_err(command_error)
-}
-
 #[tauri::command]
 fn update_recorder_settings(
     state: State<'_, Arc<Coordinator>>,
@@ -147,11 +115,6 @@ fn update_recorder_settings(
 #[tauri::command]
 fn show_main_window(state: State<'_, Arc<Coordinator>>) -> CommandResult<()> {
     state.show_main().map_err(command_error)
-}
-
-#[tauri::command]
-fn set_hud_mode(state: State<'_, Arc<Coordinator>>, mode: String) -> CommandResult<()> {
-    state.set_hud_mode(&mode).map_err(command_error)
 }
 
 #[tauri::command]
@@ -226,12 +189,8 @@ pub fn run() {
             resume_capture,
             finish_capture,
             discard_capture,
-            capture_step_thumbnail,
-            delete_capture_step,
-            retry_capture_step,
             update_recorder_settings,
             show_main_window,
-            set_hud_mode,
             open_knowhow,
             check_for_updates,
             request_quit,
@@ -246,13 +205,7 @@ pub fn run() {
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app)
-        .text("new-capture", "New Capture")
-        .separator()
-        .text("pause-resume", "Pause / Resume")
-        .text("finish", "Finish")
-        .separator()
         .text("open-knowhow", "Open KnowHow")
-        .text("settings", "Settings")
         .separator()
         .text("quit", "Quit")
         .build()?;
@@ -280,7 +233,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
                         | RecorderStatus::Finishing
                         | RecorderStatus::Uploading
                 ) {
-                    coordinator.show_hud("compact")
+                    coordinator.show_hud()
                 } else {
                     coordinator.show_main()
                 };
@@ -292,31 +245,6 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| {
             let coordinator = app.state::<Arc<Coordinator>>().inner().clone();
             match event.id().as_ref() {
-                "new-capture" | "settings" => {
-                    if let Err(error) = coordinator.show_main() {
-                        coordinator.set_status_message(command_error(error));
-                    }
-                }
-                "pause-resume" => {
-                    tauri::async_runtime::spawn(async move {
-                        let status = coordinator.snapshot().recorder.status;
-                        let result = if status == RecorderStatus::Paused {
-                            coordinator.resume_capture().await
-                        } else {
-                            coordinator.pause_capture().await
-                        };
-                        if let Err(error) = result {
-                            coordinator.set_status_message(command_error(error));
-                        }
-                    });
-                }
-                "finish" => {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(error) = coordinator.finish_capture().await {
-                            coordinator.set_status_message(command_error(error));
-                        }
-                    });
-                }
                 "open-knowhow" => {
                     if let Err(error) = coordinator.open_knowhow() {
                         coordinator.set_status_message(command_error(error));

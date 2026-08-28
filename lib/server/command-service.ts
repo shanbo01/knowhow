@@ -23,6 +23,7 @@ import {
 } from "./domain-records";
 import {
   entitlementsForPlan,
+  FREE_ENTITLEMENTS,
   inferredCommercialPlan,
   PRO_TRIAL_DAYS,
   subscriptionKindForPlan,
@@ -42,6 +43,7 @@ import {
   applyPlanEntitlements,
   EntitlementDeniedError,
   EntitlementService,
+  organizationWorkspaceLimit,
   OVERRIDABLE_ENTITLEMENTS,
   recordEntitlementBlocked,
   type EntitlementOverridePayload,
@@ -49,6 +51,7 @@ import {
   type OverridableEntitlement,
 } from "./entitlement-service";
 import { PricingCatalogService } from "./pricing-catalog-service";
+import { provisionWorkspaceRecords } from "./workspace-provisioning";
 import { GuideAccessService } from "./guide-access-service";
 import { resourceId, deterministicResourceId } from "./ids";
 import {
@@ -1570,6 +1573,12 @@ export class CommandService {
             1,
             100,
           ),
+          maximumGuides: inputInteger(
+            configuredEntitlements.maximumGuides ?? 1_000,
+            "Maximum guides",
+            1,
+            10_000,
+          ),
           storageBytes: inputInteger(
             configuredEntitlements.storageBytes ?? 5_000_000_000,
             "Storage limit",
@@ -1581,7 +1590,6 @@ export class CommandService {
           supportEnabled: true,
           removeBranding: false,
           privacyToolsEnabled: true,
-          customSubdomainEnabled: true,
           fileExportsEnabled: true,
           publicSignup: false,
           payments: false,
@@ -2902,6 +2910,137 @@ export class CommandService {
         appointmentId: appointment.appointmentId,
         appointmentToken: appointment.token,
       };
+    }
+
+    if (action === "createOrganizationWorkspace") {
+      requireReauthentication(options.reauthenticated);
+      const organizationId = inputText(payload.organizationId, "Organization", {
+        min: 1,
+        max: 36,
+      });
+      const callerRoles = await this.access.organizationRoles(
+        organizationId,
+        identity.userId,
+      );
+      if (
+        !callerRoles.includes("owner") &&
+        !callerRoles.includes("administrator")
+      ) {
+        throw new HttpError(
+          403,
+          "ORGANIZATION_ADMINISTRATOR_REQUIRED",
+          "Organization owner or administrator access is required.",
+        );
+      }
+      const organizationRow = await this.store.get(
+        TABLES.organizations,
+        organizationId,
+      );
+      if (!organizationRow || organizationRow.status !== "active") {
+        throw new HttpError(
+          404,
+          "ORGANIZATION_NOT_FOUND",
+          "Organization not found.",
+        );
+      }
+      const workspaceName = inputText(payload.name, "Workspace name", {
+        min: 2,
+        max: 128,
+      });
+      const existingWorkspaces = await this.store.list(TABLES.workspaces, {
+        filters: [{ field: "organization_id", value: organizationId }],
+        limit: 101,
+      });
+      const liveWorkspaces = existingWorkspaces.filter(
+        (row) => row.status !== "deleted" && row.status !== "archived",
+      ).length;
+      const maximumWorkspaces = await organizationWorkspaceLimit(
+        this.store,
+        organizationId,
+      );
+      if (liveWorkspaces >= maximumWorkspaces) {
+        throw new EntitlementDeniedError(
+          409,
+          "WORKSPACE_ENTITLEMENT_EXCEEDED",
+          `This organization is limited to ${maximumWorkspaces} workspace${
+            maximumWorkspaces === 1 ? "" : "s"
+          }.`,
+          "maximumWorkspaces",
+        );
+      }
+
+      const brandingRows = await this.store.list(TABLES.organizationBranding, {
+        filters: [{ field: "organization_id", value: organizationId }],
+        order: "desc",
+        limit: 1,
+      });
+      const branding = brandingRows[0]
+        ? decodePayload<{ logoMediaId?: string | null; accentColor?: string }>(
+            brandingRows[0],
+            {},
+          )
+        : {};
+      const accentColor =
+        typeof branding.accentColor === "string" &&
+        /^#[0-9a-f]{6}$/i.test(branding.accentColor)
+          ? branding.accentColor.toLowerCase()
+          : DEFAULT_WORKSPACE_SETTINGS.accentColor;
+
+      const workspaceId = resourceId("workspace");
+      const createdAt = nowIso();
+      // Every workspace bills separately, and the Pro trial is consumed once per
+      // organization — otherwise creating workspaces would mint unlimited
+      // 14-day trials. New workspaces start on Free and upgrade on their own.
+      const subscription: SubscriptionRecord = {
+        kind: "trial",
+        plan: "free",
+        status: "active",
+        startsAt: createdAt,
+        expiresAt: null,
+        graceDays: 0,
+        retentionDays: 90,
+        publicTrial: false,
+        manualContract: false,
+        trialConsumed: true,
+      };
+      await provisionWorkspaceRecords(this.store, {
+        ids: {
+          workspaceId,
+          settingsId: resourceId("settings"),
+          memberId: resourceId("member"),
+          subscriptionId: resourceId("subscription"),
+          onboardingProgressId: resourceId("onboard"),
+        },
+        organizationId,
+        name: workspaceName,
+        slug: `${slugify(workspaceName)}-${workspaceId.slice(-5)}`,
+        createdAt,
+        actor: {
+          userId: identity.userId,
+          email: identity.email,
+          name: identity.name,
+        },
+        accentColor,
+        logoMediaId: branding.logoMediaId ?? null,
+        subscription: {
+          ...subscription,
+          catalogItemId: "built_in_free_default",
+          originalExpiresAt: null,
+          deletionEligibleAt: null,
+        },
+        subscriptionKind: "trial",
+        entitlements: { ...FREE_ENTITLEMENTS },
+        entitlementSource: "built_in_free_default",
+      });
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "workspace.created",
+        targetType: "workspace",
+        targetId: workspaceId,
+        targetLabel: workspaceName,
+        summary: `${workspaceName} workspace created`,
+        metadata: { organizationId, plan: "free" },
+      });
+      return { workspaceId, name: workspaceName, plan: "free" };
     }
 
     if (action === "appointOrganizationMember") {
@@ -4959,6 +5098,8 @@ export class CommandService {
         "publishGuide",
         "shareGuide",
         "unshareGuide",
+        "unpublishGuide",
+        "duplicateGuide",
         "archiveGuide",
         "deleteGuide",
         "restoreRevision",

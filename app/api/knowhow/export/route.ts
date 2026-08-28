@@ -91,21 +91,22 @@ export async function POST(request: Request) {
     if (
       !guideRow ||
       guideRow.workspace_id !== workspaceId ||
-      !guide?.publishedRevisionId ||
+      !(guide?.workingRevisionId ?? guide?.publishedRevisionId) ||
       guide.deletedAt
     ) {
       throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     }
+    const revisionId = guide.workingRevisionId ?? guide.publishedRevisionId!;
     const authorized = await new GuideAccessService(store).require(
       identity,
       workspaceId,
       guideId,
-      guide.publishedRevisionId,
+      revisionId,
       "guide.export",
     );
     const [audienceRows, settingRows] = await Promise.all([
       store.list(TABLES.guideAudiences, {
-        filters: [{ field: "subject_id", value: guide.publishedRevisionId }],
+        filters: [{ field: "subject_id", value: revisionId }],
       }),
       store.list(TABLES.workspaceSettings, {
         filters: [{ field: "workspace_id", value: workspaceId }],
@@ -118,7 +119,9 @@ export async function POST(request: Request) {
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
-    const restricted = !audienceRows.some((row) => row.kind === "workspace");
+    const restricted =
+      authorized.revision.status === "published" &&
+      !audienceRows.some((row) => row.kind === "workspace");
     const requestedAt = new Date().toISOString();
     const jobId = await deterministicResourceId(
       "export",
@@ -128,9 +131,9 @@ export async function POST(request: Request) {
     const extension = format === "markdown" ? "md" : format === "pptx" ? "pptx" : format;
     const details: ExportJobRecord = {
       guideId,
-      revisionId: guide.publishedRevisionId,
+      revisionId,
       format,
-      filename: `${safeExportFilename(guide.title)}.${extension}`,
+      filename: `${safeExportFilename(authorized.revision.title)}.${extension}`,
       outputFileId,
       requestedAt,
       requester: {
@@ -154,7 +157,7 @@ export async function POST(request: Request) {
               organization_id: authorized.access.workspace.organizationId,
               workspace_id: workspaceId,
               user_id: identity.userId,
-              subject_id: guide.publishedRevisionId!,
+              subject_id: revisionId,
               status: "queued",
               kind: format,
               idempotency_key: idempotencyKey,
@@ -190,7 +193,7 @@ export async function POST(request: Request) {
           targetLabel: authorized.revision.title,
           summary: `${authorized.revision.title} export requested as ${format.toUpperCase()}`,
           metadata: {
-            revisionId: guide.publishedRevisionId,
+            revisionId,
             format,
             restricted,
             watermarked: details.watermarked,
@@ -213,7 +216,7 @@ export async function POST(request: Request) {
     if (
       !replay ||
       replay.guideId !== guideId ||
-      replay.revisionId !== guide.publishedRevisionId ||
+      replay.revisionId !== revisionId ||
       replay.format !== format
     ) {
       throw new HttpError(

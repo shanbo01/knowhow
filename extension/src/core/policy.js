@@ -68,6 +68,10 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   // Categories this workspace suggests covering. Shown as a hint in the on-page
   // panel; it never enables a detector by itself.
   recommendedRedactions: [],
+  // Records what the author types into ordinary fields so a guide can say what
+  // to enter, not just where. Password, username and other credential fields
+  // are never read whatever this is set to.
+  captureTypedText: true,
   clickTargetColor: "#d97706",
   // Shown briefly on-page when a capture starts or resumes; never present
   // while a screenshot is actually taken. Toggled from the side panel.
@@ -204,14 +208,6 @@ export function evaluateCaptureUrl(value, policy = DEFAULT_CAPTURE_POLICY) {
   };
 }
 
-export function sameOrigin(left, right) {
-  try {
-    return new URL(left).origin === new URL(right).origin;
-  } catch {
-    return false;
-  }
-}
-
 export function mergePolicy(stored = {}) {
   const storedVersion = Number.isInteger(stored.schemaVersion)
     ? stored.schemaVersion
@@ -274,6 +270,10 @@ export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
     excludedSites: [...local.excludedSites, ...workspaceExcluded],
     clickTargetColor,
     smartBlurEnabled: local.smartBlurEnabled === true,
+    // A workspace can switch typed-text capture off for everyone; it cannot
+    // switch it on for an author who turned it off.
+    captureTypedText:
+      context?.captureTypedText === false ? false : local.captureTypedText !== false,
     // Workspace categories are advice, not a switch: they tell the author what
     // this workspace cares about covering, while every detector stays off until
     // the author turns it on for the session. Nothing is ever covered, and no

@@ -23,6 +23,7 @@ import { resolveSelfServiceTrialPlan } from "./pricing-catalog-service";
 import type { RecordStore } from "./record-store";
 import { registrationMode } from "./registration-mode";
 import type { AuthenticatedIdentity } from "./session-identity";
+import { provisionWorkspaceRecords } from "./workspace-provisioning";
 
 const DAY = 86_400_000;
 
@@ -448,7 +449,6 @@ export class SelfServiceProvisioningService {
             supportEnabled: true,
             removeBranding: true,
             privacyToolsEnabled: true,
-            customSubdomainEnabled: true,
             fileExportsEnabled: true,
           };
     const accentColor = normalizeAccent(required.accentColor);
@@ -493,122 +493,41 @@ export class SelfServiceProvisioningService {
         { logoMediaId: null, accentColor, updatedAt: startsAt },
       ),
     );
-    await this.store.create(
-      TABLES.workspaces,
-      ids.workspaceId,
-      rowData(
-        {
-          organization_id: ids.organizationId,
-          slug: workspaceSlug,
-          status: "active",
-          created_by: identity.userId,
-          request_id: options.requestId,
-        },
-        workspace,
-      ),
-    );
-    await this.store.create(
-      TABLES.workspaceSettings,
-      ids.settingsId,
-      rowData(
-        {
-          organization_id: ids.organizationId,
-          workspace_id: ids.workspaceId,
-          status: "active",
-          created_by: identity.userId,
-        },
-        { ...DEFAULT_WORKSPACE_SETTINGS, accentColor },
-      ),
-    );
-    const member: WorkspaceMemberRecord = {
-      name: identity.name,
-      roles: ["administrator"],
-      groupIds: [],
-      joinedAt: startsAt,
-    };
-    await this.store.create(
-      TABLES.workspaceMembers,
-      ids.memberId,
-      rowData(
-        {
-          organization_id: ids.organizationId,
-          workspace_id: ids.workspaceId,
-          user_id: identity.userId,
-          email: identity.email,
-          status: "active",
-          created_by: identity.userId,
-        },
-        member,
-      ),
-    );
-    await this.store.create(
-      TABLES.subscriptions,
-      ids.subscriptionId,
-      rowData(
-        {
-          organization_id: ids.organizationId,
-          workspace_id: ids.workspaceId,
-          status: "active",
-          kind: "trial",
-          created_by: identity.userId,
-        },
-        {
-          ...subscription,
-          catalogItemId:
-            commercialPlan === "pro_trial"
-              ? catalogPlan.catalogItemId
-              : "built_in_free_default",
-          originalExpiresAt: expiresAt,
-          deletionEligibleAt,
-        },
-      ),
-    );
-    for (const [kind, value] of Object.entries(planEntitlements)) {
-      const entitlementId = await deterministicResourceId(
-        "entitle",
-        `${ids.workspaceId}:${kind}`,
-      );
-      await this.store.create(
-        TABLES.entitlements,
-        entitlementId,
-        rowData(
-          {
-            organization_id: ids.organizationId,
-            workspace_id: ids.workspaceId,
-            kind,
-            status: "active",
-            created_by: identity.userId,
-          },
-          {
-            value,
-            source:
-              commercialPlan === "pro_trial"
-                ? catalogPlan.catalogItemId
-                : "built_in_free_default",
-          },
-        ),
-      );
-    }
-    await this.store.create(
-      TABLES.onboardingProgress,
-      ids.onboardingProgressId,
-      rowData(
-        {
-          organization_id: ids.organizationId,
-          workspace_id: ids.workspaceId,
-          user_id: identity.userId,
-          status: "active",
-          occurred_at: startsAt,
-          created_by: identity.userId,
-        },
-        {
-          startedAt: startsAt,
-          completedAt: null,
-          currentStep: "workspace_readiness",
-          skippedSteps: [],
-        },
-      ),
-    );
+    await provisionWorkspaceRecords(this.store, {
+      ids: {
+        workspaceId: ids.workspaceId,
+        settingsId: ids.settingsId,
+        memberId: ids.memberId,
+        subscriptionId: ids.subscriptionId,
+        onboardingProgressId: ids.onboardingProgressId,
+      },
+      organizationId: ids.organizationId,
+      name: workspace.name,
+      slug: workspaceSlug,
+      createdAt: startsAt,
+      actor: {
+        userId: identity.userId,
+        email: identity.email,
+        name: identity.name,
+      },
+      accentColor,
+      subscription: {
+        ...subscription,
+        catalogItemId:
+          commercialPlan === "pro_trial"
+            ? catalogPlan.catalogItemId
+            : "built_in_free_default",
+        originalExpiresAt: expiresAt,
+        deletionEligibleAt,
+      },
+      subscriptionKind: "trial",
+      entitlements: planEntitlements,
+      entitlementSource:
+        commercialPlan === "pro_trial"
+          ? catalogPlan.catalogItemId
+          : "built_in_free_default",
+      requestId: options.requestId,
+    });
     const milestoneKinds = [
       "registration.completed",
       "organization.created",

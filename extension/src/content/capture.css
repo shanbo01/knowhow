@@ -72,11 +72,13 @@
   content: "";
   pointer-events: none;
   border-radius: inherit;
-  /* Opacity is the privacy guarantee. Backdrop-filter is a cheap hint of
-     the underlying surface, not the thing that has to hide glyphs. */
-  background: rgba(37, 45, 57, 0.9);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  /* This is only the fallback for text that has no safe element host. Keep it
+     visually consistent with the normal `filter: blur()` path instead of
+     reviving the old opaque cover block. Final screenshots are still baked by
+     the local rasterizer before upload. */
+  background: rgba(37, 45, 57, 0.14);
+  -webkit-backdrop-filter: blur(8px) saturate(72%) contrast(95%);
+  backdrop-filter: blur(8px) saturate(72%) contrast(95%);
   transition: none;
 }
 

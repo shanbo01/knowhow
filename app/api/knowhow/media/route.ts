@@ -4,6 +4,7 @@ import { appendAudit } from "../../../../lib/server/audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
   decodePayload,
+  type FaviconMediaRecord,
   rowData,
   type PrivateMediaRecord,
   type RevisionRecord,
@@ -129,7 +130,39 @@ export async function GET(request: Request) {
     let fileId: string;
     let contentType: string;
     let expectedHash: string;
-    if (url.searchParams.get("kind") === "logo") {
+    if (url.searchParams.get("kind") === "favicon") {
+      const mediaId = requiredId(url, "mediaId", "Media");
+      const guideId = requiredId(url, "guideId", "Guide");
+      const revisionId = requiredId(url, "revisionId", "Revision");
+      const authorized = await new GuideAccessService(store).require(
+        identity,
+        workspaceId,
+        guideId,
+        revisionId,
+        "guide.read",
+      );
+      if (authorized.guide.faviconMediaId !== mediaId) {
+        throw new HttpError(404, "MEDIA_NOT_FOUND", "Media not found.");
+      }
+      const mediaRow = await store.get(TABLES.privateMedia, mediaId);
+      const metadata = mediaRow
+        ? decodePayload<FaviconMediaRecord>(mediaRow, null as never)
+        : null;
+      if (
+        !mediaRow ||
+        mediaRow.workspace_id !== workspaceId ||
+        mediaRow.status !== "ready" ||
+        mediaRow.kind !== "favicon" ||
+        !metadata ||
+        metadata.deletedAt ||
+        metadata.storageFileId !== mediaId
+      ) {
+        throw new HttpError(404, "MEDIA_NOT_FOUND", "Media not found.");
+      }
+      fileId = metadata.storageFileId;
+      contentType = metadata.contentType;
+      expectedHash = metadata.sha256;
+    } else if (url.searchParams.get("kind") === "logo") {
       requireAuthorized("workspace.read", context);
       const logo = await configuredLogo(store, workspaceId);
       if (!logo.value.logoUrl) throw new HttpError(404, "LOGO_NOT_FOUND", "Workspace logo not found.");

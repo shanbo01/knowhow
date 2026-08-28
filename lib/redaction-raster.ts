@@ -33,9 +33,25 @@ export function redactionSampleDimensions(
 }
 
 /**
+ * How coarse a redaction is, in source-image pixels. Shared so the editor's
+ * live preview and the flattened result resolve to the same grid: a preview
+ * that is smoother or blockier than what gets baked is a preview that lies
+ * about what the reader will see.
+ */
+export function redactionBlockSize(cropWidth: number, cropHeight: number) {
+  const width = Number.isFinite(cropWidth) ? cropWidth : 0;
+  const height = Number.isFinite(cropHeight) ? cropHeight : 0;
+  return Math.max(12, Math.min(width, height) * 0.02);
+}
+
+/**
  * Paints an actually resampled redaction into the destination canvas.
  * Downsampling is the privacy guarantee; the second, filtered pass only
  * softens the enlarged samples so the result reads visually as a blur.
+ *
+ * `blockSize` is measured in *source* pixels, so the same region resolves to
+ * the same number of samples whether it is being drawn at screen size for the
+ * editor or at full size for the bake.
  */
 export function paintRasterRedaction(
   context: CanvasRenderingContext2D,
@@ -55,10 +71,16 @@ export function paintRasterRedaction(
   }
 
   const sample = redactionSampleDimensions(
-    destinationRect.width,
-    destinationRect.height,
+    sourceRect.width,
+    sourceRect.height,
     blockSize,
   );
+  // The softening pass is cosmetic and has to be expressed in destination
+  // pixels. When the destination is the full-size raster this is 1 and the
+  // baked result is unchanged; when it is a scaled-down editor preview it
+  // keeps the softness proportional instead of over-blurring the preview.
+  const destinationScale =
+    sourceRect.width > 0 ? destinationRect.width / sourceRect.width : 1;
   scratch.width = sample.width;
   scratch.height = sample.height;
   const scratchContext = scratch.getContext("2d");
@@ -104,7 +126,7 @@ export function paintRasterRedaction(
 
   // This pass is cosmetic. If `filter` is unsupported, the resampled first
   // pass above still guarantees the selected pixels are not reproduced.
-  context.filter = `blur(${Math.max(2, Math.min(14, blockSize * 0.44))}px) saturate(72%) contrast(95%)`;
+  context.filter = `blur(${Math.max(2, Math.min(14, blockSize * 0.44 * destinationScale))}px) saturate(72%) contrast(95%)`;
   context.globalAlpha = 0.96;
   context.drawImage(
     scratch,

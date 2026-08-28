@@ -4,17 +4,20 @@ export class KnowHowApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly requestId?: string;
+  /** The blocked entitlement, when the request failed a plan check. */
+  readonly entitlement?: string;
 
   constructor(
     status: number,
     message: string,
-    details: { code?: string; requestId?: string } = {},
+    details: { code?: string; requestId?: string; entitlement?: string } = {},
   ) {
     super(message);
     this.name = "KnowHowApiError";
     this.status = status;
     this.code = details.code;
     this.requestId = details.requestId;
+    this.entitlement = details.entitlement;
   }
 }
 
@@ -78,15 +81,18 @@ export async function knowhowApi<T>(
     let message = `Request failed (${response.status})`;
     let code: string | undefined;
     let requestId: string | undefined;
+    let entitlement: string | undefined;
     try {
       const payload = (await response.json()) as {
         error?: string;
         code?: string;
         requestId?: string;
+        entitlement?: string;
       };
       if (payload.error) message = payload.error;
       code = payload.code;
       requestId = payload.requestId;
+      entitlement = payload.entitlement;
     } catch {
       // Keep the status-based fallback for non-JSON infrastructure errors.
     }
@@ -99,7 +105,11 @@ export async function knowhowApi<T>(
     ) {
       return knowhowApi<T>(path, init, false);
     }
-    throw new KnowHowApiError(response.status, message, { code, requestId });
+    throw new KnowHowApiError(response.status, message, {
+      code,
+      requestId,
+      entitlement,
+    });
   }
 
   return (await response.json()) as T;
@@ -207,7 +217,7 @@ export async function downloadAuthorizedExport(
       .get("content-disposition")
       ?.match(/filename="([^"]+)"/)?.[1] ??
     queued.filename ??
-    `knowhow-guide.${format}`;
+    `knowhow-guide.${format === "markdown" ? "md" : format}`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -345,6 +355,77 @@ export async function loadAuthorizedMediaUrl(
   mediaId: string,
 ) {
   return fetchAuthorizedMediaUrl(workspaceId, mediaId);
+}
+
+type AuthorizedFaviconRequest = {
+  workspaceId: string;
+  mediaId: string;
+  guideId: string;
+  revisionId: string;
+};
+
+const faviconUrlCache = new Map<string, MediaCacheEntry>();
+
+function faviconCacheKey(input: AuthorizedFaviconRequest) {
+  return `${input.workspaceId}:${input.mediaId}`;
+}
+
+async function fetchAuthorizedFaviconUrl(input: AuthorizedFaviconRequest) {
+  const params = new URLSearchParams({
+    kind: "favicon",
+    workspaceId: input.workspaceId,
+    mediaId: input.mediaId,
+    guideId: input.guideId,
+    revisionId: input.revisionId,
+  });
+  const blob = await authorizedBlob(`/api/knowhow/media?${params}`);
+  return URL.createObjectURL(blob);
+}
+
+export async function acquireAuthorizedFaviconUrl(
+  input: AuthorizedFaviconRequest,
+) {
+  const key = faviconCacheKey(input);
+  const existing = faviconUrlCache.get(key);
+  if (existing?.url) {
+    existing.refs += 1;
+    return existing.url;
+  }
+  if (existing?.promise) {
+    existing.refs += 1;
+    return existing.promise;
+  }
+
+  const entry: MediaCacheEntry = { url: "", refs: 1 };
+  entry.promise = fetchAuthorizedFaviconUrl(input)
+    .then((url) => {
+      entry.url = url;
+      entry.promise = undefined;
+      if (entry.refs <= 0) {
+        URL.revokeObjectURL(url);
+        faviconUrlCache.delete(key);
+        throw new Error("The website icon is no longer in use.");
+      }
+      return url;
+    })
+    .catch((error) => {
+      entry.promise = undefined;
+      if (!entry.url) faviconUrlCache.delete(key);
+      throw error;
+    });
+  faviconUrlCache.set(key, entry);
+  return entry.promise;
+}
+
+export function releaseAuthorizedFaviconUrl(input: AuthorizedFaviconRequest) {
+  const key = faviconCacheKey(input);
+  const entry = faviconUrlCache.get(key);
+  if (!entry) return;
+  entry.refs = Math.max(0, entry.refs - 1);
+  if (entry.refs === 0 && !entry.promise) {
+    if (entry.url) URL.revokeObjectURL(entry.url);
+    faviconUrlCache.delete(key);
+  }
 }
 
 /** Loads the current workspace logo through the existing private media boundary. */

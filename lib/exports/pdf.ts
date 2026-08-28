@@ -19,10 +19,10 @@ import type {
 } from "../guide-contracts";
 import { prepareGuideExport } from "./policy";
 import {
-  formatIsoDate,
-  formatWatermark,
+  formatLongDate,
   hexToRgb,
   pdfSafeText,
+  watermarkParts,
 } from "./shared";
 import {
   GuideRendererError,
@@ -32,25 +32,32 @@ import {
 
 const PAGE_WIDTH = 595.28;
 const PAGE_HEIGHT = 841.89;
-const MARGIN_X = 48;
-const TOP = 790;
-const BOTTOM = 52;
+const MARGIN_X = 56;
+const TOP = 786;
+/** First baseline on a continuation page, below the running header. */
+const CONTINUED_TOP = PAGE_HEIGHT - 62;
+const BOTTOM = 66;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
+/** Left gutter reserved for the step number rail. */
+const STEP_INDENT = 34;
 
-const INK = rgb(0.09, 0.13, 0.1);
-const MUTED = rgb(0.36, 0.42, 0.38);
-const RULE = rgb(0.82, 0.85, 0.82);
-const NOTE_BACKGROUND = rgb(0.95, 0.97, 0.95);
-const WARNING_BACKGROUND = rgb(1, 0.97, 0.9);
-const SUCCESS_BACKGROUND = rgb(0.93, 0.98, 0.95);
+const INK = rgb(0.08, 0.09, 0.1);
+const INK_SOFT = rgb(0.24, 0.28, 0.29);
+const MUTED = rgb(0.42, 0.46, 0.48);
+const RULE = rgb(0.886, 0.902, 0.902);
+const RULE_STRONG = rgb(0.804, 0.831, 0.831);
+const WARNING = rgb(0.6, 0.29, 0);
+const WARNING_BACKGROUND = rgb(1, 0.965, 0.914);
+const SUCCESS = rgb(0.122, 0.42, 0.282);
+const SUCCESS_BACKGROUND = rgb(0.933, 0.973, 0.949);
+const WHITE = rgb(1, 1, 1);
 
 interface PdfFonts {
   readonly regular: PDFFont;
   readonly bold: PDFFont;
-  readonly mono: PDFFont;
 }
 
-interface WrappedTextOptions {
+interface TextStyle {
   readonly font?: PDFFont;
   readonly size?: number;
   readonly color?: ReturnType<typeof rgb>;
@@ -99,6 +106,10 @@ function wrapLine(
   return lines;
 }
 
+/**
+ * Lays out a multi-paragraph string. A blank source line is a paragraph break
+ * and becomes one blank output line; a single newline stays a line break.
+ */
 function wrapParagraphs(
   value: string,
   font: PDFFont,
@@ -106,12 +117,16 @@ function wrapParagraphs(
   width: number,
 ): string[] {
   const result: string[] = [];
-  const paragraphs = value.split(/\r?\n/);
-  paragraphs.forEach((paragraph, index) => {
-    result.push(...wrapLine(paragraph, font, size, width));
-    if (index < paragraphs.length - 1 && paragraph.trim()) result.push("");
-  });
-  return result;
+  for (const paragraph of pdfSafeText(value).split(/\n{2,}/)) {
+    const lines = paragraph
+      .split("\n")
+      .filter((line) => line.trim())
+      .flatMap((line) => wrapLine(line, font, size, width));
+    if (!lines.length) continue;
+    if (result.length) result.push("");
+    result.push(...lines);
+  }
+  return result.length ? result : [""];
 }
 
 function centeredX(text: string, font: PDFFont, size: number): number {
@@ -136,6 +151,12 @@ async function embedImage(
   }
 }
 
+function calloutLabel(tone: "note" | "warning" | "success"): string {
+  if (tone === "warning") return "Warning";
+  if (tone === "success") return "Tip";
+  return "Note";
+}
+
 export async function renderGuideToPdf(
   candidate: PublishedGuideRevision,
   options: GuideRenderOptions = {},
@@ -148,11 +169,26 @@ export async function renderGuideToPdf(
     const fonts: PdfFonts = {
       regular: await document.embedFont(StandardFonts.Helvetica),
       bold: await document.embedFont(StandardFonts.HelveticaBold),
-      mono: await document.embedFont(StandardFonts.Courier),
     };
     const accentValue = hexToRgb(revision.branding.accentColor);
     const accent = rgb(accentValue.red, accentValue.green, accentValue.blue);
+    const accentDeep = rgb(
+      accentValue.red * 0.68,
+      accentValue.green * 0.68,
+      accentValue.blue * 0.68,
+    );
+    const accentWash = rgb(
+      accentValue.red + (1 - accentValue.red) * 0.94,
+      accentValue.green + (1 - accentValue.green) * 0.94,
+      accentValue.blue + (1 - accentValue.blue) * 0.94,
+    );
+    const accentEdge = rgb(
+      accentValue.red + (1 - accentValue.red) * 0.7,
+      accentValue.green + (1 - accentValue.green) * 0.7,
+      accentValue.blue + (1 - accentValue.blue) * 0.7,
+    );
     const imageCache = new Map<string, PDFImage | undefined>();
+    const marks = watermarkParts(watermark);
 
     document.setTitle(pdfSafeText(revision.title));
     document.setAuthor(pdfSafeText(revision.branding.workspaceName));
@@ -160,6 +196,7 @@ export async function renderGuideToPdf(
     document.setCreator("KnowHow");
     document.setProducer("KnowHow");
     document.setKeywords(["KnowHow", "guide", "SOP", revision.guideId]);
+    document.setLanguage("en");
     const publishedDate = new Date(revision.publishedAt);
     document.setCreationDate(publishedDate);
     document.setModificationDate(publishedDate);
@@ -167,201 +204,263 @@ export async function renderGuideToPdf(
     let page: PDFPage = document.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     let y = TOP;
 
-    const continuationHeader = (target: PDFPage) => {
+    const runningHeader = (target: PDFPage) => {
       const left = pdfSafeText(revision.title);
       const right = `Revision ${revision.revisionNumber}`;
-      target.drawText(left, {
+      const rightWidth = fonts.regular.widthOfTextAtSize(right, 8);
+      const [clipped] = wrapLine(
+        left,
+        fonts.bold,
+        8,
+        CONTENT_WIDTH - rightWidth - 24,
+      );
+      target.drawText(clipped ?? left, {
         x: MARGIN_X,
-        y: PAGE_HEIGHT - 30,
-        font: fonts.regular,
+        y: PAGE_HEIGHT - 36,
+        font: fonts.bold,
         size: 8,
         color: MUTED,
-        maxWidth: CONTENT_WIDTH - 80,
       });
       target.drawText(right, {
-        x: PAGE_WIDTH - MARGIN_X - fonts.regular.widthOfTextAtSize(right, 8),
-        y: PAGE_HEIGHT - 30,
+        x: PAGE_WIDTH - MARGIN_X - rightWidth,
+        y: PAGE_HEIGHT - 36,
         font: fonts.regular,
         size: 8,
         color: MUTED,
       });
       target.drawLine({
-        start: { x: MARGIN_X, y: PAGE_HEIGHT - 37 },
-        end: { x: PAGE_WIDTH - MARGIN_X, y: PAGE_HEIGHT - 37 },
+        start: { x: MARGIN_X, y: PAGE_HEIGHT - 44 },
+        end: { x: PAGE_WIDTH - MARGIN_X, y: PAGE_HEIGHT - 44 },
         thickness: 0.5,
         color: RULE,
       });
     };
 
-    const addPage = (continuation = true) => {
+    const addPage = () => {
       page = document.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-      if (continuation) continuationHeader(page);
-      y = continuation ? PAGE_HEIGHT - 58 : TOP;
+      runningHeader(page);
+      y = CONTINUED_TOP;
     };
 
     const ensureSpace = (height: number) => {
-      if (y - height < BOTTOM) addPage(true);
+      if (y - height < BOTTOM) addPage();
     };
 
-    const drawWrapped = (
-      value: string,
-      settings: WrappedTextOptions = {},
-    ): void => {
-      const font = settings.font ?? fonts.regular;
-      const size = settings.size ?? 10.5;
-      const lineHeight = settings.lineHeight ?? size * 1.45;
-      const indent = settings.indent ?? 0;
+    /**
+     * Moves to a fresh page when `height` will not fit here but would fit on an
+     * empty one. Used to stop a step's heading from being stranded above the
+     * page break, away from its instructions and screenshot.
+     */
+    const keepTogether = (height: number) => {
+      if (height <= y - BOTTOM) return;
+      if (height <= CONTINUED_TOP - BOTTOM) addPage();
+    };
+
+    const measure = (value: string, style: TextStyle = {}): number => {
+      const font = style.font ?? fonts.regular;
+      const size = style.size ?? 10.5;
+      const lineHeight = style.lineHeight ?? size * 1.45;
+      const lines = wrapParagraphs(
+        value,
+        font,
+        size,
+        CONTENT_WIDTH - (style.indent ?? 0),
+      );
+      return lines.length * lineHeight + (style.after ?? 5);
+    };
+
+    const drawWrapped = (value: string, style: TextStyle = {}): void => {
+      const font = style.font ?? fonts.regular;
+      const size = style.size ?? 10.5;
+      const lineHeight = style.lineHeight ?? size * 1.45;
+      const indent = style.indent ?? 0;
       const lines = wrapParagraphs(value, font, size, CONTENT_WIDTH - indent);
       for (const line of lines) {
         ensureSpace(lineHeight);
         if (line) {
           page.drawText(line, {
             x: MARGIN_X + indent,
-            y,
+            y: y - size,
             font,
             size,
-            color: settings.color ?? INK,
+            color: style.color ?? INK,
           });
         }
         y -= lineHeight;
       }
-      y -= settings.after ?? 5;
+      y -= style.after ?? 5;
     };
 
-    const drawCallout = (
-      title: string,
+    const panelLines = (label: string, body: string, indent: number) => {
+      const inner = CONTENT_WIDTH - indent - 26;
+      return {
+        labelLines: wrapLine(label.toUpperCase(), fonts.bold, 8, inner),
+        bodyLines: wrapParagraphs(body, fonts.regular, 9.75, inner),
+      };
+    };
+
+    const panelHeight = (label: string, body: string, indent = 0): number => {
+      const { labelLines, bodyLines } = panelLines(label, body, indent);
+      return 26 + labelLines.length * 11 + 4 + bodyLines.length * 13.5 + 12;
+    };
+
+    const drawPanel = (
+      label: string,
       body: string,
       tone: "note" | "warning" | "success",
+      indent = 0,
     ) => {
-      const titleLines = wrapParagraphs(title, fonts.bold, 10, CONTENT_WIDTH - 28);
-      const bodyLines = wrapParagraphs(body, fonts.regular, 9.5, CONTENT_WIDTH - 28);
-      const height =
-        14 + titleLines.length * 13 + bodyLines.length * 13.5 + 10;
-      if (height > PAGE_HEIGHT - 130) {
-        ensureSpace(48);
-        page.drawRectangle({
-          x: MARGIN_X,
-          y: y - 31,
-          width: 3,
-          height: 36,
-          color: tone === "warning" ? rgb(0.63, 0.36, 0) : accent,
-        });
-        drawWrapped(title, {
-          font: fonts.bold,
-          size: 10,
-          lineHeight: 13,
-          indent: 14,
-          after: 3,
-        });
-        drawWrapped(body, {
-          size: 9.5,
-          lineHeight: 13.5,
-          indent: 14,
-          after: 10,
-        });
-        return;
-      }
-      ensureSpace(Math.min(height, PAGE_HEIGHT - 120));
-      const startY = y;
+      const width = CONTENT_WIDTH - indent;
+      const padding = 13;
+      const { labelLines, bodyLines } = panelLines(label, body, indent);
+      const height = padding * 2 + labelLines.length * 11 + 4 + bodyLines.length * 13.5;
       const background =
         tone === "warning"
           ? WARNING_BACKGROUND
           : tone === "success"
             ? SUCCESS_BACKGROUND
-            : NOTE_BACKGROUND;
-      const border = tone === "warning" ? rgb(0.63, 0.36, 0) : accent;
+            : accentWash;
+      const edge =
+        tone === "warning"
+          ? rgb(0.94, 0.83, 0.65)
+          : tone === "success"
+            ? rgb(0.749, 0.878, 0.804)
+            : accentEdge;
+      const labelColor =
+        tone === "warning" ? WARNING : tone === "success" ? SUCCESS : accentDeep;
+      const spine = tone === "warning" ? WARNING : tone === "success" ? SUCCESS : accent;
+
+      keepTogether(height + 10);
+      // A panel taller than a page has to flow, so fall back to a plain rule.
+      if (height > CONTINUED_TOP - BOTTOM) {
+        page.drawRectangle({
+          x: MARGIN_X + indent,
+          y: y - 30,
+          width: 2.5,
+          height: 34,
+          color: spine,
+        });
+        drawWrapped(label.toUpperCase(), {
+          font: fonts.bold,
+          size: 8,
+          lineHeight: 11,
+          color: labelColor,
+          indent: indent + 12,
+          after: 3,
+        });
+        drawWrapped(body, {
+          size: 9.75,
+          lineHeight: 13.5,
+          color: INK_SOFT,
+          indent: indent + 12,
+          after: 12,
+        });
+        return;
+      }
+
+      const top = y;
       page.drawRectangle({
-        x: MARGIN_X,
-        y: y - height + 5,
-        width: CONTENT_WIDTH,
+        x: MARGIN_X + indent,
+        y: top - height,
+        width,
         height,
         color: background,
+        borderColor: edge,
+        borderWidth: 0.7,
       });
       page.drawRectangle({
-        x: MARGIN_X,
-        y: y - height + 5,
-        width: 3,
+        x: MARGIN_X + indent,
+        y: top - height,
+        width: 2.5,
         height,
-        color: border,
+        color: spine,
       });
-      y -= 13;
-      for (const line of titleLines) {
+      let cursor = top - padding;
+      for (const line of labelLines) {
         page.drawText(line, {
-          x: MARGIN_X + 14,
-          y,
+          x: MARGIN_X + indent + padding,
+          y: cursor - 8,
           font: fonts.bold,
-          size: 10,
-          color: INK,
+          size: 8,
+          color: labelColor,
         });
-        y -= 13;
+        cursor -= 11;
       }
+      cursor -= 4;
       for (const line of bodyLines) {
         if (line) {
           page.drawText(line, {
-            x: MARGIN_X + 14,
-            y,
+            x: MARGIN_X + indent + padding,
+            y: cursor - 9.75,
             font: fonts.regular,
-            size: 9.5,
-            color: INK,
+            size: 9.75,
+            color: INK_SOFT,
           });
         }
-        y -= 13.5;
+        cursor -= 13.5;
       }
-      y = startY - height - 8;
+      y = top - height - 12;
     };
 
     const imageFor = async (
       media: GuideActionMedia,
-      source: GuideExportAsset | undefined,
     ): Promise<PDFImage | undefined> => {
       if (imageCache.has(media.mediaId)) return imageCache.get(media.mediaId);
+      const source = assets.get(media.mediaId);
       const embedded = source ? await embedImage(document, source) : undefined;
       imageCache.set(media.mediaId, embedded);
       return embedded;
     };
 
-    const drawMedia = async (media: GuideActionMedia) => {
-      const embedded = await imageFor(media, assets.get(media.mediaId));
-      if (!embedded) {
-        ensureSpace(62);
-        page.drawRectangle({
-          x: MARGIN_X + 38,
-          y: y - 48,
-          width: CONTENT_WIDTH - 38,
-          height: 48,
-          borderColor: RULE,
-          borderWidth: 1,
-        });
-        const placeholder = pdfSafeText(`Screenshot: ${media.altText}`);
-        const lines = wrapLine(placeholder, fonts.regular, 9, CONTENT_WIDTH - 62);
-        lines.slice(0, 2).forEach((line, index) => {
-          page.drawText(line, {
-            x: MARGIN_X + 50,
-            y: y - 20 - index * 12,
-            font: fonts.regular,
-            size: 9,
-            color: MUTED,
-          });
-        });
-        y -= 62;
-        return;
-      }
-
-      const maxWidth = CONTENT_WIDTH - 38;
-      const maxHeight = 420;
+    /** Screenshot box, in flow order, so a step can be measured before drawing. */
+    const mediaBox = (media: GuideActionMedia, embedded: PDFImage | undefined) => {
+      const maxWidth = CONTENT_WIDTH - STEP_INDENT;
+      if (!embedded) return { width: maxWidth, height: 54, total: 54 + 12 };
+      const maxHeight = 400;
       const crop = media.crop ?? { x: 0, y: 0, width: 1, height: 1 };
       const croppedWidth = embedded.width * crop.width;
       const croppedHeight = embedded.height * crop.height;
       const scale = Math.min(maxWidth / croppedWidth, maxHeight / croppedHeight, 1);
       const width = croppedWidth * scale;
       const height = croppedHeight * scale;
-      ensureSpace(height + 28);
-      const frameX = MARGIN_X + 38;
+      return { width, height, total: height + 14 };
+    };
+
+    const drawMedia = async (media: GuideActionMedia) => {
+      const embedded = await imageFor(media);
+      const box = mediaBox(media, embedded);
+      const frameX = MARGIN_X + STEP_INDENT;
+
+      if (!embedded) {
+        ensureSpace(box.total);
+        page.drawRectangle({
+          x: frameX,
+          y: y - box.height,
+          width: box.width,
+          height: box.height,
+          borderColor: RULE_STRONG,
+          borderWidth: 0.7,
+          color: rgb(0.976, 0.98, 0.976),
+        });
+        const label = "Screenshot unavailable in this export";
+        page.drawText(label, {
+          x: frameX + (box.width - fonts.regular.widthOfTextAtSize(label, 9)) / 2,
+          y: y - box.height / 2 - 3,
+          font: fonts.regular,
+          size: 9,
+          color: MUTED,
+        });
+        y -= box.total;
+        return;
+      }
+
+      ensureSpace(box.total);
+      const { width, height } = box;
       const frameY = y - height;
+      const crop = media.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+      const scale = width / (embedded.width * crop.width);
       const fullWidth = embedded.width * scale;
       const fullHeight = embedded.height * scale;
-      const imageX = frameX - crop.x * fullWidth;
-      const imageY = frameY - (1 - crop.y - crop.height) * fullHeight;
       page.pushOperators(
         pushGraphicsState(),
         rectangle(frameX, frameY, width, height),
@@ -369,8 +468,8 @@ export async function renderGuideToPdf(
         endPath(),
       );
       page.drawImage(embedded, {
-        x: imageX,
-        y: imageY,
+        x: frameX - crop.x * fullWidth,
+        y: frameY - (1 - crop.y - crop.height) * fullHeight,
         width: fullWidth,
         height: fullHeight,
       });
@@ -380,7 +479,7 @@ export async function renderGuideToPdf(
         y: frameY,
         width,
         height,
-        borderColor: RULE,
+        borderColor: RULE_STRONG,
         borderWidth: 0.7,
       });
 
@@ -395,27 +494,16 @@ export async function renderGuideToPdf(
         media.clickTarget.point.y >= crop.y &&
         media.clickTarget.point.y <= crop.y + crop.height
       ) {
-        const location = point(
-          media.clickTarget.point.x,
-          media.clickTarget.point.y,
-        );
+        const location = point(media.clickTarget.point.x, media.clickTarget.point.y);
         const clickColor = hexToRgb(media.clickTarget.color);
+        const marker = rgb(clickColor.red, clickColor.green, clickColor.blue);
         const radius = Math.max(
           3,
           (media.clickTarget.radius / Math.max(crop.width, crop.height)) *
             Math.min(width, height),
         );
-        page.drawCircle({
-          ...location,
-          size: radius,
-          borderColor: rgb(clickColor.red, clickColor.green, clickColor.blue),
-          borderWidth: 2,
-        });
-        page.drawCircle({
-          ...location,
-          size: 1.5,
-          color: rgb(clickColor.red, clickColor.green, clickColor.blue),
-        });
+        page.drawCircle({ ...location, size: radius, borderColor: marker, borderWidth: 2 });
+        page.drawCircle({ ...location, size: 1.5, color: marker });
       }
       for (const item of media.annotations) {
         const left = Math.max(item.region.x, crop.x);
@@ -430,12 +518,7 @@ export async function renderGuideToPdf(
         const parsedColor = hexToRgb(item.color);
         const color = rgb(parsedColor.red, parsedColor.green, parsedColor.blue);
         if (item.type === "arrow") {
-          page.drawLine({
-            start: topLeft,
-            end: bottomRight,
-            color,
-            thickness: 2,
-          });
+          page.drawLine({ start: topLeft, end: bottomRight, color, thickness: 2 });
           page.drawLine({
             start: bottomRight,
             end: { x: bottomRight.x - 6, y: bottomRight.y + 2 },
@@ -460,20 +543,28 @@ export async function renderGuideToPdf(
             borderWidth: 1,
           });
         } else if (item.type === "text") {
+          const text = pdfSafeText(item.text ?? "Annotation").slice(0, 48);
+          const boxWidth = Math.max(
+            annotationWidth,
+            fonts.bold.widthOfTextAtSize(text, 7) + 8,
+          );
+          const boxHeight = Math.max(annotationHeight, 14);
+          // Keep the label inside the frame even when the region hugs an edge.
+          const boxX = Math.min(topLeft.x, frameX + width - boxWidth);
           page.drawRectangle({
-            x: topLeft.x,
+            x: boxX,
             y: bottomRight.y,
-            width: Math.max(annotationWidth, 55),
-            height: Math.max(annotationHeight, 14),
+            width: boxWidth,
+            height: boxHeight,
             color,
             opacity: 0.92,
           });
-          page.drawText(pdfSafeText(item.text ?? "Annotation").slice(0, 48), {
-            x: topLeft.x + 4,
-            y: topLeft.y - 10,
+          page.drawText(text, {
+            x: boxX + 4,
+            y: bottomRight.y + boxHeight / 2 - 2.5,
             font: fonts.bold,
             size: 7,
-            color: rgb(1, 1, 1),
+            color: WHITE,
           });
         } else {
           page.drawRectangle({
@@ -486,26 +577,24 @@ export async function renderGuideToPdf(
           });
         }
       }
-      y -= height + 11;
-      const caption = wrapLine(pdfSafeText(media.altText), fonts.regular, 8, maxWidth);
-      for (const line of caption.slice(0, 2)) {
-        page.drawText(line, {
-          x: frameX,
-          y,
-          font: fonts.regular,
-          size: 8,
-          color: MUTED,
-        });
-        y -= 10;
-      }
-      y -= 8;
+      y -= box.total;
     };
+
+    // ---- Cover -------------------------------------------------------------
+    page.drawRectangle({
+      x: 0,
+      y: PAGE_HEIGHT - 7,
+      width: PAGE_WIDTH,
+      height: 7,
+      color: accent,
+    });
 
     const logoId = revision.branding.logoMediaId;
     const logoAsset = logoId ? assets.get(logoId) : undefined;
     const logo = logoAsset ? await embedImage(document, logoAsset) : undefined;
+    const workspace = pdfSafeText(revision.branding.workspaceName).toUpperCase();
     if (logo) {
-      const logoScale = Math.min(130 / logo.width, 42 / logo.height, 1);
+      const logoScale = Math.min(120 / logo.width, 34 / logo.height, 1);
       const logoWidth = logo.width * logoScale;
       const logoHeight = logo.height * logoScale;
       page.drawImage(logo, {
@@ -514,99 +603,306 @@ export async function renderGuideToPdf(
         width: logoWidth,
         height: logoHeight,
       });
-      y -= logoHeight + 14;
+      page.drawText(workspace, {
+        x: MARGIN_X + logoWidth + 12,
+        y: y - logoHeight / 2 - 3,
+        font: fonts.bold,
+        size: 8.5,
+        color: MUTED,
+      });
+      y -= logoHeight + 34;
+    } else {
+      page.drawText(workspace, {
+        x: MARGIN_X,
+        y: y - 9,
+        font: fonts.bold,
+        size: 8.5,
+        color: MUTED,
+      });
+      y -= 40;
     }
 
-    page.drawText(pdfSafeText(revision.branding.workspaceName).toUpperCase(), {
-      x: MARGIN_X,
-      y,
-      font: fonts.bold,
-      size: 8.5,
-      color: MUTED,
-    });
-    y -= 28;
     drawWrapped(revision.title, {
       font: fonts.bold,
-      size: 28,
-      lineHeight: 33,
-      after: 10,
+      size: 27,
+      lineHeight: 32,
+      after: 12,
     });
     if (revision.summary) {
       drawWrapped(revision.summary, {
-        size: 12,
-        lineHeight: 17,
-        color: MUTED,
-        after: 13,
+        size: 11.5,
+        lineHeight: 16.5,
+        color: INK_SOFT,
+        after: 20,
       });
     }
-    const metadata = `Revision ${revision.revisionNumber} | Published ${formatIsoDate(revision.publishedAt)}`;
-    drawWrapped(metadata, {
-      font: fonts.mono,
-      size: 8.5,
-      color: MUTED,
-      lineHeight: 11,
-      after: 13,
-    });
+
+    let actionTotal = 0;
+    for (const block of revision.blocks) if (block.type === "action") actionTotal += 1;
+
     page.drawLine({
       start: { x: MARGIN_X, y },
       end: { x: PAGE_WIDTH - MARGIN_X, y },
-      thickness: 1.5,
-      color: accent,
+      thickness: 0.7,
+      color: RULE,
     });
-    y -= 25;
-
-    let actionNumber = 0;
-    for (const block of revision.blocks) {
-      await renderPdfBlock(block, {
-        fonts,
-        accent,
-        getPage: () => page,
-        getY: () => y,
-        setY: (next) => {
-          y = next;
-        },
-        ensureSpace,
-        drawWrapped,
-        drawCallout,
-        drawMedia,
-        nextActionNumber: () => {
-          actionNumber += 1;
-          return actionNumber;
-        },
+    y -= 18;
+    const facts: Array<readonly [string, string]> = [
+      ["REVISION", String(revision.revisionNumber)],
+      ["PUBLISHED", formatLongDate(revision.publishedAt)],
+      ...(actionTotal ? ([["STEPS", String(actionTotal)]] as const) : []),
+    ];
+    let factX = MARGIN_X;
+    for (const [label, text] of facts) {
+      page.drawText(label, {
+        x: factX,
+        y: y - 7,
+        font: fonts.bold,
+        size: 7.5,
+        color: MUTED,
       });
+      page.drawText(pdfSafeText(text), {
+        x: factX,
+        y: y - 22,
+        font: fonts.bold,
+        size: 11,
+        color: INK,
+      });
+      factX += Math.max(
+        96,
+        fonts.bold.widthOfTextAtSize(pdfSafeText(text), 11) + 28,
+      );
+    }
+    y -= 40;
+
+    if (marks.length) {
+      drawPanel("Controlled copy", marks.join("\n"), "note");
     }
 
-    const watermarkText = formatWatermark(watermark);
+    // ---- Contents ----------------------------------------------------------
+    const contents = revision.blocks.filter(
+      (block) => block.type === "heading" || block.type === "action",
+    );
+    if (contents.length > 2) {
+      y -= 12;
+      drawWrapped("Contents", {
+        font: fonts.bold,
+        size: 8.5,
+        lineHeight: 12,
+        color: MUTED,
+        after: 8,
+      });
+      let entryNumber = 0;
+      for (const block of contents) {
+        ensureSpace(16);
+        if (block.type === "heading") {
+          const indent = block.level === 3 ? 12 : 0;
+          const [text] = wrapLine(
+            block.text,
+            fonts.bold,
+            10,
+            CONTENT_WIDTH - indent,
+          );
+          page.drawText(text ?? "", {
+            x: MARGIN_X + indent,
+            y: y - 10,
+            font: fonts.bold,
+            size: 10,
+            color: INK,
+          });
+          y -= 17;
+          continue;
+        }
+        entryNumber += 1;
+        const label = String(entryNumber);
+        page.drawText(label, {
+          x: MARGIN_X + 14 - fonts.regular.widthOfTextAtSize(label, 9) / 2,
+          y: y - 9.5,
+          font: fonts.regular,
+          size: 9,
+          color: MUTED,
+        });
+        const [text] = wrapLine(block.title, fonts.regular, 10, CONTENT_WIDTH - 26);
+        page.drawText(text ?? "", {
+          x: MARGIN_X + 26,
+          y: y - 10,
+          font: fonts.regular,
+          size: 10,
+          color: INK_SOFT,
+        });
+        y -= 16;
+      }
+      addPage();
+    } else {
+      y -= 8;
+    }
+
+    // ---- Body --------------------------------------------------------------
+    let actionNumber = 0;
+    for (const block of revision.blocks) {
+      await renderBlock(block);
+    }
+
+    async function renderBlock(block: GuideBlock): Promise<void> {
+      if (block.type === "heading") {
+        const size = block.level === 2 ? 17 : 13;
+        keepTogether(size * 2.6 + 46);
+        y -= block.level === 2 ? 16 : 10;
+        drawWrapped(block.text, {
+          font: fonts.bold,
+          size,
+          lineHeight: size * 1.3,
+          after: block.level === 2 ? 8 : 6,
+        });
+        if (block.level === 2) {
+          page.drawLine({
+            start: { x: MARGIN_X, y: y + 4 },
+            end: { x: PAGE_WIDTH - MARGIN_X, y: y + 4 },
+            thickness: 1,
+            color: RULE_STRONG,
+          });
+          y -= 12;
+        }
+        return;
+      }
+
+      if (block.type === "paragraph") {
+        drawWrapped(block.text, { lineHeight: 15, color: INK_SOFT, after: 12 });
+        return;
+      }
+
+      if (block.type === "callout") {
+        drawPanel(block.title || calloutLabel(block.tone), block.text, block.tone);
+        return;
+      }
+
+      const titleStyle: TextStyle = {
+        font: fonts.bold,
+        size: 13,
+        lineHeight: 17,
+        indent: STEP_INDENT,
+        after: 5,
+      };
+      const bodyStyle: TextStyle = {
+        size: 10.5,
+        lineHeight: 15,
+        color: INK_SOFT,
+        indent: STEP_INDENT,
+        after: 8,
+      };
+      const embedded = block.media ? await imageFor(block.media) : undefined;
+      // Hold the number, title, instructions and screenshot on one page so a
+      // step never opens at the foot of a page with its evidence overleaf.
+      const together =
+        measure(block.title, titleStyle) +
+        measure(block.instructions, bodyStyle) +
+        (block.systemReference ? 20 : 0) +
+        (block.media ? mediaBox(block.media, embedded).total : 0);
+      const trailing =
+        (block.expectedResult
+          ? panelHeight("Expected result", block.expectedResult, STEP_INDENT)
+          : 0) +
+        (block.requiresConfirmation
+          ? panelHeight(
+              "Confirmation required",
+              "Confirm the expected result before continuing.",
+              STEP_INDENT,
+            )
+          : 0);
+      // Pull the result panels along too when the whole step still fits a page.
+      keepTogether(
+        together + trailing <= CONTINUED_TOP - BOTTOM ? together + trailing : together,
+      );
+
+      actionNumber += 1;
+      const markerY = y - 11;
+      page.drawCircle({ x: MARGIN_X + 11, y: markerY, size: 11, color: accent });
+      const numberText = String(actionNumber);
+      page.drawText(numberText, {
+        x: MARGIN_X + 11 - fonts.bold.widthOfTextAtSize(numberText, 8.5) / 2,
+        y: markerY - 3,
+        font: fonts.bold,
+        size: 8.5,
+        color: WHITE,
+      });
+
+      drawWrapped(block.title, titleStyle);
+      drawWrapped(block.instructions, bodyStyle);
+      if (block.systemReference) {
+        page.drawText("SYSTEM", {
+          x: MARGIN_X + STEP_INDENT,
+          y: y - 7,
+          font: fonts.bold,
+          size: 7.5,
+          color: MUTED,
+        });
+        const [name] = wrapLine(
+          block.systemReference.name,
+          fonts.regular,
+          9.5,
+          CONTENT_WIDTH - STEP_INDENT - 44,
+        );
+        page.drawText(name ?? "", {
+          x: MARGIN_X + STEP_INDENT + 44,
+          y: y - 7.5,
+          font: fonts.regular,
+          size: 9.5,
+          color: INK_SOFT,
+        });
+        y -= 20;
+      }
+      if (block.media) await drawMedia(block.media);
+      if (block.expectedResult) {
+        drawPanel("Expected result", block.expectedResult, "success", STEP_INDENT);
+      }
+      if (block.requiresConfirmation) {
+        drawPanel(
+          "Confirmation required",
+          "Confirm the expected result before continuing.",
+          "warning",
+          STEP_INDENT,
+        );
+      }
+      y -= 10;
+    }
+
+    // ---- Furniture ---------------------------------------------------------
+    const footerLeft = marks.length
+      ? marks.join(" | ")
+      : revision.branding.showKnowHowBranding
+        ? "Generated with KnowHow"
+        : "";
     const pages = document.getPages();
     pages.forEach((target, index) => {
       target.drawLine({
-        start: { x: MARGIN_X, y: 39 },
-        end: { x: PAGE_WIDTH - MARGIN_X, y: 39 },
+        start: { x: MARGIN_X, y: 48 },
+        end: { x: PAGE_WIDTH - MARGIN_X, y: 48 },
         thickness: 0.5,
         color: RULE,
       });
-      const footer = `Page ${index + 1} of ${pages.length}`;
+      const footer = `${index + 1} / ${pages.length}`;
       target.drawText(footer, {
         x: PAGE_WIDTH - MARGIN_X - fonts.regular.widthOfTextAtSize(footer, 8),
-        y: 25,
+        y: 34,
         font: fonts.regular,
         size: 8,
         color: MUTED,
       });
-      if (revision.branding.showKnowHowBranding) {
-        target.drawText("Generated with KnowHow", {
+      if (footerLeft) {
+        const [line] = wrapLine(footerLeft, fonts.regular, 7.5, CONTENT_WIDTH - 60);
+        target.drawText(line ?? "", {
           x: MARGIN_X,
-          y: 25,
+          y: 34,
           font: fonts.regular,
-          size: 8,
+          size: 7.5,
           color: MUTED,
         });
       }
-      if (watermarkText) {
-        const safe = pdfSafeText(watermarkText);
+      if (marks.length) {
+        const safe = pdfSafeText(marks.join(" | "));
         const size = Math.max(
-          10,
-          Math.min(22, (PAGE_WIDTH * 0.72 * 18) / fonts.bold.widthOfTextAtSize(safe, 18)),
+          9,
+          Math.min(20, (PAGE_WIDTH * 0.7 * 18) / fonts.bold.widthOfTextAtSize(safe, 18)),
         );
         target.drawText(safe, {
           x: centeredX(safe, fonts.bold, size),
@@ -614,8 +910,8 @@ export async function renderGuideToPdf(
           font: fonts.bold,
           size,
           color: MUTED,
-          opacity: 0.13,
-          rotate: degrees(32),
+          opacity: 0.1,
+          rotate: degrees(30),
         });
       }
     });
@@ -628,132 +924,4 @@ export async function renderGuideToPdf(
       cause: error,
     });
   }
-}
-
-interface PdfBlockContext {
-  readonly fonts: PdfFonts;
-  readonly accent: ReturnType<typeof rgb>;
-  readonly getPage: () => PDFPage;
-  readonly getY: () => number;
-  readonly setY: (value: number) => void;
-  readonly ensureSpace: (height: number) => void;
-  readonly drawWrapped: (value: string, options?: WrappedTextOptions) => void;
-  readonly drawCallout: (
-    title: string,
-    body: string,
-    tone: "note" | "warning" | "success",
-  ) => void;
-  readonly drawMedia: (media: GuideActionMedia) => Promise<void>;
-  readonly nextActionNumber: () => number;
-}
-
-async function renderPdfBlock(
-  block: GuideBlock,
-  context: PdfBlockContext,
-): Promise<void> {
-  if (block.type === "heading") {
-    context.ensureSpace(42);
-    context.setY(context.getY() - (block.level === 2 ? 10 : 5));
-    context.drawWrapped(block.text, {
-      font: context.fonts.bold,
-      size: block.level === 2 ? 19 : 14,
-      lineHeight: block.level === 2 ? 23 : 18,
-      after: 9,
-    });
-    if (block.level === 2) {
-      const page = context.getPage();
-      const y = context.getY() + 5;
-      page.drawLine({
-        start: { x: MARGIN_X, y },
-        end: { x: PAGE_WIDTH - MARGIN_X, y },
-        thickness: 0.5,
-        color: RULE,
-      });
-      context.setY(context.getY() - 12);
-    }
-    return;
-  }
-
-  if (block.type === "paragraph") {
-    context.drawWrapped(block.text, { after: 10 });
-    return;
-  }
-
-  if (block.type === "callout") {
-    const fallback =
-      block.tone === "warning"
-        ? "Warning"
-        : block.tone === "success"
-          ? "Success"
-          : "Note";
-    context.drawCallout(block.title || fallback, block.text, block.tone);
-    return;
-  }
-
-  const titleHeight =
-    wrapParagraphs(
-      block.title,
-      context.fonts.bold,
-      14,
-      CONTENT_WIDTH - 38,
-    ).length * 18;
-  context.ensureSpace(Math.max(58, titleHeight + 26));
-  const number = context.nextActionNumber();
-  const page = context.getPage();
-  const markerY = context.getY() - 7;
-  page.drawCircle({
-    x: MARGIN_X + 13,
-    y: markerY,
-    size: 12,
-    color: context.accent,
-  });
-  const numberText = String(number);
-  page.drawText(numberText, {
-    x:
-      MARGIN_X +
-      13 -
-      context.fonts.bold.widthOfTextAtSize(numberText, 8.5) / 2,
-    y: markerY - 3,
-    font: context.fonts.bold,
-    size: 8.5,
-    color: rgb(1, 1, 1),
-  });
-  context.drawWrapped(block.title, {
-    font: context.fonts.bold,
-    size: 14,
-    lineHeight: 18,
-    indent: 38,
-    after: 4,
-  });
-  context.drawWrapped(block.instructions, {
-    size: 10.5,
-    lineHeight: 15,
-    indent: 38,
-    after: 8,
-  });
-  if (block.systemReference) {
-    context.drawWrapped(`System: ${block.systemReference.name}`, {
-      font: context.fonts.mono,
-      size: 8.5,
-      lineHeight: 11,
-      color: MUTED,
-      indent: 38,
-      after: 7,
-    });
-  }
-  if (block.media) await context.drawMedia(block.media);
-  if (block.expectedResult && block.requiresConfirmation) {
-    context.ensureSpace(170);
-  }
-  if (block.expectedResult) {
-    context.drawCallout("Expected result", block.expectedResult, "success");
-  }
-  if (block.requiresConfirmation) {
-    context.drawCallout(
-      "Confirmation required",
-      "Confirm the expected result before continuing.",
-      "warning",
-    );
-  }
-  context.setY(context.getY() - 6);
 }

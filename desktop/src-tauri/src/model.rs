@@ -39,10 +39,9 @@ pub enum RecorderStatus {
     Finishing,
     Uploading,
     Recovery,
-    Blocked,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecorderState {
     pub status: RecorderStatus,
@@ -59,29 +58,6 @@ pub struct RecorderState {
     pub editor_url: Option<String>,
 }
 
-impl Default for RecorderState {
-    fn default() -> Self {
-        Self {
-            status: RecorderStatus::Idle,
-            capture_id: None,
-            scope_label: None,
-            countdown_remaining: None,
-            steps: Vec::new(),
-            status_message: None,
-            editor_url: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum StepStatus {
-    Ready,
-    Processing,
-    Retry,
-    Deleting,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepSummary {
@@ -90,16 +66,15 @@ pub struct StepSummary {
     pub title: String,
     pub instruction: String,
     pub interaction: String,
-    pub status: StepStatus,
 }
 
+/// The two scopes the picker offers. A capture follows one application across
+/// all of its windows, or one display across everything on it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ScopeKind {
     Application,
-    Window,
     Monitor,
-    AllDisplays,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,7 +128,6 @@ pub struct CaptureTarget {
     pub process_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
-    pub protected: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -163,19 +137,6 @@ pub struct CaptureTargetPreview {
     pub data_url: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SmartBlurSettings {
-    pub emails: bool,
-    pub phone_numbers: bool,
-    pub financial_numbers: bool,
-    pub identifiers: bool,
-    pub form_fields: bool,
-    pub images: bool,
-    pub table_rows: bool,
-    pub long_text: bool,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TypedTextPolicy {
@@ -183,12 +144,11 @@ pub enum TypedTextPolicy {
     Disabled,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecorderSettings {
     pub capture_typed_text: bool,
     pub desktop_typed_text_policy: TypedTextPolicy,
-    pub smart_blur: SmartBlurSettings,
 }
 
 impl Default for RecorderSettings {
@@ -196,7 +156,6 @@ impl Default for RecorderSettings {
         Self {
             capture_typed_text: false,
             desktop_typed_text_policy: TypedTextPolicy::Allowed,
-            smart_blur: SmartBlurSettings::default(),
         }
     }
 }
@@ -208,7 +167,6 @@ pub struct StartCaptureInput {
     pub target_id: Option<String>,
     pub target_label: String,
     pub capture_typed_text: bool,
-    pub smart_blur: SmartBlurSettings,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -301,21 +259,10 @@ pub enum DesktopScope {
         process_id: u32,
         excluded_window_ids: Vec<String>,
     },
-    Window {
-        window_id: String,
-        application_name: String,
-        window_title: Option<String>,
-        include_owned_dialogs: bool,
-        excluded_window_ids: Vec<String>,
-    },
     Monitor {
         monitor_id: String,
         monitor_name: Option<String>,
         bounds: Bounds,
-        excluded_window_ids: Vec<String>,
-    },
-    AllDisplays {
-        monitor_ids: Vec<String>,
         excluded_window_ids: Vec<String>,
     },
 }
@@ -325,16 +272,12 @@ impl DesktopScope {
         match self {
             Self::Application {
                 application_name, ..
-            }
-            | Self::Window {
-                application_name, ..
             } => application_name.clone(),
             Self::Monitor {
                 monitor_name,
                 monitor_id,
                 ..
             } => monitor_name.clone().unwrap_or_else(|| monitor_id.clone()),
-            Self::AllDisplays { .. } => "All displays".to_owned(),
         }
     }
 }
@@ -350,10 +293,6 @@ pub struct ServerAnnotation {
     pub width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x2: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y2: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
 }
@@ -387,14 +326,13 @@ pub struct CapturedStep {
 }
 
 impl CapturedStep {
-    pub fn summary(&self, status: StepStatus) -> StepSummary {
+    pub fn summary(&self) -> StepSummary {
         StepSummary {
             id: self.id.clone(),
             order: self.order,
             title: self.title.clone(),
             instruction: self.instructions.clone(),
             interaction: self.source_event.clone(),
-            status,
         }
     }
 }
@@ -424,7 +362,6 @@ pub struct ActiveCapture {
     pub scope: DesktopScope,
     pub title: String,
     pub text_input_capture: String,
-    pub smart_blur: SmartBlurSettings,
 }
 
 #[cfg(test)]

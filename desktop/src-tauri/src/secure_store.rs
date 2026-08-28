@@ -277,39 +277,6 @@ impl SecureStore {
         Ok(())
     }
 
-    pub fn delete_step(&self, session_id: &str, step_id: &str) -> Result<()> {
-        self.connection.lock().execute(
-            "DELETE FROM steps WHERE session_id = ?1 AND step_id = ?2",
-            params![session_id, step_id],
-        )?;
-        Ok(())
-    }
-
-    /// Decrypts one step's stored screenshot without touching the rest of the
-    /// session. `load_steps` decrypts every step's metadata and image for a
-    /// whole capture — too much work to pay for a single on-demand thumbnail,
-    /// which the HUD may ask for on every step as the author records.
-    pub fn load_step_image(&self, session_id: &str, step_id: &str) -> Result<Vec<u8>> {
-        let key = self.session_key(session_id)?;
-        let (image_nonce, image_ciphertext): (Vec<u8>, Vec<u8>) = self
-            .connection
-            .lock()
-            .query_row(
-                "SELECT image_nonce, image_ciphertext FROM steps
-                 WHERE session_id = ?1 AND step_id = ?2",
-                params![session_id, step_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("capture step is unavailable"))?;
-        decrypt(
-            key.as_slice(),
-            &image_nonce,
-            &image_ciphertext,
-            format!("session:{session_id}:step:{step_id}:image").as_bytes(),
-        )
-    }
-
     pub fn load_steps(&self, session_id: &str) -> Result<Vec<(CapturedStep, Vec<u8>, String)>> {
         let key = self.session_key(session_id)?;
         let connection = self.connection.lock();

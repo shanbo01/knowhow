@@ -135,32 +135,6 @@ export function markCaptureEntryReady(state, entryId, now = Date.now()) {
   );
 }
 
-export function markCaptureEntryFailed(
-  state,
-  entryId,
-  error,
-  now = Date.now(),
-) {
-  const entry = entriesOf(state).find((candidate) => candidate.id === entryId);
-  if (!entry || entry.status === CaptureEntryStatus.READY) return state;
-  return updateCaptureEntry(
-    {
-      ...state,
-      diagnostics: {
-        ...(state.diagnostics || {}),
-        failed: Number(state.diagnostics?.failed || 0) + 1,
-      },
-    },
-    entryId,
-    {
-      status: CaptureEntryStatus.NEEDS_ATTENTION,
-      error: String(error || "Screenshot capture failed.").slice(0, 500),
-      frameId: null,
-    },
-    now,
-  );
-}
-
 export function removeCaptureEntry(state, entryId, now = Date.now()) {
   const current = entriesOf(state);
   const removed = current.find((entry) => entry.id === entryId);
@@ -188,6 +162,20 @@ export function unresolvedCaptureEntries(state) {
   );
 }
 
+/**
+ * A capture an author asked to retake. That covers a screenshot that failed and
+ * a step KnowHow kept without one, because an action always becomes a step even
+ * when its picture could not be taken.
+ */
+export function captureEntryIsRetakeable(entry) {
+  return Boolean(
+    entry &&
+      (entry.status === CaptureEntryStatus.NEEDS_ATTENTION ||
+        entry.screenshotMissing === true ||
+        entry.showsResultOfAction === true),
+  );
+}
+
 export function resetCaptureEntryForRetry(
   state,
   entryId,
@@ -195,9 +183,7 @@ export function resetCaptureEntryForRetry(
   now = Date.now(),
 ) {
   const entry = captureEntry(state, entryId);
-  if (!entry || entry.status !== CaptureEntryStatus.NEEDS_ATTENTION) {
-    return state;
-  }
+  if (!captureEntryIsRetakeable(entry)) return state;
   return updateCaptureEntry(
     state,
     entryId,
@@ -212,35 +198,6 @@ export function resetCaptureEntryForRetry(
     },
     now,
   );
-}
-
-export function recoverCaptureLedger(
-  state,
-  {
-    availableFrameIds = [],
-    now = Date.now(),
-    abandonedStageAgeMs = 10_000,
-  } = {},
-) {
-  const available = new Set(availableFrameIds.filter(Boolean));
-  let recovered = initializeCaptureCoordinator(state, now);
-  for (const entry of [...recovered.captureEntries]) {
-    if (entry.status !== CaptureEntryStatus.CAPTURING) continue;
-    if (!entry.committed) {
-      if (now - Number(entry.acceptedAtMs || 0) > abandonedStageAgeMs) {
-        recovered = removeCaptureEntry(recovered, entry.id, now);
-      }
-      continue;
-    }
-    if (entry.frameId && available.has(entry.frameId)) continue;
-    recovered = markCaptureEntryFailed(
-      recovered,
-      entry.id,
-      "The pre-action screenshot was interrupted before it could be preserved.",
-      now,
-    );
-  }
-  return recovered;
 }
 
 export function rememberNavigationKey(state, key, now = Date.now()) {
@@ -296,18 +253,15 @@ export function recentHandoffMatches(
   );
 }
 
-export const CLICK_NAVIGATION_ABSORB_MS = 1_500;
-export const SAME_TAB_DESTINATION_DEDUPE_MS = 2_000;
-const CLICK_SOURCE_EVENTS = new Set(["click", "contextmenu", "dblclick"]);
-
-export function noteClickInteraction(state, { tabId, now = Date.now() } = {}) {
-  return {
-    ...state,
-    lastInteractionAt: now,
-    lastInteractionTabId: Number.isInteger(tabId) ? tabId : Number(tabId) || 0,
-    updatedAt: timestamp(now),
-  };
-}
+// Steps an author performs on the page, as opposed to a navigation KnowHow
+// records for them. A typed value belongs here: pressing Enter in a field is
+// just as likely to navigate as clicking a link is.
+const CLICK_SOURCE_EVENTS = new Set([
+  "click",
+  "contextmenu",
+  "dblclick",
+  "type",
+]);
 
 export function switchNavigationCopy(pageTitle) {
   const title = String(pageTitle || "").replace(/\s+/g, " ").trim();
@@ -385,46 +339,4 @@ export function clickEntryNeedsSettledFrame(state, details) {
     return false;
   }
   return true;
-}
-
-export function shouldAbsorbClickNavigation(
-  state,
-  details,
-  { now = Date.now(), maxAgeMs = CLICK_NAVIGATION_ABSORB_MS, titleMode = "navigation" } = {},
-) {
-  if (titleMode !== "navigation") return false;
-  const at = Number(state?.lastInteractionAt || 0);
-  if (!at) return false;
-  const age = now - at;
-  return Boolean(
-    age >= 0 &&
-      age <= maxAgeMs &&
-      Number(state?.lastInteractionTabId) === Number(details?.tabId),
-  );
-}
-
-export function recentSameTabDestination(
-  state,
-  sanitizedUrl,
-  { now = Date.now(), maxAgeMs = SAME_TAB_DESTINATION_DEDUPE_MS } = {},
-) {
-  const recorded = String(state?.lastRecordedDestinationUrl || "");
-  const at = Number(state?.lastRecordedDestinationAt || 0);
-  if (!recorded || !sanitizedUrl || !at) return false;
-  const age = now - at;
-  return recorded === String(sanitizedUrl) && age >= 0 && age <= maxAgeMs;
-}
-
-export function rememberRecordedDestination(
-  state,
-  sanitizedUrl,
-  now = Date.now(),
-) {
-  if (!sanitizedUrl) return state;
-  return {
-    ...state,
-    lastRecordedDestinationUrl: String(sanitizedUrl),
-    lastRecordedDestinationAt: now,
-    updatedAt: timestamp(now),
-  };
 }

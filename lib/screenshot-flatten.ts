@@ -1,5 +1,5 @@
 import type { EditorBlock } from "./knowhow-types";
-import { paintRasterRedaction } from "./redaction-raster";
+import { paintRasterRedaction, redactionBlockSize } from "./redaction-raster";
 
 export type FlattenedScreenshot = {
   blob: Blob;
@@ -55,7 +55,7 @@ export async function flattenScreenshot(
     if (!context) throw new Error("This browser could not prepare the screenshot.");
     context.drawImage(bitmap, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
-    const blurPx = Math.max(12, Math.min(cropWidth, cropHeight) * 0.02);
+    const blurPx = redactionBlockSize(cropWidth, cropHeight);
     const redactionScratch = document.createElement("canvas");
     for (const region of block.redactions ?? []) {
       if (region.applied) continue;

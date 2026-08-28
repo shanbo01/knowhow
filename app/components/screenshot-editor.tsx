@@ -35,7 +35,7 @@ import {
   releaseAuthorizedMediaUrl,
 } from "../../lib/knowhow-client";
 import type { EditorBlock } from "../../lib/knowhow-types";
-import { paintRasterRedaction } from "../../lib/redaction-raster";
+import { paintRasterRedaction, redactionBlockSize } from "../../lib/redaction-raster";
 import { useConfirmDialog } from "./confirm-dialog";
 import { HexColorPicker } from "./hex-color-picker";
 
@@ -71,10 +71,14 @@ function isValidColor(value: string | undefined) {
   return /^#[0-9a-f]{6}$/i.test(value ?? "");
 }
 
+/** How far in the crop is framed, measured on whichever axis it spans most.
+ * Reading it from the *shorter* axis disagreed with setZoom for any crop that
+ * is not square in normalized terms, so a 16:9 capture reported a zoom it had
+ * not been set to. */
 function zoomOfCrop(crop: Crop | undefined) {
   if (!crop) return MIN_ZOOM;
-  const size = Math.max(MIN_CROP_SIZE, Math.min(crop.width, crop.height));
-  return clamp(1 / size, MIN_ZOOM, MAX_ZOOM);
+  const span = Math.max(MIN_CROP_SIZE, Math.max(crop.width, crop.height));
+  return clamp(1 / span, MIN_ZOOM, MAX_ZOOM);
 }
 
 /** Converts a rectangle normalized to the full source image into a
@@ -98,6 +102,7 @@ function drawRedactionPreview(
   source: HTMLImageElement,
   scratch: HTMLCanvasElement,
   region: Pick<Redaction, "x" | "y" | "width" | "height">,
+  crop: Crop,
 ) {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
@@ -121,12 +126,17 @@ function drawRedactionPreview(
       1,
       Math.min(region.height, 1 - clamp(region.y, 0, 1)) * source.naturalHeight,
     );
+    // The same block size the flatten will use, so what the author approves
+    // here is the grain they get in the published guide.
     paintRasterRedaction(
       context,
       source,
       { x: sourceX, y: sourceY, width: sourceWidth, height: sourceHeight },
       { x: 0, y: 0, width, height },
-      16 * pixelRatio,
+      redactionBlockSize(
+        crop.width * source.naturalWidth,
+        crop.height * source.naturalHeight,
+      ),
       scratch,
     );
 }
@@ -134,9 +144,11 @@ function drawRedactionPreview(
 function RedactionRasterPreview({
   url,
   region,
+  crop,
 }: {
   url: string;
   region: Pick<Redaction, "x" | "y" | "width" | "height">;
+  crop: Crop;
 }) {
   const regionX = region.x;
   const regionY = region.y;
@@ -151,6 +163,7 @@ function RedactionRasterPreview({
     width: regionWidth,
     height: regionHeight,
   });
+  const cropRef = useRef(crop);
 
   useEffect(() => {
     const nextRegion = {
@@ -160,12 +173,13 @@ function RedactionRasterPreview({
       height: regionHeight,
     };
     regionRef.current = nextRegion;
+    cropRef.current = crop;
     const canvas = canvasRef.current;
     const source = sourceRef.current;
     if (!canvas || !source) return;
     scratchRef.current ??= document.createElement("canvas");
-    drawRedactionPreview(canvas, source, scratchRef.current, nextRegion);
-  }, [regionX, regionY, regionWidth, regionHeight]);
+    drawRedactionPreview(canvas, source, scratchRef.current, nextRegion, crop);
+  }, [regionX, regionY, regionWidth, regionHeight, crop]);
 
   useEffect(() => {
     let active = true;
@@ -174,7 +188,13 @@ function RedactionRasterPreview({
     const redraw = () => {
       if (!canvas || !source.naturalWidth || !source.naturalHeight) return;
       scratchRef.current ??= document.createElement("canvas");
-      drawRedactionPreview(canvas, source, scratchRef.current, regionRef.current);
+      drawRedactionPreview(
+        canvas,
+        source,
+        scratchRef.current,
+        regionRef.current,
+        cropRef.current,
+      );
     };
     const observer = canvas
       ? new ResizeObserver(redraw)
@@ -312,7 +332,6 @@ export function ScreenshotEditor({
   const [history, setHistory] = useState<{ past: Snapshot[]; future: Snapshot[] }>({ past: [], future: [] });
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const [renderCrop, setRenderCrop] = useState<Crop | undefined>(step.crop);
-  const [isPanning, setIsPanning] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -531,18 +550,30 @@ export function ScreenshotEditor({
     onChange({ crop: pendingCropRef.current });
   }
 
+  /**
+   * Zooming changes how much of the screenshot is framed. It must not change
+   * the *shape* of the frame: this used to write a crop that was square in
+   * normalized terms, which on any screenshot that is not square means the
+   * image's own aspect ratio. A capture framed 16:9 was therefore reshaped on
+   * the first zoom click, and since the stage is sized from the crop, the whole
+   * editor resized under the author's cursor. The crop is now scaled about its
+   * centre with its proportions kept, so only the amount on screen changes.
+   */
   function setZoom(nextZoom: number) {
-    const size = clamp(1 / clamp(nextZoom, MIN_ZOOM, MAX_ZOOM), MIN_CROP_SIZE, 1);
+    const span = clamp(1 / clamp(nextZoom, MIN_ZOOM, MAX_ZOOM), MIN_CROP_SIZE, 1);
+    const longestSide = Math.max(crop.width, crop.height) || 1;
+    const width = clamp((crop.width / longestSide) * span, 0, 1);
+    const height = clamp((crop.height / longestSide) * span, 0, 1);
     const centerX = crop.x + crop.width / 2;
     const centerY = crop.y + crop.height / 2;
     const nextCrop =
-      size >= 0.999
+      width >= 0.999 && height >= 0.999
         ? undefined
         : {
-            x: clamp(centerX - size / 2, 0, 1 - size),
-            y: clamp(centerY - size / 2, 0, 1 - size),
-            width: size,
-            height: size,
+            x: clamp(centerX - width / 2, 0, 1 - width),
+            y: clamp(centerY - height / 2, 0, 1 - height),
+            width,
+            height,
           };
     commit({ crop: nextCrop });
   }
@@ -718,7 +749,6 @@ export function ScreenshotEditor({
       // Pan when zoomed (crop active), whether or not the Crop tool is selected.
       if (zoom > MIN_ZOOM + 0.01) {
         pushHistory();
-        setIsPanning(true);
         dragRef.current = {
           kind: "pan",
           startClientX: event.clientX,
@@ -952,7 +982,6 @@ export function ScreenshotEditor({
     frameRef.current?.releasePointerCapture(event.pointerId);
     if (drag.kind === "pan") {
       flushPendingCrop();
-      setIsPanning(false);
     }
     if (drag.kind === "draw" && draftRect) {
       if (mode === "redact") addRedaction(draftRect);
@@ -1097,11 +1126,26 @@ export function ScreenshotEditor({
           <div
             className="shot-frame"
             ref={frameRef}
-            style={{ aspectRatio: naturalSize.width && naturalSize.height ? `${naturalSize.width} / ${naturalSize.height}` : "16 / 9" }}
+            /* The frame is the shape of the *crop*, not of the whole
+               screenshot. Everything drawn over it — click rings, blur
+               regions, and the pointer maths that places them — maps through
+               crop.width and crop.height on their own axes, so a frame shaped
+               like the full image left the picture and its markers in two
+               different coordinate spaces whenever the crop was not a square
+               fraction. Extension captures are framed 16:9 over viewports that
+               mostly are not, so that was the common case, and it is why a
+               click ring drifted off its target until a zoom happened to square
+               the crop up again. */
+            style={{
+              aspectRatio:
+                naturalSize.width && naturalSize.height
+                  ? `${crop.width * naturalSize.width} / ${crop.height * naturalSize.height}`
+                  : "16 / 9",
+            }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              className={`shot-image${isPanning ? " panning" : ""}`}
+              className="shot-image"
               src={url}
               alt={`Screenshot for ${stepLabel}`}
               draggable={false}
@@ -1134,10 +1178,15 @@ export function ScreenshotEditor({
               }}
               style={{
                 position: "absolute",
-                width: `${zoom * 100}%`,
-                height: `${zoom * 100}%`,
-                left: `${-crop.x * zoom * 100}%`,
-                top: `${-crop.y * zoom * 100}%`,
+                // Each axis scales by its own share of the crop, matching
+                // toStageBox() and pointerToImageCoordinate() exactly. A single
+                // `zoom` scalar for both was the divergence: it showed
+                // min(crop.width, crop.height) of the image on *both* axes
+                // while every overlay was placed against the real crop.
+                width: `${(1 / crop.width) * 100}%`,
+                height: `${(1 / crop.height) * 100}%`,
+                left: `${(-crop.x / crop.width) * 100}%`,
+                top: `${(-crop.y / crop.height) * 100}%`,
                 maxWidth: "none",
                 userSelect: "none",
                 pointerEvents: "none",
@@ -1204,8 +1253,7 @@ export function ScreenshotEditor({
                   data-marker-id={redaction.id}
                   data-marker-kind="redaction"
                 >
-                  <RedactionRasterPreview url={url} region={redaction} />
-                  <span className="shot-redaction-tint" aria-hidden="true" />
+                  <RedactionRasterPreview url={url} region={redaction} crop={crop} />
                   {isSelected && !locked ? (
                     <>
                       {(["nw", "ne", "sw", "se"] as const).map((handle) => (
@@ -1362,10 +1410,7 @@ export function ScreenshotEditor({
               return (
                 <span className={`shot-region shot-draft ${mode === "redact" ? "shot-redaction" : "shot-box"}`} style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.width}%`, height: `${box.height}%` }}>
                   {mode === "redact" ? (
-                    <>
-                      <RedactionRasterPreview url={url} region={draftRect} />
-                      <span className="shot-redaction-tint" aria-hidden="true" />
-                    </>
+                    <RedactionRasterPreview url={url} region={draftRect} crop={crop} />
                   ) : null}
                 </span>
               );

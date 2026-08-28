@@ -92,6 +92,7 @@ export function transitionCapture(
         windowId: payload.windowId,
         origin: payload.origin,
         sanitizedUrl: payload.sanitizedUrl,
+        faviconUrl: payload.faviconUrl || null,
         title: payload.title || "Untitled captured guide",
         workspaceId: payload.workspaceId || null,
         scopeLabel: payload.scopeLabel || "Current tab",
@@ -263,50 +264,6 @@ export function snapshotCaptureJob(state, payload = {}) {
     ...payload,
     sessionId: state.sessionId,
     generation: state.generation,
-  };
-}
-
-export function withStepCount(state, stepCount, now = Date.now()) {
-  if (!Number.isInteger(stepCount) || stepCount < 0) {
-    throw new TypeError("Step count must be a non-negative integer.");
-  }
-  return {
-    ...state,
-    stepCount,
-    updatedAt: timestamp(now),
-  };
-}
-
-export function withCapturedStep(state, stepId, now = Date.now()) {
-  if (typeof stepId !== "string" || !stepId) {
-    throw new TypeError("A captured step requires a non-empty ID.");
-  }
-  const currentStepIds = Array.isArray(state?.stepIds) ? state.stepIds : [];
-  if (currentStepIds.includes(stepId)) return state;
-  const stepIds = [...currentStepIds, stepId];
-  const legacyStepCount = Number.isInteger(state?.stepCount)
-    ? state.stepCount + 1
-    : 1;
-  return {
-    ...state,
-    stepIds,
-    stepCount: Math.max(legacyStepCount, stepIds.length),
-    updatedAt: timestamp(now),
-  };
-}
-
-export function withoutCapturedStep(state, stepId, now = Date.now()) {
-  if (typeof stepId !== "string" || !stepId) {
-    throw new TypeError("Removing a captured step requires a non-empty ID.");
-  }
-  const currentStepIds = Array.isArray(state?.stepIds) ? state.stepIds : [];
-  if (!currentStepIds.includes(stepId)) return state;
-  const stepIds = currentStepIds.filter((item) => item !== stepId);
-  return {
-    ...state,
-    stepIds,
-    stepCount: stepIds.length,
-    updatedAt: timestamp(now),
   };
 }
 

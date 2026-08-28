@@ -22,17 +22,9 @@ export const desktop = {
   resume: () => invoke<AppSnapshot>("resume_capture"),
   finish: () => invoke<AppSnapshot>("finish_capture"),
   discard: () => invoke<AppSnapshot>("discard_capture"),
-  stepThumbnail: (stepId: string) =>
-    invoke<string>("capture_step_thumbnail", { stepId }),
-  deleteStep: (stepId: string) =>
-    invoke<AppSnapshot>("delete_capture_step", { stepId }),
-  retryStep: (stepId: string) =>
-    invoke<AppSnapshot>("retry_capture_step", { stepId }),
   settings: (settings: RecorderSettings) =>
     invoke<AppSnapshot>("update_recorder_settings", { settings }),
   showMain: () => invoke<void>("show_main_window"),
-  setHudMode: (mode: "retracted" | "compact" | "expanded") =>
-    invoke<void>("set_hud_mode", { mode }),
   openKnowHow: () => invoke<void>("open_knowhow"),
   checkUpdate: () => invoke<AppSnapshot>("check_for_updates"),
   requestQuit: () => invoke<void>("request_quit"),

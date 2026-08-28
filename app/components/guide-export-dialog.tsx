@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { ProBadge, ProUpsell } from "./pro-badge";
 import { PolicyNote } from "./workspace-patterns";
 
 export type GuideExportFormatChoice = "pdf" | "pptx" | "html" | "markdown";
@@ -27,7 +28,6 @@ const EXPORTS: Array<{
 export function GuideExportDialog({
   open,
   title,
-  isLive,
   restricted,
   fileExportsEnabled,
   canExport,
@@ -38,7 +38,6 @@ export function GuideExportDialog({
 }: {
   open: boolean;
   title: string;
-  isLive: boolean;
   restricted: boolean;
   fileExportsEnabled: boolean;
   canExport: boolean;
@@ -50,9 +49,7 @@ export function GuideExportDialog({
   const [exporting, setExporting] = useState<GuideExportFormatChoice | null>(null);
   const [error, setError] = useState("");
 
-  const blockedReason = !isLive
-    ? "Publish this guide before exporting a static copy."
-    : restricted && !canExport
+  const blockedReason = restricted && !canExport
       ? "Workspace policy does not allow exports of audience-restricted guides."
       : !canExport
         ? "Export is unavailable for your access, plan, workspace policy, or this guide state."
@@ -98,16 +95,17 @@ export function GuideExportDialog({
                   onClick={() => void exportGuide(format)}
                 >
                   {exporting === format ? <LoaderCircle className="spin" /> : <Download />}
-                  {label}{planLocked ? " · Pro" : ""}
+                  {label}
+                  {planLocked ? <ProBadge size="sm" className="ml-auto" /> : null}
                 </Button>
               );
             })}
           </div>
           {!fileExportsEnabled ? (
-            <div className="share-export-paywall" id="file-export-plan-note">
-              <p>PDF, PowerPoint, and HTML are included on Pro. Markdown remains available when policy permits.</p>
-              {onStartTrial ? <Button type="button" onClick={onStartTrial}>Start Pro trial</Button> : null}
-            </div>
+            <ProUpsell id="file-export-plan-note" onUpgrade={onStartTrial}>
+              PDF, PowerPoint, and HTML are included on Pro. Markdown remains
+              available when policy permits.
+            </ProUpsell>
           ) : null}
           {error ? <p className="form-error" role="alert">{error}</p> : null}
           <footer className="modal-footer export-dialog-footer">

@@ -39,13 +39,19 @@ export function newestEligiblePreparedFrame(frames, candidate, options) {
     )[0] || null;
 }
 
+/**
+ * Frames from this tab, whatever page or document they were taken on. Callers
+ * may pin `ignoreViewportKey: false` to demand the same scroll position and
+ * window size, which is what keeps a reused frame's click ring pointing at the
+ * control the step names.
+ */
 export function newestSameTabPreparedFrame(frames, candidate, options = {}) {
   return newestEligiblePreparedFrame(frames, candidate, {
     maxAgeMs: 12_000,
+    ignoreViewportKey: true,
     ...options,
     ignoreVisualEpoch: true,
     ignoreNavigationKey: true,
-    ignoreViewportKey: true,
     ignoreDocumentId: true,
   });
 }

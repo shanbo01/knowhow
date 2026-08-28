@@ -66,9 +66,51 @@
   border-bottom: 1px solid var(--experience-line);
 }
 
-.experience-shell .sidebar-brand {
+.experience-shell .sidebar-brand-row {
+  display: flex;
   min-height: 2.65rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.experience-shell .sidebar-brand {
+  min-width: 0;
+  min-height: auto;
   padding-inline: 0.2rem;
+}
+
+.experience-shell .sidebar-notifications-button {
+  display: inline-grid;
+  width: 2.15rem;
+  height: 2.15rem;
+  flex: 0 0 2.15rem;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--muted);
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.experience-shell .sidebar-notifications-button:hover {
+  border-color: var(--experience-line);
+  background: var(--experience-soft);
+  color: var(--foreground);
+}
+
+.experience-shell .sidebar-notifications-button:focus-visible {
+  outline: 2px solid var(--experience-accent);
+  outline-offset: 2px;
+}
+
+.experience-shell .sidebar-notifications-button svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 1.9;
 }
 
 .experience-shell .sidebar-brand .product-brand-mark {
@@ -709,6 +751,19 @@
 .experience-shell .home-guide-footer svg {
   width: 0.9rem;
   height: 0.9rem;
+}
+
+.experience-shell .guide-favicon {
+  display: block;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 0.18rem;
+  object-fit: contain;
+}
+
+.experience-shell .home-guide-icon .guide-favicon {
+  width: 1rem;
+  height: 1rem;
 }
 
 .experience-shell .home-guide-card > strong {
@@ -4384,13 +4439,243 @@
   justify-content: flex-start;
 }
 
-.guide-export-dialog .share-export-paywall,
 .export-disabled-reason {
   margin: 0;
   padding: 0.8rem;
   border-radius: 0.8rem;
   background: var(--muted);
   color: var(--muted-foreground);
+}
+
+/* Plan chrome — rendered only where an entitlement is missing, so an entitled
+   workspace never sees a badge on a feature it already has. */
+
+.pro-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-height: 1.35rem;
+  padding-inline: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--purple) 22%, var(--border));
+  border-radius: 999px;
+  background: var(--purple-soft);
+  color: var(--purple) !important;
+  font-size: 0.65rem;
+  font-weight: 720;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.pro-badge[data-size="sm"] {
+  min-height: 1.2rem;
+  font-size: 0.62rem;
+}
+
+.pro-badge svg {
+  width: 0.72rem !important;
+  height: 0.72rem !important;
+  color: var(--purple) !important;
+}
+
+.pro-upsell {
+  display: flex;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--purple) 18%, var(--border));
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--purple-soft) 70%, var(--card));
+}
+
+.pro-upsell-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 999px;
+  background: var(--purple-soft);
+}
+
+.pro-upsell-icon svg {
+  width: 0.85rem !important;
+  height: 0.85rem !important;
+  color: var(--purple) !important;
+}
+
+.pro-upsell-copy {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.pro-upsell-copy p {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.pro-upsell-hint {
+  color: var(--muted-foreground) !important;
+  font-size: 0.78rem !important;
+}
+
+.pro-upsell-action {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--purple) 30%, var(--border));
+  border-radius: 0.6rem;
+  background: var(--card);
+  color: var(--purple);
+  font-size: 0.78rem;
+  font-weight: 640;
+  cursor: pointer;
+}
+
+.pro-upsell-action:hover {
+  background: var(--purple-soft);
+}
+
+/* Usage meters */
+
+.usage-meter {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.usage-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.usage-meter-label {
+  font-size: 0.8rem;
+  font-weight: 620;
+}
+
+.usage-meter-value {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-meter-track {
+  height: 0.4rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+/* Neutral until the limit matters — --brand and --amber resolve to the same
+   value in dark mode, so a branded default would make "warn" invisible. */
+.usage-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 42%, transparent);
+  transition: width 160ms ease;
+}
+
+.usage-meter[data-tone="warn"] .usage-meter-fill {
+  background: var(--amber);
+}
+
+.usage-meter[data-tone="warn"] .usage-meter-value {
+  color: var(--amber);
+}
+
+.usage-meter[data-tone="full"] .usage-meter-fill {
+  background: var(--red);
+}
+
+.usage-meter[data-tone="full"] .usage-meter-value {
+  color: var(--red);
+}
+
+.guide-limit-notice {
+  display: grid;
+  gap: 0.65rem;
+  justify-items: start;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--amber) 26%, var(--border));
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--amber-soft) 55%, var(--card));
+}
+
+.guide-limit-notice[data-tone="full"] {
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+  background: color-mix(in srgb, var(--red-soft) 65%, var(--card));
+}
+
+.guide-limit-notice .usage-meter {
+  width: min(22rem, 100%);
+}
+
+.guide-limit-notice p {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* Plan dialog */
+
+.plan-section-heading {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.plan-usage-section,
+.plan-feature-section {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.plan-feature-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-feature-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding-block: 0.35rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.plan-feature-list li:last-child {
+  border-bottom: 0;
+}
+
+.plan-feature-included {
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 660;
+}
+
+.plan-feature-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.plan-feature-note {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-align: right;
 }
 
 .experience-shell .guide-card-clickable {

@@ -9,20 +9,15 @@ export type ConnectionState =
     }
   | { status: "blocked"; message: string };
 
-export type CaptureScopeKind =
-  | "application"
-  | "window"
-  | "monitor"
-  | "all-displays";
+export type CaptureScopeKind = "application" | "monitor";
 
 export type CaptureTarget = {
   id: string;
-  kind: Exclude<CaptureScopeKind, "all-displays">;
+  kind: CaptureScopeKind;
   label: string;
   detail: string;
   processId?: number;
   bounds?: { x: number; y: number; width: number; height: number };
-  protected: boolean;
 };
 
 export type CaptureTargetPreview = {
@@ -30,21 +25,9 @@ export type CaptureTargetPreview = {
   dataUrl: string;
 };
 
-export type SmartBlurSettings = {
-  emails: boolean;
-  phoneNumbers: boolean;
-  financialNumbers: boolean;
-  identifiers: boolean;
-  formFields: boolean;
-  images: boolean;
-  tableRows: boolean;
-  longText: boolean;
-};
-
 export type RecorderSettings = {
   captureTypedText: boolean;
   desktopTypedTextPolicy: "allowed" | "disabled";
-  smartBlur: SmartBlurSettings;
 };
 
 export type StepSummary = {
@@ -53,7 +36,6 @@ export type StepSummary = {
   title: string;
   instruction: string;
   interaction: string;
-  status: "ready" | "processing" | "retry" | "deleting";
 };
 
 export type RecorderState = {
@@ -64,8 +46,7 @@ export type RecorderState = {
     | "paused"
     | "finishing"
     | "uploading"
-    | "recovery"
-    | "blocked";
+    | "recovery";
   captureId?: string;
   scopeLabel?: string;
   countdownRemaining?: number;
@@ -90,5 +71,4 @@ export type StartCaptureInput = {
   targetId?: string;
   targetLabel: string;
   captureTypedText: boolean;
-  smartBlur: SmartBlurSettings;
 };

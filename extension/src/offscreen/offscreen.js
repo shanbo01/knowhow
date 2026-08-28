@@ -49,14 +49,29 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-export function normalizedClickTarget(clickPoint, viewport, color) {
+/**
+ * The click point arrives in the same client coordinates as every mask and the
+ * focus rectangle (`event.clientX/Y` and `getBoundingClientRect()` share one
+ * origin), and the screenshot covers the layout viewport. Normalizing against
+ * `visualViewport` instead put the ring a scrollbar's width off on every page
+ * with a classic scrollbar, and double-counted the offset while pinch-zoomed —
+ * so the ring drifted away from the control the focus box framed. Both now
+ * divide by the same viewport.
+ */
+// A ring big enough to find, small enough to read around. A flat fraction of
+// the screenshot drew the same circle over a 24px icon and a full-width text
+// field — and once the crop zoomed in on a small control, that circle covered
+// the control, its label, and the field below it. Sizing from the control means
+// the ring frames what the step names instead of burying it.
+const CLICK_RING_MIN_RADIUS = 0.012;
+const CLICK_RING_MAX_RADIUS = 0.032;
+const CLICK_RING_DEFAULT_RADIUS = 0.022;
+
+export function normalizedClickTarget(clickPoint, viewport, color, targetRect) {
   const x = Number(clickPoint?.x);
   const y = Number(clickPoint?.y);
-  const visual = viewport?.visualViewport;
-  const offsetX = Number(visual?.offsetX) || 0;
-  const offsetY = Number(visual?.offsetY) || 0;
-  const width = Number(visual?.width || viewport?.width);
-  const height = Number(visual?.height || viewport?.height);
+  const width = Number(viewport?.width);
+  const height = Number(viewport?.height);
   if (
     !Number.isFinite(x) ||
     !Number.isFinite(y) ||
@@ -67,10 +82,22 @@ export function normalizedClickTarget(clickPoint, viewport, color) {
   ) {
     return null;
   }
+  const shortSide = Math.min(
+    Number(targetRect?.width) || 0,
+    Number(targetRect?.height) || 0,
+  );
+  const radius =
+    shortSide > 0
+      ? clamp(
+          (shortSide * 0.62) / width,
+          CLICK_RING_MIN_RADIUS,
+          CLICK_RING_MAX_RADIUS,
+        )
+      : CLICK_RING_DEFAULT_RADIUS;
   return {
-    x: clamp((x - offsetX) / width, 0, 1),
-    y: clamp((y - offsetY) / height, 0, 1),
-    radius: 0.035,
+    x: clamp(x / width, 0, 1),
+    y: clamp(y / height, 0, 1),
+    radius,
     color: validColor(color),
   };
 }
@@ -358,6 +385,7 @@ function presentationPatch(message, imageWidth, imageHeight) {
     message.clickPoint,
     message.interactionViewport || message.viewport,
     message.clickTargetColor,
+    message.targetRect,
   );
   const focusRegion = normalizedFocusRegion(
     message.targetRect,
@@ -424,6 +452,77 @@ async function commitCaptureFrame(message) {
   return { ok: true, stepId: step.id };
 }
 
+async function rasterizeFavicon(message) {
+  const url = new URL(String(message.url || ""));
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("The website favicon URL is not supported.");
+  }
+
+  const response = await fetch(url.href, {
+    cache: "force-cache",
+    credentials: "omit",
+  });
+  if (!response.ok) {
+    throw new Error("The website favicon could not be downloaded.");
+  }
+  const advertised = Number(response.headers.get("content-length") || 0);
+  if (Number.isFinite(advertised) && advertised > 1_048_576) {
+    throw new Error("The website favicon is too large.");
+  }
+
+  const source = await response.blob();
+  if (!source.size || source.size > 1_048_576) {
+    throw new Error("The website favicon is too large.");
+  }
+
+  let bitmap;
+  let image;
+  let objectUrl;
+  const canvas = document.createElement("canvas");
+  try {
+    try {
+      bitmap = await createImageBitmap(source);
+    } catch {
+      // ICO and SVG favicons are not decoded consistently by createImageBitmap
+      // across Chromium versions, while an extension-page Image can handle the
+      // same browser-supported formats safely from a local object URL.
+      objectUrl = URL.createObjectURL(source);
+      image = new Image();
+      image.decoding = "async";
+      image.src = objectUrl;
+      await image.decode();
+    }
+    const sourceImage = bitmap || image;
+    const sourceWidth = bitmap?.width || image?.naturalWidth || 0;
+    const sourceHeight = bitmap?.height || image?.naturalHeight || 0;
+    if (!sourceImage || !sourceWidth || !sourceHeight) {
+      throw new Error("The website favicon could not be decoded.");
+    }
+    const size = 64;
+    const scale = Math.min(size / sourceWidth, size / sourceHeight);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d", { alpha: true });
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      sourceImage,
+      Math.round((size - width) / 2),
+      Math.round((size - height) / 2),
+      width,
+      height,
+    );
+    return { ok: true, dataUrl: canvas.toDataURL("image/png") };
+  } finally {
+    bitmap?.close();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    canvas.width = 1;
+    canvas.height = 1;
+  }
+}
+
 if (globalThis.chrome?.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.target !== "offscreen") return false;
@@ -434,6 +533,8 @@ if (globalThis.chrome?.runtime?.onMessage) {
           ? processCaptureFrame(message)
           : message.type === "KNOWHOW_COMMIT_CAPTURE_FRAME"
             ? commitCaptureFrame(message)
+            : message.type === "KNOWHOW_RASTERIZE_FAVICON"
+              ? rasterizeFavicon(message)
             : null;
     if (!operation) return false;
     operation

@@ -13,13 +13,13 @@ export const PRO_TRIAL_DAYS = 14;
 export type PlanEntitlements = {
   maximumUsers: number;
   maximumCreators: number;
+  maximumGuides: number;
   storageBytes: number;
   extensionEnabled: boolean;
   desktopCaptureEnabled: boolean;
   supportEnabled: boolean;
   removeBranding: boolean;
   privacyToolsEnabled: boolean;
-  customSubdomainEnabled: boolean;
   fileExportsEnabled: boolean;
   publicSignup: boolean;
   payments: boolean;
@@ -29,13 +29,13 @@ export type PlanEntitlements = {
 export const FREE_ENTITLEMENTS: PlanEntitlements = {
   maximumUsers: 3,
   maximumCreators: 1,
+  maximumGuides: 15,
   storageBytes: 1_000_000_000,
   extensionEnabled: false,
   desktopCaptureEnabled: false,
   supportEnabled: false,
   removeBranding: false,
   privacyToolsEnabled: false,
-  customSubdomainEnabled: false,
   fileExportsEnabled: false,
   publicSignup: false,
   payments: false,
@@ -45,13 +45,13 @@ export const FREE_ENTITLEMENTS: PlanEntitlements = {
 export const PRO_ENTITLEMENTS: PlanEntitlements = {
   maximumUsers: 100,
   maximumCreators: 25,
+  maximumGuides: 1_000,
   storageBytes: 50_000_000_000,
   extensionEnabled: true,
   desktopCaptureEnabled: true,
   supportEnabled: true,
   removeBranding: true,
   privacyToolsEnabled: true,
-  customSubdomainEnabled: true,
   fileExportsEnabled: true,
   publicSignup: false,
   payments: false,
@@ -62,7 +62,20 @@ export const ENTERPRISE_ENTITLEMENTS: PlanEntitlements = {
   ...PRO_ENTITLEMENTS,
   maximumUsers: 1_000,
   maximumCreators: 250,
+  maximumGuides: 10_000,
   storageBytes: 500_000_000_000,
+};
+
+/**
+ * Workspaces an organization may hold, by its best workspace plan. A trial is
+ * deliberately capped at one: admin-created workspaces would otherwise be a way
+ * to keep spawning fresh trials.
+ */
+export const WORKSPACES_PER_PLAN: Record<CommercialPlan, number> = {
+  free: 1,
+  pro_trial: 1,
+  pro: 10,
+  enterprise: 50,
 };
 
 export function isCommercialPlan(value: unknown): value is CommercialPlan {

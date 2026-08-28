@@ -147,5 +147,3 @@ export function createScreenshotQueue({
 
   return enqueue;
 }
-
-export const enqueueScreenshot = createScreenshotQueue();

@@ -18,11 +18,11 @@ const pricingPlans = (
     <article className="plan reveal">
       <div className="plan-top"><h2 className="plan-name">Free</h2><div className="plan-badge">Forever</div></div>
       <div className="plan-price">$0<small>forever</small></div>
-      <div className="plan-sub">Create guides, invite teammates, review, publish, share, and export. Capture and screenshot privacy tools stay on Pro.</div>
+      <div className="plan-sub">Create up to 15 guides, invite teammates, review, publish, share, and export to Markdown. Capture and screenshot privacy tools stay on Pro.</div>
       <Link className="plan-action" href="/register">Sign up for Free</Link>
       <div className="plan-rule"></div>
       <ul className="plan-list">
-        <li>Guides, review, publish, and export</li>
+        <li>Up to 15 guides, review, and publish</li>
         <li>Invite teammates into a workspace</li>
         <li>Search and share inside the workspace</li>
         <li>Capture and Smart Blur stay on Pro</li>
@@ -32,15 +32,15 @@ const pricingPlans = (
     <article className="plan pro reveal">
       <div className="plan-top"><h2 className="plan-name">Pro</h2><div className="plan-badge">14-day trial</div></div>
       <div className="plan-price">14-day<small>trial, no card</small></div>
-      <div className="plan-sub">Capture, Smart Blur, redact, annotate, custom subdomain preview, unbranding, and in-app support. After the trial, stay on Free or contact us to continue Pro.</div>
+      <div className="plan-sub">Capture, Smart Blur, redact, annotate, file exports, unbranding, and in-app support. After the trial, stay on Free or contact us to continue Pro.</div>
       <Link className="plan-action" href="/start-trial">Start free trial</Link>
       <div className="plan-rule"></div>
       <ul className="plan-list">
         <li>Everything in Free</li>
         <li>Browser capture extension</li>
         <li>Smart Blur, redact, and annotate</li>
-        <li>Custom subdomain preview and unbranding</li>
-        <li>In-app support</li>
+        <li>PDF, PowerPoint, and HTML exports</li>
+        <li>Unbranding and in-app support</li>
       </ul>
       <div className="plan-foot">No checkout is active yet. Authorization never depends on client-side billing state.</div>
     </article>
