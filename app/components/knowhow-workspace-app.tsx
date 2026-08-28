@@ -4420,15 +4420,11 @@ function SettingsView({
                   event.target.value = "";
                   if (!file) return;
                   setLogoError("");
-                  if (
-                    !(["image/png", "image/jpeg"] as string[]).includes(
-                      file.type,
-                    ) ||
-                    file.size > 1024 * 1024
-                  ) {
-                    setLogoError(
-                      "Choose a PNG or JPEG logo no larger than 1 MB.",
-                    );
+                  // Only the size is checked here. A browser types a file from
+                  // its extension, so the raster's own magic bytes decide the
+                  // format server-side.
+                  if (file.size > 1024 * 1024) {
+                    setLogoError("The logo must be no larger than 1 MB.");
                     return;
                   }
                   setLogoBusy(true);
@@ -7151,7 +7147,6 @@ export function KnowHowWorkspaceApp({
                     workspaceName={workspace.name}
                     logoKey={workspace.settings.logoUrl}
                     size="sm"
-                    bare
                   />
                   <span className="topbar-brand-divider" aria-hidden="true" />
                 </>
@@ -8130,11 +8125,6 @@ export function PlatformProvisioningDialog({
           throw new Error(
             "Save organization identity before uploading a logo.",
           );
-        if (
-          !(["image/png", "image/jpeg"] as string[]).includes(logoFile.type)
-        ) {
-          throw new Error("Choose a PNG or JPEG logo.");
-        }
         if (logoFile.size > 1024 * 1024) {
           throw new Error("The organization logo must be no larger than 1 MB.");
         }

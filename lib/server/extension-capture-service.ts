@@ -610,8 +610,7 @@ export class ExtensionCaptureService {
       throw new HttpError(400, "IDEMPOTENCY_KEY_INVALID", "The favicon idempotency key is invalid.");
     }
     const bytes = await boundedBytes(request, MAX_FAVICON_BYTES, "favicon");
-    const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
-    const validated = await validateFavicon(bytes, contentType);
+    const validated = await validateFavicon(bytes);
     // Content-addressing is workspace-scoped so every guide in a workspace
     // reuses one object for identical bytes without weakening tenant deletion
     // and storage-accounting boundaries.
@@ -745,8 +744,7 @@ export class ExtensionCaptureService {
       throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Flatten all redactions locally before upload.");
     }
     const bytes = await boundedBytes(request);
-    const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
-    const validated = await validateScreenshot(bytes, contentType, Number(request.headers.get("x-knowhow-image-width")), Number(request.headers.get("x-knowhow-image-height")));
+    const validated = await validateScreenshot(bytes, Number(request.headers.get("x-knowhow-image-width")), Number(request.headers.get("x-knowhow-image-height")));
     const mediaId = await stableId("media", `${captureId}:${stepId}`);
     const existing = await this.store.get(TABLES.privateMedia, mediaId);
     if (existing) {

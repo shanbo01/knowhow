@@ -63,15 +63,29 @@ async function digest(bytes: Uint8Array) {
 
 async function validate(
   bytes: Uint8Array,
-  claimedType: string,
-  limits: { bytes: number; dimension: number; pixels: number; label: "screenshot" | "logo" | "favicon" },
+  limits: {
+    bytes: number;
+    dimension: number;
+    pixels: number;
+    allowed: readonly SafeImageType[];
+    label: "screenshot" | "logo" | "favicon";
+  },
 ) {
   if (bytes.byteLength === 0 || bytes.byteLength > limits.bytes) {
     throw new HttpError(413, limits.label === "logo" ? "LOGO_SIZE_INVALID" : "MEDIA_SIZE_INVALID", `The ${limits.label} size is not allowed.`);
   }
+  // The browser derives an upload's declared content type from its file
+  // extension, so a well-formed PNG saved as ".jpg" arrives claiming to be a
+  // JPEG. The magic bytes are both the safer signal and the type we persist
+  // and serve, so they decide on their own and the declared type is ignored.
   const contentType = detectedType(bytes);
-  if (!contentType || contentType !== claimedType) {
-    throw new HttpError(415, limits.label === "logo" ? "LOGO_TYPE_INVALID" : "MEDIA_TYPE_INVALID", `Use a valid rasterized PNG or JPEG ${limits.label}.`);
+  if (!contentType || !limits.allowed.includes(contentType)) {
+    const accepted = limits.allowed.includes("image/jpeg") ? "PNG or JPEG" : "PNG";
+    throw new HttpError(
+      415,
+      limits.label === "logo" ? "LOGO_TYPE_INVALID" : "MEDIA_TYPE_INVALID",
+      `Use a ${accepted} ${limits.label}. WebP, HEIC, and SVG files are not supported.`,
+    );
   }
   const raster = dimensions(bytes, contentType);
   if (
@@ -92,14 +106,14 @@ async function validate(
 
 export async function validateScreenshot(
   bytes: Uint8Array,
-  claimedType: string,
   claimedWidth: number,
   claimedHeight: number,
 ) {
-  const result = await validate(bytes, claimedType, {
+  const result = await validate(bytes, {
     bytes: MAX_SCREENSHOT_BYTES,
     dimension: MAX_SCREENSHOT_DIMENSION,
     pixels: MAX_SCREENSHOT_PIXELS,
+    allowed: ["image/png", "image/jpeg"],
     label: "screenshot",
   });
   if (
@@ -111,23 +125,22 @@ export async function validateScreenshot(
   return result;
 }
 
-export function validateLogo(bytes: Uint8Array, claimedType: string) {
-  return validate(bytes, claimedType, {
+export function validateLogo(bytes: Uint8Array) {
+  return validate(bytes, {
     bytes: MAX_LOGO_BYTES,
     dimension: MAX_LOGO_DIMENSION,
     pixels: MAX_LOGO_PIXELS,
+    allowed: ["image/png", "image/jpeg"],
     label: "logo",
   });
 }
 
-export async function validateFavicon(bytes: Uint8Array, claimedType: string) {
-  if (claimedType !== "image/png") {
-    throw new HttpError(415, "MEDIA_TYPE_INVALID", "Use a rasterized PNG favicon.");
-  }
-  return validate(bytes, claimedType, {
+export async function validateFavicon(bytes: Uint8Array) {
+  return validate(bytes, {
     bytes: MAX_FAVICON_BYTES,
     dimension: MAX_FAVICON_DIMENSION,
     pixels: MAX_FAVICON_PIXELS,
+    allowed: ["image/png"],
     label: "favicon",
   });
 }

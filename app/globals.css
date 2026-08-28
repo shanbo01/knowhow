@@ -6363,23 +6363,10 @@ select {
   --workspace-logo-size: 3rem;
 }
 
-/* Chromeless variant for rows that already sit on a card or bar. */
-.workspace-logo-bare {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.workspace-logo-bare img {
-  background: transparent;
-}
-
 .workspace-logo img {
   width: 100%;
   height: 100%;
-  padding: 0.0625rem;
   object-fit: contain;
-  background: var(--card);
 }
 
 .workspace-logo-loading {
@@ -7351,7 +7338,7 @@ body::before {
 /* Paid-plan brand lockup: the workspace mark, then a hairline, then the page
    title. Sized off the bar rather than the tile so wide wordmarks read. */
 .topbar-brand-logo {
-  --workspace-logo-size: 1.6rem;
+  --workspace-logo-size: 1.9rem;
   max-width: 9rem;
 }
 
@@ -11918,6 +11905,19 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
 .dashboard-card-header>[data-slot="badge"] {
   border: 0 !important;
   box-shadow: none;
+}
+
+/*
+ * Logos exported onto a flat backdrop (the common case: artwork flattened onto
+ * white) get a plate in that same colour, with the artwork trimmed to its own
+ * edges. Plate and mark then read as one shape, instead of a white rectangle
+ * with dead margins floating on the surrounding chrome. A hairline keeps a
+ * white plate from dissolving into a light theme.
+ */
+.workspace-logo[data-plated="true"] {
+  padding: calc(var(--workspace-logo-size) * 0.09);
+  background: var(--workspace-logo-plate);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent);
 }
 
 .kh-dialog-content,

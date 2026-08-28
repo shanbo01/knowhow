@@ -236,9 +236,8 @@ export async function POST(request: Request) {
       if (!run || run.user_id !== identity.userId || run.status !== "draft") {
         throw new HttpError(404, "PROVISIONING_RUN_NOT_FOUND", "Provisioning draft not found.");
       }
-      const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
       const bytes = await boundedBytes(request, 1024 * 1024);
-      const validated = await validateLogo(bytes, contentType);
+      const validated = await validateLogo(bytes);
       const logoId = resourceId("logo");
       createdFileId = logoId;
       await objects.put({ id: logoId, bytes, filename: `organization-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType });
@@ -255,7 +254,6 @@ export async function POST(request: Request) {
     }
     const { store, objects, identity, url, workspaceId, access, context } = await workspaceContext(request);
     await consumeFixedWindows(store, [{ scope: "knowhow.media-write", subject: identity.userId, limit: 60, windowSeconds: 60 }]);
-    const contentType = request.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
     if (url.searchParams.get("kind") === "screenshot") {
       const guideId = requiredId(url, "guideId", "Guide");
       const revisionId = requiredId(url, "revisionId", "Revision");
@@ -286,7 +284,6 @@ export async function POST(request: Request) {
       const bytes = await boundedBytes(request, 5 * 1024 * 1024);
       const validated = await validateScreenshot(
         bytes,
-        contentType,
         Number(request.headers.get("x-knowhow-image-width")),
         Number(request.headers.get("x-knowhow-image-height")),
       );
@@ -350,7 +347,7 @@ export async function POST(request: Request) {
 
     requireAuthorized("workspace.settings.manage", context);
     const bytes = await boundedBytes(request, 1024 * 1024);
-    const validated = await validateLogo(bytes, contentType);
+    const validated = await validateLogo(bytes);
     const current = await configuredLogo(store, workspaceId);
     await new EntitlementService(store, workspaceId).assertStorageCapacity(
       validated.byteSize,
