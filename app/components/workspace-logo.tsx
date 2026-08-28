@@ -33,13 +33,18 @@ function loadRaster(workspaceId: string, requestKey: string) {
   if (cached) return cached;
   const pending = loadAuthorizedWorkspaceLogoUrl(workspaceId)
     .then(async (objectUrl) => {
+      let raster: LogoRaster;
       try {
-        return await normalizeLogoRaster(objectUrl);
-      } finally {
-        // normalizeLogoRaster resolves to a self-contained data URL, so the
-        // source blob is only needed for the decode.
+        raster = await normalizeLogoRaster(objectUrl);
+      } catch (error) {
         URL.revokeObjectURL(objectUrl);
+        throw error;
       }
+      // A logo that is already tight, or that could not be measured, is served
+      // straight from the source blob. Only revoke once the result no longer
+      // points at it, or the mark renders as a broken image.
+      if (raster.url !== objectUrl) URL.revokeObjectURL(objectUrl);
+      return raster;
     })
     .catch((error) => {
       rasters.delete(requestKey);
