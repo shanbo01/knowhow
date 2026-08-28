@@ -11,10 +11,25 @@ type WorkspaceLogoProps = {
   logoKey?: string | null;
   className?: string;
   size?: "sm" | "md" | "lg";
+  /** Drops the tile background so the mark sits directly on the surface. */
+  bare?: boolean;
 };
+
+/**
+ * Widest and narrowest box a logo may claim, as a multiple of its row height.
+ * Wordmarks are usually 2:1 to 3:1, so the cap keeps a banner from crowding
+ * the row while still letting it read at full height.
+ */
+const WIDEST_RATIO = 3.2;
+const NARROWEST_RATIO = 0.7;
 
 function initials(name: string) {
   return name.trim().slice(0, 1).toUpperCase() || "W";
+}
+
+function clampedRatio(width: number, height: number) {
+  if (!width || !height) return 1;
+  return Math.min(WIDEST_RATIO, Math.max(NARROWEST_RATIO, width / height));
 }
 
 /** Shows the private workspace logo when present and a stable initial fallback otherwise. */
@@ -24,8 +39,10 @@ export function WorkspaceLogo({
   logoKey,
   className,
   size = "md",
+  bare = false,
 }: WorkspaceLogoProps) {
   const [state, setState] = useState({ key: "", url: "", failed: false });
+  const [ratio, setRatio] = useState({ key: "", value: 1 });
   const requestKey = useMemo(() => `${workspaceId}:${logoKey ?? "none"}`, [logoKey, workspaceId]);
 
   useEffect(() => {
@@ -52,13 +69,36 @@ export function WorkspaceLogo({
   const isLoading = Boolean(logoKey) && state.key !== requestKey;
   const url = state.key === requestKey ? state.url : "";
   const failed = state.key === requestKey && state.failed;
+  // Stay square until the raster reports its own shape, so the row never
+  // reflows through an intermediate width.
+  const shape = ratio.key === requestKey ? ratio.value : 1;
 
   return (
-    <span className={cn("workspace-logo", `workspace-logo-${size}`, className)}>
+    <span
+      className={cn(
+        "workspace-logo",
+        `workspace-logo-${size}`,
+        bare && "workspace-logo-bare",
+        className,
+      )}
+      style={{ "--workspace-logo-ratio": shape } as React.CSSProperties}
+    >
       {url ? (
         // The source is an authenticated, workspace-scoped object URL.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt={`${workspaceName} logo`} />
+        <img
+          src={url}
+          alt={`${workspaceName} logo`}
+          onLoad={(event) =>
+            setRatio({
+              key: requestKey,
+              value: clampedRatio(
+                event.currentTarget.naturalWidth,
+                event.currentTarget.naturalHeight,
+              ),
+            })
+          }
+        />
       ) : isLoading ? (
         <LoaderCircle className="workspace-logo-loading spin" aria-label="Loading workspace logo" />
       ) : failed ? (

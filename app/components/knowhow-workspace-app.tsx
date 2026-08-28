@@ -446,6 +446,9 @@ function workspaceOptionLabel(workspace: {
   return slug || workspace.id;
 }
 
+/** Paid plans that earn the workspace's own mark in the top bar. */
+const BRANDED_PLANS = new Set(["pro_trial", "pro", "enterprise"]);
+
 function workspacePlanLabel(
   subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"],
 ) {
@@ -4399,7 +4402,8 @@ function SettingsView({
                   : "Workspace logo placeholder"}
               </strong>
               <small>
-                PNG or JPEG, up to 1 MB. The stored identifier remains private.
+                PNG or JPEG, up to 1 MB. Square marks and wide wordmarks both
+                fit. The stored identifier remains private.
               </small>
             </div>
             <label
@@ -6028,6 +6032,12 @@ export function KnowHowWorkspaceApp({
     canCreate && workspaceMutable && entitlements.desktopCaptureEnabled;
   const canAnyCapture = canCapture || canDesktopCapture;
   const canOpenSupport = entitlements.supportEnabled;
+  // Paid workspaces carry their own mark in the top bar; Free workspaces and
+  // workspaces without an uploaded logo keep the bar clean rather than showing
+  // an initial the sidebar already displays.
+  const showTopbarBrand =
+    BRANDED_PLANS.has(workspace.subscription?.plan ?? "free") &&
+    Boolean(workspace.settings.logoUrl);
   const canCreateSupportTicket =
     canOpenSupport &&
     !busy &&
@@ -7133,6 +7143,19 @@ export function KnowHowWorkspaceApp({
           <header className="topbar">
             <div className="topbar-start">
               <SidebarTrigger className="mobile-menu" />
+              {showTopbarBrand ? (
+                <>
+                  <WorkspaceLogo
+                    className="topbar-brand-logo"
+                    workspaceId={workspace.id}
+                    workspaceName={workspace.name}
+                    logoKey={workspace.settings.logoUrl}
+                    size="sm"
+                    bare
+                  />
+                  <span className="topbar-brand-divider" aria-hidden="true" />
+                </>
+              ) : null}
               <strong className="topbar-page-title">{NAV_LABELS[view]}</strong>
             </div>
             <div className="topbar-search-slot">
