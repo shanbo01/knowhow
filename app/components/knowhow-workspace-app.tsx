@@ -6924,23 +6924,15 @@ export function KnowHowWorkspaceApp({
                 label: item.name,
               }))}
               renderValue={() => (
-                <>
-                  <WorkspaceLogo
-                    workspaceId={workspace.id}
-                    workspaceName={workspace.name}
-                    logoKey={workspace.settings.logoUrl}
-                    size="md"
-                  />
-                  <span className="workspace-menu-copy">
-                    <span className="workspace-menu-title">
-                      <strong>{workspace.name}</strong>
-                      <span className="workspace-plan-chip">
-                        {workspacePlanLabel(workspace.subscription)}
-                      </span>
+                <span className="workspace-menu-copy">
+                  <span className="workspace-menu-title">
+                    <strong>{workspace.name}</strong>
+                    <span className="workspace-plan-chip">
+                      {workspacePlanLabel(workspace.subscription)}
                     </span>
-                    <small>{workspaceAccessLabel(roles)}</small>
                   </span>
-                </>
+                  <small>{workspaceAccessLabel(roles)}</small>
+                </span>
               )}
             />
           </SidebarHeader>

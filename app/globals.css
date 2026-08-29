@@ -7338,15 +7338,15 @@ body::before {
 /* Paid-plan brand lockup: the workspace mark, then a hairline, then the page
    title. Sized off the bar rather than the tile so wide wordmarks read. */
 .topbar-brand-logo {
-  --workspace-logo-size: 1.9rem;
-  max-width: 9rem;
+  --workspace-logo-size: 2.75rem;
+  max-width: 11rem;
 }
 
 .topbar-brand-divider {
   flex: 0 0 auto;
   width: 1px;
-  height: 1.1rem;
-  margin: 0 0.15rem;
+  height: 1.75rem;
+  margin: 0 0.2rem;
   border-radius: 1px;
   background: var(--border);
 }
@@ -11998,7 +11998,8 @@ html:has(.workspace-menu [aria-expanded="true"]) .kh-select-options {
   }
 
   .topbar-brand-logo {
-    max-width: 6rem;
+    --workspace-logo-size: 2.1rem;
+    max-width: 7rem;
   }
 
   .topbar-brand-divider {
