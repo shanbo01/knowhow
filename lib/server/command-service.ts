@@ -17,6 +17,7 @@ import {
   type LifecycleCaseRecord,
   type SubscriptionRecord,
   type SupportGrantRecord,
+  type SupportAttachmentRecord,
   type WorkspaceGroupRecord,
   type WorkspaceMemberRecord,
   type WorkspaceRecord,
@@ -3946,55 +3947,117 @@ export class CommandService {
         max: 160,
       });
       const body = supportText(payload.message, "Support message", {
-        min: 10,
+        min: 1,
         max: 4_000,
       });
+      const attachmentIds =
+        payload.attachmentIds === undefined
+          ? []
+          : inputStringList(payload.attachmentIds, "Support attachments", 5, 36);
+      const attachments = await Promise.all(
+        attachmentIds.map(async (attachmentId) => {
+          const row = await this.store.get(TABLES.privateMedia, attachmentId);
+          const details = row
+            ? decodePayload<SupportAttachmentRecord>(row, null as never)
+            : null;
+          if (
+            !row ||
+            row.workspace_id !== workspaceId ||
+            row.user_id !== identity.userId ||
+            row.created_by !== identity.userId ||
+            row.kind !== "support-attachment" ||
+            row.status !== "staged" ||
+            !details ||
+            details.deletedAt ||
+            details.ticketId ||
+            details.messageId ||
+            details.storageFileId !== attachmentId
+          ) {
+            throw new HttpError(
+              409,
+              "SUPPORT_ATTACHMENT_INVALID",
+              "One or more support attachments could not be used.",
+            );
+          }
+          return { id: attachmentId, row, details };
+        }),
+      );
       const ticketId = resourceId("ticket");
       const messageId = resourceId("message");
       const createdAt = nowIso();
       const responseTargetAt = nextBusinessDay(new Date(createdAt));
-      await this.store.create(
-        TABLES.supportTickets,
-        ticketId,
-        rowData(
-          {
-            organization_id: workspaceAccess.workspace.organizationId,
-            workspace_id: workspaceId,
-            user_id: identity.userId,
-            email: identity.email,
-            status: "waiting_support",
-            kind: "in_app",
-            occurred_at: createdAt,
-            request_id: options.requestId,
-            created_by: identity.userId,
-          },
-          {
-            subject,
-            requesterName: identity.name,
-            createdAt,
-            updatedAt: createdAt,
-            responseTargetAt,
-          },
-        ),
-      );
-      await this.store.create(
-        TABLES.supportMessages,
-        messageId,
-        rowData(
-          {
-            organization_id: workspaceAccess.workspace.organizationId,
-            workspace_id: workspaceId,
-            user_id: identity.userId,
-            subject_id: ticketId,
-            status: "visible",
-            kind: "customer",
-            sequence: 1,
-            occurred_at: createdAt,
-            created_by: identity.userId,
-          },
-          { authorName: identity.name, authorKind: "customer", body },
-        ),
-      );
+      await this.store.transaction(async (transaction) => {
+        await transaction.create(
+          TABLES.supportTickets,
+          ticketId,
+          rowData(
+            {
+              organization_id: workspaceAccess.workspace.organizationId,
+              workspace_id: workspaceId,
+              user_id: identity.userId,
+              email: identity.email,
+              status: "waiting_support",
+              kind: "in_app",
+              occurred_at: createdAt,
+              request_id: options.requestId,
+              created_by: identity.userId,
+            },
+            {
+              subject,
+              requesterName: identity.name,
+              createdAt,
+              updatedAt: createdAt,
+              responseTargetAt,
+            },
+          ),
+        );
+        await transaction.create(
+          TABLES.supportMessages,
+          messageId,
+          rowData(
+            {
+              organization_id: workspaceAccess.workspace.organizationId,
+              workspace_id: workspaceId,
+              user_id: identity.userId,
+              subject_id: ticketId,
+              status: "visible",
+              kind: "customer",
+              sequence: 1,
+              occurred_at: createdAt,
+              created_by: identity.userId,
+            },
+            {
+              authorName: identity.name,
+              authorKind: "customer",
+              body,
+              attachments: attachments.map(({ id, details }) => ({
+                id,
+                filename: details.filename,
+                contentType: details.contentType,
+                byteSize: details.byteSize,
+              })),
+            },
+          ),
+        );
+        for (const attachment of attachments) {
+          await transaction.update(
+            TABLES.privateMedia,
+            attachment.id,
+            rowData(
+              {
+                subject_id: ticketId,
+                status: "ready",
+                updated_by: identity.userId,
+              },
+              {
+                ...attachment.details,
+                ticketId,
+                messageId,
+              },
+            ),
+          );
+        }
+      });
       const supportEmail =
         process.env.KNOWHOW_SUPPORT_EMAIL?.trim().toLowerCase();
       if (supportEmail) {
@@ -4114,7 +4177,7 @@ export class CommandService {
           "This support ticket is closed.",
         );
       const body = supportText(payload.message, "Support message", {
-        min: 2,
+        min: 1,
         max: 4_000,
       });
       const messages = await this.store.list(TABLES.supportMessages, {

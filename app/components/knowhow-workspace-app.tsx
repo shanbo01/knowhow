@@ -38,6 +38,7 @@ import {
   MoreHorizontal,
   Moon,
   Paintbrush,
+  Paperclip,
   PenLine,
   Plus,
   RotateCcw,
@@ -79,7 +80,10 @@ import {
 import {
   downloadAuthorizedExport,
   removeWorkspaceLogo,
+  removeStagedSupportAttachment,
+  supportAttachmentHref,
   knowhowCommand,
+  uploadSupportAttachment,
   uploadProvisioningLogo,
   uploadWorkspaceLogo,
   KnowHowApiError,
@@ -304,10 +308,10 @@ const ENTITLEMENT_COPY: Record<string, string> = {
   maximumUsers: "This workspace has reached its limit on people.",
   maximumCreators: "This workspace has reached its limit on creators.",
   storageBytes: "This workspace has reached its storage limit.",
-  extensionEnabled: "Browser extension capture is a Pro feature.",
+  extensionEnabled: "Browser extension capture is unavailable in this workspace.",
   desktopCaptureEnabled: "Windows desktop capture is a Pro feature.",
   privacyToolsEnabled:
-    "Smart Blur, redaction, and annotations are Pro features.",
+    "Editor blur and annotations, plus extension Auto Blur, are Pro features.",
   fileExportsEnabled: "PDF, PowerPoint, and HTML exports are Pro features.",
   removeBranding: "Removing KnowHow branding is a Pro feature.",
   supportEnabled: "In-app support is a Pro feature.",
@@ -465,36 +469,43 @@ function workspacePlanLabel(
 }
 
 const PLAN_FEATURES: Array<{
+  id: string;
   key: keyof NonNullable<BootstrapResponse["activeWorkspace"]>["entitlements"];
   label: string;
   freeNote: string;
 }> = [
   {
+    id: "editor-privacy-tools",
     key: "privacyToolsEnabled",
-    label: "Smart Blur, redact, and annotate",
-    freeNote: "Click markers only on Free",
+    label: "Editor blur and annotations",
+    freeNote: "Click targets and crop on Free",
   },
   {
-    key: "extensionEnabled",
-    label: "Browser extension capture",
-    freeNote: "Manual guides only on Free",
+    id: "extension-auto-blur",
+    key: "privacyToolsEnabled",
+    label: "Extension Auto Blur",
+    freeNote: "Standard capture on Free",
   },
   {
+    id: "desktop-capture",
     key: "desktopCaptureEnabled",
     label: "Windows desktop capture",
     freeNote: "Manual guides only on Free",
   },
   {
+    id: "file-exports",
     key: "fileExportsEnabled",
     label: "PDF, PowerPoint, and HTML exports",
     freeNote: "Markdown only on Free",
   },
   {
+    id: "remove-branding",
     key: "removeBranding",
     label: "Remove KnowHow branding",
     freeNote: "KnowHow branding shown on Free",
   },
   {
+    id: "in-app-support",
     key: "supportEnabled",
     label: "In-app support",
     freeNote: "Contact form on Free",
@@ -548,12 +559,6 @@ function PlanDialog({
             used={metrics.members}
             maximum={entitlements.maximumUsers}
           />
-          <UsageMeter
-            label="Storage"
-            used={metrics.storageBytes}
-            maximum={entitlements.storageBytes}
-            format={formatBytes}
-          />
           <p className="privacy-caption">
             Archiving a guide frees its slot. Creators are capped at{" "}
             {entitlements.maximumCreators}.
@@ -565,7 +570,7 @@ function PlanDialog({
             {PLAN_FEATURES.map((feature) => {
               const included = Boolean(entitlements[feature.key]);
               return (
-                <li key={feature.key} data-included={included}>
+                <li key={feature.id} data-included={included}>
                   <span>{feature.label}</span>
                   {included ? (
                     <span className="plan-feature-included">Included</span>
@@ -582,7 +587,7 @@ function PlanDialog({
             })}
           </ul>
         </section>
-        <footer className="modal-footer">
+        <footer className="modal-footer plan-dialog-footer">
           <button className="button secondary" type="button" onClick={onClose}>
             Close
           </button>
@@ -3890,6 +3895,7 @@ function InviteDialog({
 }
 
 function SupportView({
+  workspaceId,
   tickets,
   busy,
   canCreate,
@@ -3897,17 +3903,20 @@ function SupportView({
   onReply,
   onClose,
 }: {
+  workspaceId: string;
   tickets: SupportTicket[];
   busy: boolean;
   canCreate: boolean;
-  onCreate: (subject: string, message: string) => Promise<void>;
+  onCreate: (subject: string, message: string, attachmentIds: string[]) => Promise<void>;
   onReply: (ticketId: string, message: string) => Promise<void>;
   onClose: (ticketId: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState(tickets[0]?.id ?? "");
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(canCreate);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [confirmingCloseId, setConfirmingCloseId] = useState("");
   const selected =
     tickets.find((ticket) => ticket.id === selectedId) ?? tickets[0];
@@ -3922,9 +3931,13 @@ function SupportView({
           </p>
         </div>
         <div className="support-heading-actions">
-          <span className="support-response-pill"><CheckCircle2 /> One-business-day target</span>
           {canCreate ? (
-            <button className="button primary" type="button" disabled={busy || creating} onClick={() => setCreating(true)}>
+            <button className="button primary" type="button" disabled={busy || creating} onClick={() => {
+              setSubject("");
+              setMessage("");
+              setAttachments([]);
+              setCreating(true);
+            }}>
               <Plus /> New request
             </button>
           ) : null}
@@ -3972,10 +3985,27 @@ function SupportView({
               className="modal-form support-composer"
               onSubmit={async (event) => {
                 event.preventDefault();
-                await onCreate(subject.trim(), message.trim());
-                setSubject("");
-                setMessage("");
-                setCreating(false);
+                const uploadedIds: string[] = [];
+                setUploadingAttachments(true);
+                try {
+                  for (const file of attachments) {
+                    const uploaded = await uploadSupportAttachment(workspaceId, file);
+                    uploadedIds.push(uploaded.id);
+                  }
+                  await onCreate(subject.trim(), message.trim(), uploadedIds);
+                  setSubject("");
+                  setMessage("");
+                  setAttachments([]);
+                  setCreating(false);
+                } catch {
+                  await Promise.allSettled(
+                    uploadedIds.map((mediaId) =>
+                      removeStagedSupportAttachment(workspaceId, mediaId),
+                    ),
+                  );
+                } finally {
+                  setUploadingAttachments(false);
+                }
               }}
             >
               <header className="support-composer-header">
@@ -3988,8 +4018,7 @@ function SupportView({
               </header>
               <div className="support-privacy-note">
                 <ShieldCheck />
-                <div><strong>Keep sensitive data out</strong><p>Don’t include guide content, screenshots, credentials, secrets, payment information, health data, or national IDs.</p></div>
-                <span>No attachments</span>
+                <div><strong>Keep sensitive data out</strong><p>Review messages and files before sending. Don’t include credentials, secrets, payment information, health data, or national IDs.</p></div>
               </div>
               <div className="support-composer-fields">
               <label className="field support-subject-field">
@@ -4007,7 +4036,6 @@ function SupportView({
                 <span>Details <small>Include steps to reproduce and any error text</small></span>
                 <textarea
                   required
-                  minLength={10}
                   maxLength={4000}
                   rows={8}
                   value={message}
@@ -4015,12 +4043,79 @@ function SupportView({
                   placeholder="Tell us what happened, what you tried, and the outcome you expected."
                 />
               </label>
+              <div className="support-attachment-field">
+                <div>
+                  <strong>Attachments</strong>
+                  <small>Up to 5 files, 5 MB each · PNG, JPEG, WebP, PDF, JSON, CSV, or text</small>
+                </div>
+                <label className="button secondary support-attachment-picker">
+                  <Paperclip /> Add files
+                  <input
+                    type="file"
+                    multiple
+                    accept=".png,.jpg,.jpeg,.webp,.pdf,.json,.csv,.txt,text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/webp"
+                    onChange={(event) => {
+                      const selectedFiles = Array.from(event.target.files ?? []);
+                      const allowedTypes = new Set([
+                        "application/json",
+                        "application/pdf",
+                        "image/jpeg",
+                        "image/png",
+                        "image/webp",
+                        "text/csv",
+                        "text/plain",
+                      ]);
+                      const next = [...attachments];
+                      for (const file of selectedFiles) {
+                        if (!file.size || file.size > 5 * 1024 * 1024) {
+                          toast.error(`${file.name} must be between 1 byte and 5 MB.`);
+                          continue;
+                        }
+                        if (!allowedTypes.has(file.type)) {
+                          toast.error(`${file.name} is not a supported attachment type.`);
+                          continue;
+                        }
+                        if (next.length >= 5) {
+                          toast.error("You can attach up to 5 files.");
+                          break;
+                        }
+                        if (!next.some((item) => item.name === file.name && item.size === file.size)) {
+                          next.push(file);
+                        }
+                      }
+                      setAttachments(next);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
+                {attachments.length ? (
+                  <ul className="support-attachment-list">
+                    {attachments.map((file, index) => (
+                      <li key={`${file.name}:${file.size}:${index}`}>
+                        <Paperclip />
+                        <span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>
+                        <button
+                          type="button"
+                          className="icon-button tiny"
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        >
+                          <X />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
               </div>
               <footer className="modal-footer">
                 <button
                   className="button secondary"
                   type="button"
-                  onClick={() => setCreating(false)}
+                  onClick={() => {
+                    setAttachments([]);
+                    setCreating(false);
+                  }}
                 >
                   Cancel
                 </button>
@@ -4028,12 +4123,12 @@ function SupportView({
                   className="button primary"
                   type="submit"
                   disabled={
-                    busy ||
+                    busy || uploadingAttachments ||
                     subject.trim().length < 4 ||
-                    message.trim().length < 10
+                    !message.trim()
                   }
                 >
-                  {busy ? <LoaderCircle className="spin" /> : <LifeBuoy />} Send
+                  {busy || uploadingAttachments ? <LoaderCircle className="spin" /> : <LifeBuoy />} Send
                   securely
                 </button>
               </footer>
@@ -4110,6 +4205,20 @@ function SupportView({
                       </span>
                     </header>
                     <p>{item.body}</p>
+                    {item.attachments.length ? (
+                      <div className="support-message-attachments">
+                        {item.attachments.map((attachment) => (
+                          <a
+                            href={supportAttachmentHref(workspaceId, attachment.id)}
+                            key={attachment.id}
+                          >
+                            <Paperclip />
+                            <span>{attachment.filename}</span>
+                            <small>{formatBytes(attachment.byteSize)}</small>
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
                   </article>
                 ))}
               </div>
@@ -4118,7 +4227,7 @@ function SupportView({
                   className="support-reply"
                   onSubmit={async (event) => {
                     event.preventDefault();
-                    if (message.trim().length < 2) return;
+                    if (!message.trim()) return;
                     await onReply(selected.id, message.trim());
                     setMessage("");
                   }}
@@ -4127,7 +4236,6 @@ function SupportView({
                     <span>{selected.status === "resolved" ? "Still need help? Reply to reopen" : "Reply"}</span>
                     <textarea
                       rows={4}
-                      minLength={2}
                       maxLength={4000}
                       required
                       value={message}
@@ -4138,7 +4246,7 @@ function SupportView({
                   <button
                     className="button primary"
                     type="submit"
-                    disabled={busy || message.trim().length < 2}
+                    disabled={busy || !message.trim()}
                   >
                     {busy ? <LoaderCircle className="spin" /> : <ArrowRight />}{" "}
                     Reply
@@ -4186,7 +4294,6 @@ function SettingsView({
 }) {
   const [settings, setSettings] = useState(initial);
   const [baseline, setBaseline] = useState(initial);
-  const [section, setSection] = useState<"general" | "branding" | "publishing" | "exports">("general");
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState("");
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
@@ -4246,37 +4353,6 @@ function SettingsView({
     setSettings((current) => ({ ...current, logoUrl: logoUrl ?? null }));
     setBaseline((current) => ({ ...current, logoUrl: logoUrl ?? null }));
   }
-  const settingsSections = [
-    {
-      id: "general" as const,
-      label: "General",
-      description: "Privacy and capture safeguards",
-      icon: Settings,
-      status: "3 enforced",
-    },
-    {
-      id: "branding" as const,
-      label: "Branding",
-      description: "Logo, colors, and exports",
-      icon: Paintbrush,
-      status: undefined,
-    },
-    {
-      id: "publishing" as const,
-      label: "Publishing",
-      description: "Reviews and approvals",
-      icon: ShieldCheck,
-      status: undefined,
-    },
-    {
-      id: "exports" as const,
-      label: "Exports",
-      description: "Downloads and watermarks",
-      icon: FileDown,
-      status: undefined,
-    },
-  ];
-  const activeSection = settingsSections.find((item) => item.id === section)!;
   return (
     <div className="view-stack settings-page">
       <div className="page-heading settings-page-heading">
@@ -4289,61 +4365,9 @@ function SettingsView({
         </div>
       </div>
       <div className="settings-console">
-        <aside className="settings-section-nav" aria-label="Workspace settings sections">
-          <div className="settings-nav-heading">
-            <span>Workspace</span>
-            <small>4 sections</small>
-          </div>
-          <div className="settings-tabs" role="tablist" aria-orientation="vertical">
-            {settingsSections.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={section === item.id}
-                  aria-controls={`settings-panel-${item.id}`}
-                  className={section === item.id ? "active" : ""}
-                  onClick={() => setSection(item.id)}
-                >
-                  <span className="settings-nav-icon"><Icon /></span>
-                  <span className="settings-nav-copy">
-                    <strong>{item.label}</strong>
-                    <small>{item.description}</small>
-                  </span>
-                  {item.status ? (
-                    <span className="settings-nav-status">{item.status}</span>
-                  ) : null}
-                  <ChevronRight className="settings-nav-chevron" />
-                </button>
-              );
-            })}
-          </div>
-          <div className="settings-nav-note">
-            <ShieldCheck />
-            <span>
-              <strong>Admin only</strong>
-              <small>Changes apply workspace-wide.</small>
-            </span>
-          </div>
-        </aside>
-
         <div className="settings-main">
-          <header className="settings-section-header">
-            <div>
-              <p className="eyebrow">{activeSection.label} settings</p>
-              <h2>{activeSection.description}</h2>
-            </div>
-            {activeSection.status ? <span>{activeSection.status}</span> : null}
-          </header>
-          <div
-            className="settings-grid"
-            id={`settings-panel-${section}`}
-            role="tabpanel"
-          >
-        {section === "general" ? (
-          <section className="card settings-card settings-section-wide">
+          <div className="settings-grid">
+          <section className="card settings-card settings-card-general settings-section-wide">
             <div className="settings-title">
               <span><Settings /></span>
               <div>
@@ -4376,8 +4400,6 @@ function SettingsView({
               <span className="settings-switch" aria-hidden="true" />
             </label>
           </section>
-        ) : null}
-        {section === "branding" ? (
         <section className="card settings-card document-identity-card settings-section-wide">
           <div className="settings-title">
             <span>
@@ -4509,9 +4531,7 @@ function SettingsView({
             <span><strong>{workspaceName}</strong><small>Live guide and export preview</small></span>
           </div>
         </section>
-        ) : null}
-        {section === "publishing" ? (
-        <section className="card settings-card settings-section-wide">
+        <section className="card settings-card settings-card-compact">
           <div className="settings-title">
             <span>
               <ShieldCheck />
@@ -4537,9 +4557,7 @@ function SettingsView({
           </label>
           <PolicyNote icon={LockKeyhole}>Administrators cannot bypass required review.</PolicyNote>
         </section>
-        ) : null}
-        {section === "exports" ? (
-        <section className="card settings-card settings-section-wide">
+        <section className="card settings-card settings-card-compact">
           <div className="settings-title">
             <span><FileDown /></span>
             <div><h2>Export controls</h2><p>Exports are static copies. Live links keep audience checks.</p></div>
@@ -4573,7 +4591,6 @@ function SettingsView({
             <span className="settings-switch" aria-hidden="true" />
           </label>
         </section>
-        ) : null}
           </div>
         </div>
       </div>
@@ -4685,21 +4702,43 @@ export function OrganizationView({
           </button>
         ) : null}
       </div>
-      <section className="card settings-card organization-identity-card">
-        <div className="settings-title">
-          <span style={{ background: organization.branding.accentColor }}>
+      <section
+        className="card settings-card organization-identity-card"
+        style={{ "--organization-accent": organization.branding.accentColor } as React.CSSProperties}
+      >
+        <div className="settings-title organization-identity-heading">
+          <span>
             <Building2 />
           </span>
           <div>
-            <h2>{organization.legalName || organization.displayName}</h2>
-            <div className="organization-metadata">
-              <span><small>Legal name</small><strong>{organization.legalName || "Not provided"}</strong></span>
-              <span><small>Country</small><strong>{organization.country}</strong></span>
-              <span><small>Status</small><strong>{titleCase(organization.status)}</strong></span>
-              <span><small>Your roles</small><strong>{organization.roles.map(organizationRoleLabel).join(", ")}</strong></span>
-            </div>
+            <h2>Organization profile</h2>
+            <p>Company identity and your administrative access.</p>
           </div>
         </div>
+        <dl className="organization-metadata">
+          <div>
+            <dt>Legal name</dt>
+            <dd>{organization.legalName || "Not provided"}</dd>
+          </div>
+          <div>
+            <dt>Country</dt>
+            <dd>{organization.country}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd><StatusBadge status={organization.status} /></dd>
+          </div>
+          <div>
+            <dt>Your roles</dt>
+            <dd className="organization-role-list">
+              {organization.roles.map((role) => (
+                <Badge className="organization-role-badge" variant="secondary" key={role}>
+                  <ShieldCheck /> {organizationRoleLabel(role)}
+                </Badge>
+              ))}
+            </dd>
+          </div>
+        </dl>
         <p className="privacy-caption">
           <LockKeyhole /> Organization administrators manage people. They do
           not automatically see workspace guides.
@@ -4764,7 +4803,9 @@ export function OrganizationView({
                 <small>{member.email}</small>
                 <span className="role-chips">
                   {member.roles.map((role) => (
-                    <span key={role}>{organizationRoleLabel(role)}</span>
+                    <Badge className="organization-role-badge organization-member-role" variant="secondary" key={role}>
+                      <ShieldCheck /> {organizationRoleLabel(role)}
+                    </Badge>
                   ))}
                 </span>
               </span>
@@ -6012,7 +6053,7 @@ export function KnowHowWorkspaceApp({
     maximumCreators: 1,
     maximumGuides: 15,
     storageBytes: 1_000_000_000,
-    extensionEnabled: false,
+    extensionEnabled: true,
     desktopCaptureEnabled: false,
     supportEnabled: false,
     removeBranding: false,
@@ -6398,7 +6439,6 @@ export function KnowHowWorkspaceApp({
     workspaceMutable;
   const guideCreateMenuProps = {
     busy,
-    browserPlanEnabled: entitlements.extensionEnabled,
     browserAvailable: canCapture,
     desktopPlanEnabled: entitlements.desktopCaptureEnabled,
     desktopAvailable: canDesktopCapture,
@@ -6895,7 +6935,7 @@ export function KnowHowWorkspaceApp({
           } as React.CSSProperties
         }
       >
-        <Sidebar className="sidebar" collapsible="offcanvas">
+        <Sidebar className="sidebar" collapsible="icon">
           <SidebarHeader className="workspace-sidebar-header">
             <div className="sidebar-brand-row">
               <div className="sidebar-brand">
@@ -6927,9 +6967,17 @@ export function KnowHowWorkspaceApp({
                 <span className="workspace-menu-copy">
                   <span className="workspace-menu-title">
                     <strong>{workspace.name}</strong>
-                    <span className="workspace-plan-chip">
-                      {workspacePlanLabel(workspace.subscription)}
-                    </span>
+                    {workspace.subscription?.plan === "pro" ||
+                    workspace.subscription?.plan === "pro_trial" ? (
+                      <ProBadge
+                        label={workspacePlanLabel(workspace.subscription)}
+                        size="sm"
+                      />
+                    ) : (
+                      <span className="workspace-plan-chip">
+                        {workspacePlanLabel(workspace.subscription)}
+                      </span>
+                    )}
                   </span>
                   <small>{workspaceAccessLabel(roles)}</small>
                 </span>
@@ -6946,6 +6994,7 @@ export function KnowHowWorkspaceApp({
                         <SidebarMenuItem key={item}>
                           <SidebarMenuButton
                             isActive={view === item}
+                            tooltip={NAV_LABELS[item]}
                             type="button"
                             onClick={() => navigateToView(item)}
                           >
@@ -6969,7 +7018,7 @@ export function KnowHowWorkspaceApp({
                       <SidebarMenu>
                         {peopleNavigation.map(({ view: item, icon: Icon }) => (
                           <SidebarMenuItem key={item}>
-                            <SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}>
+                            <SidebarMenuButton isActive={view === item} tooltip={NAV_LABELS[item]} type="button" onClick={() => navigateToView(item)}>
                               <Icon /><span>{NAV_LABELS[item]}</span>
                             </SidebarMenuButton>
                             {item === "Members" && pendingSupportCount ? <SidebarMenuBadge className="nav-badge">{pendingSupportCount}</SidebarMenuBadge> : null}
@@ -6991,6 +7040,7 @@ export function KnowHowWorkspaceApp({
                           <SidebarMenuItem key={item}>
                             <SidebarMenuButton
                               isActive={view === item}
+                              tooltip={NAV_LABELS[item]}
                               type="button"
                               onClick={() => navigateToView(item)}
                             >
@@ -7014,6 +7064,7 @@ export function KnowHowWorkspaceApp({
                         <SidebarMenuItem>
                           <SidebarMenuButton
                             isActive={view === "Administration"}
+                            tooltip="KnowHow Administration"
                             type="button"
                             onClick={() =>
                               onNavigate(
@@ -7040,6 +7091,7 @@ export function KnowHowWorkspaceApp({
                                 render={
                                   <SidebarMenuButton
                                     className="sidebar-setup-trigger"
+                                    title="Getting started"
                                     isActive={setupMenuOpen}
                                     type="button"
                                   />
@@ -7114,7 +7166,7 @@ export function KnowHowWorkspaceApp({
                         ) : null}
                         {supportNavigation.map(({ view: item, icon: Icon }) => (
                           <SidebarMenuItem key={item}>
-                            <SidebarMenuButton isActive={view === item} type="button" onClick={() => navigateToView(item)}>
+                            <SidebarMenuButton isActive={view === item} tooltip={NAV_LABELS[item]} type="button" onClick={() => navigateToView(item)}>
                               <Icon /><span>Help & support</span>
                             </SidebarMenuButton>
                           </SidebarMenuItem>
@@ -7375,13 +7427,14 @@ export function KnowHowWorkspaceApp({
             {view === "Support" ? (
               canOpenSupport ? (
               <SupportView
+                workspaceId={workspace.id}
                 tickets={supportTickets}
                 busy={busy || !workspaceMutable}
                 canCreate={canCreateSupportTicket && workspaceMutable}
-                onCreate={async (subject, message) => {
+                onCreate={async (subject, message, attachmentIds) => {
                   await command(
                     "createSupportTicket",
-                    { subject, message },
+                    { subject, message, attachmentIds },
                     "Support ticket opened",
                   );
                 }}

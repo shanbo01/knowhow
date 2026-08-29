@@ -178,6 +178,8 @@ export type WorkspaceSummary = {
   slug: string;
   status: WorkspaceStatus;
   roles: WorkspaceRole[];
+  accessKind: "membership" | "support_grant";
+  desktopCaptureEnabled: boolean;
   memberCount: number;
   publishedCount: number;
   draftCount: number;
@@ -287,6 +289,14 @@ export type SupportMessage = {
   authorKind: "customer" | "support";
   body: string;
   createdAt: string;
+  attachments: SupportAttachment[];
+};
+
+export type SupportAttachment = {
+  id: string;
+  filename: string;
+  contentType: string;
+  byteSize: number;
 };
 
 export type SupportTicket = {

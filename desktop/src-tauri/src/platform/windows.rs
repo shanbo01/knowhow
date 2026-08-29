@@ -21,7 +21,7 @@ use windows::{
             LRESULT, POINT, RECT, WPARAM,
         },
         Graphics::{
-            Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+            Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
             Gdi::{
                 BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
                 CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors,
@@ -65,18 +65,19 @@ use windows::{
             Input::{
                 GetRawInputData, HRAWINPUT,
                 KeyboardAndMouse::{
-                    VK_0, VK_9, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE,
-                    VK_F, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN,
-                    VK_MENU, VK_N, VK_NEXT, VK_O, VK_P, VK_PRIOR, VK_R, VK_RCONTROL, VK_RETURN,
-                    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_T, VK_TAB, VK_UP,
-                    VK_V, VK_W, VK_X, VK_Y, VK_Z,
+                    GetDoubleClickTime, VK_0, VK_9, VK_A, VK_APPS, VK_C, VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN,
+                    VK_END, VK_ESCAPE, VK_EXECUTE, VK_F, VK_HELP, VK_HOME, VK_INSERT, VK_LCONTROL,
+                    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_N, VK_NEXT, VK_NUMLOCK,
+                    VK_O, VK_P, VK_PAUSE, VK_PRINT, VK_PRIOR, VK_R, VK_RCONTROL, VK_RETURN,
+                    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SCROLL, VK_SELECT, VK_SHIFT,
+                    VK_SLEEP, VK_SNAPSHOT, VK_T, VK_TAB, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
                 },
                 RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY,
                 RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-                GW_OWNER, GWL_EXSTYLE, GetCursorPos,
+                GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetCursorPos,
                 GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
                 GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HWND_MESSAGE, IDNO,
                 IDYES, IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION, MB_YESNOCANCEL, MSG,
@@ -84,7 +85,8 @@ use windows::{
                 RI_MOUSE_LEFT_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP,
                 RIM_INPUT, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_INPUT, WM_QUIT, WM_WTSSESSION_CHANGE,
-                WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+                WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+                WTS_SESSION_LOCK, WTS_SESSION_UNLOCK, WindowFromPoint,
             },
         },
     },
@@ -107,6 +109,11 @@ use super::{
 };
 use crate::model::{Bounds, CaptureTarget, CaptureTargetPreview, DesktopScope, ScopeKind};
 
+/// A per-process lookup that is rebuilt wholesale once it ages out, rather
+/// than tracked entry by entry. Used for the two facts about a process that
+/// cannot change while it lives but were being re-read on the hot path.
+type ProcessCache<T> = Mutex<Option<(Instant, HashMap<u32, T>)>>;
+
 const PROTECTED_PROCESSES: &[&str] = &[
     "1password",
     "authy",
@@ -124,6 +131,9 @@ const PROTECTED_PROCESSES: &[&str] = &[
     "securityhealthhost",
     "windowssecurity",
 ];
+
+/// Must match the `outline` window's title in tauri.conf.json.
+const OUTLINE_WINDOW_TITLE: &str = "KnowHow Capture outline";
 
 const PREVIEW_WIDTH: u32 = 320;
 const PREVIEW_HEIGHT: u32 = 180;
@@ -187,6 +197,16 @@ pub fn initialize_process() -> Result<()> {
     // SAFETY: this is called once during process startup, before capture worker windows exist.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
         .context("enable per-monitor DPI awareness")
+}
+
+/// The system's own double-click interval. A single click cannot be reported
+/// until this has elapsed without a second one, so reading Windows' value —
+/// rather than assuming the 500 ms default — is the difference between steps
+/// appearing promptly and always feeling half a second behind.
+pub fn double_click_interval() -> Duration {
+    // SAFETY: GetDoubleClickTime reads a system metric and cannot fail.
+    let milliseconds = unsafe { GetDoubleClickTime() };
+    Duration::from_millis(u64::from(milliseconds.clamp(120, 900)))
 }
 
 pub fn windows_device_name() -> String {
@@ -569,6 +589,27 @@ pub fn monitor_descriptors() -> Result<Vec<MonitorDescriptor>> {
     Ok(monitors)
 }
 
+/// The process owning the top-level window under a screen point.
+///
+/// A click is attributed to whatever is *under the pointer*, not to whatever
+/// happened to hold focus when the button went down. Those differ for exactly
+/// the case that leaked into recordings: pressing on the taskbar, the Start
+/// button, or another application while the recorded app still has focus.
+pub fn process_at_point(x: i32, y: i32) -> Option<u32> {
+    // SAFETY: WindowFromPoint returns a borrowed HWND managed by Windows.
+    let hwnd = unsafe { WindowFromPoint(POINT { x, y }) };
+    if hwnd.0.is_null() {
+        return None;
+    }
+    // SAFETY: hwnd is valid; the returned root is borrowed.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    let hwnd = if root.0.is_null() { hwnd } else { root };
+    let mut process_id = 0_u32;
+    // SAFETY: HWND comes from Windows and output points to initialized storage.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut process_id)) };
+    (process_id != 0).then_some(process_id)
+}
+
 pub fn foreground_context() -> Result<ForegroundContext> {
     // SAFETY: GetForegroundWindow returns a borrowed HWND managed by Windows.
     let hwnd = unsafe { GetForegroundWindow() };
@@ -590,6 +631,71 @@ pub fn foreground_context() -> Result<ForegroundContext> {
     })
 }
 
+/// The rectangle the recording outline should trace right now, or `None` when
+/// there is nothing to trace.
+///
+/// The outline reports what is *currently* being recorded, so it appears only
+/// while the recorded surface is the one in front. An always-on-top frame drawn
+/// around a window that is buried behind another application would be tracing a
+/// window the author cannot see, over activity that is not being captured.
+pub fn scope_outline_bounds(scope: &DesktopScope) -> Option<Bounds> {
+    // SAFETY: GetForegroundWindow returns a borrowed HWND managed by Windows.
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() || !is_default_desktop() {
+        return None;
+    }
+    match scope {
+        DesktopScope::Application { process_id, .. } => {
+            (window_process(foreground) == Some(*process_id)).then(|| window_rect(foreground))?
+        }
+        DesktopScope::Monitor {
+            monitor_id, bounds, ..
+        } => {
+            // SAFETY: the foreground HWND is valid for this lookup.
+            let monitor = unsafe { MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST) };
+            (monitor_id == &self::monitor_id(monitor)).then_some(*bounds)
+        }
+    }
+}
+
+fn window_process(hwnd: HWND) -> Option<u32> {
+    let mut process_id = 0_u32;
+    // SAFETY: HWND comes from Windows and output points to initialized storage.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut process_id)) };
+    (process_id != 0).then_some(process_id)
+}
+
+/// A window's visible bounds.
+///
+/// `GetWindowRect` reports the resize border too — several invisible pixels of
+/// desktop on every side of an ordinary window. Cropping a screenshot to that
+/// rectangle leaves a sliver of whatever is behind the window along each edge,
+/// and an outline drawn on it floats away from the window it is tracing, so the
+/// composited frame bounds are preferred wherever the compositor reports them.
+fn window_rect(hwnd: HWND) -> Option<Bounds> {
+    let mut frame = RECT::default();
+    // SAFETY: hwnd is valid and the output buffer matches the advertised size.
+    let composited = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&raw mut frame).cast(),
+            u32::try_from(size_of::<RECT>()).unwrap_or(16),
+        )
+    };
+    if composited.is_ok() {
+        let bounds = rect_bounds(frame);
+        if bounds.width > 0 && bounds.height > 0 {
+            return Some(bounds);
+        }
+    }
+    let mut rect = RECT::default();
+    // SAFETY: HWND comes from Windows and rect is writable.
+    unsafe { GetWindowRect(hwnd, &raw mut rect) }.ok()?;
+    let bounds = rect_bounds(rect);
+    (bounds.width > 0 && bounds.height > 0).then_some(bounds)
+}
+
 /// Where the recorder's own windows are right now.
 ///
 /// The floating recorder sits on top of the work being captured, so the
@@ -605,19 +711,22 @@ pub fn recorder_window_bounds() -> Vec<Bounds> {
         if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
             return BOOL(1);
         }
-        let mut process_id = 0_u32;
-        // SAFETY: HWND comes from Windows and output points to initialized storage.
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&raw mut process_id)) };
-        if process_id != std::process::id() {
+        if window_process(hwnd) != Some(std::process::id()) {
             return BOOL(1);
         }
-        let mut rect = RECT::default();
-        // SAFETY: HWND comes from Windows and rect is writable.
-        if unsafe { GetWindowRect(hwnd, &raw mut rect) }.is_ok() {
-            let window = rect_bounds(rect);
-            if window.width > 0 && window.height > 0 {
-                bounds.push(window);
-            }
+        // The recording outline is one of our windows too, but it is a
+        // click-through frame drawn around the *whole* recorded window. Painting
+        // it out would black out the entire screenshot, so it is never masked —
+        // it is excluded from capture by the window itself instead. Both its
+        // title and its click-through style are checked, because getting this
+        // wrong costs every screenshot in the capture.
+        // SAFETY: reading a style does not mutate the enumerated window.
+        let extended_style = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
+        if extended_style & WS_EX_TRANSPARENT.0 != 0 || window_text(hwnd) == OUTLINE_WINDOW_TITLE {
+            return BOOL(1);
+        }
+        if let Some(window) = window_rect(hwnd) {
+            bounds.push(window);
         }
         BOOL(1)
     }
@@ -708,18 +817,16 @@ fn window_record(hwnd: HWND) -> Result<WindowRecord> {
         bail!("window process is unavailable");
     }
     let title = window_text(hwnd);
-    let application_name =
-        process_application_name(process_id).unwrap_or_else(|| "Windows application".to_owned());
-    let mut rect = RECT::default();
-    // SAFETY: HWND comes from Windows and rect is writable.
-    unsafe { GetWindowRect(hwnd, &raw mut rect) }.context("read window bounds")?;
+    let application_name = process_application_name_cached(process_id)
+        .unwrap_or_else(|| "Windows application".to_owned());
+    let bounds = window_rect(hwnd).context("read window bounds")?;
     let protected = is_known_protected(&application_name, &title);
     Ok(WindowRecord {
         id: window_id(hwnd),
         process_id,
         application_name,
         title,
-        bounds: rect_bounds(rect),
+        bounds,
         protected,
         elevated: process_id != std::process::id() && process_is_elevated_cached(process_id),
     })
@@ -732,7 +839,7 @@ fn window_record(hwnd: HWND) -> Result<WindowRecord> {
 /// process identifier corrects itself.
 fn process_is_elevated_cached(process_id: u32) -> bool {
     const ELEVATION_CACHE_MAX_AGE: Duration = Duration::from_secs(60);
-    static ELEVATION: Mutex<Option<(Instant, HashMap<u32, bool>)>> = Mutex::new(None);
+    static ELEVATION: ProcessCache<bool> = Mutex::new(None);
 
     let mut cache = ELEVATION.lock();
     let stale = cache
@@ -764,6 +871,33 @@ fn window_text(hwnd: HWND) -> String {
     // SAFETY: buffer is writable and includes a terminating slot.
     let copied = unsafe { GetWindowTextW(hwnd, &mut buffer) };
     String::from_utf16_lossy(&buffer[..usize::try_from(copied).unwrap_or(0)])
+}
+
+/// A process's executable name never changes while it lives, but this was
+/// being re-derived — an `OpenProcess`, a 64 KB path query and an allocation —
+/// several times for every single captured action, once per `window_record`
+/// call on the hot path. It is remembered per process instead, briefly enough
+/// that a reused identifier corrects itself.
+fn process_application_name_cached(process_id: u32) -> Option<String> {
+    const NAME_CACHE_MAX_AGE: Duration = Duration::from_secs(30);
+    static NAMES: ProcessCache<Option<String>> = Mutex::new(None);
+
+    let mut cache = NAMES.lock();
+    let stale = cache
+        .as_ref()
+        .is_none_or(|(filled_at, _)| filled_at.elapsed() >= NAME_CACHE_MAX_AGE);
+    if stale {
+        *cache = Some((Instant::now(), HashMap::new()));
+    }
+    let Some((_, entries)) = cache.as_mut() else {
+        return process_application_name(process_id);
+    };
+    if let Some(name) = entries.get(&process_id) {
+        return name.clone();
+    }
+    let name = process_application_name(process_id);
+    entries.insert(process_id, name.clone());
+    name
 }
 
 fn process_application_name(process_id: u32) -> Option<String> {
@@ -981,7 +1115,7 @@ impl WindowsUia {
                 x: bounds.x,
                 y: bounds.y,
             })
-            .map(|point| unsafe { windows::Win32::UI::WindowsAndMessaging::WindowFromPoint(point) })
+            .map(|point| unsafe { WindowFromPoint(point) })
             .unwrap_or_default();
         let hwnd = if hwnd.0.is_null() {
             fallback_hwnd
@@ -1423,10 +1557,61 @@ fn handle_keyboard(vkey: u16, released: bool) {
             }
         } else {
             // No character or scan code leaves this thread. The worker receives only a
-            // semantic signal that a focused value may have changed.
-            send_raw_event(RawEvent::TextActivity);
+            // semantic signal that a focused value may have changed, plus whether the
+            // key was one that can add a character. Counting arrow keys, Backspace and
+            // the function row as typed characters is what made the verification below
+            // reject nearly every real typing group.
+            send_raw_event(RawEvent::TextActivity {
+                changes_text: key_changes_text(vkey),
+            });
         }
     });
+}
+
+/// Whether an unmodified key press can change what a text field holds.
+///
+/// Characters, Backspace and Delete can; the arrows, Home/End, the function row
+/// and the lock keys only move the caret or the view. Starting a typing group
+/// on one of those is how a stray arrow key became an "Enter text" step.
+fn key_changes_text(vkey: u16) -> bool {
+    const VK_BACKSPACE: u16 = 0x08;
+    const VK_CLEAR: u16 = 0x0C;
+    const VK_FIRST_FUNCTION: u16 = 0x70;
+    const VK_LAST_FUNCTION: u16 = 0x87;
+    const VK_FIRST_BROWSER: u16 = 0xA6;
+    const VK_LAST_MEDIA: u16 = 0xB7;
+
+    if matches!(vkey, VK_BACKSPACE) || vkey == VK_DELETE.0 {
+        return true;
+    }
+    !matches!(
+        vkey,
+        VK_CLEAR | VK_FIRST_FUNCTION..=VK_LAST_FUNCTION | VK_FIRST_BROWSER..=VK_LAST_MEDIA
+    ) && ![
+        VK_PAUSE.0,
+        VK_CAPITAL.0,
+        VK_ESCAPE.0,
+        VK_PRIOR.0,
+        VK_NEXT.0,
+        VK_END.0,
+        VK_HOME.0,
+        VK_LEFT.0,
+        VK_UP.0,
+        VK_RIGHT.0,
+        VK_DOWN.0,
+        VK_SELECT.0,
+        VK_PRINT.0,
+        VK_EXECUTE.0,
+        VK_SNAPSHOT.0,
+        VK_INSERT.0,
+        VK_DELETE.0,
+        VK_HELP.0,
+        VK_APPS.0,
+        VK_SLEEP.0,
+        VK_NUMLOCK.0,
+        VK_SCROLL.0,
+    ]
+    .contains(&vkey)
 }
 
 fn shortcut_name(vkey: u16, state: ModifierState) -> Option<String> {
@@ -1501,8 +1686,33 @@ fn send_raw_event(event: RawEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{friendly_monitor_name, is_shareable_window_properties};
+    use super::{friendly_monitor_name, is_shareable_window_properties, key_changes_text};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        VK_A, VK_DELETE, VK_END, VK_ESCAPE, VK_F, VK_HOME, VK_LEFT, VK_RIGHT, VK_SPACE, VK_UP,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{WS_EX_APPWINDOW, WS_EX_TOOLWINDOW};
+
+    #[test]
+    fn only_keys_that_can_change_a_field_begin_a_typing_group() {
+        const VK_BACKSPACE: u16 = 0x08;
+        const VK_F5: u16 = 0x74;
+        for key in [VK_A.0, VK_F.0, VK_SPACE.0, VK_BACKSPACE, VK_DELETE.0] {
+            assert!(key_changes_text(key), "{key:#x} should count as typing");
+        }
+        // A caret move is not typing: treating one as the start of a group is
+        // how a stray arrow key turned into an "Enter text" step.
+        for key in [
+            VK_LEFT.0,
+            VK_RIGHT.0,
+            VK_UP.0,
+            VK_HOME.0,
+            VK_END.0,
+            VK_ESCAPE.0,
+            VK_F5,
+        ] {
+            assert!(!key_changes_text(key), "{key:#x} should not count as typing");
+        }
+    }
 
     #[test]
     fn alt_tab_filter_excludes_helper_and_cloaked_windows() {

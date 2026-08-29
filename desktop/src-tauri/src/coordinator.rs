@@ -22,14 +22,15 @@ use crate::{
     api::{ApiClient, ApiError, AuthorizationPoll, validate_external_url},
     engine::CaptureEngine,
     model::{
-        ActiveCapture, AppSnapshot, CaptureContext, CaptureTarget, CommitPayload, ConnectionState,
+        ActiveCapture, AppSnapshot, Bounds, CaptureContext, CaptureTarget, CommitPayload,
+        ConnectionState,
         DESKTOP_POLICY_VERSION, DeviceIdentity, PendingAuthorization, PrivacyAttestation,
         RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput, TypedTextPolicy,
         UpdateState, UpdateStatus,
     },
     platform::{
         QuitChoice, capture_targets, monitor_descriptors, new_scope, quit_capture_choice,
-        windows_device_name,
+        scope_outline_bounds, windows_device_name,
     },
     secure_store::{RecoveredSession, SecureStore},
 };
@@ -39,6 +40,14 @@ use crate::{
 /// the three controls that act on it.
 const HUD_WIDTH: f64 = 560.0;
 const HUD_HEIGHT: f64 = 76.0;
+
+/// How often the outline re-reads the recorded window's position.
+///
+/// This is the frame budget for something the author watches while dragging a
+/// window, so it is paced like an animation rather than like a poll. Reading
+/// the position costs two syscalls — the expensive part is moving the overlay,
+/// which only happens when the window has actually moved.
+const OUTLINE_FOLLOW_INTERVAL: Duration = Duration::from_millis(16);
 
 struct Inner {
     connection: ConnectionState,
@@ -57,6 +66,7 @@ pub struct Coordinator {
     inner: Mutex<Inner>,
     engine: Mutex<Option<CaptureEngine>>,
     countdown_generation: AtomicU64,
+    outline_generation: AtomicU64,
     finish_guard: AsyncMutex<()>,
     quitting: AtomicBool,
 }
@@ -118,6 +128,7 @@ impl Coordinator {
             }),
             engine: Mutex::new(None),
             countdown_generation: AtomicU64::new(0),
+            outline_generation: AtomicU64::new(0),
             finish_guard: AsyncMutex::new(()),
             quitting: AtomicBool::new(false),
         }))
@@ -243,7 +254,23 @@ impl Coordinator {
             self.emit();
             bail!("This device approval expired. Start a new connection.");
         }
-        match self.api.poll_authorization(&pending).await? {
+        let poll = match self.api.poll_authorization(&pending).await {
+            Ok(poll) => poll,
+            Err(error) if authorization_request_is_terminal(&error) => {
+                // The browser made a final decision, or the request can no
+                // longer be claimed. Keeping it here would make the approval
+                // button reopen the same dead URL forever.
+                self.store.clear_pending_authorization()?;
+                let mut inner = self.inner.lock();
+                inner.pending_authorization = None;
+                inner.connection = ConnectionState::Disconnected;
+                drop(inner);
+                self.emit();
+                return Ok(self.snapshot());
+            }
+            Err(error) => return Err(error),
+        };
+        match poll {
             AuthorizationPoll::Pending => {}
             AuthorizationPoll::Connected(credentials) => {
                 let context = self.api.context().await?;
@@ -399,6 +426,7 @@ impl Coordinator {
             // Put Tauri's windows into their final recording state before reclaiming the
             // process-wide mouse and keyboard Raw Input registrations.
             let _ = coordinator.show_hud();
+            coordinator.start_outline();
             if let Some(main) = coordinator.app.get_webview_window("main") {
                 let _ = main.hide();
             }
@@ -535,7 +563,7 @@ impl Coordinator {
             .await
             .context("join capture drain worker")?;
             if let Err(error) = drained {
-                self.recovery_error("Accepted actions could not drain safely. Retry Finish.");
+                self.recovery_failure("Accepted actions could not drain safely.", &error);
                 return Err(error);
             }
         }
@@ -558,7 +586,7 @@ impl Coordinator {
         if let Err(error) = self.api.transition(&active.capture_id, "resume").await
             && !is_transition_already_satisfied(&error)
         {
-            self.recovery_error("Network unavailable. Your encrypted capture is ready to retry.");
+            self.recovery_failure("The capture could not be reopened for upload.", &error);
             return Err(error);
         }
         if let Err(error) = self
@@ -566,7 +594,7 @@ impl Coordinator {
             .set_expected_steps(&active.capture_id, stored.len())
             .await
         {
-            self.recovery_error("Network unavailable. Your encrypted capture is ready to retry.");
+            self.recovery_failure("The step count could not be registered.", &error);
             return Err(error);
         }
         for (step, image, _) in &stored {
@@ -580,9 +608,7 @@ impl Coordinator {
                 // Uploads carry an idempotency key, so pressing Finish again
                 // re-sends the whole capture safely and the steps that already
                 // landed are accepted a second time without duplicating.
-                self.recovery_error(
-                    "A step could not be uploaded. Your encrypted capture is ready to retry.",
-                );
+                self.recovery_failure("A step could not be uploaded.", &error);
                 return Err(error);
             }
             self.store
@@ -607,7 +633,7 @@ impl Coordinator {
         let committed = match self.api.commit(&active.capture_id, &payload).await {
             Ok(committed) => committed,
             Err(error) => {
-                self.recovery_error("The private draft could not be committed. Retry Finish.");
+                self.recovery_failure("The private draft could not be committed.", &error);
                 return Err(error);
             }
         };
@@ -630,6 +656,7 @@ impl Coordinator {
                 ..RecorderState::default()
             };
         }
+        self.stop_outline();
         if let Some(hud) = self.app.get_webview_window("hud") {
             let _ = hud.hide();
         }
@@ -667,6 +694,7 @@ impl Coordinator {
             inner.recorder = RecorderState::default();
             inner.recorder.status_message = server_warning;
         }
+        self.stop_outline();
         if let Some(hud) = self.app.get_webview_window("hud") {
             let _ = hud.hide();
         }
@@ -739,6 +767,23 @@ impl Coordinator {
         self.emit();
     }
 
+    /// Reports a failure the author is asked to act on, keeping whatever the
+    /// server said about it. The summary alone ("could not be committed, retry")
+    /// is not something anyone can act on, and 4xx responses are not logged
+    /// server-side either, so discarding the reason left no record of it at all.
+    fn recovery_failure(&self, summary: &str, error: &anyhow::Error) {
+        let detail = user_error(error);
+        let code = error
+            .downcast_ref::<ApiError>()
+            .map(|api| api.code.clone())
+            .filter(|code| !code.trim().is_empty());
+        let message = match code {
+            Some(code) => format!("{summary} {detail} [{code}]"),
+            None => format!("{summary} {detail}"),
+        };
+        self.recovery_error(&message);
+    }
+
     fn recovery_error(&self, message: &str) {
         let mut inner = self.inner.lock();
         inner.recorder.status = RecorderStatus::Recovery;
@@ -803,6 +848,109 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Traces the recorded window with a click-through frame so the author can
+    /// always see what is being captured, and keeps it on the window as that
+    /// window moves, resizes, or is replaced by another of the app's windows.
+    fn start_outline(self: &Arc<Self>) {
+        let generation = self.outline_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        // The scope cannot change within a capture, so it is read once here
+        // rather than cloned out from behind the lock on every frame.
+        let Some(scope) = self.inner.lock().active.as_ref().map(|active| active.scope.clone())
+        else {
+            return;
+        };
+        let weak = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            let mut shown = false;
+            let mut last: Option<Bounds> = None;
+            loop {
+                let Some(coordinator) = weak.upgrade() else {
+                    return;
+                };
+                if coordinator.outline_generation.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                let recording = matches!(
+                    coordinator.inner.lock().recorder.status,
+                    RecorderStatus::Recording | RecorderStatus::Paused
+                );
+                if !recording {
+                    coordinator.hide_outline();
+                    return;
+                }
+                // Reading the foreground window and its composited frame is a
+                // pair of non-blocking syscalls, so this stays inline; handing
+                // each one to a blocking worker cost more than the work.
+                match scope_outline_bounds(&scope) {
+                    Some(bounds) => {
+                        if last != Some(bounds) {
+                            let _ = coordinator.place_outline(bounds, last);
+                            last = Some(bounds);
+                        }
+                        if !shown
+                            && let Some(window) = coordinator.app.get_webview_window("outline")
+                        {
+                            let _ = window.set_ignore_cursor_events(true);
+                            shown = window.show().is_ok();
+                        }
+                    }
+                    // The application has no window on screen right now —
+                    // minimised, behind another app, or between windows. There
+                    // is nothing to trace.
+                    None => {
+                        if shown {
+                            coordinator.hide_outline();
+                        }
+                        last = None;
+                        shown = false;
+                    }
+                }
+                drop(coordinator);
+                tokio::time::sleep(OUTLINE_FOLLOW_INTERVAL).await;
+            }
+        });
+    }
+
+    /// Moves and resizes the outline, issuing only the change that actually
+    /// happened. Dragging a window changes its position every frame but not its
+    /// size, and a redundant resize forces the transparent overlay to relayout
+    /// and repaint — which is what made the outline trail behind the window.
+    fn place_outline(&self, bounds: Bounds, previous: Option<Bounds>) -> Result<()> {
+        let window = self
+            .app
+            .get_webview_window("outline")
+            .ok_or_else(|| anyhow!("the recording outline is unavailable"))?;
+        let moved = previous.is_none_or(|last| last.x != bounds.x || last.y != bounds.y);
+        let resized =
+            previous.is_none_or(|last| last.width != bounds.width || last.height != bounds.height);
+        if resized {
+            window.set_size(Size::Physical(PhysicalSize::new(
+                bounds.width.max(1),
+                bounds.height.max(1),
+            )))?;
+        }
+        if moved {
+            window.set_position(Position::Physical(PhysicalPosition::new(bounds.x, bounds.y)))?;
+        }
+        Ok(())
+    }
+
+    fn hide_outline(&self) {
+        if let Some(window) = self.app.get_webview_window("outline") {
+            let _ = window.hide();
+        }
+    }
+
+    fn stop_outline(&self) {
+        self.outline_generation.fetch_add(1, Ordering::AcqRel);
+        self.hide_outline();
+    }
+
+    /// Pulls the recorder back only when a drag has left it somewhere it can
+    /// never be reached from — off the end of a display, or onto one that was
+    /// just unplugged. It deliberately does not snap or nudge while the author
+    /// is dragging: repositioning the window from inside its own move loop is
+    /// what made the bar feel immovable.
     pub fn constrain_hud_to_screen(&self) -> Result<()> {
         let window = self
             .app
@@ -824,20 +972,18 @@ impl Coordinator {
         let monitor_height = i32::try_from(monitor_size.height).unwrap_or(height);
         let (work_origin, work_size) =
             monitor_work_area((origin.x, origin.y), (monitor_width, monitor_height));
+        if hud_is_reachable((position.x, position.y), (width, height), work_origin, work_size) {
+            return Ok(());
+        }
         let scale = window.scale_factor().unwrap_or(1.0);
-        let gap = (8.0 * scale) as i32;
-        let (x, y) = snap_hud_position(
+        let (x, y) = clamp_hud_position(
             (position.x, position.y),
             (width, height),
             work_origin,
             work_size,
-            gap,
-            (24.0 * scale) as i32,
+            (8.0 * scale) as i32,
         );
-        let constrained = PhysicalPosition::new(x, y);
-        if constrained != position {
-            window.set_position(Position::Physical(constrained))?;
-        }
+        window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
         Ok(())
     }
 
@@ -945,31 +1091,18 @@ fn monitor_work_area(
         .unwrap_or((monitor_origin, monitor_size))
 }
 
-fn snap_hud_position(
+/// Whether enough of the recorder bar is on the working area to grab it again.
+fn hud_is_reachable(
     position: (i32, i32),
     window_size: (i32, i32),
     work_origin: (i32, i32),
     work_size: (i32, i32),
-    gap: i32,
-    snap_threshold: i32,
-) -> (i32, i32) {
-    let clamped = clamp_hud_position(position, window_size, work_origin, work_size, gap);
-    let (min_x, max_x, min_y, max_y) = hud_limits(window_size, work_origin, work_size, gap);
-    let x = if (clamped.0 - min_x).abs() <= snap_threshold {
-        min_x
-    } else if (clamped.0 - max_x).abs() <= snap_threshold {
-        max_x
-    } else {
-        clamped.0
-    };
-    let y = if (clamped.1 - min_y).abs() <= snap_threshold {
-        min_y
-    } else if (clamped.1 - max_y).abs() <= snap_threshold {
-        max_y
-    } else {
-        clamped.1
-    };
-    (x, y)
+) -> bool {
+    const REACHABLE_EDGE: i32 = 72;
+    position.0 + window_size.0 > work_origin.0 + REACHABLE_EDGE
+        && position.0 < work_origin.0 + work_size.0 - REACHABLE_EDGE
+        && position.1 + window_size.1 > work_origin.1
+        && position.1 < work_origin.1 + work_size.1
 }
 
 fn hud_limits(
@@ -1053,6 +1186,20 @@ fn is_transition_already_satisfied(error: &anyhow::Error) -> bool {
         .is_some_and(|api| api.code == "CAPTURE_TRANSITION_INVALID")
 }
 
+fn authorization_request_is_terminal(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ApiError>().is_some_and(|api| {
+        matches!(
+            api.code.as_str(),
+            "DESKTOP_AUTHORIZATION_DENIED"
+                | "DESKTOP_AUTHORIZATION_EXPIRED"
+                | "DESKTOP_AUTHORIZATION_INVALID"
+                | "DESKTOP_AUTHORIZATION_COMPLETE"
+                | "PKCE_VERIFIER_INVALID"
+                | "DEVICE_BINDING_INVALID"
+        )
+    })
+}
+
 fn user_error(error: &anyhow::Error) -> String {
     error
         .downcast_ref::<ApiError>()
@@ -1079,7 +1226,38 @@ fn update_endpoint() -> Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_hud_position, snap_hud_position};
+    use anyhow::Error;
+    use reqwest::StatusCode;
+
+    use super::{authorization_request_is_terminal, clamp_hud_position, hud_is_reachable};
+    use crate::api::ApiError;
+
+    fn api_error(status: StatusCode, code: &str) -> Error {
+        ApiError {
+            status,
+            code: code.to_owned(),
+            message: "authorization failed".to_owned(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn denied_or_unusable_authorization_requests_are_terminal() {
+        for (status, code) in [
+            (StatusCode::FORBIDDEN, "DESKTOP_AUTHORIZATION_DENIED"),
+            (StatusCode::GONE, "DESKTOP_AUTHORIZATION_EXPIRED"),
+            (StatusCode::UNAUTHORIZED, "DESKTOP_AUTHORIZATION_INVALID"),
+            (StatusCode::CONFLICT, "DESKTOP_AUTHORIZATION_COMPLETE"),
+            (StatusCode::UNAUTHORIZED, "PKCE_VERIFIER_INVALID"),
+            (StatusCode::UNAUTHORIZED, "DEVICE_BINDING_INVALID"),
+        ] {
+            assert!(authorization_request_is_terminal(&api_error(status, code)));
+        }
+        assert!(!authorization_request_is_terminal(&api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DESKTOP_REQUEST_FAILED",
+        )));
+    }
 
     #[test]
     fn keeps_the_hud_inside_the_lower_right_screen_edge() {
@@ -1106,10 +1284,16 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_near_an_edge_snaps_the_hud_flush_to_it() {
-        assert_eq!(
-            snap_hud_position((1_390, 1_004), (520, 72), (0, 0), (1_920, 1_080), 8, 24),
-            (1_392, 1_000)
-        );
+    fn a_dragged_hud_is_left_where_the_author_put_it() {
+        // Hanging off an edge is a deliberate placement, not a rescue case:
+        // pulling it back mid-drag is what stopped the bar from moving at all.
+        assert!(hud_is_reachable((-200, 900), (560, 76), (0, 0), (1_920, 1_080)));
+        assert!(hud_is_reachable((1_700, 1_040), (560, 76), (0, 0), (1_920, 1_080)));
+    }
+
+    #[test]
+    fn a_hud_left_off_the_display_is_pulled_back() {
+        assert!(!hud_is_reachable((-540, 900), (560, 76), (0, 0), (1_920, 1_080)));
+        assert!(!hud_is_reachable((300, 1_200), (560, 76), (0, 0), (1_920, 1_080)));
     }
 }

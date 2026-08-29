@@ -53,6 +53,9 @@ export const DEFAULT_CAPTURE_POLICY = Object.freeze({
   // recommend what to detect, but they never turn the feature on for the
   // author. Only the six menu toggles produce covers.
   smartBlurEnabled: false,
+  // Supplied by the workspace context. Browser capture itself is available on
+  // Free, while Smart Blur and its detectors remain a Pro capability.
+  privacyToolsEnabled: false,
   // Smart Blur is opt-in: the author reviews and adds blur in the app editor
   // instead of the extension guessing and baking it in automatically.
   redactEmails: false,
@@ -249,6 +252,7 @@ function categorySet(value) {
 
 export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
   const local = mergePolicy(storedPolicy);
+  const privacyToolsEnabled = context?.privacyToolsEnabled === true;
   const automatic = categorySet(context?.privacy?.automatic);
   const workspaceExcluded = Array.isArray(context?.excludedOrigins)
     ? context.excludedOrigins
@@ -269,7 +273,9 @@ export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
         : local.version,
     excludedSites: [...local.excludedSites, ...workspaceExcluded],
     clickTargetColor,
-    smartBlurEnabled: local.smartBlurEnabled === true,
+    privacyToolsEnabled,
+    smartBlurEnabled:
+      privacyToolsEnabled && local.smartBlurEnabled === true,
     // A workspace can switch typed-text capture off for everyone; it cannot
     // switch it on for an author who turned it off.
     captureTypedText:
@@ -279,10 +285,22 @@ export function applyWorkspaceContext(storedPolicy = {}, context = {}) {
     // the author turns it on for the session. Nothing is ever covered, and no
     // captured text is ever rewritten, without the author asking for it.
     recommendedRedactions: Array.from(automatic).slice(0, 20),
-    redactEmails: local.redactEmails === true,
-    redactPhoneNumbers: local.redactPhoneNumbers === true,
-    redactFinancialNumbers: local.redactFinancialNumbers === true,
-    redactIds: local.redactIds === true,
-    redactFormFields: local.redactFormFields === true,
+    redactEmails: privacyToolsEnabled && local.redactEmails === true,
+    redactPhoneNumbers:
+      privacyToolsEnabled && local.redactPhoneNumbers === true,
+    redactFinancialNumbers:
+      privacyToolsEnabled && local.redactFinancialNumbers === true,
+    redactIds: privacyToolsEnabled && local.redactIds === true,
+    redactAllNumbers:
+      privacyToolsEnabled && local.redactAllNumbers === true,
+    redactFormFields:
+      privacyToolsEnabled && local.redactFormFields === true,
+    redactImages: privacyToolsEnabled && local.redactImages === true,
+    redactTableRows:
+      privacyToolsEnabled && local.redactTableRows === true,
+    redactLongText:
+      privacyToolsEnabled && local.redactLongText === true,
+    redactCommonNames:
+      privacyToolsEnabled && local.redactCommonNames === true,
   });
 }

@@ -282,13 +282,17 @@ export class ExtensionCaptureService {
   async context(request: Request) {
     const credential = await this.credential(request);
     const workspaceId = String(credential.row.workspace_id);
-    const [settings, workspaceRow, preferenceRows] = await Promise.all([
+    const [settings, workspaceRow, preferenceRows, privacyToolsEnabled] = await Promise.all([
       this.settings(workspaceId),
       this.store.get(TABLES.workspaces, workspaceId),
       this.store.list(TABLES.userPreferences, {
         filters: [{ field: "user_id", value: credential.identity.userId }],
         limit: 1,
       }),
+      new EntitlementService(this.store, workspaceId).value<boolean>(
+        "privacyToolsEnabled",
+        false,
+      ),
     ]);
     const workspace = workspaceRow ? decodePayload<WorkspaceRecord>(workspaceRow, null as never) : null;
     const preference = preferenceRows[0]
@@ -300,6 +304,7 @@ export class ExtensionCaptureService {
       themePreference: preference.theme ?? "system",
       policyVersion: this.policyVersion(),
       captureSource: this.source,
+      privacyToolsEnabled,
       excludedOrigins: [],
       clickTargetColor: settings.clickTargetColor,
       minimumVersion: credential.details.minimumVersion,

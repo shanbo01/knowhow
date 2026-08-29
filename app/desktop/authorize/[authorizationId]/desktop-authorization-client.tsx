@@ -41,7 +41,10 @@ type AuthorizationDetails = {
 
 function eligible(workspace: WorkspaceSummary) {
   return (
+    workspace.accessKind === "membership" &&
     workspace.status === "active" &&
+    workspace.desktopCaptureEnabled &&
+    workspace.subscription?.access === "active" &&
     (workspace.roles.includes("administrator") ||
       workspace.roles.includes("creator"))
   );
@@ -118,7 +121,7 @@ export default function DesktopAuthorizationClient({
             : next.workspaces.find(eligible)) ?? null;
         if (!preferred) {
           setError(
-            "A Pro creator or administrator workspace is required to connect KnowHow Capture.",
+            "An active Pro workspace where you are a creator or administrator is required to connect KnowHow Capture.",
           );
           setStatus("error");
           return;

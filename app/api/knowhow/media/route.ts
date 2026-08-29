@@ -7,6 +7,7 @@ import {
   type FaviconMediaRecord,
   rowData,
   type PrivateMediaRecord,
+  type SupportAttachmentRecord,
   type RevisionRecord,
   type GuideStepRecord,
 } from "../../../../lib/server/domain-records";
@@ -39,6 +40,16 @@ export const dynamic = "force-dynamic";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,35}$/;
 const CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SUPPORT_ATTACHMENT_TYPES = new Set([
+  "application/json",
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "text/csv",
+  "text/plain",
+]);
+const SUPPORT_ATTACHMENT_LIMIT = 5 * 1024 * 1024;
 
 function requiredId(url: URL, key: string, label: string) {
   const value = url.searchParams.get(key)?.trim() ?? "";
@@ -90,6 +101,26 @@ function mediaHeaders(contentType: string) {
   };
 }
 
+function supportAttachmentFilename(request: Request) {
+  const encoded = request.headers.get("x-knowhow-file-name") ?? "attachment";
+  let decoded = encoded;
+  try {
+    decoded = decodeURIComponent(encoded);
+  } catch {
+    // Invalid percent escapes are stripped by the same filename sanitizer.
+  }
+  const filename = decoded
+    .replace(/[\\/\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 160);
+  return filename || "attachment";
+}
+
+function attachmentDisposition(filename: string) {
+  const fallback = filename.replace(/[^A-Za-z0-9._ -]/g, "_") || "attachment";
+  return `attachment; filename="${fallback.replace(/"/g, "_")}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 async function workspaceContext(request: Request) {
   const identity = await requireVerifiedSession(request);
   const services = createRequestServices();
@@ -130,7 +161,54 @@ export async function GET(request: Request) {
     let fileId: string;
     let contentType: string;
     let expectedHash: string;
-    if (url.searchParams.get("kind") === "favicon") {
+    if (url.searchParams.get("kind") === "support-attachment") {
+      requireAuthorized("workspace.read", context);
+      const mediaId = requiredId(url, "mediaId", "Attachment");
+      const mediaRow = await store.get(TABLES.privateMedia, mediaId);
+      const metadata = mediaRow
+        ? decodePayload<SupportAttachmentRecord>(mediaRow, null as never)
+        : null;
+      if (
+        !mediaRow ||
+        mediaRow.workspace_id !== workspaceId ||
+        mediaRow.status !== "ready" ||
+        mediaRow.kind !== "support-attachment" ||
+        !metadata?.ticketId ||
+        !metadata.messageId ||
+        metadata.deletedAt ||
+        metadata.storageFileId !== mediaId
+      ) {
+        throw new HttpError(404, "SUPPORT_ATTACHMENT_NOT_FOUND", "Attachment not found.");
+      }
+      const ticket = await store.get(TABLES.supportTickets, metadata.ticketId);
+      const canRead = Boolean(
+        ticket &&
+          ticket.workspace_id === workspaceId &&
+          (access.supportGrant ||
+            ticket.user_id === identity.userId ||
+            access.roles.includes("administrator")),
+      );
+      if (!canRead) {
+        throw new HttpError(404, "SUPPORT_ATTACHMENT_NOT_FOUND", "Attachment not found.");
+      }
+      fileId = metadata.storageFileId;
+      contentType = metadata.contentType;
+      expectedHash = metadata.sha256;
+      const object = await objects.get(fileId);
+      if (!object) throw new HttpError(404, "SUPPORT_ATTACHMENT_NOT_FOUND", "Attachment not found.");
+      if (object.contentType !== contentType || (expectedHash && (await sha256Bytes(object.bytes)) !== expectedHash)) {
+        throw new HttpError(500, "MEDIA_INTEGRITY_FAILURE", "Private media failed its integrity check.", { expose: false });
+      }
+      return withRequestId(
+        new Response(object.bytes.slice().buffer as ArrayBuffer, {
+          headers: {
+            ...mediaHeaders(contentType),
+            "content-disposition": attachmentDisposition(metadata.filename),
+          },
+        }),
+        requestId,
+      );
+    } else if (url.searchParams.get("kind") === "favicon") {
       const mediaId = requiredId(url, "mediaId", "Media");
       const guideId = requiredId(url, "guideId", "Guide");
       const revisionId = requiredId(url, "revisionId", "Revision");
@@ -254,6 +332,67 @@ export async function POST(request: Request) {
     }
     const { store, objects, identity, url, workspaceId, access, context } = await workspaceContext(request);
     await consumeFixedWindows(store, [{ scope: "knowhow.media-write", subject: identity.userId, limit: 60, windowSeconds: 60 }]);
+    if (url.searchParams.get("kind") === "support-attachment") {
+      requireAuthorized("workspace.read", context);
+      if (
+        access.supportGrant ||
+        !(access.roles.includes("administrator") || access.roles.includes("creator"))
+      ) {
+        throw new HttpError(403, "SUPPORT_TICKET_ROLE_REQUIRED", "A workspace administrator or creator can upload support attachments.");
+      }
+      await new EntitlementService(store, workspaceId).requireFeature("supportEnabled");
+      const contentType = (request.headers.get("content-type") ?? "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase();
+      if (!SUPPORT_ATTACHMENT_TYPES.has(contentType)) {
+        throw new HttpError(415, "SUPPORT_ATTACHMENT_TYPE_INVALID", "Choose a PNG, JPEG, WebP, PDF, JSON, CSV, or text file.");
+      }
+      const bytes = await boundedBytes(request, SUPPORT_ATTACHMENT_LIMIT);
+      if (!bytes.byteLength) {
+        throw new HttpError(400, "MEDIA_EMPTY", "Choose a non-empty file to upload.");
+      }
+      await new EntitlementService(store, workspaceId).assertStorageCapacity(bytes.byteLength);
+      const filename = supportAttachmentFilename(request);
+      const mediaId = resourceId("media");
+      createdFileId = mediaId;
+      const timestamp = new Date().toISOString();
+      const sha256 = await sha256Bytes(bytes);
+      await objects.put({ id: mediaId, bytes, filename, contentType });
+      const attachment: SupportAttachmentRecord = {
+        storageFileId: mediaId,
+        filename,
+        contentType,
+        byteSize: bytes.byteLength,
+        sha256,
+        uploadedBy: identity.userId,
+        createdAt: timestamp,
+        deletedAt: null,
+        ticketId: null,
+        messageId: null,
+      };
+      await store.create(
+        TABLES.privateMedia,
+        mediaId,
+        rowData(
+          {
+            organization_id: access.workspace.organizationId,
+            workspace_id: workspaceId,
+            subject_id: mediaId,
+            user_id: identity.userId,
+            status: "staged",
+            kind: "support-attachment",
+            created_by: identity.userId,
+          },
+          attachment,
+        ),
+      );
+      createdFileId = null;
+      return withRequestId(
+        jsonResponse({ mediaId, filename, contentType, byteSize: bytes.byteLength, requestId }),
+        requestId,
+      );
+    }
     if (url.searchParams.get("kind") === "screenshot") {
       const guideId = requiredId(url, "guideId", "Guide");
       const revisionId = requiredId(url, "revisionId", "Revision");
@@ -393,8 +532,33 @@ export async function DELETE(request: Request) {
   const requestId = correlationId(request);
   try {
     assertCookieMutationRequest(request, allowedRequestOrigins());
-    const { store, identity, workspaceId, context } = await workspaceContext(request);
+    const { store, objects, identity, url, workspaceId, context } = await workspaceContext(request);
     await consumeFixedWindows(store, [{ scope: "knowhow.media-delete", subject: identity.userId, limit: 20, windowSeconds: 600 }]);
+    if (url.searchParams.get("kind") === "support-attachment") {
+      requireAuthorized("workspace.read", context);
+      const mediaId = requiredId(url, "mediaId", "Attachment");
+      const media = await store.get(TABLES.privateMedia, mediaId);
+      if (
+        !media ||
+        media.workspace_id !== workspaceId ||
+        media.kind !== "support-attachment" ||
+        media.status !== "staged" ||
+        media.created_by !== identity.userId
+      ) {
+        throw new HttpError(404, "SUPPORT_ATTACHMENT_NOT_FOUND", "Attachment not found.");
+      }
+      const removedAt = new Date().toISOString();
+      await store.update(
+        TABLES.privateMedia,
+        mediaId,
+        rowData(
+          { status: "quarantined", deleted_at: removedAt, updated_by: identity.userId },
+          { ...decodePayload(media, {}), deletedAt: removedAt },
+        ),
+      );
+      await objects.delete(mediaId).catch(() => undefined);
+      return withRequestId(jsonResponse({ removed: true, requestId }), requestId);
+    }
     requireAuthorized("workspace.settings.manage", context);
     const current = await configuredLogo(store, workspaceId);
     if (!current.row || !current.value.logoUrl) {

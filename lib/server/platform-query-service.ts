@@ -1436,6 +1436,12 @@ export class PlatformQueryService {
           authorName?: string;
           authorKind?: "customer" | "support";
           body?: string;
+          attachments?: Array<{
+            id?: string;
+            filename?: string;
+            contentType?: string;
+            byteSize?: number;
+          }>;
         }>(message, {});
         return {
           id: message.$id,
@@ -1445,6 +1451,21 @@ export class PlatformQueryService {
           authorKind: content.authorKind === "support" ? "support" : "customer",
           body: content.body ?? "",
           createdAt: stringValue(message.occurred_at, message.$createdAt),
+          attachments: Array.isArray(content.attachments)
+            ? content.attachments.flatMap((attachment) =>
+                typeof attachment.id === "string" &&
+                typeof attachment.filename === "string" &&
+                typeof attachment.contentType === "string" &&
+                Number.isFinite(attachment.byteSize)
+                  ? [{
+                      id: attachment.id,
+                      filename: attachment.filename,
+                      contentType: attachment.contentType,
+                      byteSize: Number(attachment.byteSize),
+                    }]
+                  : [],
+              )
+            : [],
         };
       }),
     };

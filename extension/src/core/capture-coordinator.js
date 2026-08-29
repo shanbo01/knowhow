@@ -168,11 +168,13 @@ export function unresolvedCaptureEntries(state) {
  * when its picture could not be taken.
  */
 export function captureEntryIsRetakeable(entry) {
+  // A note never had a picture by design — offering to retake one would be
+  // offering to break it.
+  if (!entry || entry.textOnly === true) return false;
   return Boolean(
-    entry &&
-      (entry.status === CaptureEntryStatus.NEEDS_ATTENTION ||
-        entry.screenshotMissing === true ||
-        entry.showsResultOfAction === true),
+    entry.status === CaptureEntryStatus.NEEDS_ATTENTION ||
+      entry.screenshotMissing === true ||
+      entry.showsResultOfAction === true,
   );
 }
 

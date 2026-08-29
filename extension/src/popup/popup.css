@@ -668,6 +668,16 @@ input {
   font-weight: 600;
 }
 
+/* A typed value is a note, not a step that lost its picture: no frame, no
+   placeholder, just the sentence and a rule marking it as an aside. */
+.step-card[data-step-shape="note"] .step-card-copy {
+  padding-bottom: 11px;
+}
+
+.step-card[data-step-shape="note"] .step-card-title {
+  font-weight: 600;
+}
+
 .step-thumbnail-missing {
   display: flex;
   align-items: center;
@@ -776,6 +786,7 @@ input {
 }
 
 .dock-action {
+  position: relative;
   min-height: 42px;
   display: grid;
   place-items: center;
@@ -787,6 +798,43 @@ input {
   color: var(--muted);
   font-size: 8px;
   font-weight: 700;
+}
+
+.extension-pro-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  overflow: hidden;
+  padding: 2px 5px;
+  border: 1px solid rgb(255 255 255 / 0.58);
+  border-radius: 999px;
+  background: linear-gradient(110deg, #f5d0fe, #bfdbfe, #99f6e4, #fde68a, #fecdd3, #f5d0fe);
+  background-size: 320% 100%;
+  box-shadow: inset 0 0 0 1px rgb(76 29 149 / 0.12), 0 2px 6px rgb(91 33 182 / 0.16);
+  color: #3b1764;
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  animation: extension-pro-holographic-shift 5s ease-in-out infinite;
+}
+
+.extension-pro-badge[hidden] {
+  display: none;
+}
+
+.blur-action[data-pro-locked="true"] svg {
+  color: var(--muted);
+}
+
+@keyframes extension-pro-holographic-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .extension-pro-badge {
+    animation: none;
+  }
 }
 
 .dock-action svg {

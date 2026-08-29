@@ -28,7 +28,7 @@ export default function PrivacyPage() {
         </p>
         <h2>Browser capture privacy</h2>
         <p>
-          Smart Blur covers enabled sensitive categories and elements you
+          Auto Blur covers enabled sensitive categories and elements you
           choose on the page. KnowHow permanently rasterizes those regions on
           your device before a screenshot is stored or uploaded, then destroys
           the unredacted capture. Hover may reveal the live page while you work,

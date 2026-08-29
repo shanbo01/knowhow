@@ -25,7 +25,8 @@ use crate::{
     platform::{
         ElementMetadata, ForegroundContext, NativeRawInput, NativeUia, PasswordStatus,
         PointerButton, RawEvent, RawInputEvent, RawInputRegistration, UiAutomationClient,
-        foreground_context, monitor_descriptors, recorder_window_bounds, scope_accepts,
+        double_click_interval, foreground_context, monitor_descriptors, recorder_window_bounds,
+        scope_accepts,
     },
 };
 
@@ -44,6 +45,10 @@ const MAX_PENDING_EMISSIONS: usize = 6;
 // still happened, so it waits for the next frame instead of being dropped.
 const FRAME_RETRY_INTERVAL: Duration = Duration::from_millis(60);
 const MAX_FRAME_RETRIES: u8 = 8;
+/// How often the focused control is re-read while a capture runs. This is what
+/// notices that the author has left a field, and what keeps that field's
+/// contents current until they do.
+const FOCUS_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const MAX_PROCESSING_WIDTH: u32 = 1920;
 const MAX_PROCESSING_HEIGHT: u32 = 1080;
 
@@ -186,12 +191,26 @@ struct PendingKeyboard {
     retries: u8,
 }
 
+/// A field the author is typing into.
+///
+/// The field is read when they have *finished* with it — when they click
+/// elsewhere, press Enter or Tab, move focus, or stop the capture — and never
+/// on a timer. A pause in the middle of a word is not the end of a value: the
+/// idle timer this replaces turned "quarterly report" into a step that said
+/// "quarterly" and another that said " report", and required the keystroke
+/// count to match the text exactly, which one backspace was enough to break.
 #[derive(Clone)]
 struct PendingText {
-    before: ElementMetadata,
+    /// The field as last seen while it still held focus, refreshed by the
+    /// focus poll. Windows gives no way to read a control once focus has left
+    /// it, so the last reading taken while it was focused is what gets
+    /// reported — the same value the author finished with.
+    target: ElementMetadata,
+    /// Its contents when typing began, to tell a real edit from a caret move.
+    before: Option<String>,
     foreground: ForegroundContext,
-    activity_count: usize,
-    deadline: Instant,
+    /// Set only when a flush found no display frame and has to be retried.
+    retry_after: Option<Instant>,
     retries: u8,
 }
 
@@ -218,6 +237,7 @@ struct PendingEmission {
     metadata: ElementMetadata,
     foreground: ForegroundContext,
     exact_text: Option<String>,
+    region: Bounds,
 }
 
 struct EmissionPipeline {
@@ -258,6 +278,7 @@ impl EmissionPipeline {
 }
 
 struct ProcessorState {
+    double_click: Duration,
     pending_pointer: Option<PendingPointer>,
     pending_click: Option<PendingPointer>,
     pending_text: Option<PendingText>,
@@ -292,6 +313,7 @@ fn process_actions(
         return;
     };
     let mut state = ProcessorState {
+        double_click: double_click_interval(),
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
@@ -320,11 +342,30 @@ fn process_actions(
                 );
             }
             Err(RecvTimeoutError::Timeout) => {
-                if state.pending_text.is_none()
-                    && state.last_focus_poll.elapsed() >= Duration::from_millis(120)
-                {
-                    state.last_focus = uia.focused_element_semantic().ok();
+                if state.last_focus_poll.elapsed() >= FOCUS_POLL_INTERVAL {
                     state.last_focus_poll = Instant::now();
+                    let focused = uia.focused_element_semantic().ok();
+                    match (&mut state.pending_text, &focused) {
+                        // Still in the same field: keep its latest contents, so
+                        // that whatever the author leaves behind is what gets
+                        // reported once they move on.
+                        (Some(pending), Some(current))
+                            if same_text_target(&pending.target, current) =>
+                        {
+                            pending.target = current.clone();
+                        }
+                        // Focus has left the field. This is the desktop's blur:
+                        // the author is finished with it, so the value they
+                        // finished with becomes the step.
+                        (Some(_), _) => flush_text(
+                            &mut state, &uia, &scope, &settings, &frames, &order, &emissions,
+                            &on_status,
+                        ),
+                        (None, _) => {}
+                    }
+                    if state.pending_text.is_none() {
+                        state.last_focus = focused;
+                    }
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -360,6 +401,7 @@ fn process_without_uia(
     }
     let uia = UnavailableUia;
     let mut state = ProcessorState {
+        double_click: double_click_interval(),
         pending_pointer: None,
         pending_click: None,
         pending_text: None,
@@ -499,6 +541,7 @@ fn handle_event<U: UiAutomationClient>(
                 return;
             }
             if button == PointerButton::Right {
+                let region = capture_region(scope, &pointer.foreground, &pointer.frame);
                 emit(
                     MeaningfulAction::RightClick {
                         point: pointer.point,
@@ -507,14 +550,16 @@ fn handle_event<U: UiAutomationClient>(
                     pointer.metadata,
                     pointer.foreground,
                     None,
+                    region,
                     order,
                     emissions,
                     on_status,
                 );
             } else if let Some(first) = state.pending_click.take() {
-                if pointer.started_at.duration_since(first.started_at) <= Duration::from_millis(500)
+                if pointer.started_at.duration_since(first.started_at) <= state.double_click
                     && squared_distance(pointer.point, first.point) <= 25
                 {
+                    let region = capture_region(scope, &first.foreground, &first.frame);
                     emit(
                         MeaningfulAction::LeftClick {
                             point: first.point,
@@ -525,29 +570,28 @@ fn handle_event<U: UiAutomationClient>(
                         first.metadata,
                         first.foreground,
                         None,
+                        region,
                         order,
                         emissions,
                         on_status,
                     );
                 } else {
-                    emit_pending_click(first, order, emissions, on_status);
+                    emit_pending_click(first, scope, order, emissions, on_status);
                     state.pending_click = Some(pointer);
                 }
             } else {
                 state.pending_click = Some(pointer);
             }
         }
-        RawEvent::TextActivity => {
+        RawEvent::TextActivity { changes_text } => {
+            // A key that only moves the caret is not the start of anything.
+            if !changes_text || state.pending_text.is_some() {
+                return;
+            }
             // Once typing begins, the preceding pointer action cannot become a double-click.
             // Emit it now so Start -> type -> Enter cannot be reordered as type -> Enter -> Start.
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, order, emissions, on_status);
-            }
-            let now = at;
-            if let Some(pending) = &mut state.pending_text {
-                pending.activity_count = pending.activity_count.saturating_add(1);
-                pending.deadline = now + Duration::from_millis(450);
-                return;
+                emit_pending_click(click, scope, order, emissions, on_status);
             }
             let Ok(foreground) = foreground_context() else {
                 return;
@@ -556,26 +600,26 @@ fn handle_event<U: UiAutomationClient>(
                 on_status("Activity outside the selected scope is ignored.".to_owned());
                 return;
             }
+            // The field as it stood before this key landed: the reading taken
+            // when the author clicked into it, when it is still the same field.
             let observed = uia.focused_element_semantic().ok();
-            let before = match (state.last_focus.clone(), observed) {
-                (Some(previous), Some(current)) if same_text_target(&previous, &current) => {
-                    previous
-                }
+            let target = match (state.last_focus.clone(), observed) {
+                (Some(previous), Some(current)) if same_text_target(&previous, &current) => previous,
                 (_, Some(current)) => current,
                 (Some(previous), None) => previous,
                 (None, None) => fallback_metadata(&foreground),
             };
             state.pending_text = Some(PendingText {
-                before,
+                before: target.value.clone(),
+                target,
                 foreground,
-                activity_count: 1,
-                deadline: now + Duration::from_millis(450),
+                retry_after: None,
                 retries: 0,
             });
         }
         RawEvent::Enter | RawEvent::Tab => {
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, order, emissions, on_status);
+                emit_pending_click(click, scope, order, emissions, on_status);
             }
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
@@ -605,7 +649,7 @@ fn handle_event<U: UiAutomationClient>(
         }
         RawEvent::Shortcut(shortcut) => {
             if let Some(click) = state.pending_click.take() {
-                emit_pending_click(click, order, emissions, on_status);
+                emit_pending_click(click, scope, order, emissions, on_status);
             }
             flush_text(
                 state, uia, scope, settings, frames, order, emissions, on_status,
@@ -679,12 +723,14 @@ fn emit_keyboard_action<U: UiAutomationClient>(
     let metadata = uia
         .focused_element_semantic()
         .unwrap_or_else(|_| fallback_metadata(&foreground));
+    let region = capture_region(scope, &foreground, &frame);
     emit(
         action,
         frame,
         metadata,
         foreground,
         None,
+        region,
         order,
         emissions,
         on_status,
@@ -750,15 +796,17 @@ fn flush_due<U: UiAutomationClient>(
     if state
         .pending_click
         .as_ref()
-        .is_some_and(|click| click.started_at.elapsed() > Duration::from_millis(500))
+        .is_some_and(|click| click.started_at.elapsed() > state.double_click)
         && let Some(click) = state.pending_click.take()
     {
-        emit_pending_click(click, order, emissions, on_status);
+        emit_pending_click(click, scope, order, emissions, on_status);
     }
+    // Only a flush that could not find a display frame is retried on a clock.
+    // Typing itself is never ended by a timer; see `PendingText`.
     if state
         .pending_text
         .as_ref()
-        .is_some_and(|text| text.deadline <= Instant::now())
+        .is_some_and(|text| text.retry_after.is_some_and(|at| at <= Instant::now()))
     {
         flush_text(
             state, uia, scope, settings, frames, order, emissions, on_status,
@@ -779,7 +827,7 @@ fn flush_all<U: UiAutomationClient>(
 ) {
     flush_keyboard(state, uia, scope, frames, order, emissions, on_status);
     if let Some(click) = state.pending_click.take() {
-        emit_pending_click(click, order, emissions, on_status);
+        emit_pending_click(click, scope, order, emissions, on_status);
     }
     flush_text(
         state, uia, scope, settings, frames, order, emissions, on_status,
@@ -788,10 +836,12 @@ fn flush_all<U: UiAutomationClient>(
 
 fn emit_pending_click(
     click: PendingPointer,
+    scope: &DesktopScope,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
 ) {
+    let region = capture_region(scope, &click.foreground, &click.frame);
     emit(
         MeaningfulAction::LeftClick {
             point: click.point,
@@ -802,6 +852,7 @@ fn emit_pending_click(
         click.metadata,
         click.foreground,
         None,
+        region,
         order,
         emissions,
         on_status,
@@ -839,13 +890,26 @@ fn flush_text<U: UiAutomationClient>(
     let Some(pending) = state.pending_text.take() else {
         return;
     };
-    let after = uia
-        .focused_element()
-        .unwrap_or_else(|_| fallback_metadata(&pending.foreground));
-    state.last_focus = Some(after.clone());
+    // When focus has not moved yet — a click, Enter, Tab, or a shortcut, all of
+    // which arrive before the application processes them — the field can still
+    // be read directly, which catches the last characters typed. Once focus has
+    // gone the last polled reading is what there is.
+    let target = match uia.focused_element() {
+        Ok(current) if same_text_target(&current, &pending.target) => current,
+        _ => pending.target.clone(),
+    };
     let foreground = foreground_context().unwrap_or_else(|_| pending.foreground.clone());
     if !scope_accepts(scope, &foreground, None) {
         on_status("Activity outside the selected scope is ignored.".to_owned());
+        return;
+    }
+    let readable = settings.capture_typed_text
+        && target.password_status == PasswordStatus::NotPassword;
+    let text = readable.then(|| target.value.clone()).flatten();
+    // Nothing was actually typed: the keys moved the caret or edited nothing.
+    // Reporting a step here is how arrow keys used to become "Enter text".
+    if readable && text.is_some() && text == pending.before {
+        state.last_focus = Some(target);
         return;
     }
     let Some(frame) = ({
@@ -863,33 +927,21 @@ fn flush_text<U: UiAutomationClient>(
         }
         on_status("Waiting for a stable post-entry frame…".to_owned());
         state.pending_text = Some(PendingText {
-            deadline: Instant::now() + FRAME_RETRY_INTERVAL,
+            retry_after: Some(Instant::now() + FRAME_RETRY_INTERVAL),
             retries: pending.retries + 1,
             ..pending
         });
         return;
     };
-    let exact_text = if settings.capture_typed_text
-        && pending.before.password_status == PasswordStatus::NotPassword
-        && after.password_status == PasswordStatus::NotPassword
-        && pending.before.window_id == after.window_id
-        && pending.before.process_id == after.process_id
-    {
-        match (pending.before.value.as_deref(), after.value.as_deref()) {
-            (Some(before), Some(after)) => {
-                verified_inserted_text(before, after, pending.activity_count)
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
+    state.last_focus = Some(target.clone());
+    let region = capture_region(scope, &foreground, &frame);
     emit(
         MeaningfulAction::TextEntry,
         frame,
-        after,
+        target,
         foreground,
-        exact_text,
+        text,
+        region,
         order,
         emissions,
         on_status,
@@ -903,6 +955,7 @@ fn emit(
     metadata: ElementMetadata,
     foreground: ForegroundContext,
     exact_text: Option<String>,
+    region: Bounds,
     order: &AtomicUsize,
     emissions: &EmissionPipeline,
     on_status: &StatusCallback,
@@ -920,9 +973,31 @@ fn emit(
             metadata,
             foreground,
             exact_text,
+            region,
         },
         on_status,
     );
+}
+
+/// The slice of the display that becomes the screenshot.
+///
+/// Recording an application means recording that application, so the image is
+/// the window itself — not the desktop it happens to sit on. This is what keeps
+/// the taskbar, the wallpaper and every unrelated window out of the guide. A
+/// display capture is the whole display by definition.
+fn capture_region(
+    scope: &DesktopScope,
+    foreground: &ForegroundContext,
+    frame: &DesktopFrame,
+) -> Bounds {
+    match scope {
+        DesktopScope::Application { .. } => foreground
+            .bounds
+            .intersection(frame.monitor_bounds)
+            .filter(|region| region.width > 16 && region.height > 16)
+            .unwrap_or(frame.monitor_bounds),
+        DesktopScope::Monitor { .. } => frame.monitor_bounds,
+    }
 }
 
 fn process_emissions(
@@ -943,13 +1018,17 @@ fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status
         metadata,
         foreground,
         exact_text,
+        region,
     } = emission;
     let (title, instructions, source_event) =
         deterministic_instruction(&action, &metadata, &foreground, exact_text.as_deref());
-    let annotations = annotations(&action, &metadata, &frame);
-    let crop = contextual_crop(&action, &metadata, &frame);
-    match rasterize(&frame, &metadata, &foreground, &action) {
+    match rasterize(&frame, region, &metadata, &foreground, &action) {
         Ok(processed) => {
+            // The crop is decided first: it is what the reader actually sees, so
+            // the click marker is sized against it rather than against the whole
+            // screenshot it was cut from.
+            let crop = contextual_crop(&action, &metadata, region, processed.width, processed.height);
+            let annotations = annotations(&action, &metadata, region, crop.as_ref());
             let text = if metadata.password_status == PasswordStatus::NotPassword {
                 exact_text
             } else {
@@ -1069,11 +1148,26 @@ fn deterministic_instruction(
             "right-click",
         ),
         MeaningfulAction::TextEntry => {
-            let instruction = exact_text.map_or_else(
-                || format!("Enter text in {described}."),
-                |text| format!("Enter “{}” in {described}.", truncate(text, 180)),
-            );
-            ("Enter text".to_owned(), instruction, "text-entry")
+            let field = target.unwrap_or("the field");
+            if metadata.password_status != PasswordStatus::NotPassword {
+                return (
+                    "Enter your password".to_owned(),
+                    format!("Enter your password in {described}."),
+                    "text-entry",
+                );
+            }
+            match exact_text.map(|text| truncate(text, 180)) {
+                Some(text) => (
+                    format!("Type “{}” into {}", text, truncate(field, 60)),
+                    format!("Type “{text}” into {described}."),
+                    "text-entry",
+                ),
+                None => (
+                    format!("Type into {}", truncate(field, 60)),
+                    format!("Type the value you need into {described}."),
+                    "text-entry",
+                ),
+            }
         }
         MeaningfulAction::Enter => (
             "Press Enter".to_owned(),
@@ -1139,27 +1233,40 @@ fn is_paste_shortcut(shortcut: &str) -> bool {
     matches!(shortcut, "Ctrl+V" | "Shift+Insert")
 }
 
+/// The reader draws a click marker at `radius / crop.width` of the framed
+/// image, so a radius fixed against the whole screenshot balloons the moment a
+/// zoom crop is applied — a 0.035 radius inside a 0.38-wide crop covered
+/// roughly a fifth of the picture. The stored radius is scaled by the crop
+/// instead, so the marker lands at the same modest size whatever the zoom.
+const CLICK_MARKER_DIAMETER: f64 = 0.06;
+
+fn click_marker_radius(crop: Option<&ServerCrop>) -> f64 {
+    let framed = crop.map_or(1.0, |crop| crop.width);
+    (CLICK_MARKER_DIAMETER / 2.0 * framed).clamp(0.004, 0.05)
+}
+
 fn annotations(
     action: &MeaningfulAction,
     metadata: &ElementMetadata,
-    frame: &DesktopFrame,
+    region: Bounds,
+    crop: Option<&ServerCrop>,
 ) -> Vec<ServerAnnotation> {
     match action {
         MeaningfulAction::LeftClick { point, .. } | MeaningfulAction::RightClick { point } => {
-            let (x, y) = normalize_point(*point, frame.monitor_bounds);
+            let (x, y) = normalize_point(*point, region);
             vec![ServerAnnotation {
                 id: format!("annotation_{}", Uuid::new_v4().simple()),
                 kind: "click".to_owned(),
                 x,
                 y,
-                width: Some(0.035),
+                width: Some(click_marker_radius(crop)),
                 height: None,
                 color: Some("#ff5a12".to_owned()),
             }]
         }
         MeaningfulAction::TextEntry | MeaningfulAction::Enter | MeaningfulAction::Tab => metadata
             .bounds
-            .and_then(|bounds| normalize_bounds(bounds, frame.monitor_bounds))
+            .and_then(|bounds| normalize_bounds(bounds, region))
             .map(|(x, y, width, height)| ServerAnnotation {
                 id: format!("annotation_{}", Uuid::new_v4().simple()),
                 kind: "box".to_owned(),
@@ -1178,11 +1285,13 @@ fn annotations(
 fn contextual_crop(
     action: &MeaningfulAction,
     metadata: &ElementMetadata,
-    frame: &DesktopFrame,
+    region: Bounds,
+    image_width: u32,
+    image_height: u32,
 ) -> Option<ServerCrop> {
     let click = match action {
         MeaningfulAction::LeftClick { point, .. } | MeaningfulAction::RightClick { point } => {
-            Some(normalize_point(*point, frame.monitor_bounds))
+            Some(normalize_point(*point, region))
         }
         MeaningfulAction::TextEntry
         | MeaningfulAction::Enter
@@ -1192,11 +1301,11 @@ fn contextual_crop(
     };
     let focus = metadata
         .bounds
-        .and_then(|bounds| normalize_bounds(bounds, frame.monitor_bounds))
+        .and_then(|bounds| normalize_bounds(bounds, region))
         // Some UIA providers expose only their full top-level surface. Treat that as
         // unavailable so a precise click can still receive the browser-style zoom.
         .filter(|(_, _, width, height)| *width <= 0.7 && *height <= 0.7);
-    contextual_crop_for_geometry(click, focus, frame.width, frame.height)
+    contextual_crop_for_geometry(click, focus, image_width, image_height)
 }
 
 fn contextual_crop_for_geometry(
@@ -1264,15 +1373,17 @@ struct ProcessedImage {
     mask_count: usize,
 }
 
-/// Turns one captured display frame into the JPEG stored for a step.
+/// Turns the captured slice of a display frame into the JPEG stored for a step.
 ///
-/// Two things are painted out before the image is ever written to disk: the
-/// recorder's own windows, so KnowHow never appears in its own guides, and any
-/// password field involved in the action. A field whose password state UI
-/// Automation could not report is treated as a password — the recorder masks
-/// what it cannot vouch for rather than photographing it.
+/// Only `region` is copied out of the frame — for an application capture that
+/// is the window itself, so the desktop around it never reaches the image.
+/// Two things are then painted out: the recorder's own windows, so KnowHow
+/// never appears in its own guides, and any password field involved in the
+/// action. A field whose password state UI Automation could not report is
+/// treated as a password — the recorder masks what it cannot vouch for.
 fn rasterize(
     frame: &DesktopFrame,
+    region: Bounds,
     metadata: &ElementMetadata,
     foreground: &ForegroundContext,
     action: &MeaningfulAction,
@@ -1284,12 +1395,33 @@ fn rasterize(
     if frame.bgra.len() != expected {
         bail!("DXGI frame size does not match its dimensions");
     }
-    let mut image = RgbaImage::new(frame.width, frame.height);
-    for (target, source) in image.pixels_mut().zip(frame.bgra.chunks_exact(4)) {
-        *target = Rgba([source[2], source[1], source[0], 255]);
+    let source = region_in_frame_pixels(region, frame)
+        .ok_or_else(|| anyhow!("the captured window is not on the recorded display"))?;
+    // Copied a scanline at a time into one contiguous buffer: the recorder runs
+    // this for every captured step on the machine being recorded, and a
+    // per-pixel put_pixel pass over a full window was pure overhead.
+    let stride = usize::try_from(frame.width)?;
+    let left = usize::try_from(source.x.max(0))?;
+    let top = usize::try_from(source.y.max(0))?;
+    let region_width = usize::try_from(source.width)?;
+    let region_height = usize::try_from(source.height)?;
+    let mut pixels = vec![0_u8; region_width * region_height * 4];
+    for (row, target) in pixels.chunks_exact_mut(region_width * 4).enumerate() {
+        let start = ((top + row) * stride + left) * 4;
+        let Some(scanline) = frame.bgra.get(start..start + region_width * 4) else {
+            bail!("captured region falls outside the display frame");
+        };
+        for (destination, source) in target.chunks_exact_mut(4).zip(scanline.chunks_exact(4)) {
+            destination[0] = source[2];
+            destination[1] = source[1];
+            destination[2] = source[0];
+            destination[3] = 255;
+        }
     }
-    let (processing_width, processing_height) = processing_dimensions(frame.width, frame.height);
-    if processing_width != frame.width || processing_height != frame.height {
+    let mut image = RgbaImage::from_raw(source.width, source.height, pixels)
+        .ok_or_else(|| anyhow!("captured region has an invalid pixel layout"))?;
+    let (processing_width, processing_height) = processing_dimensions(source.width, source.height);
+    if processing_width != source.width || processing_height != source.height {
         image = imageops::resize(
             &image,
             processing_width,
@@ -1297,17 +1429,15 @@ fn rasterize(
             imageops::FilterType::Triangle,
         );
     }
-    let mask_frame = DesktopFrame {
-        width: image.width(),
-        height: image.height(),
-        ..frame.clone()
-    };
     let mut mask_count = 0_usize;
-    for recorder_window in recorder_window_bounds() {
-        if let Some(bounds) = global_to_image_bounds(recorder_window, &mask_frame) {
-            solid_mask(&mut image, bounds);
+    let mut mask = |image: &mut RgbaImage, bounds: Bounds| {
+        if let Some(bounds) = global_to_image_bounds(bounds, region, image.width(), image.height()) {
+            solid_mask(image, bounds);
             mask_count += 1;
         }
+    };
+    for recorder_window in recorder_window_bounds() {
+        mask(&mut image, recorder_window);
     }
     let password_bounds = match metadata.password_status {
         // A text entry KnowHow cannot confirm is not a password is masked at the
@@ -1319,11 +1449,8 @@ fn rasterize(
         PasswordStatus::Password => metadata.bounds,
         _ => None,
     };
-    if let Some(bounds) =
-        password_bounds.and_then(|bounds| global_to_image_bounds(bounds, &mask_frame))
-    {
-        solid_mask(&mut image, bounds);
-        mask_count += 1;
+    if let Some(bounds) = password_bounds {
+        mask(&mut image, bounds);
     }
     let (jpeg, width, height) = encode_bounded(image)?;
     Ok(ProcessedImage {
@@ -1331,6 +1458,30 @@ fn rasterize(
         width,
         height,
         mask_count,
+    })
+}
+
+/// Maps a rectangle in Windows' virtual-desktop coordinates onto the pixels of
+/// one captured display frame. The frame can be a different size than the
+/// monitor's logical bounds on a scaled display, so both axes are scaled.
+fn region_in_frame_pixels(region: Bounds, frame: &DesktopFrame) -> Option<Bounds> {
+    let monitor = frame.monitor_bounds;
+    let visible = region.intersection(monitor)?;
+    let scale_x = f64::from(frame.width) / f64::from(monitor.width.max(1));
+    let scale_y = f64::from(frame.height) / f64::from(monitor.height.max(1));
+    let x = (f64::from(visible.x - monitor.x) * scale_x).floor().max(0.0) as u32;
+    let y = (f64::from(visible.y - monitor.y) * scale_y).floor().max(0.0) as u32;
+    let width = ((f64::from(visible.width) * scale_x).round() as u32)
+        .min(frame.width.saturating_sub(x))
+        .max(1);
+    let height = ((f64::from(visible.height) * scale_y).round() as u32)
+        .min(frame.height.saturating_sub(y))
+        .max(1);
+    Some(Bounds {
+        x: i32::try_from(x).ok()?,
+        y: i32::try_from(y).ok()?,
+        width,
+        height,
     })
 }
 
@@ -1347,23 +1498,24 @@ fn processing_dimensions(width: u32, height: u32) -> (u32, u32) {
     )
 }
 
-fn global_to_image_bounds(bounds: Bounds, frame: &DesktopFrame) -> Option<Bounds> {
-    let intersection = bounds.intersection(frame.monitor_bounds)?;
-    let scale_x = f64::from(frame.width) / f64::from(frame.monitor_bounds.width.max(1));
-    let scale_y = f64::from(frame.height) / f64::from(frame.monitor_bounds.height.max(1));
-    let x = (f64::from(intersection.x - frame.monitor_bounds.x) * scale_x)
-        .floor()
-        .max(0.0);
-    let y = (f64::from(intersection.y - frame.monitor_bounds.y) * scale_y)
-        .floor()
-        .max(0.0);
-    let width = (f64::from(intersection.width) * scale_x).ceil().max(1.0);
-    let height = (f64::from(intersection.height) * scale_y).ceil().max(1.0);
+fn global_to_image_bounds(
+    bounds: Bounds,
+    region: Bounds,
+    image_width: u32,
+    image_height: u32,
+) -> Option<Bounds> {
+    let visible = bounds.intersection(region)?;
+    let scale_x = f64::from(image_width) / f64::from(region.width.max(1));
+    let scale_y = f64::from(image_height) / f64::from(region.height.max(1));
+    let x = (f64::from(visible.x - region.x) * scale_x).floor().max(0.0);
+    let y = (f64::from(visible.y - region.y) * scale_y).floor().max(0.0);
+    let width = (f64::from(visible.width) * scale_x).ceil().max(1.0);
+    let height = (f64::from(visible.height) * scale_y).ceil().max(1.0);
     Some(Bounds {
         x: x as i32,
         y: y as i32,
-        width: (width as u32).min(frame.width.saturating_sub(x as u32)),
-        height: (height as u32).min(frame.height.saturating_sub(y as u32)),
+        width: (width as u32).min(image_width.saturating_sub(x as u32)),
+        height: (height as u32).min(image_height.saturating_sub(y as u32)),
     })
 }
 
@@ -1420,36 +1572,6 @@ fn normalize_bounds(bounds: Bounds, monitor: Bounds) -> Option<(f64, f64, f64, f
     Some((x, y, width, height))
 }
 
-fn inserted_text(before: &str, after: &str) -> Option<String> {
-    if before == after {
-        return None;
-    }
-    let before = before.chars().collect::<Vec<_>>();
-    let after = after.chars().collect::<Vec<_>>();
-    let prefix = before
-        .iter()
-        .zip(after.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let max_suffix = before
-        .len()
-        .saturating_sub(prefix)
-        .min(after.len().saturating_sub(prefix));
-    let suffix = (0..max_suffix)
-        .take_while(|offset| before[before.len() - 1 - offset] == after[after.len() - 1 - offset])
-        .count();
-    let end = after.len().saturating_sub(suffix);
-    (prefix < end).then(|| after[prefix..end].iter().collect::<String>())
-}
-
-fn verified_inserted_text(before: &str, after: &str, activity_count: usize) -> Option<String> {
-    let inserted = inserted_text(before, after)?;
-    // Raw Input contributes only a count of semantic text-changing key presses. Requiring the
-    // UIA diff to account for every press prevents a raced first snapshot from turning
-    // "powershell" into the misleading partial instruction "owershell".
-    (inserted.chars().count() == activity_count).then_some(inserted)
-}
-
 fn is_duplicate(last: &mut Option<(String, Instant)>, signature: &str, window: Duration) -> bool {
     let now = Instant::now();
     let duplicate = last
@@ -1478,12 +1600,12 @@ fn truncate(value: &str, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MeaningfulAction, contextual_crop_for_geometry, deterministic_instruction, encode_bounded,
-        inserted_text, is_duplicate, processing_dimensions, shortcut_instruction,
-        verified_inserted_text,
+        MeaningfulAction, click_marker_radius, contextual_crop_for_geometry,
+        deterministic_instruction, encode_bounded, is_duplicate, processing_dimensions,
+        shortcut_instruction,
     };
     use crate::{
-        model::Bounds,
+        model::{Bounds, ServerCrop},
         platform::{ElementMetadata, ForegroundContext, PasswordStatus},
     };
     use image::{Rgba, RgbaImage};
@@ -1567,50 +1689,68 @@ mod tests {
     }
 
     #[test]
-    fn text_differencing_handles_typing_paste_and_replacement() {
-        assert_eq!(
-            inserted_text("Hello", "Hello world").as_deref(),
-            Some(" world")
-        );
-        assert_eq!(
-            inserted_text("abc xyz", "abc pasted xyz").as_deref(),
-            Some("pasted ")
-        );
-        assert_eq!(
-            inserted_text("old value", "new value").as_deref(),
-            Some("new")
-        );
-        assert_eq!(inserted_text("same", "same"), None);
-        assert_eq!(inserted_text("delete me", "delete "), None);
+    fn a_click_marker_keeps_its_rendered_size_whatever_the_zoom() {
+        // The reader draws the marker at radius / crop.width, so a tight crop
+        // must store a proportionally smaller radius.
+        let zoomed = click_marker_radius(Some(&ServerCrop {
+            x: 0.0,
+            y: 0.0,
+            width: 0.385,
+            height: 0.216,
+        }));
+        let whole = click_marker_radius(None);
+        assert!(zoomed < whole);
+        assert!(((zoomed / 0.385) * 200.0 - 6.0).abs() < 0.001);
+    }
+
+    fn text_field() -> ElementMetadata {
+        ElementMetadata {
+            control_role: Some("text field".to_owned()),
+            control_label: Some("Search".to_owned()),
+            ..metadata()
+        }
     }
 
     #[test]
-    fn exact_text_is_emitted_only_when_the_uia_diff_covers_the_whole_group() {
-        assert_eq!(
-            verified_inserted_text("", "powershell", 10).as_deref(),
-            Some("powershell")
-        );
-        assert_eq!(verified_inserted_text("p", "powershell", 10), None);
-        assert_eq!(
-            verified_inserted_text(r"PS C:\> ", r"PS C:\> ls", 2).as_deref(),
-            Some("ls")
-        );
-    }
-
-    #[test]
-    fn typed_text_appears_verbatim_in_the_instruction() {
+    fn a_typed_value_is_reported_as_the_value_the_author_finished_with() {
         let step = deterministic_instruction(
             &MeaningfulAction::TextEntry,
-            &ElementMetadata {
-                control_role: Some("text field".to_owned()),
-                control_label: Some("Search".to_owned()),
-                ..metadata()
-            },
+            &text_field(),
             &foreground(),
             Some("quarterly report"),
         );
-        assert_eq!(step.2, "text-entry");
+        assert_eq!(step.0, "Type “quarterly report” into Search");
         assert!(step.1.contains("quarterly report"));
+        assert_eq!(step.2, "text-entry");
+    }
+
+    #[test]
+    fn a_password_field_never_quotes_what_was_typed() {
+        let step = deterministic_instruction(
+            &MeaningfulAction::TextEntry,
+            &ElementMetadata {
+                password_status: PasswordStatus::Password,
+                control_label: Some("Password".to_owned()),
+                ..text_field()
+            },
+            &foreground(),
+            // Even handed the text, a password field must never repeat it.
+            Some("hunter2"),
+        );
+        assert_eq!(step.0, "Enter your password");
+        assert!(!step.1.contains("hunter2"));
+    }
+
+    #[test]
+    fn a_field_that_cannot_be_read_still_produces_a_usable_step() {
+        let step = deterministic_instruction(
+            &MeaningfulAction::TextEntry,
+            &text_field(),
+            &foreground(),
+            None,
+        );
+        assert_eq!(step.0, "Type into Search");
+        assert_eq!(step.2, "text-entry");
     }
 
     #[test]

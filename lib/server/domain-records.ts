@@ -336,6 +336,19 @@ export type FaviconMediaRecord = {
   deletedAt: string | null;
 };
 
+export type SupportAttachmentRecord = {
+  storageFileId: string;
+  filename: string;
+  contentType: string;
+  byteSize: number;
+  sha256: string;
+  uploadedBy: string;
+  createdAt: string;
+  deletedAt: string | null;
+  ticketId: string | null;
+  messageId: string | null;
+};
+
 export type SupportGrantRecord = {
   requestId: string;
   role: WorkspaceRole;

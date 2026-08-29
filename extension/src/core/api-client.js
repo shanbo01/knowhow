@@ -374,6 +374,7 @@ export async function submitPrivateDraft({ capture, steps, policy = {} }) {
           ...(step.showsResultOfAction === true
             ? { showsResultOfAction: true }
             : {}),
+          ...(step.textOnly === true ? { textOnly: true } : {}),
           redactions: Array.isArray(step.pendingRedactions)
             ? step.pendingRedactions
             : [],

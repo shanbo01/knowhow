@@ -34,9 +34,9 @@ const DEFAULT_FEATURES: CatalogEntitlementItem[] = [
   },
   {
     key: "privacy_tools",
-    label: "Smart Blur, redact, and annotate",
+    label: "Auto Blur and editor privacy tools",
     included: true,
-    note: "Local screenshot privacy tools before anything is uploaded.",
+    note: "Automatic extension blur plus editor blur and annotations before upload.",
   },
   {
     key: "remove_branding",

@@ -457,6 +457,64 @@ export async function uploadWorkspaceLogo(workspaceId: string, file: File) {
   return (await response.json()) as { configured: true };
 }
 
+export async function uploadSupportAttachment(workspaceId: string, file: File) {
+  const params = new URLSearchParams({ workspaceId, kind: "support-attachment" });
+  const response = await fetch(`/api/knowhow/media?${params}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-knowhow-file-name": encodeURIComponent(file.name),
+      "x-csrf-token": csrfToken(),
+    },
+    body: file,
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    mediaId?: string;
+    filename?: string;
+    contentType?: string;
+    byteSize?: number;
+    error?: string;
+  };
+  if (!response.ok || !payload.mediaId) {
+    throw new Error(payload.error ?? `Attachment upload failed (${response.status})`);
+  }
+  return {
+    id: payload.mediaId,
+    filename: payload.filename ?? file.name,
+    contentType: payload.contentType ?? file.type,
+    byteSize: payload.byteSize ?? file.size,
+  };
+}
+
+export async function removeStagedSupportAttachment(
+  workspaceId: string,
+  mediaId: string,
+) {
+  const params = new URLSearchParams({
+    workspaceId,
+    kind: "support-attachment",
+    mediaId,
+  });
+  const response = await fetch(`/api/knowhow/media?${params}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "x-csrf-token": csrfToken() },
+  });
+  if (!response.ok && response.status !== 404) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? `Attachment cleanup failed (${response.status})`);
+  }
+}
+
+export function supportAttachmentHref(workspaceId: string, mediaId: string) {
+  return `/api/knowhow/media?${new URLSearchParams({
+    workspaceId,
+    kind: "support-attachment",
+    mediaId,
+  })}`;
+}
+
 export async function uploadProvisioningLogo(runId: string, file: File) {
   const params = new URLSearchParams({ kind: "provisioning-logo", runId });
   const response = await fetch(`/api/knowhow/media?${params}`, {

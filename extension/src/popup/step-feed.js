@@ -347,7 +347,7 @@ function saysTheSameThing(left, right) {
 }
 
 export function stepCopy(step) {
-  if (step?.captureStatus === "capturing") {
+  if (step?.captureStatus === "capturing" && step?.textOnly !== true) {
     return {
       title: "Saving screenshot…",
       detail: String(step?.title || "Capturing the pre-action view.").trim(),
@@ -396,11 +396,30 @@ export function captureFeedSteps(state, storedSteps = []) {
   const announced = new Set(entries.map((entry) => entry.stepId));
   const feed = entries.map((entry) => {
     const stored = storedById.get(entry.stepId);
+    // A note carries its whole self on the entry — a sentence, no image — so it
+    // renders without waiting on the stored copy. Requiring that copy meant a
+    // step with nothing left to do could still sit under "Saving screenshot…".
+    if (entry.textOnly === true) {
+      return {
+        ...(stored || {}),
+        id: entry.stepId || `entry:${entry.id}`,
+        entryId: entry.id,
+        order: entry.order,
+        sourceEvent: entry.sourceEvent || "type",
+        captureStatus: "ready",
+        textOnly: true,
+        title: stored?.title || entry.context?.title || "",
+        instructions: stored?.instructions || entry.context?.instructions || "",
+        sanitizedUrl:
+          stored?.sanitizedUrl || entry.context?.sanitizedUrl || "",
+      };
+    }
     if (entry.status === "ready" && stored) {
       return {
         ...stored,
         entryId: entry.id,
         captureStatus: "ready",
+        ...(entry.textOnly === true ? { textOnly: true } : {}),
         ...(entry.showsResultOfAction === true
           ? { showsResultOfAction: true }
           : {}),
@@ -420,6 +439,7 @@ export function captureFeedSteps(state, storedSteps = []) {
       ...(Array.isArray(entry.context?.keys) && entry.context.keys.length
         ? { keys: entry.context.keys }
         : {}),
+      ...(entry.textOnly === true ? { textOnly: true } : {}),
       ...(entry.screenshotMissing === true ? { screenshotMissing: true } : {}),
       ...(entry.showsResultOfAction === true
         ? { showsResultOfAction: true }

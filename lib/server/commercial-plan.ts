@@ -31,7 +31,7 @@ export const FREE_ENTITLEMENTS: PlanEntitlements = {
   maximumCreators: 1,
   maximumGuides: 15,
   storageBytes: 1_000_000_000,
-  extensionEnabled: false,
+  extensionEnabled: true,
   desktopCaptureEnabled: false,
   supportEnabled: false,
   removeBranding: false,

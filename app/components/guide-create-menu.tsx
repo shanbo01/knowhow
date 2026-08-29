@@ -50,7 +50,6 @@ export function GuideCreateMenu({
   label = "New guide",
   className,
   busy,
-  browserPlanEnabled,
   browserAvailable,
   desktopPlanEnabled,
   desktopAvailable,
@@ -65,7 +64,6 @@ export function GuideCreateMenu({
   label?: string;
   className?: string;
   busy: boolean;
-  browserPlanEnabled: boolean;
   browserAvailable: boolean;
   desktopPlanEnabled: boolean;
   desktopAvailable: boolean;
@@ -76,15 +74,13 @@ export function GuideCreateMenu({
   onDesktop: () => void;
   onOpenPlan?: () => void;
 }) {
-  const browserStatus: CaptureStatus = !browserPlanEnabled
-    ? { label: "Pro", tone: "pro" }
-    : !browserAvailable
-      ? { label: "Unavailable", tone: "muted" }
-      : extensionState === "connected"
-        ? { label: "Ready", tone: "ready" }
-        : extensionState === "checking"
-          ? { label: "Checking…", tone: "muted" }
-          : { label: "Set up", tone: "setup" };
+  const browserStatus: CaptureStatus = !browserAvailable
+    ? { label: "Unavailable", tone: "muted" }
+    : extensionState === "connected"
+      ? { label: "Ready", tone: "ready" }
+      : extensionState === "checking"
+        ? { label: "Checking…", tone: "muted" }
+        : { label: "Set up", tone: "setup" };
   const desktopStatus: CaptureStatus = !desktopPlanEnabled
     ? { label: "Pro", tone: "pro" }
     : !desktopAvailable
@@ -98,7 +94,6 @@ export function GuideCreateMenu({
             tone: "ready",
           }
         : { label: "Install", tone: "setup" };
-  const browserCanUpgrade = !browserPlanEnabled && Boolean(onOpenPlan);
   const desktopCanUpgrade = !desktopPlanEnabled && Boolean(onOpenPlan);
   const isCard = appearance === "card";
 
@@ -154,10 +149,8 @@ export function GuideCreateMenu({
           </DropdownMenuLabel>
           <DropdownMenuItem
             className="guide-create-option"
-            disabled={
-              busy || (!browserAvailable && !browserCanUpgrade)
-            }
-            onClick={browserAvailable ? onBrowser : onOpenPlan}
+            disabled={busy || !browserAvailable}
+            onClick={onBrowser}
           >
             <span className="guide-create-option-icon" data-kind="browser">
               <Globe2 />

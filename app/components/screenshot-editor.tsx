@@ -38,6 +38,7 @@ import type { EditorBlock } from "../../lib/knowhow-types";
 import { paintRasterRedaction, redactionBlockSize } from "../../lib/redaction-raster";
 import { useConfirmDialog } from "./confirm-dialog";
 import { HexColorPicker } from "./hex-color-picker";
+import { ProBadge } from "./pro-badge";
 
 type Annotation = NonNullable<EditorBlock["annotations"]>[number];
 type Redaction = NonNullable<EditorBlock["redactions"]>[number];
@@ -1212,12 +1213,17 @@ export function ScreenshotEditor({
                     {privacyToolsEnabled ? (
                       <>
                         <button type="button" role="menuitem" onClick={() => setCanvasMenuView("annotate")} disabled={locked}><Square /> Annotate</button>
-                        <button type="button" role="menuitem" onClick={() => chooseCanvasTool("redact")} disabled={locked}><EyeOff /> Redact</button>
+                        <button type="button" role="menuitem" onClick={() => chooseCanvasTool("redact")} disabled={locked}><EyeOff /> Blur</button>
                       </>
                     ) : (
-                      <button type="button" role="menuitem" disabled>
-                        <EyeOff /> Smart Blur, redact, and annotate are on Pro
-                      </button>
+                      <>
+                        <button className="shot-pro-feature" type="button" role="menuitem" disabled>
+                          <Square /> <span>Annotate</span><ProBadge size="sm" />
+                        </button>
+                        <button className="shot-pro-feature" type="button" role="menuitem" disabled>
+                          <EyeOff /> <span>Blur</span><ProBadge size="sm" />
+                        </button>
+                      </>
                     )}
                     <button type="button" role="menuitem" onClick={() => chooseCanvasTool(mode === "crop" ? "view" : "crop")}><CropIcon /> {mode === "crop" ? "Done cropping" : "Crop"}</button>
                     {zoom > MIN_ZOOM + 0.01 ? <button type="button" role="menuitem" onClick={() => { commit({ crop: undefined }); closeCanvasMenu(); }}><CropIcon /> Reset crop</button> : null}

@@ -1108,7 +1108,7 @@ async function startCapture(options = {}) {
       status: CaptureStatus.PAUSED,
     });
     if (!blurArmed?.ok) {
-      throw new Error("KnowHow could not arm Smart Blur on this page.");
+      throw new Error("KnowHow could not arm Auto Blur on this page.");
     }
     await sendToCapturedTab(prepared, { type: "KNOWHOW_WAIT_PAGE_SETTLED" });
     const beforeReady = await revalidateSelectedTab(
@@ -2394,6 +2394,24 @@ async function keepStepWithoutScreenshot(entryId, reason) {
     pendingRedactions: [],
   };
 
+  // Nothing to salvage or flag for a step that was never going to have a
+  // picture: it is complete as written.
+  if (entry.textOnly === true) {
+    await putCapturedStep({ ...step, textOnly: true });
+    await withStateMutation(async () => {
+      const latest = await getCaptureState();
+      if (!captureEntry(latest, entryId)) return latest;
+      const next = updateCaptureEntry(
+        markCaptureEntryReady(latest, entryId),
+        entryId,
+        { context: entry.context, textOnly: true },
+      );
+      await setCaptureState(next);
+      return next;
+    });
+    return true;
+  }
+
   let usedFrameId = null;
   if (entry.additionalFrameId) {
     const settled = await getCaptureFrame(
@@ -2459,6 +2477,10 @@ async function finalizeInteractionEntry(entryId) {
       entry.status !== CaptureEntryStatus.CAPTURING
     ) {
       return false;
+    }
+    if (entry.textOnly === true) {
+      await recordStepWithoutScreenshot(entryId, "");
+      return true;
     }
     let frame = entry.frameId
       ? await getCaptureFrame(state.sessionId, entry.frameId)
@@ -2769,8 +2791,17 @@ async function stageCaptureInteraction(message, sender) {
         typeof message.frameId === "string" && message.frameId
           ? message.frameId
           : null,
-      capturePending: true,
-      committed: false,
+      // A typed value is recorded as a note: the click that reached the field
+      // was already photographed, so this step carries the sentence and nothing
+      // else. It has no capture to wait on and nothing to retake.
+      textOnly: message.textOnly === true,
+      capturePending: message.textOnly !== true,
+      // A note is already complete when it is staged. The stage-then-commit
+      // dance exists so a pointer press can still be taken back if it turns
+      // into a drag; a typed value has no such second half to wait for, and
+      // waiting for one left the step spinning if the commit was reordered
+      // behind the stage or dropped while the worker was asleep.
+      committed: message.textOnly === true,
       context: {
         ...(message.context || {}),
         pageUrl: sender.tab.url || message.context?.pageUrl,
@@ -2791,6 +2822,11 @@ async function stageCaptureInteraction(message, sender) {
   });
   if (!stagedEntry) return { ok: false, ignored: true };
   await retainCaptureFrames(next);
+  if (stagedEntry.textOnly === true) {
+    // Written here rather than on commit, so the note exists by the time this
+    // call returns and no later message is required to complete it.
+    await recordStepWithoutScreenshot(stagedEntry.id, "");
+  }
   return {
     ok: true,
     interactionId: stagedEntry.id,
@@ -3945,13 +3981,19 @@ async function handleMessage(message, sender) {
     case "TOGGLE_SMART_BLUR_PANEL": {
       const state = await getCaptureState();
       if (!isCollecting(state)) {
-        throw new Error("Start a capture before opening Smart Blur.");
+        throw new Error("Start a capture before opening Auto Blur.");
+      }
+      const policy = await getCapturePolicy();
+      if (policy.privacyToolsEnabled !== true) {
+        throw new Error(
+          "Auto Blur is available on Pro. Browser capture is included on Free.",
+        );
       }
       const response = await sendToCapturedTab(state, {
         type: "KNOWHOW_TOGGLE_SMART_BLUR_PANEL",
       });
       if (!response?.ok) {
-        throw new Error("KnowHow could not open Smart Blur on this page.");
+        throw new Error("KnowHow could not open Auto Blur on this page.");
       }
       return { ok: true, open: response.open === true };
     }

@@ -106,13 +106,19 @@ async function withFrameStore(mode, action) {
   );
 }
 
+export function capturedStepHasValidImageShape(step) {
+  const mayOmitScreenshot =
+    step?.sourceEvent === "navigation" ||
+    step?.textOnly === true ||
+    step?.screenshotMissing === true;
+  return mayOmitScreenshot || step?.imageBlob instanceof Blob;
+}
+
 export async function putCapturedStep(step) {
   if (!step?.sessionId || !step?.id) {
     throw new TypeError("A captured step requires IDs.");
   }
-  const textOnlyNavigation =
-    step.sourceEvent === "navigation" && !(step.imageBlob instanceof Blob);
-  if (!textOnlyNavigation && !(step.imageBlob instanceof Blob)) {
+  if (!capturedStepHasValidImageShape(step)) {
     throw new TypeError("A captured step requires IDs and a redacted image Blob.");
   }
   return withStore("readwrite", (store) => requestResult(store.put(step)));

@@ -99,6 +99,8 @@ function summary(
   row: StoredRecord<RecordData>,
   workspace: WorkspaceRecord,
   roles: WorkspaceSummary["roles"],
+  accessKind: WorkspaceSummary["accessKind"],
+  desktopCaptureEnabled: boolean,
   memberCount: number,
   guides: Guide[],
   lifecycle?: WorkspaceAccess["lifecycle"],
@@ -120,6 +122,8 @@ function summary(
     slug: workspace.slug,
     status: workspace.status,
     roles,
+    accessKind,
+    desktopCaptureEnabled,
     memberCount,
     publishedCount: guides.filter((guide) => guide.publishedRevision).length,
     draftCount: guides.filter((guide) => guide.workingRevision).length,
@@ -587,17 +591,19 @@ export class BootstrapService {
     const isAdmin =
       access.roles.includes("administrator") && !access.supportGrant;
     const metrics = metricView(members, groups, guides, usageRows, mediaRows);
+    const entitlements =
+      (await new EntitlementService(this.store, workspaceId).snapshot()) as WorkspaceEntitlements;
     const workspace = summary(
       access.workspaceRow,
       access.workspace,
       access.roles,
+      access.membershipRow ? "membership" : "support_grant",
+      entitlements.desktopCaptureEnabled,
       members.length,
       guides,
       access.lifecycle,
       access.subscription,
     );
-    const entitlements =
-      (await new EntitlementService(this.store, workspaceId).snapshot()) as WorkspaceEntitlements;
     const onboardingRecord = onboardingRows[0]
       ? decodePayload<{
           startedAt?: string;
@@ -779,6 +785,12 @@ export class BootstrapService {
                 authorName?: string;
                 authorKind?: "customer" | "support";
                 body?: string;
+                attachments?: Array<{
+                  id?: string;
+                  filename?: string;
+                  contentType?: string;
+                  byteSize?: number;
+                }>;
               }>(message, {});
               return {
                 id: message.$id,
@@ -788,6 +800,21 @@ export class BootstrapService {
                 authorKind: content.authorKind ?? "customer",
                 body: content.body ?? "",
                 createdAt: message.$createdAt,
+                attachments: Array.isArray(content.attachments)
+                  ? content.attachments.flatMap((attachment) =>
+                      typeof attachment.id === "string" &&
+                      typeof attachment.filename === "string" &&
+                      typeof attachment.contentType === "string" &&
+                      Number.isFinite(attachment.byteSize)
+                        ? [{
+                            id: attachment.id,
+                            filename: attachment.filename,
+                            contentType: attachment.contentType,
+                            byteSize: Number(attachment.byteSize),
+                          }]
+                        : [],
+                    )
+                  : [],
               };
             }),
         };
@@ -1147,6 +1174,10 @@ export class BootstrapService {
     ).filter((access): access is WorkspaceAccess => Boolean(access));
     const summaries: WorkspaceSummary[] = [];
     for (const access of accesses) {
+      const desktopCaptureEnabled = await new EntitlementService(
+        this.store,
+        access.workspaceRow.$id,
+      ).value<boolean>("desktopCaptureEnabled", false);
       const memberCount = (
         await this.store.list(TABLES.workspaceMembers, {
           filters: [{ field: "workspace_id", value: access.workspaceRow.$id }],
@@ -1158,6 +1189,8 @@ export class BootstrapService {
           access.workspaceRow,
           access.workspace,
           access.roles,
+          access.membershipRow ? "membership" : "support_grant",
+          desktopCaptureEnabled,
           memberCount,
           guides.guides.map((row) => {
             const value = decodePayload<GuideRecord>(row, null as never);

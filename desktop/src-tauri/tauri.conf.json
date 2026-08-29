@@ -38,7 +38,23 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "contentProtected": false
+        "contentProtected": true
+      },
+      {
+        "label": "outline",
+        "title": "KnowHow Capture outline",
+        "url": "index.html",
+        "width": 640,
+        "height": 400,
+        "visible": false,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "contentProtected": true
       }
     ],
     "security": {

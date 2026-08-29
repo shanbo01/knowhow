@@ -21,9 +21,10 @@ import {
   unresolvedCaptureEntries,
   updateCaptureEntry,
 } from "../src/core/capture-coordinator.js";
+import { capturedStepHasValidImageShape } from "../src/core/capture-store.js";
 import { applyWorkspaceContext, mergePolicy } from "../src/core/policy.js";
 import { newestSameTabPreparedFrame } from "../src/core/prepared-frame.js";
-import { stepCopy } from "../src/popup/step-feed.js";
+import { captureFeedSteps, stepCopy } from "../src/popup/step-feed.js";
 import "../src/content/typed-fields.js";
 
 const { classifyField, typedStepCopy, classifyShortcut } =
@@ -40,6 +41,27 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+test("capture storage accepts only explicit screenshot-free steps", () => {
+  for (const step of [
+    { sourceEvent: "navigation" },
+    { sourceEvent: "type", textOnly: true },
+    { sourceEvent: "click", screenshotMissing: true },
+    { sourceEvent: "click", imageBlob: new Blob(["redacted"]) },
+  ]) {
+    assert.equal(
+      capturedStepHasValidImageShape(step),
+      true,
+      "an intentional screenshot-free shape must pass validation",
+    );
+  }
+
+  assert.equal(
+    capturedStepHasValidImageShape({ sourceEvent: "click" }),
+    false,
+    "an ordinary illustrated step must still require a locally redacted raster",
+  );
+});
 
 test("a click takes the next screenshot slot ahead of speculative pre-warming", async () => {
   const started = [];
@@ -246,6 +268,40 @@ test("typed-text capture is on by default and only a workspace can switch it off
     false,
     "a workspace cannot switch it back on for an author who turned it off",
   );
+});
+
+test("Free browser capture keeps Auto Blur and every detector off", () => {
+  const selected = {
+    schemaVersion: 5,
+    smartBlurEnabled: true,
+    redactEmails: true,
+    redactAllNumbers: true,
+    redactImages: true,
+    redactTableRows: true,
+    redactLongText: true,
+  };
+  const free = applyWorkspaceContext(selected, {
+    workspaceId: "free-workspace",
+    policyVersion: "v1",
+    privacyToolsEnabled: false,
+  });
+  assert.equal(free.privacyToolsEnabled, false);
+  assert.equal(free.smartBlurEnabled, false);
+  assert.equal(free.redactEmails, false);
+  assert.equal(free.redactAllNumbers, false);
+  assert.equal(free.redactImages, false);
+  assert.equal(free.redactTableRows, false);
+  assert.equal(free.redactLongText, false);
+
+  const pro = applyWorkspaceContext(selected, {
+    workspaceId: "pro-workspace",
+    policyVersion: "v1",
+    privacyToolsEnabled: true,
+  });
+  assert.equal(pro.privacyToolsEnabled, true);
+  assert.equal(pro.smartBlurEnabled, true);
+  assert.equal(pro.redactEmails, true);
+  assert.equal(pro.redactAllNumbers, true);
 });
 
 test("a reused pre-click frame can be pinned to the scroll position of the click", () => {
@@ -560,4 +616,101 @@ test("a step card never repeats its own title as its description", () => {
     "",
     "navigation steps dedupe the same way",
   );
+});
+
+test("a typed value is a note: no screenshot, and nothing to retake", () => {
+  const now = 10_000;
+  let state = initializeCaptureCoordinator(
+    { sessionId: "session", captureEntries: [] },
+    now,
+  );
+  state = reserveCaptureEntry(
+    state,
+    {
+      id: "interaction-1",
+      stepId: "step-1",
+      kind: "type",
+      sourceEvent: "type",
+      tabId: 42,
+      textOnly: true,
+      capturePending: false,
+    },
+    now,
+  );
+  state = updateCaptureEntry(
+    markCaptureEntryReady(state, "interaction-1", now),
+    "interaction-1",
+    { textOnly: true },
+    now,
+  );
+
+  const entry = captureEntry(state, "interaction-1");
+  assert.equal(state.stepIds.includes("step-1"), true, "the note is a step");
+  assert.equal(
+    captureEntryIsRetakeable(entry),
+    false,
+    "offering to retake a picture it never wanted would only break it",
+  );
+  assert.equal(
+    resetCaptureEntryForRetry(state, "interaction-1", {}, now),
+    state,
+    "and a retake request leaves it exactly as written",
+  );
+});
+
+test("a note never sits under \"Saving screenshot…\"", () => {
+  const noteEntry = {
+    id: "interaction-1",
+    stepId: "step-1",
+    order: 0,
+    kind: "type",
+    sourceEvent: "type",
+    status: "ready",
+    textOnly: true,
+    context: {
+      title: 'Type "test" into "Name"',
+      instructions: 'Type "test" into "Name".',
+    },
+  };
+
+  // The stored copy has not been read back yet — the exact moment the feed
+  // used to fall through to the spinner and stay there.
+  const [pending] = captureFeedSteps(
+    { sessionId: "session", captureEntries: [noteEntry] },
+    [],
+  );
+  assert.equal(pending.captureStatus, "ready");
+  assert.equal(pending.textOnly, true);
+  assert.equal(stepCopy(pending).title, 'Type "test" into "Name"');
+
+  // And a note that is somehow still mid-flight reads as itself, not as a
+  // screenshot that is being saved.
+  const [inFlight] = captureFeedSteps(
+    {
+      sessionId: "session",
+      captureEntries: [{ ...noteEntry, status: "capturing" }],
+    },
+    [],
+  );
+  assert.notEqual(stepCopy(inFlight).title, "Saving screenshot…");
+  assert.equal(stepCopy(inFlight).title, 'Type "test" into "Name"');
+
+  // A real click still shows its progress while its screenshot is saving.
+  const [click] = captureFeedSteps(
+    {
+      sessionId: "session",
+      captureEntries: [
+        {
+          id: "interaction-2",
+          stepId: "step-2",
+          order: 1,
+          sourceEvent: "click",
+          status: "capturing",
+          context: { title: 'Click "Name"' },
+        },
+      ],
+    },
+    [],
+  );
+  assert.equal(stepCopy(click).title, "Saving screenshot…");
 });

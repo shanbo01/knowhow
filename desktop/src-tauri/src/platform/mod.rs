@@ -36,7 +36,12 @@ pub enum RawEvent {
         x: i32,
         y: i32,
     },
-    TextActivity,
+    /// An unmodified key press in a text field. `changes_text` is true for the
+    /// keys that can alter what the field holds — characters, Backspace,
+    /// Delete — and false for the ones that only move the caret or the view.
+    TextActivity {
+        changes_text: bool,
+    },
     Enter,
     Tab,
     Shortcut(String),
@@ -121,8 +126,10 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     WindowsRawInput as NativeRawInput, WindowsUia as NativeUia, capture_target_previews,
+    double_click_interval,
     capture_targets, foreground_context, initialize_process, monitor_descriptors, new_scope,
-    quit_capture_choice, recorder_window_bounds, windows_device_name,
+    process_at_point, quit_capture_choice, recorder_window_bounds, scope_outline_bounds,
+    windows_device_name,
 };
 
 #[cfg(not(windows))]
@@ -180,6 +187,12 @@ mod unsupported {
     pub fn recorder_window_bounds() -> Vec<Bounds> {
         Vec::new()
     }
+    pub fn process_at_point(_x: i32, _y: i32) -> Option<u32> {
+        None
+    }
+    pub fn scope_outline_bounds(_scope: &DesktopScope) -> Option<Bounds> {
+        None
+    }
     pub fn foreground_context() -> Result<ForegroundContext> {
         anyhow::bail!("KnowHow Capture supports Windows only")
     }
@@ -188,6 +201,9 @@ mod unsupported {
         _target: Option<&CaptureTarget>,
     ) -> Result<DesktopScope> {
         anyhow::bail!("KnowHow Capture supports Windows only")
+    }
+    pub fn double_click_interval() -> std::time::Duration {
+        std::time::Duration::from_millis(500)
     }
     pub fn windows_device_name() -> String {
         "Windows device".to_owned()
@@ -214,7 +230,14 @@ pub fn scope_accepts(
         return false;
     }
     match scope {
-        DesktopScope::Application { process_id, .. } => foreground.process_id == *process_id,
+        // A press is attributed to the window under the pointer. Focus still
+        // belongs to the recorded application at the moment the button goes
+        // down on the taskbar, the Start button or another window, so checking
+        // focus alone recorded all three as steps of the application's guide.
+        DesktopScope::Application { process_id, .. } => match point {
+            Some((x, y)) => process_at_point(x, y).is_some_and(|owner| owner == *process_id),
+            None => foreground.process_id == *process_id,
+        },
         DesktopScope::Monitor {
             monitor_id, bounds, ..
         } => {

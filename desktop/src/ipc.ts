@@ -8,8 +8,28 @@ import type {
   StartCaptureInput,
 } from "./types";
 
+/**
+ * Tauri creates every window in the configuration before the setup hook runs,
+ * so a webview can ask for the first snapshot while the recorder is still being
+ * constructed and `manage`d — which surfaced as "state not managed for field
+ * `state`" in the window that happened to ask first. Nothing is wrong at that
+ * point except the timing, so the first read waits for the backend rather than
+ * reporting a failure the author can do nothing about.
+ */
+async function firstSnapshot(): Promise<AppSnapshot> {
+  const attempts = 25;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await invoke<AppSnapshot>("app_snapshot");
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+  }
+}
+
 export const desktop = {
-  snapshot: () => invoke<AppSnapshot>("app_snapshot"),
+  snapshot: firstSnapshot,
   authorize: () => invoke<{ verificationUri: string }>("begin_authorization"),
   pollAuthorization: () => invoke<AppSnapshot>("poll_authorization"),
   disconnect: () => invoke<AppSnapshot>("disconnect"),

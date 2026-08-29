@@ -1755,6 +1755,7 @@
   }
 
   function setPagePolicy(key, checked) {
+    if (state.policy.privacyToolsEnabled !== true) return;
     const patch =
       key === "redactAllNumbers"
         ? Object.fromEntries(NUMBER_POLICY_KEYS.map((item) => [item, checked]))
@@ -2142,10 +2143,28 @@
     headingRow.style.cssText =
       "display:flex;align-items:center;justify-content:space-between;gap:14px;";
     const title = document.createElement("strong");
-    title.textContent = "Smart Blur";
+    title.textContent = "Auto Blur";
     title.style.cssText = "font-size:14px;letter-spacing:-.01em;";
-    headingRow.append(title, smartBlurSwitch("smartBlurEnabled", ""));
+    const headingCopy = document.createElement("span");
+    headingCopy.style.cssText = "display:flex;align-items:center;gap:7px;";
+    const headingProBadge = document.createElement("span");
+    headingProBadge.className = "knowhow-pro-badge";
+    headingProBadge.dataset.knowhowBlurPro = "";
+    headingProBadge.textContent = "✦ Pro";
+    headingCopy.append(title, headingProBadge);
+    const masterSwitch = smartBlurSwitch("smartBlurEnabled", "");
+    masterSwitch.dataset.knowhowBlurMaster = "";
+    headingRow.append(headingCopy, masterSwitch);
     heading.append(headingRow);
+
+    const lockedNotice = document.createElement("div");
+    lockedNotice.dataset.knowhowBlurLocked = "";
+    lockedNotice.style.cssText =
+      "display:none;margin:12px 15px 14px;padding:12px;border:1px solid rgba(255,255,255,.09);" +
+      "border-radius:10px;background:#22221e;color:#c7c7ce;font:600 11px/1.45 " +
+      PANEL_FONT + ";";
+    lockedNotice.textContent =
+      "Auto Blur is available on Pro. Browser capture remains included on Free.";
 
     const options = document.createElement("div");
     options.dataset.knowhowBlurOptions = "";
@@ -2167,6 +2186,7 @@
     const choose = document.createElement("button");
     choose.type = "button";
     choose.dataset.knowhowManualCount = "";
+    choose.dataset.knowhowBlurAction = "";
     choose.style.cssText =
       "min-height:36px;margin-top:10px;border:1px solid rgba(255,255,255,.11);" +
       "border-radius:9px;background:#22221e;color:#f5f4f0;font:700 12px/1 " +
@@ -2175,11 +2195,12 @@
     const unblur = document.createElement("button");
     unblur.type = "button";
     unblur.dataset.knowhowUnblurCount = "";
+    unblur.dataset.knowhowBlurAction = "";
     unblur.style.cssText = choose.style.cssText.replace("margin-top:10px;", "margin-top:0;");
     unblur.addEventListener("click", () => enterElementPicker("unblur"));
     manualActions.append(choose, unblur);
 
-    panel.append(heading, options, manualActions);
+    panel.append(heading, lockedNotice, options, manualActions);
 
     const trigger = document.createElement("button");
     trigger.type = "button";
@@ -2197,7 +2218,11 @@
       "width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#52525b;";
     const triggerLabel = document.createElement("span");
     triggerLabel.dataset.knowhowBlurLabel = "";
-    trigger.append(triggerDot, triggerLabel);
+    const triggerProBadge = document.createElement("span");
+    triggerProBadge.className = "knowhow-pro-badge";
+    triggerProBadge.dataset.knowhowBlurPro = "";
+    triggerProBadge.textContent = "✦ Pro";
+    trigger.append(triggerDot, triggerLabel, triggerProBadge);
     trigger.addEventListener("click", () => {
       smartBlurPanelOpen = !smartBlurPanelOpen;
       clearPreparedFrameSchedule();
@@ -2214,10 +2239,15 @@
 
   function syncBlurCoverageCopy() {
     if (!smartBlurUiRoot?.isConnected) return;
+    const locked = state.policy.privacyToolsEnabled !== true;
     const enabled = state.policy.smartBlurEnabled === true;
     const label = smartBlurUiRoot.querySelector("[data-knowhow-blur-label]");
     if (label) {
-      label.textContent = enabled ? "Smart Blur on" : "Smart Blur off";
+      label.textContent = locked
+        ? "Auto Blur"
+        : enabled
+          ? "Auto Blur on"
+          : "Auto Blur off";
     }
   }
 
@@ -2229,9 +2259,17 @@
       return;
     }
     const root = ensureSmartBlurUi();
-    const enabled = state.policy.smartBlurEnabled === true;
+    const locked = state.policy.privacyToolsEnabled !== true;
+    const enabled = !locked && state.policy.smartBlurEnabled === true;
     const panel = root.querySelector("[data-knowhow-blur-panel]");
     panel.style.display = smartBlurPanelOpen ? "block" : "none";
+    const lockedNotice = root.querySelector("[data-knowhow-blur-locked]");
+    if (lockedNotice) lockedNotice.style.display = locked ? "block" : "none";
+    const masterSwitch = root.querySelector("[data-knowhow-blur-master]");
+    if (masterSwitch) masterSwitch.style.display = locked ? "none" : "flex";
+    for (const badge of root.querySelectorAll("[data-knowhow-blur-pro]")) {
+      badge.style.display = locked ? "inline-flex" : "none";
+    }
     const dot = root.querySelector("[data-knowhow-blur-dot]");
     if (dot) {
       dot.style.background = enabled ? "#34d399" : "#52525b";
@@ -2245,6 +2283,7 @@
         : "none";
     }
     for (const input of root.querySelectorAll("[data-knowhow-policy]")) {
+      input.disabled = locked;
       input.checked = policySwitchIsOn(input.dataset.knowhowPolicy);
       const track = input.nextElementSibling;
       if (track) {
@@ -2254,7 +2293,11 @@
       }
     }
     const options = root.querySelector("[data-knowhow-blur-options]");
-    if (options) options.style.opacity = enabled ? "1" : ".5";
+    if (options) options.style.display = locked ? "none" : "grid";
+    for (const action of root.querySelectorAll("[data-knowhow-blur-action]")) {
+      action.disabled = locked;
+      action.parentElement.style.display = locked ? "none" : "grid";
+    }
     syncBlurCoverageCopy();
   }
 
@@ -3020,7 +3063,7 @@
     element,
     context,
     sourceEvent = "click",
-    { frameId = null } = {},
+    { frameId = null, textOnly = false } = {},
   ) {
     const interactionId = crypto.randomUUID();
     const staged = {
@@ -3046,6 +3089,7 @@
       sessionId: state.sessionId,
       interactionId,
       frameId,
+      ...(textOnly ? { textOnly: true } : {}),
       sourceEvent,
       navigationKey: state.navigationKey,
       visualEpoch,
@@ -3303,10 +3347,13 @@
 
     const box = element.getBoundingClientRect();
     if (box.width < 1 || box.height < 1) return null;
-    // Typing changes no attribute and adds no node, so the request goes out
-    // before the label/selector lookups below just as it does for a click —
-    // there is no visual-change signal to hang a screenshot on otherwise.
-    const frameId = requestInteractionFrame();
+    // Deliberately no screenshot. The click that put the cursor in this field
+    // was photographed a moment ago, and a second picture of the same form with
+    // a few characters in it tells the reader nothing the sentence does not —
+    // it just repeats the step above it. Skipping it also hands the whole of
+    // Chrome's two-captures-a-second budget back to the clicks, which are the
+    // steps that genuinely need a picture and the ones that lose the race for a
+    // slot when a burst of actions arrives together.
     const text = typedFieldText(element, kind);
     const copy = typedFields.typedStepCopy(kind, text, targetName(element));
     const viewport = viewportSnapshot();
@@ -3317,9 +3364,16 @@
     );
     const staged = stageInteraction(
       element,
-      { ...context, title: copy.title, instructions: copy.instructions },
+      {
+        ...context,
+        // Nothing to point at without a picture to point at it on.
+        targetRect: null,
+        clickPoint: null,
+        title: copy.title,
+        instructions: copy.instructions,
+      },
       "type",
-      { frameId },
+      { textOnly: true },
     );
     commitStagedInteraction(staged);
     lastTypedStep = {

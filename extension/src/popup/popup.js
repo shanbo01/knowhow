@@ -44,6 +44,7 @@ const elements = {
   privacySettings: document.querySelector("#privacy-settings"),
   smartBlurToggle: document.querySelector("#smart-blur-toggle"),
   smartBlurOptions: document.querySelector("#smart-blur-options"),
+  smartBlurProBadge: document.querySelector("#smart-blur-pro-badge"),
   excludeButton: document.querySelector("#exclude-button"),
   error: document.querySelector("#error"),
   policyInputs: Array.from(document.querySelectorAll("[data-policy]")),
@@ -188,11 +189,16 @@ function applyPolicyControls(policy) {
   elements.smartBlurOptions.dataset.enabled =
     policy?.smartBlurEnabled === true ? "true" : "false";
   const smartBlurEnabled = policy?.smartBlurEnabled === true;
+  const smartBlurLocked = policy?.privacyToolsEnabled !== true;
+  elements.blurPanelButton.dataset.proLocked = String(smartBlurLocked);
+  elements.smartBlurProBadge.hidden = !smartBlurLocked;
   elements.blurPanelButton.classList.toggle("active", smartBlurEnabled);
   elements.blurPanelButton.setAttribute("aria-pressed", String(smartBlurEnabled));
-  elements.blurPanelButton.title = smartBlurEnabled
-    ? "Smart Blur is on — open settings"
-    : "Smart Blur is off — open settings";
+  elements.blurPanelButton.title = smartBlurLocked
+    ? "Auto Blur is available on Pro"
+    : smartBlurEnabled
+      ? "Auto Blur is on — open settings"
+      : "Auto Blur is off — open settings";
 }
 
 async function request(message) {
@@ -381,6 +387,7 @@ function renderStepFeed(state, rawSteps) {
     // an invitation, not a repair the author owes.
     const retakeable =
       Boolean(step.entryId) &&
+      step.textOnly !== true &&
       (step.captureStatus === "needs_attention" ||
         step.screenshotMissing === true ||
         step.showsResultOfAction === true);
@@ -424,6 +431,10 @@ function renderStepFeed(state, rawSteps) {
       pending.setAttribute("aria-label", "Screenshot is being privacy-processed");
       pending.append(document.createElement("span"));
       item.append(pending);
+    } else if (step.textOnly === true) {
+      // Typed values are notes on purpose. No placeholder, no apology: the
+      // sentence is the step.
+      item.dataset.stepShape = "note";
     } else if (step.screenshotMissing === true) {
       const missing = document.createElement("div");
       missing.className = "step-thumbnail step-thumbnail-missing";
@@ -960,13 +971,17 @@ elements.pauseButton.addEventListener("click", async () => {
 elements.blurPanelButton.addEventListener("click", async () => {
   if (elements.blurPanelButton.disabled) return;
   showError("");
+  if (currentPolicy?.privacyToolsEnabled !== true) {
+    showError("Auto Blur is available on Pro. Browser capture is included on Free.");
+    return;
+  }
   try {
     await request({ type: "TOGGLE_SMART_BLUR_PANEL" });
   } catch (error) {
     showError(
       error instanceof Error
         ? error.message
-        : "Could not open Smart Blur settings.",
+        : "Could not open Auto Blur settings.",
     );
   }
 });
