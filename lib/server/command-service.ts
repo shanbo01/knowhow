@@ -3044,6 +3044,186 @@ export class CommandService {
       return { workspaceId, name: workspaceName, plan: "free" };
     }
 
+    if (
+      action === "renameOrganizationWorkspace" ||
+      action === "archiveOrganizationWorkspace" ||
+      action === "restoreOrganizationWorkspace"
+    ) {
+      requireReauthentication(options.reauthenticated);
+      const organizationId = inputText(payload.organizationId, "Organization", {
+        min: 1,
+        max: 36,
+      });
+      const targetWorkspaceId = inputText(
+        payload.targetWorkspaceId,
+        "Workspace",
+        { min: 1, max: 36 },
+      );
+      const callerRoles = await this.access.organizationRoles(
+        organizationId,
+        identity.userId,
+      );
+      // Renaming is open to administrators, as creating is. Archiving takes a
+      // workspace away from everyone in it, so it stays with the owner.
+      const permitted =
+        action === "renameOrganizationWorkspace"
+          ? callerRoles.includes("owner") ||
+            callerRoles.includes("administrator")
+          : callerRoles.includes("owner");
+      if (!permitted) {
+        throw new HttpError(
+          403,
+          "ORGANIZATION_ADMINISTRATOR_REQUIRED",
+          action === "renameOrganizationWorkspace"
+            ? "Organization owner or administrator access is required."
+            : "Organization owner access is required.",
+        );
+      }
+      const row = await this.store.get(TABLES.workspaces, targetWorkspaceId);
+      if (!row) {
+        throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
+      }
+      const workspace = decodePayload<WorkspaceRecord>(row, null as never);
+      if (
+        (workspace?.organizationId ?? stringValue(row.organization_id)) !==
+        organizationId
+      ) {
+        throw new HttpError(
+          404,
+          "WORKSPACE_NOT_FOUND",
+          "Workspace not found in this organization.",
+        );
+      }
+
+      if (action === "renameOrganizationWorkspace") {
+        const name = inputText(payload.name, "Workspace name", {
+          min: 2,
+          max: 128,
+        });
+        // The slug is the workspace URL and is already inside shared guide
+        // links, so a rename changes the display name only.
+        await this.store.update(
+          TABLES.workspaces,
+          targetWorkspaceId,
+          rowData(
+            {
+              organization_id: organizationId,
+              status: stringValue(row.status, workspace.status),
+            },
+            { ...workspace, name },
+          ),
+        );
+        await appendAudit(this.store, identity, targetWorkspaceId, {
+          action: "workspace.renamed",
+          targetType: "workspace",
+          targetId: targetWorkspaceId,
+          targetLabel: name,
+          summary: `Workspace renamed from ${workspace.name} to ${name}`,
+          metadata: { organizationId, previousName: workspace.name },
+        });
+        return { workspaceId: targetWorkspaceId, name };
+      }
+
+      const status = stringValue(row.status, workspace.status);
+
+      if (action === "restoreOrganizationWorkspace") {
+        if (status !== "archived") {
+          throw new HttpError(
+            409,
+            "WORKSPACE_NOT_ARCHIVED",
+            "Only an archived workspace can be restored.",
+          );
+        }
+        // Restoring spends a slot again, so the allowance is re-checked here
+        // rather than assumed from when the workspace was archived.
+        const liveWorkspaces = (
+          await this.store.list(TABLES.workspaces, {
+            filters: [{ field: "organization_id", value: organizationId }],
+            limit: 101,
+          })
+        ).filter(
+          (item) => item.status !== "deleted" && item.status !== "archived",
+        ).length;
+        const maximumWorkspaces = await organizationWorkspaceLimit(
+          this.store,
+          organizationId,
+        );
+        if (liveWorkspaces >= maximumWorkspaces) {
+          throw new EntitlementDeniedError(
+            409,
+            "WORKSPACE_ENTITLEMENT_EXCEEDED",
+            `This organization is limited to ${maximumWorkspaces} workspace${
+              maximumWorkspaces === 1 ? "" : "s"
+            }. Archive another workspace or subscribe one to Pro first.`,
+            "maximumWorkspaces",
+          );
+        }
+        await this.store.update(
+          TABLES.workspaces,
+          targetWorkspaceId,
+          rowData(
+            { organization_id: organizationId, status: "active" },
+            { ...workspace, status: "active" },
+          ),
+        );
+        await appendAudit(this.store, identity, targetWorkspaceId, {
+          action: "workspace.restored",
+          targetType: "workspace",
+          targetId: targetWorkspaceId,
+          targetLabel: workspace.name,
+          summary: `${workspace.name} workspace restored`,
+          metadata: { organizationId },
+        });
+        return { workspaceId: targetWorkspaceId, status: "active" };
+      }
+
+      if (status === "archived") {
+        throw new HttpError(
+          409,
+          "WORKSPACE_ALREADY_ARCHIVED",
+          "This workspace is already archived.",
+        );
+      }
+      if (status === "deleted") {
+        throw new HttpError(
+          409,
+          "WORKSPACE_DELETED",
+          "This workspace has been deleted.",
+        );
+      }
+      // Typed confirmation, matching the tenant deletion case. Archiving is
+      // reversible, so it stops here: purging guides still needs the deletion
+      // case and a platform owner.
+      const confirmation = inputText(payload.confirmation, "Confirmation", {
+        min: 1,
+        max: 128,
+      });
+      if (confirmation.trim() !== workspace.name.trim()) {
+        throw new HttpError(
+          400,
+          "WORKSPACE_CONFIRMATION_MISMATCH",
+          "The typed workspace name does not match.",
+        );
+      }
+      await this.store.update(
+        TABLES.workspaces,
+        targetWorkspaceId,
+        rowData(
+          { organization_id: organizationId, status: "archived" },
+          { ...workspace, status: "archived" },
+        ),
+      );
+      await appendAudit(this.store, identity, targetWorkspaceId, {
+        action: "workspace.archived",
+        targetType: "workspace",
+        targetId: targetWorkspaceId,
+        targetLabel: workspace.name,
+        summary: `${workspace.name} workspace archived`,
+        metadata: { organizationId, previousStatus: status },
+      });
+      return { workspaceId: targetWorkspaceId, status: "archived" };
+    }
+
     if (action === "appointOrganizationMember") {
       requireReauthentication(options.reauthenticated);
       const organizationId = inputText(payload.organizationId, "Organization", {

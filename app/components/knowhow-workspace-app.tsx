@@ -2,6 +2,8 @@
 
 import {
   Archive,
+  ArchiveRestore,
+  Pencil,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
@@ -122,6 +124,7 @@ import {
   guideEditorHref,
   guideHref,
   newGuideHref,
+  administrationClientHref,
   workspaceHref,
   type AppRoute,
   type GuideRevisionMode,
@@ -453,10 +456,8 @@ function workspaceOptionLabel(workspace: {
 /** Paid plans that earn the workspace's own mark in the top bar. */
 const BRANDED_PLANS = new Set(["pro_trial", "pro", "enterprise"]);
 
-function workspacePlanLabel(
-  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"],
-) {
-  switch (subscription?.plan) {
+function planLabel(plan: string | undefined) {
+  switch (plan) {
     case "pro_trial":
       return "Pro trial";
     case "pro":
@@ -466,6 +467,12 @@ function workspacePlanLabel(
     default:
       return "Free";
   }
+}
+
+function workspacePlanLabel(
+  subscription?: NonNullable<BootstrapResponse["activeWorkspace"]>["workspace"]["subscription"],
+) {
+  return planLabel(subscription?.plan);
 }
 
 const PLAN_FEATURES: Array<{
@@ -4644,10 +4651,20 @@ export function OrganizationView({
   onUpdate,
   onRevokeAppointment,
   onCreateWorkspace,
+  onRenameWorkspace,
+  onArchiveWorkspace,
+  onRestoreWorkspace,
 }: {
   organization: OrganizationAdministration;
   busy: boolean;
   onCreateWorkspace: (name: string) => Promise<unknown>;
+  /** Absent on the pre-workspace shell, where these controls are not offered. */
+  onRenameWorkspace?: (workspaceId: string, name: string) => Promise<unknown>;
+  onArchiveWorkspace?: (
+    workspaceId: string,
+    confirmation: string,
+  ) => Promise<unknown>;
+  onRestoreWorkspace?: (workspaceId: string) => Promise<unknown>;
   onAppoint: (payload: {
     emails: string[];
     roles: OrganizationRole[];
@@ -4668,18 +4685,43 @@ export function OrganizationView({
 }) {
   const [appointing, setAppointing] = useState(false);
   const [addingWorkspace, setAddingWorkspace] = useState(false);
+  const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(
+    null,
+  );
+  const [renameDraft, setRenameDraft] = useState("");
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   const canManage = organization.roles.includes("owner");
   // Adding a workspace is open to administrators too, unlike member changes.
   const canAddWorkspace =
     canManage || organization.roles.includes("administrator");
+  // Renaming follows adding; archiving takes a workspace away from everyone in
+  // it, so it stays with the owner.
+  const canRenameWorkspace = canAddWorkspace && Boolean(onRenameWorkspace);
+  const canArchiveWorkspace = canManage && Boolean(onArchiveWorkspace);
+  const liveWorkspaceCount = organization.workspaces.filter(
+    (workspace) =>
+      workspace.status !== "archived" && workspace.status !== "deleted",
+  ).length;
   const activeOwnerCount = organization.members.filter(
     (member) => member.status === "active" && member.roles.includes("owner"),
   ).length;
   const editingMember = organization.members.find(
     (member) => member.id === editingMemberId,
   );
+  const { allowance } = organization;
+  const allowanceFull = allowance.used >= allowance.maximum;
+  // A granted ceiling is not something a subscription bought, so it is never
+  // described as one.
+  const allowanceUnlockedBy =
+    allowance.source === "override"
+      ? `Your organization holds ${allowance.maximum} workspace slots.`
+      : allowance.plan === "free"
+        ? "Free organizations hold one workspace."
+        : `Your ${planLabel(allowance.plan)} subscription unlocks ${allowance.maximum} workspace slots.`;
+  const allowanceHint = allowanceFull
+    ? `All ${countPhrase(allowance.maximum, "workspace slot")} are in use. Subscribe a workspace to Pro to unlock more, or archive one you no longer need.`
+    : allowanceUnlockedBy;
   return (
     <div className="view-stack">
       <div className="page-heading">
@@ -4756,7 +4798,8 @@ export function OrganizationView({
             <Button
               variant="outline"
               size="sm"
-              disabled={busy}
+              disabled={busy || allowanceFull}
+              title={allowanceFull ? allowanceHint : undefined}
               onClick={() => setAddingWorkspace(true)}
             >
               <Plus /> Add workspace
@@ -4765,18 +4808,149 @@ export function OrganizationView({
             <ShieldCheck />
           )}
         </div>
+        <div className="organization-allowance">
+          <UsageMeter
+            label="Workspaces"
+            used={organization.allowance.used}
+            maximum={organization.allowance.maximum}
+          />
+          <p className="privacy-caption">
+            <LockKeyhole />{" "}
+            {allowanceFull
+              ? allowanceHint
+              : `${allowanceUnlockedBy} Each workspace is billed on its own — a new one starts on Free until you subscribe it.`}
+          </p>
+        </div>
         {organization.workspaces.map((workspace) => (
           <div className="invite-row" key={workspace.id}>
             <span className="invite-icon">
               <Building2 />
             </span>
-            <span className="member-main">
-              <strong>{workspace.name}</strong>
-              <small>
-                {workspace.slug}
-              </small>
-            </span>
+            {renamingWorkspaceId === workspace.id ? (
+              <form
+                className="member-main organization-rename-form"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const name = renameDraft.trim();
+                  if (name.length < 2 || name === workspace.name) {
+                    setRenamingWorkspaceId(null);
+                    return;
+                  }
+                  await onRenameWorkspace?.(workspace.id, name);
+                  setRenamingWorkspaceId(null);
+                }}
+              >
+                <input
+                  autoFocus
+                  value={renameDraft}
+                  aria-label={`Rename ${workspace.name}`}
+                  maxLength={128}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                />
+                <small>
+                  The address stays {workspace.slug}, so shared links keep
+                  working.
+                </small>
+              </form>
+            ) : (
+              <span className="member-main">
+                <strong>{workspace.name}</strong>
+                <small>{workspace.slug}</small>
+              </span>
+            )}
             <StatusBadge status={workspace.status} />
+            {workspace.status === "archived" ? (
+              canArchiveWorkspace && onRestoreWorkspace ? (
+                <span className="organization-workspace-actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={busy || allowanceFull}
+                    title={
+                      allowanceFull
+                        ? "Restoring needs a free workspace slot."
+                        : undefined
+                    }
+                    onClick={() => onRestoreWorkspace(workspace.id)}
+                  >
+                    <ArchiveRestore /> Restore
+                  </Button>
+                </span>
+              ) : null
+            ) : canRenameWorkspace ? (
+              renamingWorkspaceId === workspace.id ? (
+                <span className="organization-workspace-actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setRenamingWorkspaceId(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    type="button"
+                    disabled={busy || renameDraft.trim().length < 2}
+                    onClick={async () => {
+                      const name = renameDraft.trim();
+                      if (name === workspace.name) {
+                        setRenamingWorkspaceId(null);
+                        return;
+                      }
+                      await onRenameWorkspace?.(workspace.id, name);
+                      setRenamingWorkspaceId(null);
+                    }}
+                  >
+                    Save
+                  </Button>
+                </span>
+              ) : (
+                <span className="organization-workspace-actions">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setRenameDraft(workspace.name);
+                      setRenamingWorkspaceId(workspace.id);
+                    }}
+                  >
+                    <Pencil /> Rename
+                  </Button>
+                  {canArchiveWorkspace ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      type="button"
+                      disabled={busy || liveWorkspaceCount < 2}
+                      title={
+                        liveWorkspaceCount < 2
+                          ? "An organization keeps at least one live workspace."
+                          : undefined
+                      }
+                      onClick={async () => {
+                        const confirmed = await askToConfirm({
+                          title: `Archive ${workspace.name}?`,
+                          description:
+                            "Its guides and members stay intact and the workspace can be restored, but nobody can open it while it is archived. This frees one workspace slot.",
+                          // Not the danger tone: that dialog is headed
+                          // "Permanent action", and archiving can be undone.
+                          confirmLabel: "Archive workspace",
+                        });
+                        if (!confirmed) return;
+                        await onArchiveWorkspace?.(workspace.id, workspace.name);
+                      }}
+                    >
+                      <Archive /> Archive
+                    </Button>
+                  ) : null}
+                </span>
+              )
+            ) : null}
           </div>
         ))}
       </section>
@@ -6085,11 +6259,13 @@ export function KnowHowWorkspaceApp({
   const requestedView: View =
     route.kind === "workspace-section"
       ? SECTION_TO_VIEW[route.section]
-      : route.kind === "guide-new" ||
-        route.kind === "guide-view" ||
-        route.kind === "guide-edit"
-        ? "Guides"
-        : "Overview";
+      : route.kind === "administration-client"
+        ? "Administration"
+        : route.kind === "guide-new" ||
+            route.kind === "guide-view" ||
+            route.kind === "guide-edit"
+          ? "Guides"
+          : "Overview";
   const view =
     requestedView === "Administration" && !canOpenAdministration
       ? "Overview"
@@ -7486,6 +7662,41 @@ export function KnowHowWorkspaceApp({
                   await onSelectWorkspace(created.workspaceId);
                   return created;
                 }}
+                onRenameWorkspace={(workspaceId, name) =>
+                  command(
+                    "renameOrganizationWorkspace",
+                    {
+                      organizationId: organization.id,
+                      workspaceId: undefined,
+                      targetWorkspaceId: workspaceId,
+                      name,
+                    },
+                    `Workspace renamed to ${name}`,
+                  )
+                }
+                onRestoreWorkspace={(workspaceId) =>
+                  command(
+                    "restoreOrganizationWorkspace",
+                    {
+                      organizationId: organization.id,
+                      workspaceId: undefined,
+                      targetWorkspaceId: workspaceId,
+                    },
+                    "Workspace restored",
+                  )
+                }
+                onArchiveWorkspace={(workspaceId, confirmation) =>
+                  command(
+                    "archiveOrganizationWorkspace",
+                    {
+                      organizationId: organization.id,
+                      workspaceId: undefined,
+                      targetWorkspaceId: workspaceId,
+                      confirmation,
+                    },
+                    `${confirmation} archived`,
+                  )
+                }
                 onAppoint={async ({ emails, roles, anchorWorkspaceId }) => {
                   onBusyChange(true);
                   onError("");
@@ -7553,7 +7764,21 @@ export function KnowHowWorkspaceApp({
               />
             ) : null}
             {view === "Administration" && canOpenAdministration ? (
-              <AdministrationView viewer={data.viewer} />
+              <AdministrationView
+                viewer={data.viewer}
+                clientRouteId={
+                  route.kind === "administration-client"
+                    ? route.organizationId
+                    : ""
+                }
+                onOpenClientRoute={(organizationId) =>
+                  onNavigate(
+                    organizationId
+                      ? administrationClientHref(workspace.slug, organizationId)
+                      : workspaceHref(workspace.slug, "administration"),
+                  )
+                }
+              />
             ) : null}
             {view === "Settings" && isAdmin ? (
               <SettingsView

@@ -78,6 +78,25 @@ export const WORKSPACES_PER_PLAN: Record<CommercialPlan, number> = {
   enterprise: 50,
 };
 
+/**
+ * Commercial standing, which is not the same order as workspace slots: Free and
+ * a Pro trial both grant one workspace, but a trial is the better plan to name
+ * when describing an account.
+ */
+export const PLAN_RANK: Record<CommercialPlan, number> = {
+  free: 0,
+  pro_trial: 1,
+  pro: 2,
+  enterprise: 3,
+};
+
+export function bestCommercialPlan(plans: CommercialPlan[]): CommercialPlan {
+  return plans.reduce<CommercialPlan>(
+    (carry, plan) => (PLAN_RANK[plan] > PLAN_RANK[carry] ? plan : carry),
+    "free",
+  );
+}
+
 export function isCommercialPlan(value: unknown): value is CommercialPlan {
   return (
     value === "free" ||

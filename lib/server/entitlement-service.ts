@@ -1,8 +1,10 @@
 import { TABLES } from "./appwrite-resources";
 import {
+  bestCommercialPlan,
   effectiveCommercialPlan,
   entitlementsForPlan,
   WORKSPACES_PER_PLAN,
+  type CommercialPlan,
   type PlanEntitlements,
 } from "./commercial-plan";
 import {
@@ -139,32 +141,64 @@ export async function organizationEntitlement(
 }
 
 /**
- * How many workspaces the organization may hold: an explicit entitlement row
- * when one exists, otherwise derived from its best-funded workspace. Buying Pro
- * for one workspace is what unlocks adding more.
+ * How many workspaces the organization may hold, and which plan unlocked that
+ * many: an explicit entitlement row when one exists, otherwise derived from its
+ * best-funded workspace. Buying Pro for one workspace is what unlocks adding
+ * more; the extra workspaces are not themselves paid for by that purchase.
+ *
+ * The customer-facing allowance meter reads this too, so the number a client is
+ * shown can never drift from the one that refuses the create.
  */
-export async function organizationWorkspaceLimit(
+export async function organizationWorkspaceAllowance(
   store: RecordStore,
   organizationId: string,
-) {
+): Promise<{
+  maximum: number;
+  plan: CommercialPlan;
+  source: "plan" | "override";
+}> {
   const rows = await store.list(TABLES.subscriptions, {
     filters: [{ field: "organization_id", value: organizationId }],
     limit: 200,
   });
-  let allowed = WORKSPACES_PER_PLAN.free;
+  const plans: CommercialPlan[] = [];
   for (const row of rows) {
     if (row.status === "cancelled") continue;
     const subscription = decodePayload<SubscriptionRecord>(row, null as never);
     if (!subscription) continue;
-    const plan = effectiveCommercialPlan(subscription);
-    allowed = Math.max(allowed, WORKSPACES_PER_PLAN[plan]);
+    plans.push(effectiveCommercialPlan(subscription));
   }
-  return organizationEntitlement(
+  // The ceiling comes from whichever plan grants the most slots; the plan named
+  // alongside it is the best plan commercially, which can differ.
+  const allowed = plans.reduce(
+    (carry, plan) => Math.max(carry, WORKSPACES_PER_PLAN[plan]),
+    WORKSPACES_PER_PLAN.free,
+  );
+  const best = bestCommercialPlan(plans);
+  const maximum = await organizationEntitlement(
     store,
     organizationId,
     "maximumWorkspaces",
     allowed,
   );
+  // An explicit grant can raise the ceiling past what any subscription buys, so
+  // only credit the plan when the plan is what produced the number.
+  return {
+    maximum,
+    plan: best,
+    source: maximum === allowed ? "plan" : "override",
+  };
+}
+
+export async function organizationWorkspaceLimit(
+  store: RecordStore,
+  organizationId: string,
+) {
+  const { maximum } = await organizationWorkspaceAllowance(
+    store,
+    organizationId,
+  );
+  return maximum;
 }
 
 function isExpiredOverride(payload: EntitlementOverridePayload, now: number) {

@@ -51,6 +51,18 @@ export type OrganizationAdministration = {
     slug: string;
     status: string;
   }>;
+  /**
+   * Workspace slots this organization holds and how many are spent. `plan` is
+   * the subscription that unlocked the ceiling, which is not the same as the
+   * plan of any given workspace: each workspace is billed on its own, and a
+   * slot unlocked by one Pro subscription may be filled by a Free workspace.
+   */
+  allowance: {
+    used: number;
+    maximum: number;
+    plan: "free" | "pro_trial" | "pro" | "enterprise";
+    source: "plan" | "override";
+  };
   appointments: AdminAppointment[];
 };
 
@@ -387,6 +399,7 @@ export type PlatformSubscriptionSummary = {
 
 export type PlatformHomeItem = {
   workspaceId: string;
+  organizationId: string;
   name: string;
   organizationName: string;
   plan: string;
@@ -464,6 +477,48 @@ export type PlatformAccountSummary = {
   nextAction?: PlatformNextAction;
   nextActionReason?: string;
   complimentary?: boolean;
+};
+
+/**
+ * A client is the organization — the company KnowHow is sold to. It holds one
+ * or more workspaces, each billed on its own. `plan` is the best plan across
+ * those workspaces, matching the rule that decides the workspace allowance, so
+ * a client on Pro may still hold Free workspaces inside its unlocked slots.
+ */
+export type PlatformClientSummary = {
+  id: string;
+  displayName: string;
+  legalName: string;
+  country: string;
+  status: string;
+  createdAt: string;
+  plan: "free" | "pro_trial" | "pro" | "enterprise";
+  workspaceCount: number;
+  workspaceLimit: number;
+  paidWorkspaceCount: number;
+  memberCount: number;
+  /** The worst health across the client's workspaces, so one bad workspace surfaces the client. */
+  health: PlatformHealth;
+  intentScore: number;
+  nextAction: PlatformNextAction;
+  nextActionReason: string;
+  lastActivityAt: string | null;
+  tags: AccountTag[];
+};
+
+export type PlatformClientRecord = PlatformClientSummary & {
+  primaryContactName: string;
+  primaryContactEmail: string;
+  internalNotes: string;
+  ownerLabel: string;
+  branding: { logoMediaId: string | null; accentColor: string };
+  workspaces: PlatformAccountSummary[];
+  administrators: PlatformPerson[];
+  billingContacts: PlatformPerson[];
+  activation: {
+    firstPublishedAt: string | null;
+    publishedWorkspaces: number;
+  };
 };
 
 export type PlatformPerson = {

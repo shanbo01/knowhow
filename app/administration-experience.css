@@ -517,11 +517,106 @@
   line-height: 1.5;
 }
 
-.administration-workspaces-layout {
+.administration-split-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.48fr);
   align-items: start;
   gap: 0.9rem;
+}
+
+.administration-clients-layout {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.administration-client-page {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+}
+
+.administration-client-header {
+  display: grid;
+  justify-items: start;
+  gap: 0.6rem;
+}
+
+.administration-client-header > .administration-client-title {
+  justify-self: stretch;
+}
+
+.administration-client-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.administration-client-title h2 {
+  margin: 0.1rem 0 0.15rem;
+}
+
+.administration-client-title p {
+  margin: 0;
+  color: var(--experience-muted);
+  font-size: 0.82rem;
+}
+
+.administration-client-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+}
+
+.administration-client-stats > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.9rem;
+  background: var(--experience-panel);
+}
+
+.administration-client-stats span {
+  color: var(--experience-muted);
+  font-size: 0.7rem;
+  font-weight: 640;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.administration-client-stats strong {
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.administration-client-stats small {
+  color: var(--experience-muted);
+  font-size: 0.74rem;
+}
+
+.administration-client-body {
+  display: grid;
+  align-items: start;
+  gap: 0.9rem;
+}
+
+.administration-client-body[data-open] {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.48fr);
+}
+
+.administration-client-main {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+/* Clients carry one column more than the workspace table: the slot count. */
+.administration-directory-table.is-clients .administration-directory-row {
+  grid-template-columns:
+    minmax(11rem, 1.2fr) minmax(6.5rem, 0.6fr) minmax(7rem, 0.6fr)
+    minmax(5.5rem, 0.5fr) minmax(10rem, 0.9fr) auto;
 }
 
 .administration-directory {
@@ -711,7 +806,7 @@ button.administration-directory-row[data-selected] {
   padding: 0.8rem;
 }
 
-.administration-client-inspector {
+.administration-side-inspector {
   position: sticky;
   top: 5.2rem;
   max-height: calc(100dvh - 7rem);
@@ -722,7 +817,7 @@ button.administration-directory-row[data-selected] {
   box-shadow: var(--experience-shadow);
 }
 
-.administration-client-inspector.is-empty {
+.administration-side-inspector.is-empty {
   min-height: 24rem;
   display: grid;
   align-items: center;
@@ -1726,11 +1821,12 @@ button.administration-directory-row[data-selected] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .administration-workspaces-layout {
+  .administration-split-layout,
+  .administration-client-body[data-open] {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .administration-client-inspector {
+  .administration-side-inspector {
     position: fixed;
     z-index: 50;
     top: 0;
@@ -1742,7 +1838,7 @@ button.administration-directory-row[data-selected] {
     box-shadow: -24px 0 60px rgb(0 0 0 / 0.28);
   }
 
-  .administration-client-inspector.is-empty {
+  .administration-side-inspector.is-empty {
     display: none;
   }
 }
@@ -1772,6 +1868,21 @@ button.administration-directory-row[data-selected] {
   }
 
   .administration-directory-row > span:nth-child(4) {
+    display: none;
+  }
+
+  /* Clients drop health and signal here, keeping the slot count visible. */
+  .administration-directory-table.is-clients .administration-directory-row {
+    grid-template-columns:
+      minmax(10rem, 1.3fr) minmax(6.5rem, 0.6fr) minmax(7rem, 0.6fr) auto;
+  }
+
+  .administration-directory-table.is-clients
+    .administration-directory-row
+    > span:nth-child(4),
+  .administration-directory-table.is-clients
+    .administration-directory-row
+    > span:nth-child(5) {
     display: none;
   }
 
@@ -2222,7 +2333,7 @@ button.administration-directory-row[data-selected] {
 
 /* With no leads at all there is no record to select, so the directory takes the
    full width instead of sitting beside an empty second column. */
-.administration-workspaces-layout:not(:has(.administration-client-inspector)) {
+.administration-split-layout:not(:has(.administration-side-inspector)) {
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -2269,7 +2380,7 @@ button.administration-directory-row[data-selected] {
 }
 
 /* Workspace inspector: neutral data canvas with one deliberate brand signal. */
-.administration-client-inspector {
+.administration-side-inspector {
   border-color: color-mix(in srgb, var(--foreground) 11%, var(--experience-line));
   background: var(--card);
   box-shadow:

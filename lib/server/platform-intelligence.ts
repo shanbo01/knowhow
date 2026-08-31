@@ -85,6 +85,7 @@ export function isConsumerEmailDomain(domain: string | null) {
 export type WorkspaceSignals = {
   workspaceId: string;
   name: string;
+  organizationId: string;
   organizationName: string;
   plan: CommercialPlan;
   billedPlan: CommercialPlan;

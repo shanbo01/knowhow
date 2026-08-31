@@ -159,9 +159,17 @@ export async function GET(request: Request) {
     const canManage = roles.some((role) => role === "owner" || role === "operations");
     const canSupport = canManage || roles.includes("support");
     if (
-      ["dashboard", "clients", "client", "leads", "lead", "revenue", "activity"].includes(
-        resource,
-      ) &&
+      [
+        "dashboard",
+        "clients",
+        "client",
+        "workspaces",
+        "workspace",
+        "leads",
+        "lead",
+        "revenue",
+        "activity",
+      ].includes(resource) &&
       !canManage
     ) {
       throw new HttpError(
@@ -183,6 +191,7 @@ export async function GET(request: Request) {
     const cursor = url.searchParams.get("cursor")?.trim() || undefined;
     const limit = url.searchParams.get("limit");
     const workspaceId = url.searchParams.get("workspaceId")?.trim() ?? "";
+    const organizationId = url.searchParams.get("organizationId")?.trim() ?? "";
     const ticketId = url.searchParams.get("ticketId")?.trim() ?? "";
     const leadId = url.searchParams.get("leadId")?.trim() ?? "";
 
@@ -190,12 +199,24 @@ export async function GET(request: Request) {
     if (resource === "dashboard") {
       body = await service.home(identity);
     } else if (resource === "clients") {
-      body = await service.listAccounts(identity, { query, status, cursor, limit });
+      body = await service.listClients(identity, { query, status, cursor, limit });
     } else if (resource === "client") {
-      if (!workspaceId) {
+      if (!organizationId) {
         throw new HttpError(400, "CLIENT_REQUIRED", "Client is required.");
       }
-      body = { client: await service.account(identity, workspaceId) };
+      body = {
+        client: await service.client(
+          identity,
+          inputText(organizationId, "Client", { min: 1, max: 36 }),
+        ),
+      };
+    } else if (resource === "workspaces") {
+      body = await service.listAccounts(identity, { query, status, cursor, limit });
+    } else if (resource === "workspace") {
+      if (!workspaceId) {
+        throw new HttpError(400, "WORKSPACE_REQUIRED", "Workspace is required.");
+      }
+      body = { workspace: await service.account(identity, workspaceId) };
     } else if (resource === "support") {
       body = await service.listTickets(identity, {
         query,

@@ -43,7 +43,10 @@ import { authorize } from "./policy";
 import type { RecordData, RecordStore, StoredRecord } from "./record-store";
 import type { AuthenticatedIdentity } from "./session-identity";
 import { toWorkspaceSubscriptionView } from "./commercial-plan";
-import { EntitlementService } from "./entitlement-service";
+import {
+  EntitlementService,
+  organizationWorkspaceAllowance,
+} from "./entitlement-service";
 import type { WorkspaceEntitlements } from "../knowhow-types";
 
 function stringValue(value: unknown, fallback = "") {
@@ -919,6 +922,7 @@ export class BootstrapService {
         workspaceRows,
         brandingRows,
         appointmentRows,
+        allowance,
       ] = await Promise.all([
         this.store.get(TABLES.organizations, organizationId),
         this.store.list(TABLES.organizationMemberships, {
@@ -938,6 +942,7 @@ export class BootstrapService {
             { field: "status", value: "active" },
           ],
         }),
+        organizationWorkspaceAllowance(this.store, organizationId),
       ]);
       if (!organizationRow) continue;
       const organization = decodePayload<OrganizationRecord>(
@@ -997,6 +1002,17 @@ export class BootstrapService {
             status: stringValue(row.status, workspace.status),
           };
         }),
+        allowance: {
+          // Counted the way the create command counts it, so the meter and the
+          // refusal always agree.
+          used: workspaceRows.filter((row) => {
+            const status = stringValue(row.status, "active");
+            return status !== "deleted" && status !== "archived";
+          }).length,
+          maximum: allowance.maximum,
+          plan: allowance.plan,
+          source: allowance.source,
+        },
         appointments: canInspectMemberships
           ? appointmentRows.flatMap((row) => {
               const details = decodePayload<{

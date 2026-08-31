@@ -1,8 +1,12 @@
 import "server-only";
 
 import type {
+  AccountTag,
   PlatformAccountRecord,
   PlatformAccountSummary,
+  PlatformClientRecord,
+  PlatformClientSummary,
+  PlatformHealth,
   PlatformAuditSummary,
   PlatformDeletionCase,
   PlatformHome,
@@ -23,10 +27,12 @@ import type {
 import { AccessService } from "./access-service";
 import { TABLES } from "./appwrite-resources";
 import {
+  bestCommercialPlan,
   effectiveCommercialPlan,
   entitlementsForPlan,
   inferredCommercialPlan,
   trialConsumed,
+  WORKSPACES_PER_PLAN,
   type CommercialPlan,
 } from "./commercial-plan";
 import {
@@ -199,6 +205,29 @@ function subscriptionSummary(
         ? String((value as { manualReference?: string }).manualReference)
         : null,
   };
+}
+
+/**
+ * A client's health is the most attention-worthy of its workspaces, not an
+ * average: risk first, then time-sensitive trials, then a healthy paying
+ * workspace, and free last because free is the resting state rather than a
+ * signal. One churning workspace surfaces the whole client.
+ */
+const CLIENT_HEALTH_PRIORITY: PlatformHealth[] = [
+  "churning",
+  "at_risk",
+  "trial",
+  "healthy",
+  "free",
+];
+
+function clientHealth(signals: WorkspaceSignals[], now: number): PlatformHealth {
+  if (!signals.length) return "free";
+  const present = new Set(signals.map((item) => customerHealth(item, now)));
+  for (const health of CLIENT_HEALTH_PRIORITY) {
+    if (present.has(health)) return health;
+  }
+  return "free";
 }
 
 function personFromMember(row: StoredRecord<RecordData>): PlatformPerson {
@@ -384,9 +413,9 @@ export class PlatformQueryService {
     const signals = new Map<string, WorkspaceSignals>();
     for (const row of workspaceRows) {
       const workspace = decodePayload<WorkspaceRecord>(row, null as never);
-      const organization =
-        organizations.get(workspace?.organizationId ?? stringValue(row.organization_id)) ??
-        null;
+      const organizationId =
+        workspace?.organizationId ?? stringValue(row.organization_id);
+      const organization = organizations.get(organizationId) ?? null;
       const subscription = subscriptions.get(row.$id) ?? null;
       const plan = (subscription?.plan ?? "free") as CommercialPlan;
       const billedPlan = (subscription?.billedPlan ?? plan) as CommercialPlan;
@@ -405,6 +434,7 @@ export class PlatformQueryService {
       const tags = normalizeAccountTags(organization?.accountTags);
       signals.set(row.$id, {
         workspaceId: row.$id,
+        organizationId,
         name: workspace?.name ?? "Workspace",
         organizationName: organization?.displayName ?? workspace?.name ?? "Workspace",
         plan,
@@ -433,7 +463,9 @@ export class PlatformQueryService {
     return {
       workspaceRows,
       organizations,
+      organizationRows,
       subscriptions,
+      entitlementRows,
       membersByWorkspace,
       domainWorkspaces,
       domainUsers,
@@ -447,6 +479,7 @@ export class PlatformQueryService {
     const score = intentScore(signals);
     return {
       workspaceId: signals.workspaceId,
+      organizationId: signals.organizationId,
       name: signals.name,
       organizationName: signals.organizationName,
       plan: signals.plan,
@@ -551,6 +584,7 @@ export class PlatformQueryService {
         const users = facts.domainUsers.get(domain)?.size ?? 0;
         return {
           workspaceId: firstId,
+          organizationId: signals?.organizationId ?? "",
           name: signals?.name ?? domain,
           organizationName: `@${domain}`,
           plan: signals?.plan ?? "free",
@@ -659,6 +693,8 @@ export class PlatformQueryService {
             );
             return {
               workspaceId: ticket.workspaceId,
+              organizationId:
+                facts.signals.get(ticket.workspaceId)?.organizationId ?? "",
               name: ticket.subject,
               organizationName: ticket.workspaceName,
               plan: facts.signals.get(ticket.workspaceId)?.plan ?? "free",
@@ -674,6 +710,9 @@ export class PlatformQueryService {
           description: "Owner confirmation required before purge.",
           items: deletionRows.slice(0, 8).map((row) => ({
             workspaceId: stringValue(row.workspace_id),
+            organizationId:
+              facts.signals.get(stringValue(row.workspace_id))?.organizationId ??
+              "",
             name: names.get(stringValue(row.workspace_id)) ?? "Workspace",
             organizationName: "Pending purge",
             plan: "enterprise",
@@ -763,6 +802,268 @@ export class PlatformQueryService {
       ...(includeConfirmation && details.confirmationText
         ? { confirmationText: details.confirmationText }
         : {}),
+    };
+  }
+
+  /**
+   * Slots the organization holds. Derived from rows already loaded by
+   * loadWorkspaceSignals rather than re-querying per organization, but it
+   * mirrors organizationWorkspaceAllowance: an active organization-scoped
+   * maximumWorkspaces grant wins, otherwise the best plan across its
+   * workspaces sets the ceiling.
+   */
+  private organizationWorkspaceCeiling(
+    organizationId: string,
+    plans: CommercialPlan[],
+    entitlementRows: StoredRecord<RecordData>[],
+  ) {
+    const now = Date.now();
+    for (const row of entitlementRows) {
+      if (row.status !== "active") continue;
+      if (stringValue(row.organization_id) !== organizationId) continue;
+      if (stringValue(row.kind) !== "maximumWorkspaces") continue;
+      // Per-workspace rows share the organization id but describe one workspace.
+      if (stringValue(row.workspace_id)) continue;
+      const payload = decodePayload<{
+        value?: unknown;
+        source?: string;
+        expiresAt?: string | null;
+      }>(row, {});
+      if (payload.source === "override" && payload.expiresAt) {
+        const expiry = Date.parse(payload.expiresAt);
+        if (Number.isFinite(expiry) && expiry <= now) continue;
+      }
+      if (typeof payload.value === "number") return payload.value;
+    }
+    let allowed = WORKSPACES_PER_PLAN.free;
+    for (const plan of plans) {
+      allowed = Math.max(allowed, WORKSPACES_PER_PLAN[plan]);
+    }
+    return allowed;
+  }
+
+  private async loadClients(now = Date.now()) {
+    const facts = await this.loadWorkspaceSignals(now);
+    const grouped = new Map<
+      string,
+      { rows: StoredRecord<RecordData>[]; signals: WorkspaceSignals[] }
+    >();
+    for (const row of facts.workspaceRows) {
+      const workspace = decodePayload<WorkspaceRecord>(row, null as never);
+      const organizationId =
+        workspace?.organizationId ?? stringValue(row.organization_id);
+      if (!organizationId) continue;
+      const bucket = grouped.get(organizationId) ?? { rows: [], signals: [] };
+      bucket.rows.push(row);
+      const signals = facts.signals.get(row.$id);
+      if (signals) bucket.signals.push(signals);
+      grouped.set(organizationId, bucket);
+    }
+
+    const clients: PlatformClientSummary[] = [];
+    for (const [organizationId, bucket] of grouped) {
+      const organization = facts.organizations.get(organizationId);
+      const live = bucket.rows.filter((row) => {
+        const status = stringValue(row.status, "active");
+        return status !== "deleted" && status !== "archived";
+      });
+      const plans = bucket.signals.map((item) => item.plan);
+      const best = bestCommercialPlan(plans);
+      const decisions = bucket.signals
+        .map((item) => ({
+          decision: nextBestAction(item),
+          score: intentScore(item).score,
+        }))
+        .filter((item) => item.decision.action !== "none")
+        .sort((a, b) => b.score - a.score);
+      const lastActivityAt =
+        bucket.signals
+          .map((item) => item.lastActivityAt)
+          .filter((value): value is string => Boolean(value))
+          .sort()
+          .at(-1) ?? null;
+      const tags = new Set<AccountTag>();
+      for (const item of bucket.signals) {
+        for (const tag of item.tags) tags.add(tag);
+      }
+      clients.push({
+        id: organizationId,
+        displayName:
+          organization?.displayName ??
+          bucket.signals[0]?.organizationName ??
+          "Client",
+        legalName: organization?.legalName ?? "",
+        country: organization?.country ?? "",
+        status: stringValue(
+          facts.organizationRows.find((row) => row.$id === organizationId)
+            ?.status,
+          organization?.status ?? "active",
+        ),
+        createdAt:
+          bucket.signals.map((item) => item.createdAt).sort().at(0) ??
+          bucket.rows[0]?.$createdAt ??
+          "",
+        plan: best,
+        workspaceCount: live.length,
+        workspaceLimit: this.organizationWorkspaceCeiling(
+          organizationId,
+          plans,
+          facts.entitlementRows,
+        ),
+        paidWorkspaceCount: bucket.signals.filter(
+          (item) => item.plan === "pro" || item.plan === "enterprise",
+        ).length,
+        memberCount: bucket.signals.reduce(
+          (carry, item) => carry + item.memberCount,
+          0,
+        ),
+        health: clientHealth(bucket.signals, now),
+        intentScore: bucket.signals.reduce(
+          (carry, item) => Math.max(carry, intentScore(item).score),
+          0,
+        ),
+        nextAction: decisions[0]?.decision.action ?? "none",
+        nextActionReason: decisions[0]?.decision.reason ?? "",
+        lastActivityAt,
+        tags: [...tags],
+      });
+    }
+    return { facts, grouped, clients };
+  }
+
+  async listClients(
+    identity: AuthenticatedIdentity,
+    input: {
+      query?: string;
+      status?: string;
+      cursor?: string;
+      limit?: string | null;
+    },
+  ): Promise<PlatformPage<PlatformClientSummary>> {
+    await this.requireOperator(identity);
+    const limit = pageLimit(input.limit ?? null);
+    const { clients } = await this.loadClients();
+    const term = input.query?.trim().toLowerCase() ?? "";
+    const status = input.status && input.status !== "all" ? input.status : "";
+    let items = clients;
+    if (status) {
+      items = items.filter((item) => {
+        if (status === "trial") return item.plan === "pro_trial";
+        if (status === "free") return item.plan === "free";
+        if (status === "pro") return item.plan === "pro";
+        if (status === "enterprise") return item.plan === "enterprise";
+        if (status === "at_risk")
+          return item.health === "at_risk" || item.health === "churning";
+        if (status === "win_back") return item.nextAction === "grant_trial";
+        if (status === "high_intent") return item.intentScore >= 40;
+        if (status === "at_capacity")
+          return item.workspaceCount >= item.workspaceLimit;
+        return item.status === status;
+      });
+    }
+    if (term) {
+      items = items.filter((item) =>
+        `${item.displayName} ${item.legalName} ${item.country} ${item.plan}`
+          .toLowerCase()
+          .includes(term),
+      );
+    }
+    items = [...items].sort((a, b) => b.intentScore - a.intentScore);
+    const start = input.cursor
+      ? items.findIndex((item) => item.id === input.cursor) + 1
+      : 0;
+    const from = start > 0 ? start : input.cursor ? items.length : 0;
+    const page = items.slice(from, from + limit);
+    return {
+      items: page,
+      nextCursor: from + limit < items.length ? (page.at(-1)?.id ?? null) : null,
+    };
+  }
+
+  async client(
+    identity: AuthenticatedIdentity,
+    organizationId: string,
+  ): Promise<PlatformClientRecord> {
+    await this.requireOperator(identity);
+    const { facts, grouped, clients } = await this.loadClients();
+    const summary = clients.find((item) => item.id === organizationId);
+    const bucket = grouped.get(organizationId);
+    if (!summary || !bucket) {
+      throw new HttpError(404, "CLIENT_NOT_FOUND", "Client not found.");
+    }
+    const organization = facts.organizations.get(organizationId);
+    const [brandingRows, memberRows] = await Promise.all([
+      this.store.list(TABLES.organizationBranding, {
+        filters: [{ field: "organization_id", value: organizationId }],
+        order: "desc",
+        limit: 1,
+      }),
+      this.store.list(TABLES.organizationMemberships, {
+        filters: [{ field: "organization_id", value: organizationId }],
+      }),
+    ]);
+    const branding = brandingRows[0]
+      ? decodePayload<{ logoMediaId?: string | null; accentColor?: string }>(
+          brandingRows[0],
+          {},
+        )
+      : {};
+    const people = memberRows
+      .filter((row) => row.status !== "revoked")
+      .map((row) => personFromMember(row));
+    const workspaces: PlatformAccountSummary[] = bucket.rows.map((row) => {
+      const workspace = decodePayload<WorkspaceRecord>(row, null as never);
+      const signals = facts.signals.get(row.$id);
+      const decision = signals ? nextBestAction(signals) : null;
+      return {
+        id: row.$id,
+        organizationId,
+        organizationName: summary.displayName,
+        name: workspace?.name ?? "Workspace",
+        slug: workspace?.slug ?? row.$id,
+        status: workspace?.status ?? stringValue(row.status, "active"),
+        createdAt: workspace?.createdAt ?? row.$createdAt,
+        subscription: facts.subscriptions.get(row.$id) ?? null,
+        seatLimit: signals?.seatLimit ?? null,
+        memberCount: signals?.memberCount ?? 0,
+        tags: signals?.tags ?? [],
+        lastActivityAt: signals?.lastActivityAt ?? null,
+        health: signals ? customerHealth(signals, Date.now()) : "free",
+        intentScore: signals ? intentScore(signals).score : 0,
+        nextAction: decision?.action ?? "none",
+        nextActionReason: decision?.reason ?? "",
+        complimentary: signals?.complimentary === true,
+      } satisfies PlatformAccountSummary;
+    });
+    return {
+      ...summary,
+      primaryContactName: organization?.primaryContactName ?? "",
+      primaryContactEmail: organization?.primaryContactEmail ?? "",
+      internalNotes: organization?.internalNotes ?? "",
+      ownerLabel: organization?.ownerLabel ?? "",
+      branding: {
+        logoMediaId: branding.logoMediaId ?? null,
+        accentColor: branding.accentColor ?? "#2f6fed",
+      },
+      workspaces,
+      administrators: people.filter(
+        (person) =>
+          person.roles.includes("owner") ||
+          person.roles.includes("administrator"),
+      ),
+      billingContacts: people.filter((person) =>
+        person.roles.includes("billing"),
+      ),
+      activation: {
+        firstPublishedAt:
+          bucket.signals
+            .map((item) => item.lastActivityAt)
+            .filter((value): value is string => Boolean(value))
+            .sort()
+            .at(0) ?? null,
+        publishedWorkspaces: bucket.signals.filter((item) => item.published)
+          .length,
+      },
     };
   }
 

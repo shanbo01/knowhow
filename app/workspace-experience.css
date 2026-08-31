@@ -3790,6 +3790,10 @@
   line-height: 1.25;
 }
 
+.experience-shell .settings-toggle-copy strong > .pro-badge {
+  margin-inline-start: 0.42rem;
+}
+
 .experience-shell .settings-toggle-copy small {
   max-width: 48rem;
   color: var(--muted-foreground);
@@ -4268,6 +4272,11 @@
 .guide-create-option[data-highlighted] {
   background: var(--surface-hover) !important;
   color: var(--foreground) !important;
+}
+
+.guide-create-option .pro-badge,
+.guide-create-option .pro-badge * {
+  color: #3b1764 !important;
 }
 
 .guide-create-option[data-disabled] {
@@ -4978,27 +4987,10 @@
   text-align: right;
 }
 
-.plan-dialog-footer {
+.kh-dialog-content .plan-dialog-footer {
   gap: 0.5rem;
-}
-
-.plan-dialog-footer .button.primary {
-  border-color: var(--brand-fill, var(--brand)) !important;
-  background: var(--brand-fill, var(--brand)) !important;
-  color: var(--brand-foreground) !important;
-  box-shadow: 0 5px 14px color-mix(in srgb, var(--brand-fill, var(--brand)) 28%, transparent);
-}
-
-.plan-dialog-footer .button.primary:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--brand-fill, var(--brand)) 88%, var(--foreground)) !important;
-  background: color-mix(in srgb, var(--brand-fill, var(--brand)) 88%, var(--foreground)) !important;
-}
-
-.plan-dialog-footer .button.secondary {
-  border-color: var(--border) !important;
-  background: var(--card) !important;
-  color: var(--foreground) !important;
-  box-shadow: none;
+  background: var(--popover, var(--card));
+  backdrop-filter: none;
 }
 
 .experience-shell .guide-card-clickable {
@@ -5280,6 +5272,43 @@
   font-weight: 680;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.experience-shell .organization-workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.experience-shell .organization-rename-form {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.experience-shell .organization-rename-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 640;
+}
+
+.experience-shell .organization-allowance {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.85rem 0.95rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
+.experience-shell .organization-allowance .privacy-caption {
+  margin: 0;
 }
 
 .experience-shell .organization-role-list {

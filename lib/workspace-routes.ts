@@ -25,6 +25,11 @@ export type AppRoute =
   | { kind: "guide-new"; workspaceSlug: string }
   | { kind: "guide-view"; workspaceSlug: string; guideId: string; revision: GuideRevisionMode }
   | { kind: "guide-edit"; workspaceSlug: string; guideId: string }
+  | {
+      kind: "administration-client";
+      workspaceSlug: string;
+      organizationId: string;
+    }
   | { kind: "invalid" };
 
 function safeSegment(value: string) {
@@ -72,6 +77,17 @@ export function guideEditorHref(workspaceSlug: string, guideId: string) {
   return `${workspaceHref(workspaceSlug, "guides")}/${safeSegment(guideId)}/edit`;
 }
 
+/**
+ * A single client inside KnowHow Administration. Routable so an operator can
+ * link a colleague straight to a client rather than describing where to click.
+ */
+export function administrationClientHref(
+  workspaceSlug: string,
+  organizationId: string,
+) {
+  return `${workspaceHref(workspaceSlug, "administration")}/clients/${safeSegment(organizationId)}`;
+}
+
 export function routeWorkspaceSlug(route: AppRoute) {
   return "workspaceSlug" in route ? route.workspaceSlug : null;
 }
@@ -95,6 +111,17 @@ export function parseAppRoute(pathname: string, search = ""): AppRoute {
 
   if (nested.length === 1 && isWorkspaceSection(nested[0])) {
     return { kind: "workspace-section", workspaceSlug, section: nested[0] };
+  }
+
+  if (nested[0] === "administration") {
+    if (nested.length === 3 && nested[1] === "clients" && nested[2]) {
+      return {
+        kind: "administration-client",
+        workspaceSlug,
+        organizationId: nested[2],
+      };
+    }
+    return { kind: "invalid" };
   }
 
   if (nested[0] !== "guides") return { kind: "invalid" };
