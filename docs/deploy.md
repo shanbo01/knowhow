@@ -5,10 +5,9 @@ comes back after a reboot. Appwrite is deployed separately from its own compose
 file; the one change required on that side is in
 [Prepare Appwrite](#prepare-appwrite) below.
 
-> **Status.** This document describes what currently exists. Two things are
-> still missing before a deployment is fully operable, and each is called out
-> where it bites: deploying the two Appwrite Functions, and the deep readiness
-> probe. See [Known gaps](#known-gaps).
+> **Status.** This document describes what currently exists. One thing is still
+> missing before a deployment is fully operable — the deep readiness probe —
+> and it is called out where it bites. See [Known gaps](#known-gaps).
 
 ## What runs
 
@@ -135,6 +134,78 @@ Then confirm the application is serving:
 curl -fsS https://your-domain.com/api/health
 ```
 
+## Deploy the Appwrite Functions
+
+Two functions do the work no web request can: `knowhow-operations` sweeps the
+lifecycle, expiries, usage rollups, purges, and the notification queue, and
+`knowhow-export` turns queued export jobs into files. Both are declared in
+`appwrite.config.json` and pushed with the CLI, which is pinned as a
+devDependency so the version cannot drift from the server.
+
+Without them, nothing fails loudly: exports queue forever, invitation and
+verification emails are never sent, trials never expire, and deleted workspaces
+are never purged.
+
+### Enable the Node runtime first
+
+Appwrite ships with only four runtimes enabled, and Node 22 is not one of them.
+Check what your instance actually has:
+
+```bash
+npx appwrite functions list-runtimes
+```
+
+If `node-22` is absent, add it to `_APP_FUNCTIONS_RUNTIMES` in Appwrite's `.env`
+and restart Appwrite. Both functions declare `"engines": { "node": ">=22" }`, so
+an older runtime is not a workaround. A push against an instance without it
+fails with `Runtime "node-22" is not supported`.
+
+### Push, then supply the variables
+
+```bash
+npx appwrite login
+npm run appwrite:functions:push
+```
+
+The functions' environment variables cannot travel in the config: most are
+secrets, and a committed file is the wrong place for a signing key. Sync them
+from the deployment's own environment instead. It prints a plan first and
+changes nothing until `--apply`:
+
+```bash
+node --env-file=.env.production scripts/sync-function-variables.mjs
+node --env-file=.env.production scripts/sync-function-variables.mjs --apply
+```
+
+Values are never printed — only key names and whether each was created, updated,
+or already current. Secrets are rewritten every run, because Appwrite redacts
+them on read and an unchanged secret is otherwise indistinguishable from a
+rotated one.
+
+Neither function needs an API key variable. Both prefer the dynamic key Appwrite
+injects per execution, scoped by the `scopes` array in `appwrite.config.json` —
+which is why that array is checked to be non-empty: a function with no scopes
+receives a powerless key and fails at run time rather than at push time.
+
+### Confirm the triggers
+
+`knowhow-export` runs on two triggers: a row created in `export_jobs`, and a
+five-minute sweep that retries jobs the event missed. `knowhow-operations` runs
+on schedule only. Neither is executable over HTTP, which
+`npm run appwrite:check` enforces.
+
+```bash
+npx appwrite functions list
+```
+
+Then queue an export from the application and confirm the file appears.
+
+> **Notification latency.** The operations function runs every five minutes, so
+> a queued notification can wait that long. `/api/health?ready=1` currently
+> treats *any* due notification as not-ready, which will make readiness flap
+> once the functions are live. That check needs relaxing — see
+> [Known gaps](#known-gaps).
+
 ## Grant the first Administration owner
 
 Platform roles are only writable through the administration API, which itself
@@ -220,10 +291,8 @@ changes additive so that an application rollback is always safe on its own.
 These are tracked and not yet done. A deployment works without them, but is not
 fully operable:
 
-- **The Appwrite Functions are not declared.** `appwrite.config.json` has no
-  `functions` section, so the export and operations workers must be created by
-  hand with their environment variables and triggers. Without them, exports never
-  complete and notification emails are never sent.
 - **The deep readiness probe cannot pass.** `/api/health?ready=1` requires a
   worker health service that does not exist yet, so it always returns 503. Point
   uptime monitoring at `/api/health` — the liveness endpoint — until that lands.
+  The same check also treats any due notification as not-ready, which does not
+  survive contact with a five-minute worker schedule; both belong in one fix.
