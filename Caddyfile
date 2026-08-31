@@ -1,0 +1,84 @@
+# Public edge for KnowHow. Caddy terminates TLS, obtains and renews
+# certificates automatically, and is the only process bound to 80 and 443.
+#
+# The header_up directives below are a security control, not tidiness. The
+# application derives request origins and rate-limit subjects from forwarded
+# headers, so this file is where those headers stop being attacker-controlled:
+# every one is overwritten with the proxy's own view of the connection, and any
+# copy a client supplied is discarded.
+
+{
+	# Certificate contact and staging toggle live in .env.production.
+	email {$ACME_EMAIL}
+	servers {
+		# Client-supplied forwarded headers are never trusted for the remote
+		# address. Caddy's own connection is the only source.
+		trusted_proxies static private_ranges
+	}
+}
+
+(knowhow_forwarded_headers) {
+	# Overwrite, never append. {host} and {scheme} are Caddy's view of the
+	# request; {remote_host} is the peer address of the TCP connection.
+	header_up Host {host}
+	header_up X-Forwarded-Host {host}
+	header_up X-Forwarded-Proto {scheme}
+	header_up X-Forwarded-For {remote_host}
+	# Drop headers a client may have sent that the application, or Appwrite,
+	# might otherwise read.
+	header_up -Forwarded
+	header_up -X-Forwarded-Server
+	header_up -X-Real-IP
+	header_up -X-Original-URL
+	header_up -X-Rewrite-URL
+}
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+{$KNOWHOW_SITE_HOST} {
+	encode zstd gzip
+
+	# Immutable build assets. Everything else is left to the application, which
+	# already sets no-store on API responses.
+	@static path /_next/static/* /fonts/*
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	reverse_proxy web:3000 {
+		import knowhow_forwarded_headers
+		# Screenshot uploads and generated exports are large and slow; the
+		# default read timeout is not generous enough for either.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Appwrite
+# ---------------------------------------------------------------------------
+# Appwrite needs a public HTTPS hostname of its own: the desktop app and the
+# export function both reach it from outside this network. Its own traefik must
+# be moved off 80 and 443 first — see docs/deploy.md.
+{$APPWRITE_PUBLIC_HOST} {
+	encode zstd gzip
+
+	reverse_proxy {$APPWRITE_UPSTREAM} {
+		import knowhow_forwarded_headers
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

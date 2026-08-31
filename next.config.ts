@@ -8,6 +8,13 @@ function configuredOrigin(value: string | undefined) {
   }
 }
 
+function boundedCpus(value: string | undefined) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 16 ? parsed : 1;
+}
+
+const buildCpus = boundedCpus(process.env.KNOWHOW_BUILD_CPUS);
+
 const connectSources = [
   "'self'",
   configuredOrigin(process.env.APPWRITE_ENDPOINT),
@@ -51,16 +58,20 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Trace the server's real imports into .next/standalone so the deployed image
+  // carries a runtime instead of the whole dependency tree.
+  output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
   compress: true,
   productionBrowserSourceMaps: false,
   enablePrerenderSourceMaps: false,
   experimental: {
-    // Appwrite Free Sites build in a 1 GB container. Bound worker fan-out so
-    // Turbopack and static generation stay inside that hard memory ceiling.
-    cpus: 1,
-    staticGenerationMaxConcurrency: 1,
+    // Build fan-out. The single-worker settings below existed for a 1 GB
+    // Appwrite Free Sites container; a VPS builder has more room, so
+    // KNOWHOW_BUILD_CPUS raises the ceiling without pinning it to one host.
+    cpus: buildCpus,
+    staticGenerationMaxConcurrency: buildCpus,
     staticGenerationMinPagesPerWorker: 100,
     serverSourceMaps: false,
   },

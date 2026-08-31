@@ -59,6 +59,18 @@ npm run workers:local:watch
 
 Copy `.env.example` to `.env.local` and supply the local or hosted Appwrite values before starting the web app or workers. Never commit `.env.local`.
 
+## Deploying
+
+The web application ships as a container behind Caddy, with Appwrite self-hosted
+alongside it. `docs/deploy.md` is the runbook: preparing Appwrite, generating
+secrets, the first deploy, verifying that the stack returns after a reboot, and
+what is still missing.
+
+```bash
+cp .env.controlled.example .env.production
+docker compose --env-file .env.production up -d --build
+```
+
 ## Companion builds
 
 ```powershell

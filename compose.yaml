@@ -1,0 +1,91 @@
+# KnowHow web application and its reverse proxy.
+#
+# Appwrite is deployed separately from its own compose file and keeps its own
+# volumes; this stack joins that network so the application can reach Appwrite
+# by service name over the private network instead of hairpinning out through
+# the public hostname. See docs/deploy.md for the one change required on the
+# Appwrite side.
+#
+#   docker compose --env-file .env.production up -d --build
+#
+# Pass --env-file so one file serves both purposes: Compose reads it for the
+# ${...} substitutions below, and `env_file:` hands the same values to the
+# container. Without the flag Compose substitutes from `.env` alone and the
+# build arguments resolve empty.
+#
+# `restart: unless-stopped` is what brings the stack back after a reboot or a
+# crash. It is deliberately not `always`, so a container you stop by hand during
+# maintenance stays stopped.
+
+name: knowhow
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        KNOWHOW_ENVIRONMENT: ${KNOWHOW_ENVIRONMENT:?set KNOWHOW_ENVIRONMENT}
+        KNOWHOW_RELEASE: ${KNOWHOW_RELEASE:?set KNOWHOW_RELEASE to a git sha or tag}
+        KNOWHOW_REGISTRATION_MODE: ${KNOWHOW_REGISTRATION_MODE:?set KNOWHOW_REGISTRATION_MODE}
+        KNOWHOW_SITE_ORIGIN: ${KNOWHOW_SITE_ORIGIN:?set KNOWHOW_SITE_ORIGIN}
+        APPWRITE_ENDPOINT: ${APPWRITE_ENDPOINT:?set APPWRITE_ENDPOINT}
+        KNOWHOW_BUILD_CPUS: ${KNOWHOW_BUILD_CPUS:-2}
+        NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL: ${NEXT_PUBLIC_KNOWHOW_CHROME_EXTENSION_URL:-}
+        NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL: ${NEXT_PUBLIC_KNOWHOW_EDGE_EXTENSION_URL:-}
+        NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_X64_URL: ${NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_X64_URL:-}
+        NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_X64_URL: ${NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_X64_URL:-}
+        NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_ARM64_URL: ${NEXT_PUBLIC_KNOWHOW_DESKTOP_EXE_ARM64_URL:-}
+        NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_ARM64_URL: ${NEXT_PUBLIC_KNOWHOW_DESKTOP_MSI_ARM64_URL:-}
+    image: knowhow-web:${KNOWHOW_RELEASE:-latest}
+    restart: unless-stopped
+    # Secrets and everything else rotatable arrive here, not in the image.
+    env_file:
+      - .env.production
+    # No `ports:` mapping. The application is reachable only from this network,
+    # through the proxy — there is no way to bypass TLS or the header pinning.
+    expose:
+      - "3000"
+    networks:
+      - edge
+      - appwrite
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      KNOWHOW_SITE_HOST: ${KNOWHOW_SITE_HOST:?set KNOWHOW_SITE_HOST, the bare hostname}
+      APPWRITE_PUBLIC_HOST: ${APPWRITE_PUBLIC_HOST:?set APPWRITE_PUBLIC_HOST, the bare hostname}
+      APPWRITE_UPSTREAM: ${APPWRITE_UPSTREAM:-appwrite-traefik:80}
+    networks:
+      - edge
+      - appwrite
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  caddy-data:
+  caddy-config:
+
+networks:
+  edge:
+  # Created by Appwrite's own compose file. Confirm the name with
+  # `docker network ls` and set APPWRITE_NETWORK if it differs.
+  appwrite:
+    external: true
+    name: ${APPWRITE_NETWORK:-appwrite}
