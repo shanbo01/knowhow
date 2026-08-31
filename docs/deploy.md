@@ -35,6 +35,26 @@ without it:
 sudo systemctl enable --now docker
 ```
 
+## Check the host first
+
+```bash
+./scripts/preflight.sh
+```
+
+Read-only: it starts nothing, changes nothing, and prints no secret values. It
+checks the things that otherwise fail halfway through a deploy for boring
+reasons — memory and disk, Docker enabled at boot, whether anything already
+holds 80 and 443, clock sync, DNS, whether `node-22` is enabled in Appwrite, and
+whether `.env.production` still contains template placeholders or short secrets.
+
+Run it again after any change on the Appwrite side. Failures block a deploy;
+warnings are worth knowing but do not.
+
+Two checks it cannot do from inside the host: whether your cloud firewall
+actually allows inbound 80 and 443, and whether the address DNS points at is
+this machine. For the second, set `KNOWHOW_EXPECTED_PUBLIC_IP` and it will
+verify; otherwise it prints what resolved for you to confirm.
+
 ## Prepare Appwrite
 
 Appwrite ships its own Traefik, which binds 80 and 443 by default. Caddy needs
