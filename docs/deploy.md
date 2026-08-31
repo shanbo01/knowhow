@@ -319,6 +319,90 @@ Images are tagged with the release, so a rollback is a rebuild at the previous
 tag. Note that this does **not** roll back Appwrite schema changes — keep column
 changes additive so that an application rollback is always safe on its own.
 
+## Backups
+
+Two things cannot be rebuilt from this repository: Appwrite's database, and the
+storage volume holding captured screenshots and generated exports. Everything
+else — the image, the schema, the functions — is reproducible from a git tag.
+
+```bash
+sudo ./scripts/backup.sh
+```
+
+The script dumps the database with `--single-transaction`, so it stays
+consistent without locking the site, archives the uploads volume, then
+**verifies what it wrote**: both archives must be valid gzip streams, and the
+dump must be large enough and contain table definitions. A dump that succeeds
+against the wrong schema is otherwise indistinguishable from a good one until
+the day you need it.
+
+### Send it off the host
+
+A backup on the same disk as the data it protects is not a backup. Set one
+destination in `.env.production`; the script warns loudly if neither is set:
+
+```
+KNOWHOW_BACKUP_RCLONE_REMOTE=b2:knowhow-backups   # any rclone remote
+# or
+KNOWHOW_BACKUP_RSYNC_TARGET=user@backup-host:/srv/knowhow
+```
+
+Local copies are pruned after `KNOWHOW_BACKUP_KEEP_DAYS` (14 by default).
+Off-host copies are never pruned by this script — that retention belongs to the
+provider, so the copy that matters most is never deleted by a bug here.
+
+### Run it nightly
+
+```ini
+# /etc/systemd/system/knowhow-backup.service
+[Unit]
+Description=KnowHow backup
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/knowhow/.env.production
+ExecStart=/opt/knowhow/scripts/backup.sh
+```
+
+```ini
+# /etc/systemd/system/knowhow-backup.timer
+[Unit]
+Description=Nightly KnowHow backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl enable --now knowhow-backup.timer
+sudo systemctl list-timers knowhow-backup.timer
+```
+
+The script exits non-zero on any failure, so a broken backup shows up in
+`systemctl status` rather than passing silently.
+
+### Rehearse the restore
+
+Do this once, on a scratch host, **before there is real customer data**. It is
+the only step that turns a backup into a safety net.
+
+```bash
+./scripts/restore.sh /var/backups/knowhow/<timestamp> --confirm
+```
+
+It verifies checksums before touching anything, clears the uploads volume
+before unpacking so no orphaned files survive, and refuses to run against
+`KNOWHOW_ENVIRONMENT=production` unless the intent is stated a second time.
+
+Afterwards, restart the stack and confirm a guide opens **with its screenshots
+loading** — a restored database with an empty volume looks healthy on the
+dashboard and is missing every image.
+
 ## Known gaps
 
 These are tracked and not yet done. A deployment works without them, but is not
