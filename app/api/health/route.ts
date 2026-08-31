@@ -13,6 +13,17 @@ import { Query } from "node-appwrite";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * How long a queued notification may sit past its scheduled time before the
+ * deployment is unhealthy rather than merely busy.
+ *
+ * The operations worker runs every five minutes, so a due notification is the
+ * normal state for most of every cycle — treating any due row as a fault would
+ * flap the probe continuously. What matters is a row that has outlived several
+ * cycles, which means the worker is not draining the queue.
+ */
+const NOTIFICATION_OVERDUE_MS = 15 * 60_000;
+
 export async function GET(request: Request) {
   const requestId = correlationId(request);
   const ready = new URL(request.url).searchParams.get("ready") === "1";
@@ -23,7 +34,7 @@ export async function GET(request: Request) {
     );
   }
   try {
-    const { config, users, tables, storage } = createRequestServices();
+    const { config, users, tables, storage, functions } = createRequestServices();
     const issues = deploymentConfigurationIssues(config);
     const infrastructureChecks = await Promise.allSettled([
       users.list({ queries: [Query.limit(1)], total: false }),
@@ -33,18 +44,20 @@ export async function GET(request: Request) {
     ]);
     const [identity, database, privateStorage, exportStorage] =
       infrastructureChecks;
-    const workers = await workerReadiness(config);
-    let notificationQueue = { due: 0, terminalFailed: 0 };
+    const workers = await workerReadiness(config, { functions });
+    let notificationQueue = { overdue: 0, terminalFailed: 0 };
     let queueCheck: "ok" | "failed" = "ok";
     if (database.status === "fulfilled") {
-      const now = new Date().toISOString();
-      const [due, failed] = await Promise.allSettled([
+      const overdueBefore = new Date(
+        Date.now() - NOTIFICATION_OVERDUE_MS,
+      ).toISOString();
+      const [overdue, failed] = await Promise.allSettled([
         tables.listRows({
           databaseId: config.databaseId,
           tableId: TABLES.notificationDeliveries,
           queries: [
             Query.equal("status", ["queued"]),
-            Query.lessThanEqual("scheduled_at", now),
+            Query.lessThanEqual("scheduled_at", overdueBefore),
             Query.limit(1),
           ],
           total: false,
@@ -56,9 +69,9 @@ export async function GET(request: Request) {
           total: false,
         }),
       ]);
-      if (due.status === "fulfilled" && failed.status === "fulfilled") {
+      if (overdue.status === "fulfilled" && failed.status === "fulfilled") {
         notificationQueue = {
-          due: due.value.rows.length,
+          overdue: overdue.value.rows.length,
           terminalFailed: failed.value.rows.length,
         };
       } else {
@@ -72,7 +85,7 @@ export async function GET(request: Request) {
     );
     const queueReady =
       queueCheck === "ok" &&
-      notificationQueue.due === 0 &&
+      notificationQueue.overdue === 0 &&
       notificationQueue.terminalFailed === 0;
     const runtimeReady =
       infrastructureReady && workers.ready && queueReady;
@@ -98,7 +111,15 @@ export async function GET(request: Request) {
             exportStorage: settledStatus(exportStorage),
             workers: workers.ready ? "ok" : "failed",
             workerState: workers.state,
+            // Seconds rather than milliseconds, and only when known: this is
+            // read by whoever is working out why a probe went red, and "the
+            // last run was 47 minutes ago" is the answer they need.
+            ...(workers.ageMs === undefined
+              ? {}
+              : { workerLastRunSeconds: Math.round(workers.ageMs / 1000) }),
             notificationQueue: queueReady ? "ok" : "failed",
+            notificationQueueOverdue: notificationQueue.overdue,
+            notificationQueueFailed: notificationQueue.terminalFailed,
             configuration: issues.length ? "failed" : "ok",
             configurationIssueCount: issues.length,
           },

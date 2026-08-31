@@ -5,9 +5,9 @@ comes back after a reboot. Appwrite is deployed separately from its own compose
 file; the one change required on that side is in
 [Prepare Appwrite](#prepare-appwrite) below.
 
-> **Status.** This document describes what currently exists. One thing is still
-> missing before a deployment is fully operable — the deep readiness probe —
-> and it is called out where it bites. See [Known gaps](#known-gaps).
+> **Status.** This document describes what currently exists and has been
+> verified. Remaining gaps are listed in [Known gaps](#known-gaps); none of them
+> stop a deployment from running.
 
 ## What runs
 
@@ -200,11 +200,44 @@ npx appwrite functions list
 
 Then queue an export from the application and confirm the file appears.
 
-> **Notification latency.** The operations function runs every five minutes, so
-> a queued notification can wait that long. `/api/health?ready=1` currently
-> treats *any* due notification as not-ready, which will make readiness flap
-> once the functions are live. That check needs relaxing — see
-> [Known gaps](#known-gaps).
+## Health and readiness
+
+Two endpoints, for two different questions.
+
+`/api/health` is liveness: is this process serving? It touches nothing else, so
+it stays green while a dependency is down. **This is what uptime monitoring and
+the container health check should watch** — restarting the application because
+Appwrite hiccuped would only make an outage longer.
+
+`/api/health?ready=1` is readiness: is the whole deployment able to do its job?
+It checks identity, the database, both buckets, configuration, the notification
+queue, and whether the operations worker is actually running. Use it after a
+deploy, and for alerting that a human should look at something.
+
+Readiness reads Appwrite's own execution history for `knowhow-operations`
+rather than asking the worker to report on itself — a worker wedged mid-run
+cannot report its own failure, but a missing execution is visible from outside.
+**`APPWRITE_API_KEY` therefore needs the `executions.read` scope**, or readiness
+reports `workerState: "invalid"` and never goes green.
+
+A red probe names its own cause:
+
+```bash
+curl -s 'https://your-domain.com/api/health?ready=1' | jq '.checks'
+```
+
+| `workerState` | Meaning |
+| --- | --- |
+| `ready` | The function completed a scheduled run recently |
+| `missing` | It has never run — not deployed, or the schedule is not set |
+| `stale` | Its last run is older than 15 minutes; check `workerLastRunSeconds` |
+| `failed` | Its last run errored; read the function's logs in Appwrite |
+| `invalid` | Readiness could not be established — usually the missing `executions.read` scope |
+
+A queued notification is normal for most of every five-minute cycle, so
+readiness only fails on one that has outlived three cycles
+(`notificationQueueOverdue`). A queue with work in it is not an unhealthy queue.
+Any terminally failed delivery does fail readiness, since nothing retries it.
 
 ## Grant the first Administration owner
 
@@ -291,8 +324,9 @@ changes additive so that an application rollback is always safe on its own.
 These are tracked and not yet done. A deployment works without them, but is not
 fully operable:
 
-- **The deep readiness probe cannot pass.** `/api/health?ready=1` requires a
-  worker health service that does not exist yet, so it always returns 503. Point
-  uptime monitoring at `/api/health` — the liveness endpoint — until that lands.
-  The same check also treats any due notification as not-ready, which does not
-  survive contact with a five-minute worker schedule; both belong in one fix.
+- **No automated backups.** Nothing dumps Appwrite's database or storage
+  volumes, and no restore has been rehearsed. Do this before real customer data
+  exists, not after.
+- **500s carry no stack trace.** `lib/server/telemetry.ts` records only the
+  error type, so an unexpected failure in production gives you `"TypeError"` and
+  nothing else to work from.
