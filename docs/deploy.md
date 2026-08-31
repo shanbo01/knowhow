@@ -5,10 +5,10 @@ comes back after a reboot. Appwrite is deployed separately from its own compose
 file; the one change required on that side is in
 [Prepare Appwrite](#prepare-appwrite) below.
 
-> **Status.** This document describes what currently exists. Three things are
+> **Status.** This document describes what currently exists. Two things are
 > still missing before a deployment is fully operable, and each is called out
-> where it bites: creating the first platform owner, deploying the two Appwrite
-> Functions, and the deep readiness probe. See [Known gaps](#known-gaps).
+> where it bites: deploying the two Appwrite Functions, and the deep readiness
+> probe. See [Known gaps](#known-gaps).
 
 ## What runs
 
@@ -135,6 +135,32 @@ Then confirm the application is serving:
 curl -fsS https://your-domain.com/api/health
 ```
 
+## Grant the first Administration owner
+
+Platform roles are only writable through the administration API, which itself
+requires an existing owner. A fresh deployment therefore has no way in, and this
+is it.
+
+Create the account through the normal sign-up flow first and verify its email
+address — a controlled deployment will not promote an unverified account. Then:
+
+```bash
+docker compose --env-file .env.production run --rm ops \
+  scripts/bootstrap-platform-owner.mjs --email=you@your-domain.com --confirm
+```
+
+`--confirm` is required outside development, because this grants permanent
+administrative access to every workspace on the deployment.
+
+The script refuses to run once any active owner exists. That is what makes it
+safe to leave in place: it can create the first owner and never a second. Grant
+every later role from Administration, where the change is attributed to the
+person who made it.
+
+Note the separate `ops` image. It exists because `node-appwrite` is bundled into
+the server output rather than left external, so a script inside the deployed
+runtime could not import it.
+
 ## Verify the reboot path
 
 This is the step people skip and regret. Do it before there is any real data.
@@ -194,10 +220,6 @@ changes additive so that an application rollback is always safe on its own.
 These are tracked and not yet done. A deployment works without them, but is not
 fully operable:
 
-- **No platform owner can be created.** `scripts/bootstrap-local-owner.mjs`
-  refuses to run outside the local stack, and the administration API requires an
-  existing owner. Administration is unreachable on a fresh deployment until a
-  controlled bootstrap path exists.
 - **The Appwrite Functions are not declared.** `appwrite.config.json` has no
   `functions` section, so the export and operations workers must be created by
   hand with their environment variables and triggers. Without them, exports never

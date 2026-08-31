@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit",
     "appwrite:generate": "node scripts/generate-appwrite-config.mjs",
     "appwrite:check": "node scripts/generate-appwrite-config.mjs --check && node scripts/check-appwrite-query-indexes.mjs",
-    "appwrite:local:owner": "node --env-file-if-exists=.env.local scripts/bootstrap-local-owner.mjs",
+    "appwrite:local:owner": "node --env-file-if-exists=.env.local scripts/bootstrap-platform-owner.mjs",
     "appwrite:local:beta": "node --conditions react-server --import tsx --env-file-if-exists=.env.local scripts/create-local-beta-grant.ts",
     "workers:local:once": "node --env-file-if-exists=.env.local scripts/run-local-workers.mjs --once",
     "workers:local:watch": "node --env-file-if-exists=.env.local scripts/run-local-workers.mjs --watch",

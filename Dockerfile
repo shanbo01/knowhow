@@ -82,6 +82,24 @@ RUN KNOWHOW_EXTENSION_ORIGIN="${KNOWHOW_SITE_ORIGIN}" npm run extension:build:st
 RUN npm run build
 
 # ---------------------------------------------------------------------------
+# Operator tasks
+# ---------------------------------------------------------------------------
+# A separate image for one-shot maintenance run through `docker compose run`.
+# It is deliberately not part of the runtime: node-appwrite is bundled into the
+# server output rather than left external, so a script inside the traced runtime
+# could not import it, and adding the SDK there would grow every deployed image
+# for a task that runs once.
+FROM node:${NODE_VERSION} AS ops
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY scripts ./scripts
+COPY infrastructure ./infrastructure
+USER node
+ENTRYPOINT ["node"]
+CMD ["scripts/bootstrap-platform-owner.mjs"]
+
+# ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
 FROM node:${NODE_VERSION} AS runner
