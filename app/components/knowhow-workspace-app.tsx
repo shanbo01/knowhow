@@ -829,6 +829,149 @@ const ONBOARDING_STEP_COPY: Record<
   },
 };
 
+function SetupWizardReadiness({
+  busy,
+  onConfirmReadiness,
+}: {
+  busy: boolean;
+  onConfirmReadiness: () => Promise<void>;
+}) {
+  const [ordinaryDataOnly, setOrdinaryDataOnly] = useState(false);
+  const [policiesReviewed, setPoliciesReviewed] = useState(false);
+
+  return (
+    <div className="onboarding-readiness">
+      <strong>Confirm workspace readiness</strong>
+      <label className="choice-row">
+        <input
+          type="checkbox"
+          checked={ordinaryDataOnly}
+          onChange={(event) => setOrdinaryDataOnly(event.target.checked)}
+        />
+        <span>
+          <strong>Ordinary business-process data only</strong>
+          <small>
+            No credentials, payments, health data, national IDs, or
+            sensitive data.
+          </small>
+        </span>
+      </label>
+      <label className="choice-row">
+        <input
+          type="checkbox"
+          checked={policiesReviewed}
+          onChange={(event) => setPoliciesReviewed(event.target.checked)}
+        />
+        <span>
+          <strong>Workspace policies reviewed</strong>
+          <small>
+            You have reviewed the terms and capture boundaries for this
+            workspace.
+          </small>
+        </span>
+      </label>
+      <Button
+        size="sm"
+        type="button"
+        disabled={busy || !ordinaryDataOnly || !policiesReviewed}
+        onClick={() => void onConfirmReadiness()}
+      >
+        <ShieldCheck /> Confirm readiness
+      </Button>
+    </div>
+  );
+}
+
+function SetupWizardTaskList({
+  checklist,
+  currentStep,
+  busy,
+  continueBlocked,
+  chrome,
+  canCapture,
+  captureLockedByPlan,
+  onNextAction,
+  onPinExtension,
+}: {
+  checklist: NonNullable<BootstrapResponse["activeWorkspace"]>["onboarding"]["steps"];
+  currentStep: NonNullable<BootstrapResponse["activeWorkspace"]>["onboarding"]["steps"][number];
+  busy: boolean;
+  continueBlocked: boolean;
+  chrome: "card" | "plain" | "popover";
+  canCapture: boolean;
+  captureLockedByPlan?: boolean;
+  onNextAction: () => void;
+  onPinExtension: () => Promise<void>;
+}) {
+  return (
+    <>
+      <ul className="onboarding-task-list" aria-label="Getting started">
+        {checklist.map((step) => {
+          const item = ONBOARDING_STEP_COPY[step.id];
+          return (
+            <li
+              key={step.id}
+              className={
+                step.completed
+                  ? "complete"
+                  : currentStep.id === step.id
+                    ? "current"
+                    : ""
+              }
+            >
+              <button
+                type="button"
+                disabled={busy || step.completed || continueBlocked}
+                onClick={onNextAction}
+              >
+                <span>{step.completed ? <Check /> : null}</span>
+                <strong>{item.title}</strong>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {chrome !== "popover" ? (
+        <div className="onboarding-wizard-actions">
+          {currentStep.id === "extension_pin" ? (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={() => void onPinExtension()}
+            >
+              <Pin /> Mark as pinned
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            type="button"
+            disabled={continueBlocked}
+            onClick={onNextAction}
+          >
+            {currentStep.id === "extension_installation" && canCapture
+              ? "Install and pair"
+              : currentStep.id === "teammate_invitation"
+                ? "Invite teammates"
+                : currentStep.id === "first_publication"
+                  ? "Open guides"
+                  : captureLockedByPlan &&
+                      [
+                        "extension_installation",
+                        "first_capture",
+                        "extension_pin",
+                      ].includes(currentStep.id)
+                    ? "Write a guide instead"
+                    : "Continue"}{" "}
+            <ArrowRight />
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function SetupWizard({
   onboarding,
   busy,
@@ -856,8 +999,6 @@ function SetupWizard({
   onPinExtension: () => Promise<void>;
   onDismiss: () => Promise<void>;
 }) {
-  const [ordinaryDataOnly, setOrdinaryDataOnly] = useState(false);
-  const [policiesReviewed, setPoliciesReviewed] = useState(false);
   if (onboarding.completedAt) return null;
   const readiness = onboarding.steps.find((step) => step.id === "workspace_readiness");
   const checklist = onboarding.steps.filter((step) => step.id !== "workspace_readiness");
@@ -886,17 +1027,21 @@ function SetupWizard({
       if (canManageAccess) onNavigate("Members");
       return;
     }
-    if (current.id === "extension_installation" || current.id === "extension_pin") {
-      if (canCapture) onOpenExtension();
-      else if (captureLockedByPlan) onNavigate("Guides");
-      return;
-    }
-    if (current.id === "first_capture") {
+    if (
+      current.id === "extension_installation" ||
+      current.id === "extension_pin" ||
+      current.id === "first_capture"
+    ) {
       if (canCapture) onOpenExtension();
       else if (captureLockedByPlan) onNavigate("Guides");
       return;
     }
     onNavigate("Guides");
+  };
+
+  const handleDismissOrClose = () => {
+    if (onClose) onClose();
+    else void onDismiss();
   };
 
   const body = (
@@ -912,111 +1057,30 @@ function SetupWizard({
           type="button"
           aria-label={onClose ? "Close getting started" : "Dismiss getting started"}
           disabled={busy}
-          onClick={() => {
-            if (onClose) onClose();
-            else void onDismiss();
-          }}
+          onClick={handleDismissOrClose}
         >
           <X />
         </Button>
       </div>
       <DashboardProgress value={percent} label="Getting started progress" tone="accent" />
       {readinessPending && chrome !== "popover" ? (
-        <div className="onboarding-readiness">
-          <strong>Confirm workspace readiness</strong>
-          <label className="choice-row">
-            <input
-              type="checkbox"
-              checked={ordinaryDataOnly}
-              onChange={(event) => setOrdinaryDataOnly(event.target.checked)}
-            />
-            <span>
-              <strong>Ordinary business-process data only</strong>
-              <small>
-                No credentials, payments, health data, national IDs, or
-                sensitive data.
-              </small>
-            </span>
-          </label>
-          <label className="choice-row">
-            <input
-              type="checkbox"
-              checked={policiesReviewed}
-              onChange={(event) => setPoliciesReviewed(event.target.checked)}
-            />
-            <span>
-              <strong>Workspace policies reviewed</strong>
-              <small>
-                You have reviewed the terms and capture boundaries for this
-                workspace.
-              </small>
-            </span>
-          </label>
-          <Button
-            size="sm"
-            type="button"
-            disabled={busy || !ordinaryDataOnly || !policiesReviewed}
-            onClick={() => void onConfirmReadiness()}
-          >
-            <ShieldCheck /> Confirm readiness
-          </Button>
-        </div>
+        <SetupWizardReadiness
+          busy={busy}
+          onConfirmReadiness={onConfirmReadiness}
+        />
       ) : null}
       {current ? (
-        <>
-          <ul className="onboarding-task-list" aria-label="Getting started">
-            {checklist.map((step) => {
-              const item = ONBOARDING_STEP_COPY[step.id];
-              return (
-                <li key={step.id} className={step.completed ? "complete" : current.id === step.id ? "current" : ""}>
-                  <button
-                    type="button"
-                    disabled={busy || step.completed || continueBlocked}
-                    onClick={nextAction}
-                  >
-                    <span>{step.completed ? <Check /> : null}</span>
-                    <strong>{item.title}</strong>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          {chrome !== "popover" ? (
-          <div className="onboarding-wizard-actions">
-            {current.id === "extension_pin" ? (
-              <Button
-                variant="outline"
-                size="sm"
-                type="button"
-                disabled={busy}
-                onClick={() => void onPinExtension()}
-              >
-                <Pin /> Mark as pinned
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              type="button"
-              disabled={continueBlocked}
-              onClick={nextAction}
-            >
-              {current.id === "extension_installation" && canCapture
-                ? "Install and pair"
-                : current.id === "teammate_invitation"
-                  ? "Invite teammates"
-                  : current.id === "first_publication"
-                    ? "Open guides"
-                    : captureLockedByPlan &&
-                        ["extension_installation", "first_capture", "extension_pin"].includes(
-                          current.id,
-                        )
-                      ? "Write a guide instead"
-                      : "Continue"}{" "}
-              <ArrowRight />
-            </Button>
-          </div>
-          ) : null}
-        </>
+        <SetupWizardTaskList
+          checklist={checklist}
+          currentStep={current}
+          busy={busy}
+          continueBlocked={continueBlocked}
+          chrome={chrome}
+          canCapture={canCapture}
+          captureLockedByPlan={captureLockedByPlan}
+          onNextAction={nextAction}
+          onPinExtension={onPinExtension}
+        />
       ) : null}
       <div className="onboarding-wizard-footer">
         <Button
@@ -1024,10 +1088,7 @@ function SetupWizard({
           size="sm"
           type="button"
           disabled={busy}
-          onClick={() => {
-            if (onClose) onClose();
-            else void onDismiss();
-          }}
+          onClick={handleDismissOrClose}
         >
           {onClose ? "Close" : "Dismiss"}
         </Button>
