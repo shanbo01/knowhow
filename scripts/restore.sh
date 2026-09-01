@@ -18,7 +18,7 @@ DB_CONTAINER="${KNOWHOW_BACKUP_DB_CONTAINER:-}"
 DB_USER="${_APP_DB_USER:-user}"
 DB_PASS="${_APP_DB_PASS:-password}"
 DB_SCHEMA="${_APP_DB_SCHEMA:-appwrite}"
-UPLOADS_VOLUME="${KNOWHOW_BACKUP_UPLOADS_VOLUME:-appwrite-uploads}"
+UPLOADS_VOLUME="${KNOWHOW_BACKUP_UPLOADS_VOLUME:-}"
 
 log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { printf 'restore refused: %s\n' "$*" >&2; exit 1; }
@@ -62,6 +62,13 @@ fi
 command -v docker >/dev/null || die "docker is not on PATH"
 docker inspect "${DB_CONTAINER}" >/dev/null 2>&1 || die "container '${DB_CONTAINER}' not found"
 
+# Same compose project-name prefix as in backup.sh.
+if [ -z "${UPLOADS_VOLUME}" ]; then
+  UPLOADS_VOLUME="$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)appwrite-uploads$' | head -1)"
+  [ -n "${UPLOADS_VOLUME}" ] \
+    || die "no appwrite-uploads volume found; set KNOWHOW_BACKUP_UPLOADS_VOLUME"
+fi
+
 if [ -f "${SOURCE}/SHA256SUMS" ]; then
   log "verifying checksums"
   ( cd "${SOURCE}" && sha256sum -c SHA256SUMS ) || die "checksums do not match; this backup is damaged"
@@ -75,8 +82,22 @@ gzip -t "${SOURCE}/uploads.tar.gz" || die "uploads archive is not a valid gzip s
 log "restoring database ${DB_SCHEMA} into ${DB_CONTAINER} (${DB_ADAPTER})"
 case "${DB_ADAPTER}" in
   mongodb)
-    # --drop replaces each collection as it is read, so nothing from the
-    # current contents outlives the restore.
+    # --drop alone is not enough: it drops only the collections the archive
+    # contains, so anything created after the backup survives and the restored
+    # database is not the one that was backed up.
+    #
+    # Collections are dropped one by one rather than with dropDatabase, because
+    # Appwrite's database user is not granted dropDatabase — but it is granted
+    # the per-collection drop that mongorestore --drop already relies on. The
+    # archive has been verified above, so this is not discarding data in
+    # exchange for nothing.
+    docker exec "${DB_CONTAINER}" mongosh --quiet \
+      --username="${DB_USER}" \
+      --password="${DB_PASS}" \
+      --authenticationDatabase=admin \
+      "${DB_SCHEMA}" \
+      --eval 'db.getCollectionNames().forEach(function (name) { db.getCollection(name).drop(); })' >/dev/null \
+      || die "could not clear ${DB_SCHEMA} before restoring"
     gzip -dc "${SOURCE}/${DB_FILE}" \
       | docker exec -i "${DB_CONTAINER}" \
           mongorestore \

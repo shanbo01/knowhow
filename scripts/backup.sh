@@ -27,7 +27,7 @@ DB_CONTAINER="${KNOWHOW_BACKUP_DB_CONTAINER:-}"
 DB_USER="${_APP_DB_USER:-user}"
 DB_PASS="${_APP_DB_PASS:-password}"
 DB_SCHEMA="${_APP_DB_SCHEMA:-appwrite}"
-UPLOADS_VOLUME="${KNOWHOW_BACKUP_UPLOADS_VOLUME:-appwrite-uploads}"
+UPLOADS_VOLUME="${KNOWHOW_BACKUP_UPLOADS_VOLUME:-}"
 
 # Off-host destination. Set one of these, or the backup lives on the same disk
 # as the thing it protects, which is not a backup.
@@ -57,6 +57,14 @@ fi
 
 docker inspect "${DB_CONTAINER}" >/dev/null 2>&1 \
   || die "database container '${DB_CONTAINER}' not found; set KNOWHOW_BACKUP_DB_CONTAINER"
+# Compose prefixes volumes with its project name, so the uploads volume is
+# usually appwrite_appwrite-uploads rather than appwrite-uploads. Match on the
+# suffix instead of guessing the prefix.
+if [ -z "${UPLOADS_VOLUME}" ]; then
+  UPLOADS_VOLUME="$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)appwrite-uploads$' | head -1)"
+  [ -n "${UPLOADS_VOLUME}" ] \
+    || die "no appwrite-uploads volume found; set KNOWHOW_BACKUP_UPLOADS_VOLUME"
+fi
 docker volume inspect "${UPLOADS_VOLUME}" >/dev/null 2>&1 \
   || die "volume '${UPLOADS_VOLUME}' not found; set KNOWHOW_BACKUP_UPLOADS_VOLUME"
 
@@ -134,14 +142,28 @@ DB_BYTES="$(gzip -dc "${WORK}/${DB_FILE}" | wc -c)"
 [ "${DB_BYTES}" -gt 10240 ] \
   || die "database dump is only ${DB_BYTES} bytes; check the schema and credentials"
 
+# Searching a decompressed stream needs care here. Both `grep -q` and `head`
+# close the pipe as soon as they have what they need, which SIGPIPEs the
+# decompressor — and under `pipefail` that reads as a failed pipeline no matter
+# what was found. Disabling it for the search is the difference between a check
+# that verifies the dump and one that rejects every dump ever taken.
+archive_contains() {
+  local file="$1" limit="$2" needle="$3" found
+  set +o pipefail
+  gzip -dc "${file}" | head -c "${limit}" | grep -qa -- "${needle}"
+  found=$?
+  set -o pipefail
+  return "${found}"
+}
+
 case "${DB_ADAPTER}" in
   mariadb|mysql)
-    gzip -dc "${WORK}/${DB_FILE}" | grep -q "CREATE TABLE" \
+    archive_contains "${WORK}/${DB_FILE}" 8388608 "CREATE TABLE" \
       || die "database dump contains no table definitions"
     ;;
   mongodb)
-    # The archive header names each collection it carries.
-    gzip -dc "${WORK}/${DB_FILE}" | head -c 65536 | grep -qa "${DB_SCHEMA}" \
+    # The archive prelude names every database and collection it carries.
+    archive_contains "${WORK}/${DB_FILE}" 262144 "${DB_SCHEMA}" \
       || die "database archive names no ${DB_SCHEMA} collections"
     ;;
 esac
