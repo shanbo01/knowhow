@@ -3901,6 +3901,413 @@ function InviteDialog({
   );
 }
 
+function SupportComposer({
+  workspaceId,
+  busy,
+  subject,
+  setSubject,
+  message,
+  setMessage,
+  attachments,
+  setAttachments,
+  uploadingAttachments,
+  setUploadingAttachments,
+  onCreate,
+  onCancel,
+}: {
+  workspaceId: string;
+  busy: boolean;
+  subject: string;
+  setSubject: React.Dispatch<React.SetStateAction<string>>;
+  message: string;
+  setMessage: React.Dispatch<React.SetStateAction<string>>;
+  attachments: File[];
+  setAttachments: React.Dispatch<React.SetStateAction<File[]>>;
+  uploadingAttachments: boolean;
+  setUploadingAttachments: React.Dispatch<React.SetStateAction<boolean>>;
+  onCreate: (subject: string, message: string, attachmentIds: string[]) => Promise<void>;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      className="modal-form support-composer"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const uploadedIds: string[] = [];
+        setUploadingAttachments(true);
+        try {
+          for (const file of attachments) {
+            const uploaded = await uploadSupportAttachment(workspaceId, file);
+            uploadedIds.push(uploaded.id);
+          }
+          await onCreate(subject.trim(), message.trim(), uploadedIds);
+          setSubject("");
+          setMessage("");
+          setAttachments([]);
+          onCancel();
+        } catch {
+          await Promise.allSettled(
+            uploadedIds.map((mediaId) =>
+              removeStagedSupportAttachment(workspaceId, mediaId),
+            ),
+          );
+        } finally {
+          setUploadingAttachments(false);
+        }
+      }}
+    >
+      <header className="support-composer-header">
+        <span><LifeBuoy /></span>
+        <div>
+          <p className="eyebrow">New support request</p>
+          <h2>How can we help?</h2>
+          <p>Describe the issue and what you expected to happen.</p>
+        </div>
+      </header>
+      <div className="support-privacy-note">
+        <ShieldCheck />
+        <div><strong>Keep sensitive data out</strong><p>Review messages and files before sending. Don’t include credentials, secrets, payment information, health data, or national IDs.</p></div>
+      </div>
+      <div className="support-composer-fields">
+        <label className="field support-subject-field">
+          <span>Subject <small>Summarize the problem</small></span>
+          <input
+            required
+            minLength={4}
+            maxLength={160}
+            value={subject}
+            onChange={(event) => setSubject(event.target.value)}
+            placeholder="What do you need help with?"
+          />
+        </label>
+        <label className="field">
+          <span>Details <small>Include steps to reproduce and any error text</small></span>
+          <textarea
+            required
+            maxLength={4000}
+            rows={8}
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder="Tell us what happened, what you tried, and the outcome you expected."
+          />
+        </label>
+        <div className="support-attachment-field">
+          <div>
+            <strong>Attachments</strong>
+            <small>Up to 5 files, 5 MB each · PNG, JPEG, WebP, PDF, JSON, CSV, or text</small>
+          </div>
+          <label className="button secondary support-attachment-picker">
+            <Paperclip /> Add files
+            <input
+              type="file"
+              multiple
+              accept=".png,.jpg,.jpeg,.webp,.pdf,.json,.csv,.txt,text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/webp"
+              onChange={(event) => {
+                const selectedFiles = Array.from(event.target.files ?? []);
+                const allowedTypes = new Set([
+                  "application/json",
+                  "application/pdf",
+                  "image/jpeg",
+                  "image/png",
+                  "image/webp",
+                  "text/csv",
+                  "text/plain",
+                ]);
+                const next = [...attachments];
+                for (const file of selectedFiles) {
+                  if (!file.size || file.size > 5 * 1024 * 1024) {
+                    toast.error(`${file.name} must be between 1 byte and 5 MB.`);
+                    continue;
+                  }
+                  if (!allowedTypes.has(file.type)) {
+                    toast.error(`${file.name} is not a supported attachment type.`);
+                    continue;
+                  }
+                  if (next.length >= 5) {
+                    toast.error("You can attach up to 5 files.");
+                    break;
+                  }
+                  if (!next.some((item) => item.name === file.name && item.size === file.size)) {
+                    next.push(file);
+                  }
+                }
+                setAttachments(next);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {attachments.length ? (
+            <ul className="support-attachment-list">
+              {attachments.map((file, index) => (
+                <li key={`${file.name}:${file.size}:${index}`}>
+                  <Paperclip />
+                  <span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>
+                  <button
+                    type="button"
+                    className="icon-button tiny"
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                  >
+                    <X />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+      <footer className="modal-footer">
+        <button
+          className="button secondary"
+          type="button"
+          onClick={() => {
+            setAttachments([]);
+            onCancel();
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          className="button primary"
+          type="submit"
+          disabled={
+            busy || uploadingAttachments ||
+            subject.trim().length < 4 ||
+            !message.trim()
+          }
+        >
+          {busy || uploadingAttachments ? <LoaderCircle className="spin" /> : <LifeBuoy />} Send
+          securely
+        </button>
+      </footer>
+    </form>
+  );
+}
+
+function SupportThreadDetail({
+  workspaceId,
+  selected,
+  busy,
+  confirmingCloseId,
+  setConfirmingCloseId,
+  onClose,
+  message,
+  setMessage,
+  onReply,
+}: {
+  workspaceId: string;
+  selected: SupportTicket;
+  busy: boolean;
+  confirmingCloseId: string;
+  setConfirmingCloseId: React.Dispatch<React.SetStateAction<string>>;
+  onClose: (ticketId: string) => Promise<void>;
+  message: string;
+  setMessage: React.Dispatch<React.SetStateAction<string>>;
+  onReply: (ticketId: string, message: string) => Promise<void>;
+}) {
+  return (
+    <>
+      <header className="support-thread-header">
+        <div>
+          <p className="eyebrow">
+            {titleCase(selected.status.replace("_", " "))}
+          </p>
+          <h2>{selected.subject}</h2>
+          <small>
+            Initial response target:{" "}
+            {formatDate(selected.responseTargetAt, true)}
+          </small>
+        </div>
+        {selected.status === "closed" ? (
+          <span className="support-closed-pill">
+            <CheckCircle2 />
+            {selected.closureConfirmedAt ? "Closed with customer confirmation" : "Closed"}
+          </span>
+        ) : null}
+      </header>
+      {selected.status === "resolved" ? (
+        <div className="support-resolution-banner">
+          <CheckCircle2 />
+          <div>
+            <strong>KnowHow Support marked this resolved</strong>
+            <p>Confirm closure if the issue is fixed. If you still need help, reply below and the ticket will reopen.</p>
+          </div>
+          {confirmingCloseId === selected.id ? (
+            <div className="support-resolution-confirm">
+              <strong>Close this ticket permanently?</strong>
+              <button className="button secondary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId("")}>
+                Not yet
+              </button>
+              <button
+                className="button primary small"
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  await onClose(selected.id);
+                  setConfirmingCloseId("");
+                }}
+              >
+                {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />} Confirm & close
+              </button>
+            </div>
+          ) : (
+            <button className="button primary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId(selected.id)}>
+              Confirm resolution
+            </button>
+          )}
+        </div>
+      ) : null}
+      <div className="support-messages">
+        {selected.messages.map((item) => (
+          <article
+            className={
+              item.authorKind === "support"
+                ? "support-message support"
+                : "support-message"
+            }
+            key={item.id}
+          >
+            <header>
+              <strong>{item.authorName}</strong>
+              <span>
+                {item.authorKind === "support"
+                  ? "KnowHow support"
+                  : "Workspace"}{" "}
+                · {formatDate(item.createdAt, true)}
+              </span>
+            </header>
+            <p>{item.body}</p>
+            {item.attachments.length ? (
+              <div className="support-message-attachments">
+                {item.attachments.map((attachment) => (
+                  <a
+                    href={supportAttachmentHref(workspaceId, attachment.id)}
+                    key={attachment.id}
+                  >
+                    <Paperclip />
+                    <span>{attachment.filename}</span>
+                    <small>{formatBytes(attachment.byteSize)}</small>
+                  </a>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        ))}
+      </div>
+      {selected.status !== "closed" ? (
+        <form
+          className="support-reply"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!message.trim()) return;
+            await onReply(selected.id, message.trim());
+            setMessage("");
+          }}
+        >
+          <label className="field">
+            <span>{selected.status === "resolved" ? "Still need help? Reply to reopen" : "Reply"}</span>
+            <textarea
+              rows={4}
+              maxLength={4000}
+              required
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              placeholder="Do not include sensitive data."
+            />
+          </label>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={busy || !message.trim()}
+          >
+            {busy ? <LoaderCircle className="spin" /> : <ArrowRight />}{" "}
+            Reply
+          </button>
+        </form>
+      ) : null}
+    </>
+  );
+}
+
+function SupportWelcome({
+  canCreate,
+  busy,
+  onStartRequest,
+}: {
+  canCreate: boolean;
+  busy: boolean;
+  onStartRequest: () => void;
+}) {
+  return (
+    <div className="support-welcome">
+      <span className="support-welcome-icon"><LifeBuoy /></span>
+      <p className="eyebrow">Private workspace support</p>
+      <h2>Get help without leaving KnowHow</h2>
+      <p>Start a private conversation with our support team. We target an initial response within one business day.</p>
+      <div className="support-assurance-grid">
+        <span><ShieldCheck /><strong>Workspace private</strong><small>Only authorized support staff can respond.</small></span>
+        <span><Mail /><strong>Safe notifications</strong><small>Email notices never include message content.</small></span>
+      </div>
+      {canCreate ? (
+        <button className="button primary" type="button" disabled={busy} onClick={onStartRequest}>
+          <Plus /> Start a support request
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function SupportTicketList({
+  tickets,
+  selectedId,
+  onSelectTicket,
+}: {
+  tickets: SupportTicket[];
+  selectedId: string;
+  onSelectTicket: (ticketId: string) => void;
+}) {
+  return (
+    <aside className="card support-list" aria-label="Support tickets">
+      <header className="support-list-header">
+        <div>
+          <p className="eyebrow">Your requests</p>
+          <h2>{countPhrase(tickets.length, "conversation")}</h2>
+        </div>
+        {tickets.length ? (
+          <span>
+            {tickets.filter((ticket) => ticket.status !== "closed").length} active
+          </span>
+        ) : null}
+      </header>
+      {tickets.map((ticket) => (
+        <button
+          type="button"
+          className={
+            ticket.id === selectedId
+              ? "support-ticket active"
+              : "support-ticket"
+          }
+          key={ticket.id}
+          onClick={() => onSelectTicket(ticket.id)}
+        >
+          <strong>{ticket.subject}</strong>
+          <small>
+            {titleCase(ticket.status.replace("_", " "))} · updated{" "}
+            {formatDate(ticket.updatedAt, true)}
+          </small>
+        </button>
+      ))}
+      {!tickets.length ? (
+        <div className="support-list-empty">
+          <LifeBuoy />
+          <strong>No requests yet</strong>
+          <small>Your support history will stay organized here.</small>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
 function SupportView({
   workspaceId,
   tickets,
@@ -3951,328 +4358,49 @@ function SupportView({
         </div>
       </div>
       <div className={["support-layout", !tickets.length ? "is-empty" : "", creating ? "is-creating" : ""].filter(Boolean).join(" ")}>
-        <aside className="card support-list" aria-label="Support tickets">
-          <header className="support-list-header">
-            <div><p className="eyebrow">Your requests</p><h2>{countPhrase(tickets.length, "conversation")}</h2></div>
-            {tickets.length ? <span>{tickets.filter((ticket) => ticket.status !== "closed").length} active</span> : null}
-          </header>
-          {tickets.map((ticket) => (
-            <button
-              type="button"
-              className={
-                ticket.id === selected?.id
-                  ? "support-ticket active"
-                  : "support-ticket"
-              }
-              key={ticket.id}
-              onClick={() => {
-                setSelectedId(ticket.id);
-                setCreating(false);
-                setConfirmingCloseId("");
-              }}
-            >
-              <strong>{ticket.subject}</strong>
-              <small>
-                {titleCase(ticket.status.replace("_", " "))} · updated{" "}
-                {formatDate(ticket.updatedAt, true)}
-              </small>
-            </button>
-          ))}
-          {!tickets.length ? (
-            <div className="support-list-empty">
-              <LifeBuoy />
-              <strong>No requests yet</strong>
-              <small>Your support history will stay organized here.</small>
-            </div>
-          ) : null}
-        </aside>
+        <SupportTicketList
+          tickets={tickets}
+          selectedId={selected?.id ?? ""}
+          onSelectTicket={(ticketId) => {
+            setSelectedId(ticketId);
+            setCreating(false);
+            setConfirmingCloseId("");
+          }}
+        />
         <section className="card support-thread">
           {creating ? (
-            <form
-              className="modal-form support-composer"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                const uploadedIds: string[] = [];
-                setUploadingAttachments(true);
-                try {
-                  for (const file of attachments) {
-                    const uploaded = await uploadSupportAttachment(workspaceId, file);
-                    uploadedIds.push(uploaded.id);
-                  }
-                  await onCreate(subject.trim(), message.trim(), uploadedIds);
-                  setSubject("");
-                  setMessage("");
-                  setAttachments([]);
-                  setCreating(false);
-                } catch {
-                  await Promise.allSettled(
-                    uploadedIds.map((mediaId) =>
-                      removeStagedSupportAttachment(workspaceId, mediaId),
-                    ),
-                  );
-                } finally {
-                  setUploadingAttachments(false);
-                }
-              }}
-            >
-              <header className="support-composer-header">
-                <span><LifeBuoy /></span>
-                <div>
-                  <p className="eyebrow">New support request</p>
-                  <h2>How can we help?</h2>
-                  <p>Describe the issue and what you expected to happen.</p>
-                </div>
-              </header>
-              <div className="support-privacy-note">
-                <ShieldCheck />
-                <div><strong>Keep sensitive data out</strong><p>Review messages and files before sending. Don’t include credentials, secrets, payment information, health data, or national IDs.</p></div>
-              </div>
-              <div className="support-composer-fields">
-              <label className="field support-subject-field">
-                <span>Subject <small>Summarize the problem</small></span>
-                <input
-                  required
-                  minLength={4}
-                  maxLength={160}
-                  value={subject}
-                  onChange={(event) => setSubject(event.target.value)}
-                  placeholder="What do you need help with?"
-                />
-              </label>
-              <label className="field">
-                <span>Details <small>Include steps to reproduce and any error text</small></span>
-                <textarea
-                  required
-                  maxLength={4000}
-                  rows={8}
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                  placeholder="Tell us what happened, what you tried, and the outcome you expected."
-                />
-              </label>
-              <div className="support-attachment-field">
-                <div>
-                  <strong>Attachments</strong>
-                  <small>Up to 5 files, 5 MB each · PNG, JPEG, WebP, PDF, JSON, CSV, or text</small>
-                </div>
-                <label className="button secondary support-attachment-picker">
-                  <Paperclip /> Add files
-                  <input
-                    type="file"
-                    multiple
-                    accept=".png,.jpg,.jpeg,.webp,.pdf,.json,.csv,.txt,text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/webp"
-                    onChange={(event) => {
-                      const selectedFiles = Array.from(event.target.files ?? []);
-                      const allowedTypes = new Set([
-                        "application/json",
-                        "application/pdf",
-                        "image/jpeg",
-                        "image/png",
-                        "image/webp",
-                        "text/csv",
-                        "text/plain",
-                      ]);
-                      const next = [...attachments];
-                      for (const file of selectedFiles) {
-                        if (!file.size || file.size > 5 * 1024 * 1024) {
-                          toast.error(`${file.name} must be between 1 byte and 5 MB.`);
-                          continue;
-                        }
-                        if (!allowedTypes.has(file.type)) {
-                          toast.error(`${file.name} is not a supported attachment type.`);
-                          continue;
-                        }
-                        if (next.length >= 5) {
-                          toast.error("You can attach up to 5 files.");
-                          break;
-                        }
-                        if (!next.some((item) => item.name === file.name && item.size === file.size)) {
-                          next.push(file);
-                        }
-                      }
-                      setAttachments(next);
-                      event.target.value = "";
-                    }}
-                  />
-                </label>
-                {attachments.length ? (
-                  <ul className="support-attachment-list">
-                    {attachments.map((file, index) => (
-                      <li key={`${file.name}:${file.size}:${index}`}>
-                        <Paperclip />
-                        <span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span>
-                        <button
-                          type="button"
-                          className="icon-button tiny"
-                          aria-label={`Remove ${file.name}`}
-                          onClick={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                        >
-                          <X />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-              </div>
-              <footer className="modal-footer">
-                <button
-                  className="button secondary"
-                  type="button"
-                  onClick={() => {
-                    setAttachments([]);
-                    setCreating(false);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="button primary"
-                  type="submit"
-                  disabled={
-                    busy || uploadingAttachments ||
-                    subject.trim().length < 4 ||
-                    !message.trim()
-                  }
-                >
-                  {busy || uploadingAttachments ? <LoaderCircle className="spin" /> : <LifeBuoy />} Send
-                  securely
-                </button>
-              </footer>
-            </form>
+            <SupportComposer
+              workspaceId={workspaceId}
+              busy={busy}
+              subject={subject}
+              setSubject={setSubject}
+              message={message}
+              setMessage={setMessage}
+              attachments={attachments}
+              setAttachments={setAttachments}
+              uploadingAttachments={uploadingAttachments}
+              setUploadingAttachments={setUploadingAttachments}
+              onCreate={onCreate}
+              onCancel={() => setCreating(false)}
+            />
           ) : selected ? (
-            <>
-              <header className="support-thread-header">
-                <div>
-                  <p className="eyebrow">
-                    {titleCase(selected.status.replace("_", " "))}
-                  </p>
-                  <h2>{selected.subject}</h2>
-                  <small>
-                    Initial response target:{" "}
-                    {formatDate(selected.responseTargetAt, true)}
-                  </small>
-                </div>
-                {selected.status === "closed" ? (
-                  <span className="support-closed-pill">
-                    <CheckCircle2 />
-                    {selected.closureConfirmedAt ? "Closed with customer confirmation" : "Closed"}
-                  </span>
-                ) : null}
-              </header>
-              {selected.status === "resolved" ? (
-                <div className="support-resolution-banner">
-                  <CheckCircle2 />
-                  <div>
-                    <strong>KnowHow Support marked this resolved</strong>
-                    <p>Confirm closure if the issue is fixed. If you still need help, reply below and the ticket will reopen.</p>
-                  </div>
-                  {confirmingCloseId === selected.id ? (
-                    <div className="support-resolution-confirm">
-                      <strong>Close this ticket permanently?</strong>
-                      <button className="button secondary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId("")}>
-                        Not yet
-                      </button>
-                      <button
-                        className="button primary small"
-                        type="button"
-                        disabled={busy}
-                        onClick={async () => {
-                          await onClose(selected.id);
-                          setConfirmingCloseId("");
-                        }}
-                      >
-                        {busy ? <LoaderCircle className="spin" /> : <CheckCircle2 />} Confirm & close
-                      </button>
-                    </div>
-                  ) : (
-                    <button className="button primary small" type="button" disabled={busy} onClick={() => setConfirmingCloseId(selected.id)}>
-                      Confirm resolution
-                    </button>
-                  )}
-                </div>
-              ) : null}
-              <div className="support-messages">
-                {selected.messages.map((item) => (
-                  <article
-                    className={
-                      item.authorKind === "support"
-                        ? "support-message support"
-                        : "support-message"
-                    }
-                    key={item.id}
-                  >
-                    <header>
-                      <strong>{item.authorName}</strong>
-                      <span>
-                        {item.authorKind === "support"
-                          ? "KnowHow support"
-                          : "Workspace"}{" "}
-                        · {formatDate(item.createdAt, true)}
-                      </span>
-                    </header>
-                    <p>{item.body}</p>
-                    {item.attachments.length ? (
-                      <div className="support-message-attachments">
-                        {item.attachments.map((attachment) => (
-                          <a
-                            href={supportAttachmentHref(workspaceId, attachment.id)}
-                            key={attachment.id}
-                          >
-                            <Paperclip />
-                            <span>{attachment.filename}</span>
-                            <small>{formatBytes(attachment.byteSize)}</small>
-                          </a>
-                        ))}
-                      </div>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-              {selected.status !== "closed" ? (
-                <form
-                  className="support-reply"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    if (!message.trim()) return;
-                    await onReply(selected.id, message.trim());
-                    setMessage("");
-                  }}
-                >
-                  <label className="field">
-                    <span>{selected.status === "resolved" ? "Still need help? Reply to reopen" : "Reply"}</span>
-                    <textarea
-                      rows={4}
-                      maxLength={4000}
-                      required
-                      value={message}
-                      onChange={(event) => setMessage(event.target.value)}
-                      placeholder="Do not include sensitive data."
-                    />
-                  </label>
-                  <button
-                    className="button primary"
-                    type="submit"
-                    disabled={busy || !message.trim()}
-                  >
-                    {busy ? <LoaderCircle className="spin" /> : <ArrowRight />}{" "}
-                    Reply
-                  </button>
-                </form>
-              ) : null}
-            </>
+            <SupportThreadDetail
+              workspaceId={workspaceId}
+              selected={selected}
+              busy={busy}
+              confirmingCloseId={confirmingCloseId}
+              setConfirmingCloseId={setConfirmingCloseId}
+              onClose={onClose}
+              message={message}
+              setMessage={setMessage}
+              onReply={onReply}
+            />
           ) : (
-            <div className="support-welcome">
-              <span className="support-welcome-icon"><LifeBuoy /></span>
-              <p className="eyebrow">Private workspace support</p>
-              <h2>Get help without leaving KnowHow</h2>
-              <p>Start a private conversation with our support team. We target an initial response within one business day.</p>
-              <div className="support-assurance-grid">
-                <span><ShieldCheck /><strong>Workspace private</strong><small>Only authorized support staff can respond.</small></span>
-                <span><Mail /><strong>Safe notifications</strong><small>Email notices never include message content.</small></span>
-              </div>
-              {canCreate ? <button className="button primary" type="button" disabled={busy} onClick={() => setCreating(true)}><Plus /> Start a support request</button> : null}
-            </div>
+            <SupportWelcome
+              canCreate={canCreate}
+              busy={busy}
+              onStartRequest={() => setCreating(true)}
+            />
           )}
         </section>
       </div>
