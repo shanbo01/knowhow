@@ -36,7 +36,10 @@ jobs:
         with:
           node-version: 22.13.0
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - run: npm ci
       - run: npm ci --prefix desktop
       - run: npm run desktop:check
       - name: Native formatting and correctness lints
