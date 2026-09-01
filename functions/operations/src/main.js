@@ -864,6 +864,209 @@ function lifecycleNotices(subscription) {
   ];
 }
 
+async function downgradeSubscriptionToFree(tables, subscription, row, now) {
+  const next = {
+    ...subscription,
+    plan: "free",
+    kind: "trial",
+    status: "active",
+    expiresAt: null,
+    graceDays: 0,
+    publicTrial: false,
+    manualContract: false,
+    trialConsumed: true,
+    downgradedAt: now.toISOString(),
+    lastEvaluatedAt: now.toISOString(),
+  };
+  await tables.updateRow({
+    databaseId: DATABASE_ID,
+    tableId: "subscriptions",
+    rowId: row.$id,
+    data: fields(
+      { status: "active", kind: next.kind, updated_by: "knowhow_ops" },
+      next,
+    ),
+    permissions: [],
+  });
+  const entitlementRows = await listAll(tables, "entitlements", [
+    Query.equal("workspace_id", [row.workspace_id]),
+  ]);
+  const freeEntitlements = {
+    maximumUsers: 3,
+    maximumCreators: 1,
+    maximumGuides: 15,
+    storageBytes: 1_000_000_000,
+    extensionEnabled: false,
+    desktopCaptureEnabled: false,
+    supportEnabled: false,
+    removeBranding: false,
+    privacyToolsEnabled: false,
+    publicSignup: false,
+    payments: false,
+    ssoScim: false,
+  };
+  for (const [kind, value] of Object.entries(freeEntitlements)) {
+    const existing = entitlementRows.find((item) => item.kind === kind);
+    const data = fields(
+      {
+        organization_id: row.organization_id,
+        workspace_id: row.workspace_id,
+        kind,
+        status: "active",
+        updated_by: "knowhow_ops",
+      },
+      { value, source: "plan" },
+    );
+    if (existing) {
+      await tables.updateRow({
+        databaseId: DATABASE_ID,
+        tableId: "entitlements",
+        rowId: existing.$id,
+        data,
+        permissions: [],
+      });
+    }
+  }
+}
+
+async function syncWorkspaceStatus(tables, workspace, workspaceData, result, retain) {
+  const suspend =
+    retain &&
+    ["suspended", "deletion_pending", "deleting", "deleted"].includes(
+      result.access,
+    );
+  if (
+    suspend &&
+    (workspace.status !== "suspended" ||
+      workspaceData.suspensionReason !== "lifecycle")
+  ) {
+    await tables.updateRow({
+      databaseId: DATABASE_ID,
+      tableId: "workspaces",
+      rowId: workspace.$id,
+      data: fields(
+        { status: "suspended", updated_by: "knowhow_ops" },
+        {
+          ...workspaceData,
+          status: "suspended",
+          suspensionReason: "lifecycle",
+        },
+      ),
+      permissions: [],
+    });
+  } else if (
+    !suspend &&
+    workspace.status === "suspended" &&
+    workspaceData.suspensionReason === "lifecycle"
+  ) {
+    await tables.updateRow({
+      databaseId: DATABASE_ID,
+      tableId: "workspaces",
+      rowId: workspace.$id,
+      data: fields(
+        { status: "active", updated_by: "knowhow_ops" },
+        { ...workspaceData, status: "active", suspensionReason: null },
+      ),
+      permissions: [],
+    });
+  }
+}
+
+async function dispatchLifecycleNotices(tables, subscription, row, workspace, details, now) {
+  let queued = 0;
+  const members = await listAll(tables, "workspace_members", [
+    Query.equal("workspace_id", [row.workspace_id]),
+    Query.equal("status", ["active"]),
+  ]);
+  const administrators = members.filter((member) =>
+    (payload(member).roles || []).includes("administrator"),
+  );
+  for (const [kind, milestone] of lifecycleNotices(subscription)) {
+    if (milestone > now.getTime()) continue;
+    for (const administrator of administrators) {
+      if (!administrator.email) continue;
+      if (
+        await queueNotice(tables, {
+          organizationId: workspace.organization_id,
+          workspaceId: workspace.$id,
+          userId: administrator.user_id,
+          email: administrator.email,
+          kind,
+          subjectId: row.$id,
+          scheduledAt: now.toISOString(),
+          idempotencyKey: `${row.$id}:${kind}:${administrator.user_id}`,
+          details,
+        })
+      ) {
+        queued += 1;
+      }
+    }
+  }
+  return queued;
+}
+
+async function handleDeletionApprovalCase(tables, subscription, row, workspace, workspaceData, result, details, now) {
+  let queued = 0;
+  const caseId = await stableId("delete", `${row.$id}:tenant-deletion`);
+  const organization = await tables
+    .getRow({
+      databaseId: DATABASE_ID,
+      tableId: "organizations",
+      rowId: workspace.organization_id,
+    })
+    .catch(() => null);
+  const organizationData = organization ? payload(organization) : {};
+  await createOnce(
+    tables,
+    "lifecycle_cases",
+    caseId,
+    fields(
+      {
+        organization_id: workspace.organization_id,
+        workspace_id: workspace.$id,
+        subject_id: row.$id,
+        kind: "tenant_deletion_approval",
+        status: "awaiting_approval",
+        scheduled_at: now.toISOString(),
+        created_by: "knowhow_ops",
+      },
+      {
+        kind: "tenant_deletion_approval",
+        subscriptionId: row.$id,
+        status: "awaiting_approval",
+        eligibleAt: new Date(result.eligible).toISOString(),
+        confirmationText: `DELETE ${organizationData.displayName || workspaceData.name}`,
+        createdAt: now.toISOString(),
+      },
+    ),
+  );
+  const day = now.toISOString().slice(0, 10);
+  for (const email of (process.env.KNOWHOW_PLATFORM_OWNER_EMAILS || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)) {
+    if (
+      await queueNotice(tables, {
+        organizationId: workspace.organization_id,
+        workspaceId: workspace.$id,
+        email,
+        kind: "deletion.approval_overdue",
+        subjectId: caseId,
+        scheduledAt: now.toISOString(),
+        idempotencyKey: `${caseId}:critical:${day}:${email}`,
+        details: {
+          ...details,
+          organizationName:
+            organizationData.displayName || workspaceData.name,
+        },
+      })
+    ) {
+      queued += 1;
+    }
+  }
+  return queued;
+}
+
 async function runLifecycle({ tables }, now) {
   const subscriptions = await listAll(tables, "subscriptions");
   let transitions = 0;
@@ -881,68 +1084,7 @@ async function runLifecycle({ tables }, now) {
     const effectivePlan = effectiveCommercialPlan(subscription, now.getTime());
     if (!retain && effectivePlan === "free" && storedPlan !== "free") {
       transitions += 1;
-      const next = {
-        ...subscription,
-        plan: "free",
-        kind: "trial",
-        status: "active",
-        expiresAt: null,
-        graceDays: 0,
-        publicTrial: false,
-        manualContract: false,
-        trialConsumed: true,
-        downgradedAt: now.toISOString(),
-        lastEvaluatedAt: now.toISOString(),
-      };
-      await tables.updateRow({
-        databaseId: DATABASE_ID,
-        tableId: "subscriptions",
-        rowId: row.$id,
-        data: fields(
-          { status: "active", kind: next.kind, updated_by: "knowhow_ops" },
-          next,
-        ),
-        permissions: [],
-      });
-      const entitlementRows = await listAll(tables, "entitlements", [
-        Query.equal("workspace_id", [row.workspace_id]),
-      ]);
-      const freeEntitlements = {
-        maximumUsers: 3,
-        maximumCreators: 1,
-        maximumGuides: 15,
-        storageBytes: 1_000_000_000,
-        extensionEnabled: false,
-        desktopCaptureEnabled: false,
-        supportEnabled: false,
-        removeBranding: false,
-        privacyToolsEnabled: false,
-        publicSignup: false,
-        payments: false,
-        ssoScim: false,
-      };
-      for (const [kind, value] of Object.entries(freeEntitlements)) {
-        const existing = entitlementRows.find((item) => item.kind === kind);
-        const data = fields(
-          {
-            organization_id: row.organization_id,
-            workspace_id: row.workspace_id,
-            kind,
-            status: "active",
-            updated_by: "knowhow_ops",
-          },
-          { value, source: "plan" },
-        );
-        if (existing) {
-          await tables.updateRow({
-            databaseId: DATABASE_ID,
-            tableId: "entitlements",
-            rowId: existing.$id,
-            data,
-            permissions: [],
-          });
-        }
-      }
+      await downgradeSubscriptionToFree(tables, subscription, row, now);
       continue;
     }
     const result = evaluate(subscription, now.getTime());
@@ -974,53 +1116,7 @@ async function runLifecycle({ tables }, now) {
       continue;
     }
     const workspaceData = payload(workspace);
-    const suspend =
-      retain &&
-      ["suspended", "deletion_pending", "deleting", "deleted"].includes(
-        result.access,
-      );
-    if (
-      suspend &&
-      (workspace.status !== "suspended" ||
-        workspaceData.suspensionReason !== "lifecycle")
-    ) {
-      await tables.updateRow({
-        databaseId: DATABASE_ID,
-        tableId: "workspaces",
-        rowId: workspace.$id,
-        data: fields(
-          { status: "suspended", updated_by: "knowhow_ops" },
-          {
-            ...workspaceData,
-            status: "suspended",
-            suspensionReason: "lifecycle",
-          },
-        ),
-        permissions: [],
-      });
-    } else if (
-      !suspend &&
-      workspace.status === "suspended" &&
-      workspaceData.suspensionReason === "lifecycle"
-    ) {
-      await tables.updateRow({
-        databaseId: DATABASE_ID,
-        tableId: "workspaces",
-        rowId: workspace.$id,
-        data: fields(
-          { status: "active", updated_by: "knowhow_ops" },
-          { ...workspaceData, status: "active", suspensionReason: null },
-        ),
-        permissions: [],
-      });
-    }
-    const members = await listAll(tables, "workspace_members", [
-      Query.equal("workspace_id", [row.workspace_id]),
-      Query.equal("status", ["active"]),
-    ]);
-    const administrators = members.filter((member) =>
-      (payload(member).roles || []).includes("administrator"),
-    );
+    await syncWorkspaceStatus(tables, workspace, workspaceData, result, retain);
     const details = {
       workspaceName: workspaceData.name || "KnowHow workspace",
       expiresAt:
@@ -1034,84 +1130,27 @@ async function runLifecycle({ tables }, now) {
           ? null
           : new Date(result.eligible).toISOString(),
     };
-    for (const [kind, milestone] of lifecycleNotices(subscription)) {
-      if (milestone > now.getTime()) continue;
-      for (const administrator of administrators) {
-        if (!administrator.email) continue;
-        if (
-          await queueNotice(tables, {
-            organizationId: workspace.organization_id,
-            workspaceId: workspace.$id,
-            userId: administrator.user_id,
-            email: administrator.email,
-            kind,
-            subjectId: row.$id,
-            scheduledAt: now.toISOString(),
-            idempotencyKey: `${row.$id}:${kind}:${administrator.user_id}`,
-            details,
-          })
-        )
-          queued += 1;
-      }
-    }
-    if (!retain || result.access !== "deletion_pending" || result.eligible === null)
-      continue;
-    const caseId = await stableId("delete", `${row.$id}:tenant-deletion`);
-    const organization = await tables
-      .getRow({
-        databaseId: DATABASE_ID,
-        tableId: "organizations",
-        rowId: workspace.organization_id,
-      })
-      .catch(() => null);
-    const organizationData = organization ? payload(organization) : {};
-    await createOnce(
+    queued += await dispatchLifecycleNotices(
       tables,
-      "lifecycle_cases",
-      caseId,
-      fields(
-        {
-          organization_id: workspace.organization_id,
-          workspace_id: workspace.$id,
-          subject_id: row.$id,
-          kind: "tenant_deletion_approval",
-          status: "awaiting_approval",
-          scheduled_at: now.toISOString(),
-          created_by: "knowhow_ops",
-        },
-        {
-          kind: "tenant_deletion_approval",
-          subscriptionId: row.$id,
-          status: "awaiting_approval",
-          eligibleAt: new Date(result.eligible).toISOString(),
-          confirmationText: `DELETE ${organizationData.displayName || workspaceData.name}`,
-          createdAt: now.toISOString(),
-        },
-      ),
+      subscription,
+      row,
+      workspace,
+      details,
+      now,
     );
-    const day = now.toISOString().slice(0, 10);
-    for (const email of (process.env.KNOWHOW_PLATFORM_OWNER_EMAILS || "")
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean)) {
-      if (
-        await queueNotice(tables, {
-          organizationId: workspace.organization_id,
-          workspaceId: workspace.$id,
-          email,
-          kind: "deletion.approval_overdue",
-          subjectId: caseId,
-          scheduledAt: now.toISOString(),
-          idempotencyKey: `${caseId}:critical:${day}:${email}`,
-          details: {
-            ...details,
-            organizationName:
-              organizationData.displayName || workspaceData.name,
-          },
-        })
-      )
-        queued += 1;
+    if (!retain || result.access !== "deletion_pending" || result.eligible === null) {
+      continue;
     }
+    queued += await handleDeletionApprovalCase(
+      tables,
+      subscription,
+      row,
+      workspace,
+      workspaceData,
+      result,
+      details,
+      now,
+    );
   }
   return { checked: subscriptions.length, skippedDeleted, transitions, queued };
 }
