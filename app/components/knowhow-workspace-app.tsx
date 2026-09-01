@@ -5848,6 +5848,143 @@ function ExtensionDialog({
   );
 }
 
+function MfaRecoveryCodesList({ recoveryCodes }: { recoveryCodes: string[] }) {
+  return (
+    <div className="created-invite">
+      <ShieldCheck />
+      <div>
+        <strong>New recovery codes</strong>
+        <p>
+          These codes replace every previous recovery code and are shown
+          once. Store them in a password manager now.
+        </p>
+      </div>
+      <ol className="mfa-recovery-codes" aria-label="New recovery codes">
+        {recoveryCodes.map((code) => (
+          <li key={code}>
+            <code>{code}</code>
+          </li>
+        ))}
+      </ol>
+      <button
+        className="button secondary"
+        type="button"
+        onClick={() => {
+          void navigator.clipboard
+            .writeText(recoveryCodes.join("\n"))
+            .then(() => toast.success("Recovery codes copied"));
+        }}
+      >
+        <Copy /> Copy codes
+      </button>
+    </div>
+  );
+}
+
+function AccountProfileFields({
+  displayName,
+  setDisplayName,
+  working,
+  onSaveName,
+  currentPassword,
+  setCurrentPassword,
+  nextPassword,
+  setNextPassword,
+  confirmPassword,
+  setConfirmPassword,
+  onSavePassword,
+  mfaEnabled,
+  onSignOutOtherDevices,
+}: {
+  displayName: string;
+  setDisplayName: (value: string) => void;
+  working: boolean;
+  onSaveName: () => void;
+  currentPassword: string;
+  setCurrentPassword: (value: string) => void;
+  nextPassword: string;
+  setNextPassword: (value: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (value: string) => void;
+  onSavePassword: () => void;
+  mfaEnabled: boolean;
+  onSignOutOtherDevices: () => void;
+}) {
+  return (
+    <>
+      <label className="field">
+        <span>Name</span>
+        <input
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+        />
+      </label>
+      <button
+        className="button secondary small"
+        type="button"
+        disabled={working || displayName.trim().length < 2}
+        onClick={onSaveName}
+      >
+        Save name
+      </button>
+      <label className="field">
+        <span>Current password</span>
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(event) => setCurrentPassword(event.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span>New password</span>
+        <input
+          type="password"
+          minLength={8}
+          autoComplete="new-password"
+          value={nextPassword}
+          onChange={(event) => setNextPassword(event.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span>Confirm new password</span>
+        <input
+          type="password"
+          minLength={8}
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(event) => setConfirmPassword(event.target.value)}
+        />
+      </label>
+      <button
+        className="button secondary small"
+        type="button"
+        disabled={working || !currentPassword || !nextPassword}
+        onClick={onSavePassword}
+      >
+        Update password
+      </button>
+      <p className="modal-copy">
+        {mfaEnabled
+          ? "Authenticator sign-in is on for this account. You can replace recovery codes or turn it off."
+          : "Authenticator apps are optional. Turn one on if you want a second step at sign-in."}
+      </p>
+      <p className="privacy-caption">
+        <LockKeyhole /> Recovery codes are shown once and never included
+        in logs, email, or support records.
+      </p>
+      <button
+        className="button ghost small"
+        type="button"
+        disabled={working}
+        onClick={onSignOutOtherDevices}
+      >
+        Sign out other devices
+      </button>
+    </>
+  );
+}
+
 function AccountSecurityDialog({
   name,
   email,
@@ -5981,106 +6118,23 @@ function AccountSecurityDialog({
     >
       <div className="modal-form">
         {recoveryCodes.length ? (
-          <div className="created-invite">
-            <ShieldCheck />
-            <div>
-              <strong>New recovery codes</strong>
-              <p>
-                These codes replace every previous recovery code and are shown
-                once. Store them in a password manager now.
-              </p>
-            </div>
-            <ol className="mfa-recovery-codes" aria-label="New recovery codes">
-              {recoveryCodes.map((code) => (
-                <li key={code}>
-                  <code>{code}</code>
-                </li>
-              ))}
-            </ol>
-            <button
-              className="button secondary"
-              type="button"
-              onClick={() => {
-                void navigator.clipboard
-                  .writeText(recoveryCodes.join("\n"))
-                  .then(() => toast.success("Recovery codes copied"));
-              }}
-            >
-              <Copy /> Copy codes
-            </button>
-          </div>
+          <MfaRecoveryCodesList recoveryCodes={recoveryCodes} />
         ) : (
-          <>
-            <label className="field">
-              <span>Name</span>
-              <input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </label>
-            <button
-              className="button secondary small"
-              type="button"
-              disabled={working || displayName.trim().length < 2}
-              onClick={() => void saveName()}
-            >
-              Save name
-            </button>
-            <label className="field">
-              <span>Current password</span>
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={currentPassword}
-                onChange={(event) => setCurrentPassword(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>New password</span>
-              <input
-                type="password"
-                minLength={8}
-                autoComplete="new-password"
-                value={nextPassword}
-                onChange={(event) => setNextPassword(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Confirm new password</span>
-              <input
-                type="password"
-                minLength={8}
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-              />
-            </label>
-            <button
-              className="button secondary small"
-              type="button"
-              disabled={working || !currentPassword || !nextPassword}
-              onClick={() => void savePassword()}
-            >
-              Update password
-            </button>
-            <p className="modal-copy">
-              {mfaEnabled
-                ? "Authenticator sign-in is on for this account. You can replace recovery codes or turn it off."
-                : "Authenticator apps are optional. Turn one on if you want a second step at sign-in."}
-            </p>
-            <p className="privacy-caption">
-              <LockKeyhole /> Recovery codes are shown once and never included
-              in logs, email, or support records.
-            </p>
-            <button
-              className="button ghost small"
-              type="button"
-              disabled={working}
-              onClick={() => void signOutOtherDevices()}
-            >
-              Sign out other devices
-            </button>
-          </>
+          <AccountProfileFields
+            displayName={displayName}
+            setDisplayName={setDisplayName}
+            working={working}
+            onSaveName={() => void saveName()}
+            currentPassword={currentPassword}
+            setCurrentPassword={setCurrentPassword}
+            nextPassword={nextPassword}
+            setNextPassword={setNextPassword}
+            confirmPassword={confirmPassword}
+            setConfirmPassword={setConfirmPassword}
+            onSavePassword={() => void savePassword()}
+            mfaEnabled={mfaEnabled}
+            onSignOutOtherDevices={() => void signOutOtherDevices()}
+          />
         )}
         {error ? (
           <p className="form-error" role="alert">
