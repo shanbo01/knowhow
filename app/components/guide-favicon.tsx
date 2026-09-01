@@ -51,6 +51,7 @@ export function GuideFavicon({
   if (!ready) return fallback;
   return (
     // Favicons are decorative here; the adjacent guide title is the label.
+
     <img
       className="guide-favicon"
       src={state.url}
