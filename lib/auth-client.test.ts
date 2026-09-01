@@ -31,9 +31,9 @@ test("getAuthSession", async (t) => {
     const user = await getAuthSession();
 
     assert.deepEqual(user, mockUser);
-    assert.notStrictEqual(fetchCalledWith, null);
-    assert.equal(fetchCalledWith?.url, "/api/auth/session");
-    assert.deepEqual(fetchCalledWith?.init, {
+    assert.ok(fetchCalledWith);
+    assert.equal(fetchCalledWith.url, "/api/auth/session");
+    assert.deepEqual(fetchCalledWith.init, {
       credentials: "same-origin",
       headers: { accept: "application/json" },
     });
