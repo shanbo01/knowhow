@@ -3672,6 +3672,191 @@ function MemberDialog({
   );
 }
 
+function CreatedInviteResultList({
+  created,
+  origin,
+}: {
+  created: Array<{ email: string; token: string }>;
+  origin: string;
+}) {
+  return (
+    <div className="created-invite">
+      <CheckCircle2 />
+      <div>
+        <strong>
+          {created.length === 1
+            ? "Invitation sent"
+            : `${created.length} invitations sent`}
+        </strong>
+        <p>
+          We emailed each person. The link below is a one-time backup if
+          the email is delayed.
+        </p>
+      </div>
+      <div className="created-invite-list">
+        {created.map((item) => {
+          const url = `${origin}/app?invite=${encodeURIComponent(item.token)}`;
+          return (
+            <div className="copy-field" key={item.email}>
+              <span className="created-invite-email">{item.email}</span>
+              <input readOnly value={url} aria-label={`${item.email} invitation link`} />
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => navigator.clipboard.writeText(url)}
+              >
+                <Copy /> Copy
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {created.length > 1 ? (
+        <button
+          className="button ghost small"
+          type="button"
+          onClick={() =>
+            navigator.clipboard.writeText(
+              created
+                .map(
+                  (item) =>
+                    `${item.email}\t${origin}/app?invite=${encodeURIComponent(item.token)}`,
+                )
+                .join("\n"),
+            )
+          }
+        >
+          <Copy /> Copy all links
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function InviteRecipientsSection({
+  emailDraft,
+  setEmailDraft,
+  parsed,
+  overLimit,
+}: {
+  emailDraft: string;
+  setEmailDraft: (value: string) => void;
+  parsed: { emails: string[]; invalid: string[] };
+  overLimit: boolean;
+}) {
+  return (
+    <section className="invite-composer-section invite-recipients-section">
+      <div className="form-section-heading">
+        <span className="form-section-icon"><Mail /></span>
+        <div><strong>Who are you inviting?</strong><small>Add up to {MAX_BULK_INVITES} exact email addresses.</small></div>
+      </div>
+      <label className="field invite-email-field">
+        <span>Email addresses</span>
+        <textarea
+          required
+          className="invite-emails"
+          value={emailDraft}
+          onChange={(event) => setEmailDraft(event.target.value)}
+          placeholder={"teammate@example.com\nops@example.com"}
+          aria-label="Invitee emails"
+          rows={6}
+        />
+        <small>
+          Paste one address per line, or separate them with commas. Each
+          person must sign in or create an account with that exact email.
+          {parsed.emails.length
+            ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
+            : ""}
+        </small>
+        {parsed.invalid.length ? (
+          <small className="form-error" role="alert">
+            Not valid: {parsed.invalid.slice(0, 6).join(", ")}
+            {parsed.invalid.length > 6
+              ? ` +${parsed.invalid.length - 6} more`
+              : ""}
+          </small>
+        ) : null}
+        {overLimit ? (
+          <small className="form-error" role="alert">
+            Invite at most {MAX_BULK_INVITES} people at a time.
+          </small>
+        ) : null}
+        {parsed.emails.length && !parsed.invalid.length ? (
+          <span className="invite-ready-chip"><Check /> {countPhrase(parsed.emails.length, "address")} ready</span>
+        ) : null}
+      </label>
+    </section>
+  );
+}
+
+function InviteAccessSection({
+  label,
+  setLabel,
+  role,
+  setRole,
+  expires,
+  setExpires,
+}: {
+  label: string;
+  setLabel: (value: string) => void;
+  role: WorkspaceRole;
+  setRole: (role: WorkspaceRole) => void;
+  expires: number;
+  setExpires: (expires: number) => void;
+}) {
+  return (
+    <section className="invite-composer-section invite-access-section">
+      <div className="form-section-heading">
+        <span className="form-section-icon"><UserCog /></span>
+        <div><strong>Invitation access</strong><small>Choose the initial role, expiry, and an optional internal label.</small></div>
+      </div>
+      <div className="invite-settings">
+        <label className="field">
+          <span>Internal label <small>Optional</small></span>
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="August contractor onboarding"
+          />
+        </label>
+        <div className="field">
+          <span>Starting role</span>
+          <SelectMenu
+            className="form-select"
+            value={role}
+            onChange={(value) => setRole(value as WorkspaceRole)}
+            ariaLabel="Invitation access"
+            options={[
+              { value: "viewer", label: "Viewer — can view shared guides" },
+              { value: "creator", label: "Creator — can create guides" },
+              { value: "reviewer", label: "Reviewer — reviews assigned drafts" },
+              { value: "publisher", label: "Publisher — publishes approved revisions" },
+            ]}
+          />
+          <small>
+            Roles are additive and can be adjusted after membership.
+          </small>
+        </div>
+        <div className="field">
+          <span>Expires after</span>
+          <SelectMenu
+            className="form-select"
+            value={String(expires)}
+            onChange={(value) => setExpires(Number(value))}
+            ariaLabel="Invitation expiry"
+            options={[
+              { value: "24", label: "24 hours" },
+              { value: "72", label: "3 days" },
+              { value: "168", label: "7 days" },
+              { value: "720", label: "30 days" },
+            ]}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function InviteDialog({
   busy,
   origin,
@@ -3726,148 +3911,23 @@ function InviteDialog({
         }}
       >
         {created.length ? (
-          <div className="created-invite">
-            <CheckCircle2 />
-            <div>
-              <strong>
-                {created.length === 1
-                  ? "Invitation sent"
-                  : `${created.length} invitations sent`}
-              </strong>
-              <p>
-                We emailed each person. The link below is a one-time backup if
-                the email is delayed.
-              </p>
-            </div>
-            <div className="created-invite-list">
-              {created.map((item) => {
-                const url = `${origin}/app?invite=${encodeURIComponent(item.token)}`;
-                return (
-                  <div className="copy-field" key={item.email}>
-                    <span className="created-invite-email">{item.email}</span>
-                    <input readOnly value={url} aria-label={`${item.email} invitation link`} />
-                    <button
-                      className="button secondary"
-                      type="button"
-                      onClick={() => navigator.clipboard.writeText(url)}
-                    >
-                      <Copy /> Copy
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            {created.length > 1 ? (
-              <button
-                className="button ghost small"
-                type="button"
-                onClick={() =>
-                  navigator.clipboard.writeText(
-                    created
-                      .map(
-                        (item) =>
-                          `${item.email}\t${origin}/app?invite=${encodeURIComponent(item.token)}`,
-                      )
-                      .join("\n"),
-                  )
-                }
-              >
-                <Copy /> Copy all links
-              </button>
-            ) : null}
-          </div>
+          <CreatedInviteResultList created={created} origin={origin} />
         ) : (
           <>
-            <section className="invite-composer-section invite-recipients-section">
-              <div className="form-section-heading">
-                <span className="form-section-icon"><Mail /></span>
-                <div><strong>Who are you inviting?</strong><small>Add up to {MAX_BULK_INVITES} exact email addresses.</small></div>
-              </div>
-            <label className="field invite-email-field">
-              <span>Email addresses</span>
-              <textarea
-                required
-                className="invite-emails"
-                value={emailDraft}
-                onChange={(event) => setEmailDraft(event.target.value)}
-                placeholder={"teammate@example.com\nops@example.com"}
-                aria-label="Invitee emails"
-                rows={6}
-              />
-              <small>
-                Paste one address per line, or separate them with commas. Each
-                person must sign in or create an account with that exact email.
-                {parsed.emails.length
-                  ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
-                  : ""}
-              </small>
-              {parsed.invalid.length ? (
-                <small className="form-error" role="alert">
-                  Not valid: {parsed.invalid.slice(0, 6).join(", ")}
-                  {parsed.invalid.length > 6
-                    ? ` +${parsed.invalid.length - 6} more`
-                    : ""}
-                </small>
-              ) : null}
-              {overLimit ? (
-                <small className="form-error" role="alert">
-                  Invite at most {MAX_BULK_INVITES} people at a time.
-                </small>
-              ) : null}
-              {parsed.emails.length && !parsed.invalid.length ? (
-                <span className="invite-ready-chip"><Check /> {countPhrase(parsed.emails.length, "address")} ready</span>
-              ) : null}
-            </label>
-            </section>
-            <section className="invite-composer-section invite-access-section">
-              <div className="form-section-heading">
-                <span className="form-section-icon"><UserCog /></span>
-                <div><strong>Invitation access</strong><small>Choose the initial role, expiry, and an optional internal label.</small></div>
-              </div>
-            <div className="invite-settings">
-              <label className="field">
-                <span>Internal label <small>Optional</small></span>
-                <input
-                  value={label}
-                  onChange={(event) => setLabel(event.target.value)}
-                  placeholder="August contractor onboarding"
-                />
-              </label>
-              <div className="field">
-                <span>Starting role</span>
-                <SelectMenu
-                  className="form-select"
-                  value={role}
-                  onChange={(value) => setRole(value as WorkspaceRole)}
-                  ariaLabel="Invitation access"
-                  options={[
-                    { value: "viewer", label: "Viewer — can view shared guides" },
-                    { value: "creator", label: "Creator — can create guides" },
-                    { value: "reviewer", label: "Reviewer — reviews assigned drafts" },
-                    { value: "publisher", label: "Publisher — publishes approved revisions" },
-                  ]}
-                />
-                <small>
-                  Roles are additive and can be adjusted after membership.
-                </small>
-              </div>
-              <div className="field">
-                <span>Expires after</span>
-                <SelectMenu
-                  className="form-select"
-                  value={String(expires)}
-                  onChange={(value) => setExpires(Number(value))}
-                  ariaLabel="Invitation expiry"
-                  options={[
-                    { value: "24", label: "24 hours" },
-                    { value: "72", label: "3 days" },
-                    { value: "168", label: "7 days" },
-                    { value: "720", label: "30 days" },
-                  ]}
-                />
-              </div>
-            </div>
-            </section>
+            <InviteRecipientsSection
+              emailDraft={emailDraft}
+              setEmailDraft={setEmailDraft}
+              parsed={parsed}
+              overLimit={overLimit}
+            />
+            <InviteAccessSection
+              label={label}
+              setLabel={setLabel}
+              role={role}
+              setRole={setRole}
+              expires={expires}
+              setExpires={setExpires}
+            />
             <PolicyNote icon={LockKeyhole} className="invite-security-note">
               Every invitation is exact-email, single-use, expiring, and audited. There are no generic invite links.
             </PolicyNote>
