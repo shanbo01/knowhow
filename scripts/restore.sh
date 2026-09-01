@@ -50,7 +50,7 @@ fi
 
 case " $* " in
   *" --confirm "*) ;;
-  *) die "this overwrites ${DB_SCHEMA} and ${UPLOADS_VOLUME}. Re-run with --confirm." ;;
+  *) die "this overwrites the ${DB_SCHEMA} database and the uploads volume. Re-run with --confirm." ;;
 esac
 
 # Restoring onto a live deployment is almost never what someone means to do, and
