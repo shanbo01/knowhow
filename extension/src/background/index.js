@@ -955,17 +955,13 @@ async function pauseCapture(reason) {
   return paused;
 }
 
-async function startCapture(options = {}) {
-  await requireCaptureHostAccess();
-  const initialTab = await getActiveTab(options);
-  if (initialTab.incognito) {
-    throw new Error("KnowHow Capture is disabled in incognito windows.");
-  }
+async function initializePreparingCaptureSession(initialTab, options) {
   let initialPolicy;
   let cachedContext;
   let initialVerdict;
   let initialSelection;
   let previousSessionId;
+
   const preparing = await withStateMutation(async () => {
     const current = await getCaptureState();
     if (
@@ -1010,179 +1006,238 @@ async function startCapture(options = {}) {
     await setCaptureState(started);
     return started;
   });
+
   if (previousSessionId) await deleteCaptureSession(previousSessionId);
-  let prepared = preparing;
-  let remoteCreated = false;
-  let remoteAttempted = false;
-  let remoteCaptureId = preparing.sessionId;
+
+  return { preparing, initialSelection };
+}
+
+async function prepareWorkspaceCaptureSession(preparing, initialSelection, options) {
+  const workspaceContext = await refreshWorkspaceContext();
+  const policy = applyWorkspaceContext(
+    await getLocalCapturePolicy(),
+    workspaceContext,
+  );
+  const afterWorkspace = await revalidateSelectedTab(
+    initialSelection,
+    policy,
+    "preparing this capture",
+  );
+  const refreshedSelection = selectionFromTab(
+    afterWorkspace.tab,
+    afterWorkspace.verdict,
+  );
+  const prepared = await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      latest.sessionId !== preparing.sessionId ||
+      latest.status !== CaptureStatus.PREPARING
+    ) {
+      throw new Error("The capture session changed while KnowHow was preparing it.");
+    }
+    const next = {
+      ...latest,
+      origin: afterWorkspace.verdict.origin,
+      sanitizedUrl: afterWorkspace.verdict.sanitizedUrl,
+      title: safeCaptureText(
+        options.title || afterWorkspace.tab.title || "Captured guide",
+        policy,
+        200,
+        "Captured guide",
+      ),
+      workspaceId: workspaceContext.workspaceId,
+      scopeLabel:
+        (workspaceContext.workspaceName || "Workspace") +
+        " · " +
+        afterWorkspace.verdict.hostname,
+      policyVersion: workspaceContext.policyVersion,
+      updatedAt: new Date().toISOString(),
+    };
+    await setCaptureState(next);
+    return next;
+  });
+
+  return { prepared, policy, refreshedSelection };
+}
+
+async function createRemoteCaptureSession(preparing, prepared, policy, refreshedSelection) {
+  const remote = await enqueueRemoteLifecycle(() =>
+    beginRemoteCapture(prepared),
+  );
+  const remoteCaptureId =
+    typeof remote?.captureId === "string" && remote.captureId
+      ? remote.captureId
+      : preparing.sessionId;
+  if (!remote?.captureId) {
+    throw new Error("KnowHow did not return a capture identifier.");
+  }
+  await revalidateSelectedTab(
+    refreshedSelection,
+    policy,
+    "creating the workspace capture",
+  );
+  const remotePrepared = await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      latest.sessionId !== preparing.sessionId ||
+      latest.status !== CaptureStatus.PREPARING
+    ) {
+      throw new Error("The capture session changed while KnowHow was preparing it.");
+    }
+    const next = {
+      ...latest,
+      remoteCaptureId: remote.captureId,
+      remoteGuideId: remote.guideId,
+      remoteRevisionId: remote.revisionId,
+      remoteSyncWarning: null,
+      updatedAt: new Date().toISOString(),
+    };
+    await setCaptureState(next);
+    return next;
+  });
+
+  return { prepared: remotePrepared, remoteCaptureId };
+}
+
+async function activateCaptureSessionOnPage(preparing, prepared, policy, refreshedSelection) {
+  await revalidateSelectedTab(
+    refreshedSelection,
+    policy,
+    "attaching capture to this page",
+  );
+  await injectCaptureContent(prepared, policy);
+  // Arm live Smart Blur before the seed JPEG. The page stays paused so
+  // clicks are not recorded while that first screenshot slot is held.
+  const blurArmed = await chrome.tabs.sendMessage(prepared.tabId, {
+    type: "KNOWHOW_SET_STATUS",
+    status: CaptureStatus.PAUSED,
+  });
+  if (!blurArmed?.ok) {
+    throw new Error("KnowHow could not arm Auto Blur on this page.");
+  }
+  await sendToCapturedTab(prepared, { type: "KNOWHOW_WAIT_PAGE_SETTLED" });
+  const beforeReady = await revalidateSelectedTab(
+    refreshedSelection,
+    policy,
+    "finishing capture setup",
+  );
+  const recording = await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      latest.sessionId !== preparing.sessionId ||
+      latest.status !== CaptureStatus.PREPARING
+    ) {
+      throw new Error("The capture session changed before it became ready.");
+    }
+    const ready = transitionCapture(
+      {
+        ...latest,
+        sanitizedUrl: beforeReady.verdict.sanitizedUrl,
+        lastNavigationUrl: beforeReady.verdict.sanitizedUrl,
+        lastNavigationAt: Date.now(),
+      },
+      CaptureEvent.READY,
+    );
+    await setCaptureState(ready);
+    return ready;
+  });
+  // No screenshot is taken here. A guide begins at the first thing the author
+  // actually does, and photographing the starting page before they have done
+  // anything only added a step showing an untouched page — while spending the
+  // slowest part of startup, and failing the whole capture if the page moved
+  // in the meantime. The starting URL is already recorded on the session, and
+  // the first click captures the page from the moment it matters.
+  const statusResponse = await chrome.tabs.sendMessage(recording.tabId, {
+    type: "KNOWHOW_SET_STATUS",
+    status: CaptureStatus.RECORDING,
+    announce: "started",
+  });
+  if (!statusResponse?.ok) {
+    throw new Error("KnowHow could not activate capture on this page.");
+  }
+  return await getCaptureState();
+}
+
+async function handleStartCaptureFailure(preparing, error, remoteState) {
+  await sendToCapturedTab(preparing, {
+    type: "KNOWHOW_SET_STATUS",
+    status: CaptureStatus.ERROR,
+  });
+  await withStateMutation(async () => {
+    const latest = await getCaptureState();
+    if (
+      latest.sessionId !== preparing.sessionId ||
+      latest.status === CaptureStatus.IDLE ||
+      latest.status === CaptureStatus.ERROR
+    ) {
+      return latest;
+    }
+    const failed = transitionCapture(latest, CaptureEvent.FAIL, {
+      message:
+        error instanceof Error
+          ? error.message
+          : "KnowHow could not attach to this page.",
+    });
+    const cleanedFailure = {
+      ...failed,
+      stepCount: 0,
+      stepIds: [],
+    };
+    await setCaptureState(cleanedFailure);
+    return cleanedFailure;
+  });
+  await deleteCaptureSession(preparing.sessionId);
+  if (remoteState.remoteCreated || remoteState.remoteAttempted) {
+    await cleanupRemoteCapture(remoteState.remoteCaptureId);
+  }
+}
+
+async function startCapture(options = {}) {
+  await requireCaptureHostAccess();
+  const initialTab = await getActiveTab(options);
+  if (initialTab.incognito) {
+    throw new Error("KnowHow Capture is disabled in incognito windows.");
+  }
+
+  const { preparing, initialSelection } = await initializePreparingCaptureSession(
+    initialTab,
+    options,
+  );
+
+  const remoteState = {
+    remoteAttempted: false,
+    remoteCreated: false,
+    remoteCaptureId: preparing.sessionId,
+  };
+
   try {
-    const workspaceContext = await refreshWorkspaceContext();
-    const policy = applyWorkspaceContext(
-      await getLocalCapturePolicy(),
-      workspaceContext,
-    );
-    const afterWorkspace = await revalidateSelectedTab(
-      initialSelection,
+    const {
+      prepared: workspacePrepared,
       policy,
-      "preparing this capture",
-    );
-    const refreshedSelection = selectionFromTab(
-      afterWorkspace.tab,
-      afterWorkspace.verdict,
-    );
-    prepared = await withStateMutation(async () => {
-      const latest = await getCaptureState();
-      if (
-        latest.sessionId !== preparing.sessionId ||
-        latest.status !== CaptureStatus.PREPARING
-      ) {
-        throw new Error("The capture session changed while KnowHow was preparing it.");
-      }
-      const next = {
-        ...latest,
-        origin: afterWorkspace.verdict.origin,
-        sanitizedUrl: afterWorkspace.verdict.sanitizedUrl,
-        title: safeCaptureText(
-          options.title || afterWorkspace.tab.title || "Captured guide",
-          policy,
-          200,
-          "Captured guide",
-        ),
-        workspaceId: workspaceContext.workspaceId,
-        scopeLabel:
-          (workspaceContext.workspaceName || "Workspace") +
-          " · " +
-          afterWorkspace.verdict.hostname,
-        policyVersion: workspaceContext.policyVersion,
-        updatedAt: new Date().toISOString(),
-      };
-      await setCaptureState(next);
-      return next;
-    });
-    remoteAttempted = true;
-    const remote = await enqueueRemoteLifecycle(() =>
-      beginRemoteCapture(prepared),
-    );
-    remoteCreated = true;
-    remoteCaptureId =
-      typeof remote?.captureId === "string" && remote.captureId
-        ? remote.captureId
-        : preparing.sessionId;
-    if (!remote?.captureId) {
-      throw new Error("KnowHow did not return a capture identifier.");
-    }
-    await revalidateSelectedTab(
       refreshedSelection,
+    } = await prepareWorkspaceCaptureSession(preparing, initialSelection, options);
+
+    remoteState.remoteAttempted = true;
+    const {
+      prepared: remotePrepared,
+      remoteCaptureId,
+    } = await createRemoteCaptureSession(
+      preparing,
+      workspacePrepared,
       policy,
-      "creating the workspace capture",
-    );
-    prepared = await withStateMutation(async () => {
-      const latest = await getCaptureState();
-      if (
-        latest.sessionId !== preparing.sessionId ||
-        latest.status !== CaptureStatus.PREPARING
-      ) {
-        throw new Error("The capture session changed while KnowHow was preparing it.");
-      }
-      const remotePrepared = {
-        ...latest,
-        remoteCaptureId: remote.captureId,
-        remoteGuideId: remote.guideId,
-        remoteRevisionId: remote.revisionId,
-        remoteSyncWarning: null,
-        updatedAt: new Date().toISOString(),
-      };
-      await setCaptureState(remotePrepared);
-      return remotePrepared;
-    });
-    await revalidateSelectedTab(
       refreshedSelection,
-      policy,
-      "attaching capture to this page",
     );
-    await injectCaptureContent(prepared, policy);
-    // Arm live Smart Blur before the seed JPEG. The page stays paused so
-    // clicks are not recorded while that first screenshot slot is held.
-    const blurArmed = await chrome.tabs.sendMessage(prepared.tabId, {
-      type: "KNOWHOW_SET_STATUS",
-      status: CaptureStatus.PAUSED,
-    });
-    if (!blurArmed?.ok) {
-      throw new Error("KnowHow could not arm Auto Blur on this page.");
-    }
-    await sendToCapturedTab(prepared, { type: "KNOWHOW_WAIT_PAGE_SETTLED" });
-    const beforeReady = await revalidateSelectedTab(
+    remoteState.remoteCreated = true;
+    remoteState.remoteCaptureId = remoteCaptureId;
+
+    return await activateCaptureSessionOnPage(
+      preparing,
+      remotePrepared,
+      policy,
       refreshedSelection,
-      policy,
-      "finishing capture setup",
     );
-    const recording = await withStateMutation(async () => {
-      const latest = await getCaptureState();
-      if (
-        latest.sessionId !== preparing.sessionId ||
-        latest.status !== CaptureStatus.PREPARING
-      ) {
-        throw new Error("The capture session changed before it became ready.");
-      }
-      const ready = transitionCapture(
-        {
-          ...latest,
-          sanitizedUrl: beforeReady.verdict.sanitizedUrl,
-          lastNavigationUrl: beforeReady.verdict.sanitizedUrl,
-          lastNavigationAt: Date.now(),
-        },
-        CaptureEvent.READY,
-      );
-      await setCaptureState(ready);
-      return ready;
-    });
-    // No screenshot is taken here. A guide begins at the first thing the author
-    // actually does, and photographing the starting page before they have done
-    // anything only added a step showing an untouched page — while spending the
-    // slowest part of startup, and failing the whole capture if the page moved
-    // in the meantime. The starting URL is already recorded on the session, and
-    // the first click captures the page from the moment it matters.
-    const statusResponse = await chrome.tabs.sendMessage(recording.tabId, {
-      type: "KNOWHOW_SET_STATUS",
-      status: CaptureStatus.RECORDING,
-      announce: "started",
-    });
-    if (!statusResponse?.ok) {
-      throw new Error("KnowHow could not activate capture on this page.");
-    }
-    return await getCaptureState();
   } catch (error) {
-    await sendToCapturedTab(preparing, {
-      type: "KNOWHOW_SET_STATUS",
-      status: CaptureStatus.ERROR,
-    });
-    await withStateMutation(async () => {
-      const latest = await getCaptureState();
-      if (
-        latest.sessionId !== preparing.sessionId ||
-        latest.status === CaptureStatus.IDLE ||
-        latest.status === CaptureStatus.ERROR
-      ) {
-        return latest;
-      }
-      const failed = transitionCapture(latest, CaptureEvent.FAIL, {
-        message:
-          error instanceof Error
-            ? error.message
-            : "KnowHow could not attach to this page.",
-      });
-      const cleanedFailure = {
-        ...failed,
-        stepCount: 0,
-        stepIds: [],
-      };
-      await setCaptureState(cleanedFailure);
-      return cleanedFailure;
-    });
-    await deleteCaptureSession(preparing.sessionId);
-    if (remoteCreated || remoteAttempted) {
-      await cleanupRemoteCapture(remoteCaptureId);
-    }
+    await handleStartCaptureFailure(preparing, error, remoteState);
     throw error;
   }
 }
