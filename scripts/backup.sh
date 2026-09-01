@@ -18,7 +18,12 @@ set -euo pipefail
 
 BACKUP_DIR="${KNOWHOW_BACKUP_DIR:-/var/backups/knowhow}"
 KEEP_DAYS="${KNOWHOW_BACKUP_KEEP_DAYS:-14}"
-DB_CONTAINER="${KNOWHOW_BACKUP_DB_CONTAINER:-appwrite-mariadb}"
+
+# Appwrite 1.9 installs MongoDB by default and also supports MariaDB and
+# PostgreSQL. Which one is running is read from the container rather than
+# assumed: backing up the wrong engine fails at the worst possible moment.
+DB_ADAPTER="${KNOWHOW_BACKUP_DB_ADAPTER:-}"
+DB_CONTAINER="${KNOWHOW_BACKUP_DB_CONTAINER:-}"
 DB_USER="${_APP_DB_USER:-user}"
 DB_PASS="${_APP_DB_PASS:-password}"
 DB_SCHEMA="${_APP_DB_SCHEMA:-appwrite}"
@@ -36,6 +41,20 @@ log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { printf 'backup failed: %s\n' "$*" >&2; exit 1; }
 
 command -v docker >/dev/null || die "docker is not on PATH"
+
+if [ -z "${DB_ADAPTER}" ]; then
+  DB_ADAPTER="$(docker exec appwrite printenv _APP_DB_ADAPTER 2>/dev/null || true)"
+  DB_ADAPTER="${DB_ADAPTER:-mongodb}"
+fi
+if [ -z "${DB_CONTAINER}" ]; then
+  case "${DB_ADAPTER}" in
+    mongodb) DB_CONTAINER="appwrite-mongodb" ;;
+    mariadb|mysql) DB_CONTAINER="appwrite-mariadb" ;;
+    postgres*) DB_CONTAINER="appwrite-postgres" ;;
+    *) die "unrecognised database adapter '${DB_ADAPTER}'; set KNOWHOW_BACKUP_DB_CONTAINER" ;;
+  esac
+fi
+
 docker inspect "${DB_CONTAINER}" >/dev/null 2>&1 \
   || die "database container '${DB_CONTAINER}' not found; set KNOWHOW_BACKUP_DB_CONTAINER"
 docker volume inspect "${UPLOADS_VOLUME}" >/dev/null 2>&1 \
@@ -49,24 +68,48 @@ chmod 700 "${BACKUP_DIR}" "${WORK}"
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-# Appwrite ships MariaDB; the dump client was renamed in 11.x, so accept either.
-DUMP_BIN="mariadb-dump"
-docker exec "${DB_CONTAINER}" sh -c "command -v mariadb-dump" >/dev/null 2>&1 \
-  || DUMP_BIN="mysqldump"
+log "dumping ${DB_SCHEMA} from ${DB_CONTAINER} (${DB_ADAPTER})"
 
-log "dumping ${DB_SCHEMA} with ${DUMP_BIN}"
-# --single-transaction keeps the dump consistent without locking the site.
-# The password reaches the client through the environment rather than argv,
-# where it would be visible to every process on the host.
-docker exec -e MYSQL_PWD="${DB_PASS}" "${DB_CONTAINER}" \
-  "${DUMP_BIN}" \
-    --user="${DB_USER}" \
-    --single-transaction \
-    --quick \
-    --routines \
-    --triggers \
-    --databases "${DB_SCHEMA}" \
-  | gzip -9 > "${WORK}/database.sql.gz"
+case "${DB_ADAPTER}" in
+  mongodb)
+    DB_FILE="database.archive.gz"
+    # --archive streams a single file to stdout and --gzip compresses inside
+    # it, so mongorestore reads the result back without unpacking first.
+    docker exec "${DB_CONTAINER}" \
+      mongodump \
+        --quiet \
+        --archive \
+        --gzip \
+        --username="${DB_USER}" \
+        --password="${DB_PASS}" \
+        --authenticationDatabase=admin \
+      > "${WORK}/${DB_FILE}"
+    ;;
+  mariadb|mysql)
+    DB_FILE="database.sql.gz"
+    DUMP_BIN="mariadb-dump"
+    docker exec "${DB_CONTAINER}" sh -c "command -v mariadb-dump" >/dev/null 2>&1 \
+      || DUMP_BIN="mysqldump"
+    # --single-transaction keeps the dump consistent without locking the site.
+    # The password reaches the client through the environment rather than argv,
+    # where it would be visible to every process on the host.
+    docker exec -e MYSQL_PWD="${DB_PASS}" "${DB_CONTAINER}" \
+      "${DUMP_BIN}" \
+        --user="${DB_USER}" \
+        --single-transaction \
+        --quick \
+        --routines \
+        --triggers \
+        --databases "${DB_SCHEMA}" \
+      | gzip -9 > "${WORK}/${DB_FILE}"
+    ;;
+  postgres*)
+    DB_FILE="database.dump.gz"
+    docker exec -e PGPASSWORD="${DB_PASS}" "${DB_CONTAINER}" \
+      pg_dump --username="${DB_USER}" --format=custom "${DB_SCHEMA}" \
+      | gzip -9 > "${WORK}/${DB_FILE}"
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Storage
@@ -82,20 +125,29 @@ docker run --rm \
 # Verify before trusting
 # ---------------------------------------------------------------------------
 log "verifying archives"
-gzip -t "${WORK}/database.sql.gz" || die "database dump is not a valid gzip stream"
+gzip -t "${WORK}/${DB_FILE}" || die "database dump is not a valid gzip stream"
 gzip -t "${WORK}/uploads.tar.gz" || die "uploads archive is not a valid gzip stream"
 
-# A dump that succeeded but wrote almost nothing means the credentials were
-# accepted against an empty or wrong schema. Catch that here rather than on the
-# day it is needed.
-DB_BYTES="$(gzip -dc "${WORK}/database.sql.gz" | wc -c)"
+# A dump that authenticated but selected nothing still compresses cleanly, so
+# check the size and then look for evidence the schema was actually read.
+DB_BYTES="$(gzip -dc "${WORK}/${DB_FILE}" | wc -c)"
 [ "${DB_BYTES}" -gt 10240 ] \
-  || die "database dump is only ${DB_BYTES} bytes; check _APP_DB_SCHEMA and credentials"
-grep -q "CREATE TABLE" <(gzip -dc "${WORK}/database.sql.gz") \
-  || die "database dump contains no table definitions"
+  || die "database dump is only ${DB_BYTES} bytes; check the schema and credentials"
+
+case "${DB_ADAPTER}" in
+  mariadb|mysql)
+    gzip -dc "${WORK}/${DB_FILE}" | grep -q "CREATE TABLE" \
+      || die "database dump contains no table definitions"
+    ;;
+  mongodb)
+    # The archive header names each collection it carries.
+    gzip -dc "${WORK}/${DB_FILE}" | head -c 65536 | grep -qa "${DB_SCHEMA}" \
+      || die "database archive names no ${DB_SCHEMA} collections"
+    ;;
+esac
 
 ( cd "${WORK}" && sha256sum ./*.gz > SHA256SUMS )
-log "database $(du -h "${WORK}/database.sql.gz" | cut -f1), uploads $(du -h "${WORK}/uploads.tar.gz" | cut -f1)"
+log "database $(du -h "${WORK}/${DB_FILE}" | cut -f1), uploads $(du -h "${WORK}/uploads.tar.gz" | cut -f1)"
 
 # ---------------------------------------------------------------------------
 # Off-host copy
