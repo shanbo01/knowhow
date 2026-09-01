@@ -23,10 +23,9 @@ use crate::{
     engine::CaptureEngine,
     model::{
         ActiveCapture, AppSnapshot, Bounds, CaptureContext, CaptureTarget, CommitPayload,
-        ConnectionState,
-        DESKTOP_POLICY_VERSION, DeviceIdentity, PendingAuthorization, PrivacyAttestation,
-        RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput, TypedTextPolicy,
-        UpdateState, UpdateStatus,
+        ConnectionState, DESKTOP_POLICY_VERSION, DeviceIdentity, PendingAuthorization,
+        PrivacyAttestation, RecorderSettings, RecorderState, RecorderStatus, StartCaptureInput,
+        TypedTextPolicy, UpdateState, UpdateStatus,
     },
     platform::{
         QuitChoice, capture_targets, monitor_descriptors, new_scope, quit_capture_choice,
@@ -855,7 +854,12 @@ impl Coordinator {
         let generation = self.outline_generation.fetch_add(1, Ordering::AcqRel) + 1;
         // The scope cannot change within a capture, so it is read once here
         // rather than cloned out from behind the lock on every frame.
-        let Some(scope) = self.inner.lock().active.as_ref().map(|active| active.scope.clone())
+        let Some(scope) = self
+            .inner
+            .lock()
+            .active
+            .as_ref()
+            .map(|active| active.scope.clone())
         else {
             return;
         };
@@ -930,7 +934,9 @@ impl Coordinator {
             )))?;
         }
         if moved {
-            window.set_position(Position::Physical(PhysicalPosition::new(bounds.x, bounds.y)))?;
+            window.set_position(Position::Physical(PhysicalPosition::new(
+                bounds.x, bounds.y,
+            )))?;
         }
         Ok(())
     }
@@ -972,7 +978,12 @@ impl Coordinator {
         let monitor_height = i32::try_from(monitor_size.height).unwrap_or(height);
         let (work_origin, work_size) =
             monitor_work_area((origin.x, origin.y), (monitor_width, monitor_height));
-        if hud_is_reachable((position.x, position.y), (width, height), work_origin, work_size) {
+        if hud_is_reachable(
+            (position.x, position.y),
+            (width, height),
+            work_origin,
+            work_size,
+        ) {
             return Ok(());
         }
         let scale = window.scale_factor().unwrap_or(1.0);
@@ -1287,13 +1298,33 @@ mod tests {
     fn a_dragged_hud_is_left_where_the_author_put_it() {
         // Hanging off an edge is a deliberate placement, not a rescue case:
         // pulling it back mid-drag is what stopped the bar from moving at all.
-        assert!(hud_is_reachable((-200, 900), (560, 76), (0, 0), (1_920, 1_080)));
-        assert!(hud_is_reachable((1_700, 1_040), (560, 76), (0, 0), (1_920, 1_080)));
+        assert!(hud_is_reachable(
+            (-200, 900),
+            (560, 76),
+            (0, 0),
+            (1_920, 1_080)
+        ));
+        assert!(hud_is_reachable(
+            (1_700, 1_040),
+            (560, 76),
+            (0, 0),
+            (1_920, 1_080)
+        ));
     }
 
     #[test]
     fn a_hud_left_off_the_display_is_pulled_back() {
-        assert!(!hud_is_reachable((-540, 900), (560, 76), (0, 0), (1_920, 1_080)));
-        assert!(!hud_is_reachable((300, 1_200), (560, 76), (0, 0), (1_920, 1_080)));
+        assert!(!hud_is_reachable(
+            (-540, 900),
+            (560, 76),
+            (0, 0),
+            (1_920, 1_080)
+        ));
+        assert!(!hud_is_reachable(
+            (300, 1_200),
+            (560, 76),
+            (0, 0),
+            (1_920, 1_080)
+        ));
     }
 }
