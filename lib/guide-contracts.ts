@@ -1294,16 +1294,11 @@ const REVISION_BASE_KEYS = [
   "exportPolicy",
 ] as const;
 
-function revision(
-  value: unknown,
+function validateRevisionKeys(
+  value: UnknownRecord,
   path: string,
   issues: ValidationIssue[],
-): value is GuideRevision {
-  if (!isRecord(value)) {
-    issue(issues, path, "Expected a guide revision object.");
-    return false;
-  }
-
+): void {
   const lifecycle = value.lifecycle;
   if (lifecycle === "draft") {
     exactKeys(value, REVISION_BASE_KEYS, path, issues);
@@ -1345,6 +1340,142 @@ function revision(
   } else {
     issue(issues, `${path}.lifecycle`, "Unknown guide lifecycle state.");
   }
+}
+
+function validateRevisionBlocks(
+  blocks: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    issue(issues, `${path}.blocks`, "A guide revision requires at least one block.");
+  } else {
+    const ids = new Set<string>();
+    blocks.forEach((block, index) => {
+      guideBlock(block, `${path}.blocks[${index}]`, issues);
+      if (isRecord(block) && typeof block.id === "string") {
+        if (ids.has(block.id)) issue(issues, `${path}.blocks[${index}].id`, "Duplicate block ID.");
+        ids.add(block.id);
+      }
+    });
+  }
+}
+
+function validatePublishedRevision(
+  value: UnknownRecord,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  isoDate(value.reviewedAt, `${path}.reviewedAt`, issues);
+  actor(value.reviewedBy, `${path}.reviewedBy`, issues);
+  isoDate(value.publishedAt, `${path}.publishedAt`, issues);
+  actor(value.publishedBy, `${path}.publishedBy`, issues);
+  if (
+    isCapturedGuideSource(value.source) &&
+    (!isRecord(value.privacyReview) ||
+      value.privacyReview.required !== true ||
+      value.privacyReview.status !== "approved")
+  ) {
+    issue(
+      issues,
+      `${path}.privacyReview`,
+      "Captured revisions require an approved privacy review before publication.",
+    );
+  }
+  chronological(
+    [
+      { path: `${path}.createdAt`, value: value.createdAt },
+      { path: `${path}.submittedAt`, value: value.submittedAt },
+      { path: `${path}.reviewedAt`, value: value.reviewedAt },
+      { path: `${path}.publishedAt`, value: value.publishedAt },
+    ],
+    issues,
+  );
+  const publishedAt = timestamp(value.publishedAt);
+  if (publishedAt !== undefined && isRecord(value.privacyReview)) {
+    const privacyReviewedAt = timestamp(value.privacyReview.reviewedAt);
+    if (privacyReviewedAt !== undefined && privacyReviewedAt > publishedAt) {
+      issue(
+        issues,
+        `${path}.privacyReview.reviewedAt`,
+        "Privacy review must be completed before publication.",
+      );
+    }
+  }
+  if (publishedAt !== undefined && Array.isArray(value.blocks)) {
+    value.blocks.forEach((block, index) => {
+      if (!isRecord(block) || block.type !== "action" || !isRecord(block.media)) {
+        return;
+      }
+      const sanitizedAt = timestamp(block.media.sanitizedAt);
+      if (sanitizedAt !== undefined && sanitizedAt > publishedAt) {
+        issue(
+          issues,
+          `${path}.blocks[${index}].media.sanitizedAt`,
+          "Media must be sanitized before publication.",
+        );
+      }
+      if (Array.isArray(block.media.redactions)) {
+        block.media.redactions.forEach((entry, redactionIndex) => {
+          if (isRecord(entry) && entry.applied !== true) {
+            issue(
+              issues,
+              `${path}.blocks[${index}].media.redactions[${redactionIndex}].applied`,
+              "Published redactions must already be flattened into the image.",
+            );
+          }
+        });
+      }
+    });
+  }
+}
+
+function validateArchivedRevision(
+  value: UnknownRecord,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  enumeration(
+    value.archivedFrom,
+    ["draft", "review", "published"] as const,
+    `${path}.archivedFrom`,
+    issues,
+  );
+  isoDate(value.archivedAt, `${path}.archivedAt`, issues);
+  actor(value.archivedBy, `${path}.archivedBy`, issues);
+  isoDate(value.submittedAt, `${path}.submittedAt`, issues, true);
+  actor(value.submittedBy, `${path}.submittedBy`, issues, true);
+  isoDate(value.reviewedAt, `${path}.reviewedAt`, issues, true);
+  actor(value.reviewedBy, `${path}.reviewedBy`, issues, true);
+  isoDate(value.publishedAt, `${path}.publishedAt`, issues, true);
+  actor(value.publishedBy, `${path}.publishedBy`, issues, true);
+  if (value.archivedFrom === "published" && (!value.publishedAt || !value.publishedBy)) {
+    issue(issues, path, "A published archived revision must retain publication metadata.");
+  }
+  chronological(
+    [
+      { path: `${path}.createdAt`, value: value.createdAt },
+      { path: `${path}.submittedAt`, value: value.submittedAt },
+      { path: `${path}.reviewedAt`, value: value.reviewedAt },
+      { path: `${path}.publishedAt`, value: value.publishedAt },
+      { path: `${path}.archivedAt`, value: value.archivedAt },
+    ],
+    issues,
+  );
+}
+
+function revision(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): value is GuideRevision {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a guide revision object.");
+    return false;
+  }
+
+  const lifecycle = value.lifecycle;
+  validateRevisionKeys(value, path, issues);
 
   if (value.schemaVersion !== 1) issue(issues, `${path}.schemaVersion`, "Schema version must be 1.");
   identifier(value.guideId, `${path}.guideId`, issues);
@@ -1361,18 +1492,7 @@ function revision(
   isoDate(value.createdAt, `${path}.createdAt`, issues);
   actor(value.createdBy, `${path}.createdBy`, issues);
 
-  if (!Array.isArray(value.blocks) || value.blocks.length === 0) {
-    issue(issues, `${path}.blocks`, "A guide revision requires at least one block.");
-  } else {
-    const ids = new Set<string>();
-    value.blocks.forEach((block, index) => {
-      guideBlock(block, `${path}.blocks[${index}]`, issues);
-      if (isRecord(block) && typeof block.id === "string") {
-        if (ids.has(block.id)) issue(issues, `${path}.blocks[${index}].id`, "Duplicate block ID.");
-        ids.add(block.id);
-      }
-    });
-  }
+  validateRevisionBlocks(value.blocks, path, issues);
 
   audience(value.audience, `${path}.audience`, issues);
   privacyReview(value.privacyReview, `${path}.privacyReview`, issues);
@@ -1390,100 +1510,6 @@ function revision(
     isoDate(value.submittedAt, `${path}.submittedAt`, issues);
     actor(value.submittedBy, `${path}.submittedBy`, issues);
   }
-  if (lifecycle === "published") {
-    isoDate(value.reviewedAt, `${path}.reviewedAt`, issues);
-    actor(value.reviewedBy, `${path}.reviewedBy`, issues);
-    isoDate(value.publishedAt, `${path}.publishedAt`, issues);
-    actor(value.publishedBy, `${path}.publishedBy`, issues);
-    if (
-      isCapturedGuideSource(value.source) &&
-      (!isRecord(value.privacyReview) ||
-        value.privacyReview.required !== true ||
-        value.privacyReview.status !== "approved")
-    ) {
-      issue(
-        issues,
-        `${path}.privacyReview`,
-        "Captured revisions require an approved privacy review before publication.",
-      );
-    }
-    chronological(
-      [
-        { path: `${path}.createdAt`, value: value.createdAt },
-        { path: `${path}.submittedAt`, value: value.submittedAt },
-        { path: `${path}.reviewedAt`, value: value.reviewedAt },
-        { path: `${path}.publishedAt`, value: value.publishedAt },
-      ],
-      issues,
-    );
-    const publishedAt = timestamp(value.publishedAt);
-    if (publishedAt !== undefined && isRecord(value.privacyReview)) {
-      const privacyReviewedAt = timestamp(value.privacyReview.reviewedAt);
-      if (privacyReviewedAt !== undefined && privacyReviewedAt > publishedAt) {
-        issue(
-          issues,
-          `${path}.privacyReview.reviewedAt`,
-          "Privacy review must be completed before publication.",
-        );
-      }
-    }
-    if (publishedAt !== undefined && Array.isArray(value.blocks)) {
-      value.blocks.forEach((block, index) => {
-        if (!isRecord(block) || block.type !== "action" || !isRecord(block.media)) {
-          return;
-        }
-        const sanitizedAt = timestamp(block.media.sanitizedAt);
-        if (sanitizedAt !== undefined && sanitizedAt > publishedAt) {
-          issue(
-            issues,
-            `${path}.blocks[${index}].media.sanitizedAt`,
-            "Media must be sanitized before publication.",
-          );
-        }
-        if (Array.isArray(block.media.redactions)) {
-          block.media.redactions.forEach((entry, redactionIndex) => {
-            if (isRecord(entry) && entry.applied !== true) {
-              issue(
-                issues,
-                `${path}.blocks[${index}].media.redactions[${redactionIndex}].applied`,
-                "Published redactions must already be flattened into the image.",
-              );
-            }
-          });
-        }
-      });
-    }
-  }
-  if (lifecycle === "archived") {
-    enumeration(
-      value.archivedFrom,
-      ["draft", "review", "published"] as const,
-      `${path}.archivedFrom`,
-      issues,
-    );
-    isoDate(value.archivedAt, `${path}.archivedAt`, issues);
-    actor(value.archivedBy, `${path}.archivedBy`, issues);
-    isoDate(value.submittedAt, `${path}.submittedAt`, issues, true);
-    actor(value.submittedBy, `${path}.submittedBy`, issues, true);
-    isoDate(value.reviewedAt, `${path}.reviewedAt`, issues, true);
-    actor(value.reviewedBy, `${path}.reviewedBy`, issues, true);
-    isoDate(value.publishedAt, `${path}.publishedAt`, issues, true);
-    actor(value.publishedBy, `${path}.publishedBy`, issues, true);
-    if (value.archivedFrom === "published" && (!value.publishedAt || !value.publishedBy)) {
-      issue(issues, path, "A published archived revision must retain publication metadata.");
-    }
-    chronological(
-      [
-        { path: `${path}.createdAt`, value: value.createdAt },
-        { path: `${path}.submittedAt`, value: value.submittedAt },
-        { path: `${path}.reviewedAt`, value: value.reviewedAt },
-        { path: `${path}.publishedAt`, value: value.publishedAt },
-        { path: `${path}.archivedAt`, value: value.archivedAt },
-      ],
-      issues,
-    );
-  }
-
   if (lifecycle === "review") {
     chronological(
       [
@@ -1492,6 +1518,10 @@ function revision(
       ],
       issues,
     );
+  } else if (lifecycle === "published") {
+    validatePublishedRevision(value, path, issues);
+  } else if (lifecycle === "archived") {
+    validateArchivedRevision(value, path, issues);
   }
 
   return true;
