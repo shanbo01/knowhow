@@ -491,6 +491,7 @@ fn encode_preview_pixels(width: u32, height: u32, pixels: Vec<u8>) -> Result<Str
     let mut resized = DynamicImage::ImageRgba8(image)
         .resize(PREVIEW_WIDTH, PREVIEW_HEIGHT, FilterType::Triangle)
         .to_rgba8();
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     for pixel in resized.chunks_exact_mut(4) {
         pixel.swap(0, 2);
         pixel[3] = 255;
