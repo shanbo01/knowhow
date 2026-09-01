@@ -1612,6 +1612,185 @@ function captureEvent(
   return true;
 }
 
+type PauseRange = { start: number; end: number | undefined; index: number };
+
+function captureScopeV1(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (!isRecord(value)) {
+    issue(issues, path, "Expected a capture scope.");
+    return;
+  }
+  exactKeys(value, ["origin", "startedUrl", "excludedOrigins"], path, issues);
+  text(value.origin, `${path}.origin`, issues, { max: 2_000 });
+  text(value.startedUrl, `${path}.startedUrl`, issues, { max: 4_000 });
+  if (!Array.isArray(value.excludedOrigins)) {
+    issue(issues, `${path}.excludedOrigins`, "Expected an origin array.");
+  } else {
+    value.excludedOrigins.forEach((origin, index) =>
+      text(origin, `${path}.excludedOrigins[${index}]`, issues, { max: 2_000 }),
+    );
+  }
+}
+
+function capturePausesV1(
+  pauses: unknown,
+  state: unknown,
+  startTime: number | undefined,
+  endTime: number | undefined,
+  path: string,
+  issues: ValidationIssue[],
+): PauseRange[] {
+  if (!Array.isArray(pauses)) {
+    issue(issues, `${path}.pauses`, "Expected a pause interval array.");
+    return [];
+  }
+
+  pauses.forEach((pause, index) => {
+    const pausePath = `${path}.pauses[${index}]`;
+    if (!isRecord(pause)) {
+      issue(issues, pausePath, "Expected a pause interval.");
+      return;
+    }
+    exactKeys(pause, ["pausedAt", "resumedAt"], pausePath, issues);
+    isoDate(pause.pausedAt, `${pausePath}.pausedAt`, issues);
+    isoDate(pause.resumedAt, `${pausePath}.resumedAt`, issues, true);
+  });
+
+  const openPauses = pauses.filter(
+    (pause) => isRecord(pause) && pause.resumedAt === undefined,
+  );
+  if (openPauses.length > 1) issue(issues, `${path}.pauses`, "Only one pause may be open.");
+  if (state === "paused" && openPauses.length !== 1) {
+    issue(issues, `${path}.pauses`, "A paused capture requires one open pause interval.");
+  }
+  if (state !== "paused" && openPauses.length !== 0) {
+    issue(issues, `${path}.pauses`, "Only a paused capture may have an open pause interval.");
+  }
+
+  const pauseRanges = pauses
+    .map((pause, index) => {
+      if (!isRecord(pause)) return undefined;
+      const start = timestamp(pause.pausedAt);
+      const end = timestamp(pause.resumedAt);
+      if (start !== undefined && end !== undefined && end < start) {
+        issue(
+          issues,
+          `${path}.pauses[${index}].resumedAt`,
+          "A capture cannot resume before it was paused.",
+        );
+      }
+      if (startTime !== undefined && start !== undefined && start < startTime) {
+        issue(
+          issues,
+          `${path}.pauses[${index}].pausedAt`,
+          "A pause cannot begin before the capture.",
+        );
+      }
+      if (endTime !== undefined && start !== undefined && start > endTime) {
+        issue(
+          issues,
+          `${path}.pauses[${index}].pausedAt`,
+          "A pause cannot begin after the capture ended.",
+        );
+      }
+      return start === undefined ? undefined : { start, end, index };
+    })
+    .filter(
+      (range): range is PauseRange => range !== undefined,
+    );
+
+  for (let index = 1; index < pauseRanges.length; index += 1) {
+    const previous = pauseRanges[index - 1];
+    const current = pauseRanges[index];
+    if (current.start < previous.start) {
+      issue(
+        issues,
+        `${path}.pauses[${current.index}].pausedAt`,
+        "Pause intervals must be chronological.",
+      );
+    }
+    if (previous.end === undefined || current.start < previous.end) {
+      issue(
+        issues,
+        `${path}.pauses[${current.index}]`,
+        "Pause intervals must not overlap.",
+      );
+    }
+  }
+
+  return pauseRanges;
+}
+
+function captureEventsV1(
+  events: unknown,
+  pauseRanges: readonly PauseRange[],
+  startTime: number | undefined,
+  endTime: number | undefined,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (!Array.isArray(events)) {
+    issue(issues, `${path}.events`, "Expected a capture event array.");
+    return;
+  }
+
+  const eventIds = new Set<string>();
+  let previousEventTime: number | undefined;
+
+  events.forEach((event, index) => {
+    captureEvent(event, `${path}.events[${index}]`, issues);
+    if (isRecord(event) && typeof event.id === "string") {
+      if (eventIds.has(event.id)) {
+        issue(issues, `${path}.events[${index}].id`, "Duplicate capture event ID.");
+      }
+      eventIds.add(event.id);
+    }
+
+    if (!isRecord(event)) return;
+    const occurredAt = timestamp(event.occurredAt);
+    if (occurredAt === undefined) return;
+
+    if (startTime !== undefined && occurredAt < startTime) {
+      issue(
+        issues,
+        `${path}.events[${index}].occurredAt`,
+        "A capture event cannot occur before capture starts.",
+      );
+    }
+    if (endTime !== undefined && occurredAt > endTime) {
+      issue(
+        issues,
+        `${path}.events[${index}].occurredAt`,
+        "A capture event cannot occur after capture ends.",
+      );
+    }
+    if (previousEventTime !== undefined && occurredAt < previousEventTime) {
+      issue(
+        issues,
+        `${path}.events[${index}].occurredAt`,
+        "Capture events must be chronological.",
+      );
+    }
+    previousEventTime = occurredAt;
+
+    const paused = pauseRanges.some(
+      (range) =>
+        occurredAt >= range.start &&
+        (range.end === undefined || occurredAt < range.end),
+    );
+    if (paused) {
+      issue(
+        issues,
+        `${path}.events[${index}].occurredAt`,
+        "Paused capture intervals must contain no events.",
+      );
+    }
+  });
+}
+
 function captureSessionV1(
   value: unknown,
   path: string,
@@ -1654,61 +1833,36 @@ function captureSessionV1(
   isoDate(value.startedAt, `${path}.startedAt`, issues);
   isoDate(value.finishedAt, `${path}.finishedAt`, issues, true);
   isoDate(value.discardedAt, `${path}.discardedAt`, issues, true);
-  if (!isRecord(value.scope)) {
-    issue(issues, `${path}.scope`, "Expected a capture scope.");
-  } else {
-    exactKeys(value.scope, ["origin", "startedUrl", "excludedOrigins"], `${path}.scope`, issues);
-    text(value.scope.origin, `${path}.scope.origin`, issues, { max: 2_000 });
-    text(value.scope.startedUrl, `${path}.scope.startedUrl`, issues, { max: 4_000 });
-    if (!Array.isArray(value.scope.excludedOrigins)) {
-      issue(issues, `${path}.scope.excludedOrigins`, "Expected an origin array.");
-    } else {
-      value.scope.excludedOrigins.forEach((origin, index) =>
-        text(origin, `${path}.scope.excludedOrigins[${index}]`, issues, { max: 2_000 }),
-      );
-    }
-  }
+
+  captureScopeV1(value.scope, `${path}.scope`, issues);
   privacyPolicy(value.privacyPolicy, `${path}.privacyPolicy`, issues);
-  if (!Array.isArray(value.pauses)) {
-    issue(issues, `${path}.pauses`, "Expected a pause interval array.");
-  } else {
-    value.pauses.forEach((pause, index) => {
-      const pausePath = `${path}.pauses[${index}]`;
-      if (!isRecord(pause)) {
-        issue(issues, pausePath, "Expected a pause interval.");
-        return;
-      }
-      exactKeys(pause, ["pausedAt", "resumedAt"], pausePath, issues);
-      isoDate(pause.pausedAt, `${pausePath}.pausedAt`, issues);
-      isoDate(pause.resumedAt, `${pausePath}.resumedAt`, issues, true);
-    });
-    const openPauses = value.pauses.filter(
-      (pause) => isRecord(pause) && pause.resumedAt === undefined,
-    );
-    if (openPauses.length > 1) issue(issues, `${path}.pauses`, "Only one pause may be open.");
-    if (value.state === "paused" && openPauses.length !== 1) {
-      issue(issues, `${path}.pauses`, "A paused capture requires one open pause interval.");
-    }
-    if (value.state !== "paused" && openPauses.length !== 0) {
-      issue(issues, `${path}.pauses`, "Only a paused capture may have an open pause interval.");
-    }
-  }
-  if (!Array.isArray(value.events)) {
-    issue(issues, `${path}.events`, "Expected a capture event array.");
-  } else {
-    const eventIds = new Set<string>();
-    value.events.forEach((event, index) =>
-      {
-        captureEvent(event, `${path}.events[${index}]`, issues);
-        if (isRecord(event) && typeof event.id === "string") {
-          if (eventIds.has(event.id)) {
-            issue(issues, `${path}.events[${index}].id`, "Duplicate capture event ID.");
-          }
-          eventIds.add(event.id);
-        }
-      },
-    );
-  }
+
+  const startTime = timestamp(value.startedAt);
+  const endTime =
+    value.state === "finished"
+      ? timestamp(value.finishedAt)
+      : value.state === "discarded"
+        ? timestamp(value.discardedAt)
+        : undefined;
+
+  const pauseRanges = capturePausesV1(
+    value.pauses,
+    value.state,
+    startTime,
+    endTime,
+    path,
+    issues,
+  );
+
+  captureEventsV1(
+    value.events,
+    pauseRanges,
+    startTime,
+    endTime,
+    path,
+    issues,
+  );
+
   if (!Array.isArray(value.draftBlocks)) {
     issue(issues, `${path}.draftBlocks`, "Expected a guide block array.");
   } else {
@@ -1716,6 +1870,7 @@ function captureSessionV1(
       guideBlock(block, `${path}.draftBlocks[${index}]`, issues),
     );
   }
+
   if (value.state === "finished" && !value.finishedAt) {
     issue(issues, `${path}.finishedAt`, "Finished captures require a finish time.");
   }
@@ -1729,108 +1884,6 @@ function captureSessionV1(
     issue(issues, `${path}.discardedAt`, "Only discarded captures may have a discard time.");
   }
 
-  const startTime = timestamp(value.startedAt);
-  const endTime =
-    value.state === "finished"
-      ? timestamp(value.finishedAt)
-      : value.state === "discarded"
-        ? timestamp(value.discardedAt)
-        : undefined;
-  const pauseRanges = Array.isArray(value.pauses)
-    ? value.pauses
-        .map((pause, index) => {
-          if (!isRecord(pause)) return undefined;
-          const start = timestamp(pause.pausedAt);
-          const end = timestamp(pause.resumedAt);
-          if (start !== undefined && end !== undefined && end < start) {
-            issue(
-              issues,
-              `${path}.pauses[${index}].resumedAt`,
-              "A capture cannot resume before it was paused.",
-            );
-          }
-          if (startTime !== undefined && start !== undefined && start < startTime) {
-            issue(
-              issues,
-              `${path}.pauses[${index}].pausedAt`,
-              "A pause cannot begin before the capture.",
-            );
-          }
-          if (endTime !== undefined && start !== undefined && start > endTime) {
-            issue(
-              issues,
-              `${path}.pauses[${index}].pausedAt`,
-              "A pause cannot begin after the capture ended.",
-            );
-          }
-          return start === undefined ? undefined : { start, end, index };
-        })
-        .filter(
-          (range): range is { start: number; end: number | undefined; index: number } =>
-            range !== undefined,
-        )
-    : [];
-  for (let index = 1; index < pauseRanges.length; index += 1) {
-    const previous = pauseRanges[index - 1];
-    const current = pauseRanges[index];
-    if (current.start < previous.start) {
-      issue(
-        issues,
-        `${path}.pauses[${current.index}].pausedAt`,
-        "Pause intervals must be chronological.",
-      );
-    }
-    if (previous.end === undefined || current.start < previous.end) {
-      issue(
-        issues,
-        `${path}.pauses[${current.index}]`,
-        "Pause intervals must not overlap.",
-      );
-    }
-  }
-
-  if (Array.isArray(value.events)) {
-    let previousEventTime: number | undefined;
-    value.events.forEach((event, index) => {
-      if (!isRecord(event)) return;
-      const occurredAt = timestamp(event.occurredAt);
-      if (occurredAt === undefined) return;
-      if (startTime !== undefined && occurredAt < startTime) {
-        issue(
-          issues,
-          `${path}.events[${index}].occurredAt`,
-          "A capture event cannot occur before capture starts.",
-        );
-      }
-      if (endTime !== undefined && occurredAt > endTime) {
-        issue(
-          issues,
-          `${path}.events[${index}].occurredAt`,
-          "A capture event cannot occur after capture ends.",
-        );
-      }
-      if (previousEventTime !== undefined && occurredAt < previousEventTime) {
-        issue(
-          issues,
-          `${path}.events[${index}].occurredAt`,
-          "Capture events must be chronological.",
-        );
-      }
-      previousEventTime = occurredAt;
-      const paused = pauseRanges.some(
-        (range) =>
-          occurredAt >= range.start &&
-          (range.end === undefined || occurredAt < range.end),
-      );
-      if (paused) {
-        issue(
-          issues,
-          `${path}.events[${index}].occurredAt`,
-          "Paused capture intervals must contain no events.",
-        );
-      }
-    });
-  }
   if (
     value.state === "discarded" &&
     ((Array.isArray(value.events) && value.events.length > 0) ||
