@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prepareGuideExport } from "./policy";
-import { GuideRendererError } from "./types";
+import { GuideRendererError, type GuideExportAsset, type GuideExportWatermark } from "./types";
 import type { PublishedGuideRevision } from "../guide-contracts";
 
 function createValidPublishedRevision(
@@ -217,7 +217,7 @@ test("prepareGuideExport validates watermark options and formats", () => {
   assert.throws(
     () =>
       prepareGuideExport(revision, "pdf", {
-        watermark: { unknownWatermarkKey: "val" } as unknown,
+        watermark: { unknownWatermarkKey: "val" } as unknown as GuideExportWatermark,
       }),
     (err: unknown) => {
       assert(err instanceof GuideRendererError);
@@ -324,7 +324,7 @@ test("prepareGuideExport validates asset options and detects media mismatches", 
   assert.throws(
     () =>
       prepareGuideExport(revision, "pdf", {
-        assets: [{ mediaId: "media-1", mimeType: "image/png", extra: 123 } as unknown],
+        assets: [{ mediaId: "media-1", mimeType: "image/png", extra: 123 } as unknown as GuideExportAsset],
       }),
     (err: unknown) => {
       assert(err instanceof GuideRendererError);
@@ -352,7 +352,7 @@ test("prepareGuideExport validates asset options and detects media mismatches", 
   assert.throws(
     () =>
       prepareGuideExport(revision, "pdf", {
-        assets: [{ mediaId: "media-1", mimeType: "image/svg+xml" as unknown }],
+        assets: [{ mediaId: "media-1", mimeType: "image/svg+xml" as unknown as "image/png" }],
       }),
     (err: unknown) => {
       assert(err instanceof GuideRendererError);
@@ -366,7 +366,7 @@ test("prepareGuideExport validates asset options and detects media mismatches", 
   assert.throws(
     () =>
       prepareGuideExport(revision, "pdf", {
-        assets: [{ mediaId: "media-1", mimeType: "image/png", bytes: [1, 2, 3] as unknown }],
+        assets: [{ mediaId: "media-1", mimeType: "image/png", bytes: [1, 2, 3] as unknown as Uint8Array }],
       }),
     (err: unknown) => {
       assert(err instanceof GuideRendererError);
@@ -434,9 +434,6 @@ test("prepareGuideExport checks workspace logo media type", () => {
     },
   });
 
-  // Supplied logo asset with unsupported/non-image mimeType
-  // Note: validateAsset will throw INVALID_OPTIONS if mimeType is not image/png or image/jpeg,
-  // but if logo asset is provided as image/png/jpeg, assetMap accepts it.
   const prepared = prepareGuideExport(revision, "pdf", {
     assets: [{ mediaId: "logo-media-1", mimeType: "image/png" }],
   });
