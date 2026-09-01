@@ -4644,6 +4644,264 @@ const ORGANIZATION_ROLES: Array<{
     },
   ];
 
+function OrganizationIdentityCard({
+  organization,
+}: {
+  organization: OrganizationAdministration;
+}) {
+  return (
+    <section
+      className="card settings-card organization-identity-card"
+      style={{ "--organization-accent": organization.branding.accentColor } as React.CSSProperties}
+    >
+      <div className="settings-title organization-identity-heading">
+        <span>
+          <Building2 />
+        </span>
+        <div>
+          <h2>Organization profile</h2>
+          <p>Company identity and your administrative access.</p>
+        </div>
+      </div>
+      <dl className="organization-metadata">
+        <div>
+          <dt>Legal name</dt>
+          <dd>{organization.legalName || "Not provided"}</dd>
+        </div>
+        <div>
+          <dt>Country</dt>
+          <dd>{organization.country}</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd><StatusBadge status={organization.status} /></dd>
+        </div>
+        <div>
+          <dt>Your roles</dt>
+          <dd className="organization-role-list">
+            {organization.roles.map((role) => (
+              <Badge className="organization-role-badge" variant="secondary" key={role}>
+                <ShieldCheck /> {organizationRoleLabel(role)}
+              </Badge>
+            ))}
+          </dd>
+        </div>
+      </dl>
+      <p className="privacy-caption">
+        <LockKeyhole /> Organization administrators manage people. They do
+        not automatically see workspace guides.
+      </p>
+    </section>
+  );
+}
+
+function OrganizationWorkspaceRow({
+  workspace,
+  busy,
+  allowanceFull,
+  canRenameWorkspace,
+  canArchiveWorkspace,
+  liveWorkspaceCount,
+  renamingWorkspaceId,
+  renameDraft,
+  setRenameDraft,
+  setRenamingWorkspaceId,
+  onRenameWorkspace,
+  onArchiveWorkspace,
+  onRestoreWorkspace,
+  askToConfirm,
+}: {
+  workspace: OrganizationAdministration["workspaces"][number];
+  busy: boolean;
+  allowanceFull: boolean;
+  canRenameWorkspace: boolean;
+  canArchiveWorkspace: boolean;
+  liveWorkspaceCount: number;
+  renamingWorkspaceId: string | null;
+  renameDraft: string;
+  setRenameDraft: (draft: string) => void;
+  setRenamingWorkspaceId: (id: string | null) => void;
+  onRenameWorkspace?: (workspaceId: string, name: string) => Promise<unknown>;
+  onArchiveWorkspace?: (workspaceId: string, confirmation: string) => Promise<unknown>;
+  onRestoreWorkspace?: (workspaceId: string) => Promise<unknown>;
+  askToConfirm: ReturnType<typeof useConfirmDialog>["askToConfirm"];
+}) {
+  const isRenaming = renamingWorkspaceId === workspace.id;
+
+  return (
+    <div className="invite-row">
+      <span className="invite-icon">
+        <Building2 />
+      </span>
+      {isRenaming ? (
+        <form
+          className="member-main organization-rename-form"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const name = renameDraft.trim();
+            if (name.length < 2 || name === workspace.name) {
+              setRenamingWorkspaceId(null);
+              return;
+            }
+            await onRenameWorkspace?.(workspace.id, name);
+            setRenamingWorkspaceId(null);
+          }}
+        >
+          <input
+            autoFocus
+            value={renameDraft}
+            aria-label={`Rename ${workspace.name}`}
+            maxLength={128}
+            onChange={(event) => setRenameDraft(event.target.value)}
+          />
+          <small>
+            The address stays {workspace.slug}, so shared links keep
+            working.
+          </small>
+        </form>
+      ) : (
+        <span className="member-main">
+          <strong>{workspace.name}</strong>
+          <small>{workspace.slug}</small>
+        </span>
+      )}
+      <StatusBadge status={workspace.status} />
+      {workspace.status === "archived" ? (
+        canArchiveWorkspace && onRestoreWorkspace ? (
+          <span className="organization-workspace-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              disabled={busy || allowanceFull}
+              title={
+                allowanceFull
+                  ? "Restoring needs a free workspace slot."
+                  : undefined
+              }
+              onClick={() => onRestoreWorkspace(workspace.id)}
+            >
+              <ArchiveRestore /> Restore
+            </Button>
+          </span>
+        ) : null
+      ) : canRenameWorkspace ? (
+        isRenaming ? (
+          <span className="organization-workspace-actions">
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={() => setRenamingWorkspaceId(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              type="button"
+              disabled={busy || renameDraft.trim().length < 2}
+              onClick={async () => {
+                const name = renameDraft.trim();
+                if (name === workspace.name) {
+                  setRenamingWorkspaceId(null);
+                  return;
+                }
+                await onRenameWorkspace?.(workspace.id, name);
+                setRenamingWorkspaceId(null);
+              }}
+            >
+              Save
+            </Button>
+          </span>
+        ) : (
+          <span className="organization-workspace-actions">
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setRenameDraft(workspace.name);
+                setRenamingWorkspaceId(workspace.id);
+              }}
+            >
+              <Pencil /> Rename
+            </Button>
+            {canArchiveWorkspace ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                disabled={busy || liveWorkspaceCount < 2}
+                title={
+                  liveWorkspaceCount < 2
+                    ? "An organization keeps at least one live workspace."
+                    : undefined
+                }
+                onClick={async () => {
+                  const confirmed = await askToConfirm({
+                    title: `Archive ${workspace.name}?`,
+                    description:
+                      "Its guides and members stay intact and the workspace can be restored, but nobody can open it while it is archived. This frees one workspace slot.",
+                    confirmLabel: "Archive workspace",
+                  });
+                  if (!confirmed) return;
+                  await onArchiveWorkspace?.(workspace.id, workspace.name);
+                }}
+              >
+                <Archive /> Archive
+              </Button>
+            ) : null}
+          </span>
+        )
+      ) : null}
+    </div>
+  );
+}
+
+function OrganizationMemberRow({
+  member,
+  busy,
+  canManage,
+  onEdit,
+}: {
+  member: OrganizationAdministration["members"][number];
+  busy: boolean;
+  canManage: boolean;
+  onEdit: (memberId: string) => void;
+}) {
+  return (
+    <div className="member-row">
+      <span className="avatar">
+        {initials(member.name, member.email)}
+      </span>
+      <span className="member-main">
+        <strong>{member.name || member.email}</strong>
+        <small>{member.email}</small>
+        <span className="role-chips">
+          {member.roles.map((role) => (
+            <Badge className="organization-role-badge organization-member-role" variant="secondary" key={role}>
+              <ShieldCheck /> {organizationRoleLabel(role)}
+            </Badge>
+          ))}
+        </span>
+      </span>
+      <StatusBadge status={member.status} />
+      {canManage ? (
+        <button
+          className="button ghost small"
+          type="button"
+          disabled={busy}
+          onClick={() => onEdit(member.id)}
+        >
+          <UserCog /> Edit
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export function OrganizationView({
   organization,
   busy,
@@ -4722,6 +4980,7 @@ export function OrganizationView({
   const allowanceHint = allowanceFull
     ? `All ${countPhrase(allowance.maximum, "workspace slot")} are in use. Subscribe a workspace to Pro to unlock more, or archive one you no longer need.`
     : allowanceUnlockedBy;
+
   return (
     <div className="view-stack">
       <div className="page-heading">
@@ -4744,48 +5003,7 @@ export function OrganizationView({
           </button>
         ) : null}
       </div>
-      <section
-        className="card settings-card organization-identity-card"
-        style={{ "--organization-accent": organization.branding.accentColor } as React.CSSProperties}
-      >
-        <div className="settings-title organization-identity-heading">
-          <span>
-            <Building2 />
-          </span>
-          <div>
-            <h2>Organization profile</h2>
-            <p>Company identity and your administrative access.</p>
-          </div>
-        </div>
-        <dl className="organization-metadata">
-          <div>
-            <dt>Legal name</dt>
-            <dd>{organization.legalName || "Not provided"}</dd>
-          </div>
-          <div>
-            <dt>Country</dt>
-            <dd>{organization.country}</dd>
-          </div>
-          <div>
-            <dt>Status</dt>
-            <dd><StatusBadge status={organization.status} /></dd>
-          </div>
-          <div>
-            <dt>Your roles</dt>
-            <dd className="organization-role-list">
-              {organization.roles.map((role) => (
-                <Badge className="organization-role-badge" variant="secondary" key={role}>
-                  <ShieldCheck /> {organizationRoleLabel(role)}
-                </Badge>
-              ))}
-            </dd>
-          </div>
-        </dl>
-        <p className="privacy-caption">
-          <LockKeyhole /> Organization administrators manage people. They do
-          not automatically see workspace guides.
-        </p>
-      </section>
+      <OrganizationIdentityCard organization={organization} />
       <section className="card table-card">
         <div className="section-heading compact">
           <div>
@@ -4822,136 +5040,23 @@ export function OrganizationView({
           </p>
         </div>
         {organization.workspaces.map((workspace) => (
-          <div className="invite-row" key={workspace.id}>
-            <span className="invite-icon">
-              <Building2 />
-            </span>
-            {renamingWorkspaceId === workspace.id ? (
-              <form
-                className="member-main organization-rename-form"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  const name = renameDraft.trim();
-                  if (name.length < 2 || name === workspace.name) {
-                    setRenamingWorkspaceId(null);
-                    return;
-                  }
-                  await onRenameWorkspace?.(workspace.id, name);
-                  setRenamingWorkspaceId(null);
-                }}
-              >
-                <input
-                  autoFocus
-                  value={renameDraft}
-                  aria-label={`Rename ${workspace.name}`}
-                  maxLength={128}
-                  onChange={(event) => setRenameDraft(event.target.value)}
-                />
-                <small>
-                  The address stays {workspace.slug}, so shared links keep
-                  working.
-                </small>
-              </form>
-            ) : (
-              <span className="member-main">
-                <strong>{workspace.name}</strong>
-                <small>{workspace.slug}</small>
-              </span>
-            )}
-            <StatusBadge status={workspace.status} />
-            {workspace.status === "archived" ? (
-              canArchiveWorkspace && onRestoreWorkspace ? (
-                <span className="organization-workspace-actions">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    disabled={busy || allowanceFull}
-                    title={
-                      allowanceFull
-                        ? "Restoring needs a free workspace slot."
-                        : undefined
-                    }
-                    onClick={() => onRestoreWorkspace(workspace.id)}
-                  >
-                    <ArchiveRestore /> Restore
-                  </Button>
-                </span>
-              ) : null
-            ) : canRenameWorkspace ? (
-              renamingWorkspaceId === workspace.id ? (
-                <span className="organization-workspace-actions">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setRenamingWorkspaceId(null)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    type="button"
-                    disabled={busy || renameDraft.trim().length < 2}
-                    onClick={async () => {
-                      const name = renameDraft.trim();
-                      if (name === workspace.name) {
-                        setRenamingWorkspaceId(null);
-                        return;
-                      }
-                      await onRenameWorkspace?.(workspace.id, name);
-                      setRenamingWorkspaceId(null);
-                    }}
-                  >
-                    Save
-                  </Button>
-                </span>
-              ) : (
-                <span className="organization-workspace-actions">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setRenameDraft(workspace.name);
-                      setRenamingWorkspaceId(workspace.id);
-                    }}
-                  >
-                    <Pencil /> Rename
-                  </Button>
-                  {canArchiveWorkspace ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      type="button"
-                      disabled={busy || liveWorkspaceCount < 2}
-                      title={
-                        liveWorkspaceCount < 2
-                          ? "An organization keeps at least one live workspace."
-                          : undefined
-                      }
-                      onClick={async () => {
-                        const confirmed = await askToConfirm({
-                          title: `Archive ${workspace.name}?`,
-                          description:
-                            "Its guides and members stay intact and the workspace can be restored, but nobody can open it while it is archived. This frees one workspace slot.",
-                          // Not the danger tone: that dialog is headed
-                          // "Permanent action", and archiving can be undone.
-                          confirmLabel: "Archive workspace",
-                        });
-                        if (!confirmed) return;
-                        await onArchiveWorkspace?.(workspace.id, workspace.name);
-                      }}
-                    >
-                      <Archive /> Archive
-                    </Button>
-                  ) : null}
-                </span>
-              )
-            ) : null}
-          </div>
+          <OrganizationWorkspaceRow
+            key={workspace.id}
+            workspace={workspace}
+            busy={busy}
+            allowanceFull={allowanceFull}
+            canRenameWorkspace={canRenameWorkspace}
+            canArchiveWorkspace={canArchiveWorkspace}
+            liveWorkspaceCount={liveWorkspaceCount}
+            renamingWorkspaceId={renamingWorkspaceId}
+            renameDraft={renameDraft}
+            setRenameDraft={setRenameDraft}
+            setRenamingWorkspaceId={setRenamingWorkspaceId}
+            onRenameWorkspace={onRenameWorkspace}
+            onArchiveWorkspace={onArchiveWorkspace}
+            onRestoreWorkspace={onRestoreWorkspace}
+            askToConfirm={askToConfirm}
+          />
         ))}
       </section>
       {organization.members.length ? (
@@ -4968,33 +5073,13 @@ export function OrganizationView({
             </span>
           </div>
           {organization.members.map((member) => (
-            <div className="member-row" key={member.id}>
-              <span className="avatar">
-                {initials(member.name, member.email)}
-              </span>
-              <span className="member-main">
-                <strong>{member.name || member.email}</strong>
-                <small>{member.email}</small>
-                <span className="role-chips">
-                  {member.roles.map((role) => (
-                    <Badge className="organization-role-badge organization-member-role" variant="secondary" key={role}>
-                      <ShieldCheck /> {organizationRoleLabel(role)}
-                    </Badge>
-                  ))}
-                </span>
-              </span>
-              <StatusBadge status={member.status} />
-              {canManage ? (
-                <button
-                  className="button ghost small"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setEditingMemberId(member.id)}
-                >
-                  <UserCog /> Edit
-                </button>
-              ) : null}
-            </div>
+            <OrganizationMemberRow
+              key={member.id}
+              member={member}
+              busy={busy}
+              canManage={canManage}
+              onEdit={setEditingMemberId}
+            />
           ))}
         </section>
       ) : null}
