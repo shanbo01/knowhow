@@ -5154,6 +5154,247 @@ function OrganizationWorkspaceDialog({
   );
 }
 
+type OrganizationAppointmentItem = {
+  email: string;
+  appointmentToken: string;
+  expiresAt: string;
+};
+
+function OrganizationAppointmentCreatedView({
+  created,
+  origin,
+  onClose,
+}: {
+  created: OrganizationAppointmentItem[];
+  origin: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-form invite-form created-invite">
+      <CheckCircle2 />
+      <div>
+        <strong>
+          {created.length === 1
+            ? "Appointment queued"
+            : `${created.length} appointments queued`}
+        </strong>
+        <p>
+          Each fallback credential is shown once. Copy the links now.
+        </p>
+      </div>
+      <div className="created-invite-list">
+        {created.map((item) => {
+          const url = `${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`;
+          return (
+            <div className="copy-field" key={item.email}>
+              <span className="created-invite-email">{item.email}</span>
+              <input
+                readOnly
+                value={url}
+                aria-label={`${item.email} appointment link`}
+              />
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => navigator.clipboard.writeText(url)}
+              >
+                <Copy /> Copy
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {created.length > 1 ? (
+        <button
+          className="button ghost small"
+          type="button"
+          onClick={() =>
+            navigator.clipboard.writeText(
+              created
+                .map(
+                  (item) =>
+                    `${item.email}\t${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`,
+                )
+                .join("\n"),
+            )
+          }
+        >
+          <Copy /> Copy all links
+        </button>
+      ) : null}
+      <footer className="modal-footer">
+        <span />
+        <button className="button primary" type="button" onClick={onClose}>
+          Done
+        </button>
+      </footer>
+    </div>
+  );
+}
+
+function OrganizationAppointmentFormView({
+  organization,
+  busy,
+  onClose,
+  onAppoint,
+  onSuccess,
+}: {
+  organization: OrganizationAdministration;
+  busy: boolean;
+  onClose: () => void;
+  onAppoint: (payload: {
+    emails: string[];
+    roles: OrganizationRole[];
+    anchorWorkspaceId: string;
+  }) => Promise<OrganizationAppointmentItem[]>;
+  onSuccess: (items: OrganizationAppointmentItem[]) => void;
+}) {
+  const [emailDraft, setEmailDraft] = useState("");
+  const [roles, setRoles] = useState<OrganizationRole[]>(["administrator"]);
+  const [workspaceId, setWorkspaceId] = useState(
+    organization.workspaces[0]?.id ?? "",
+  );
+  const [error, setError] = useState("");
+  const parsed = parseInviteEmails(emailDraft);
+  const overLimit = parsed.emails.length > MAX_BULK_INVITES;
+
+  return (
+    <form
+      className="modal-form invite-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (
+          !parsed.emails.length ||
+          parsed.invalid.length ||
+          overLimit ||
+          !roles.length ||
+          !workspaceId
+        ) {
+          return;
+        }
+        setError("");
+        try {
+          const result = await onAppoint({
+            emails: parsed.emails,
+            roles,
+            anchorWorkspaceId: workspaceId,
+          });
+          if (result.length) onSuccess(result);
+        } catch (nextError) {
+          setError(messageFromError(nextError));
+        }
+      }}
+    >
+      <p className="modal-copy">
+        Organization roles expose governance metadata only. Select workspace
+        access separately from the workspace Members page.
+      </p>
+      <label className="field">
+        <span>Verified account emails</span>
+        <textarea
+          required
+          className="invite-emails"
+          value={emailDraft}
+          onChange={(event) => setEmailDraft(event.target.value)}
+          placeholder={"owner@example.com\nbilling@example.com"}
+          aria-label="Verified account emails"
+          rows={6}
+        />
+        <small>
+          Paste one address per line, or separate them with commas. Each
+          person must already have that verified account.
+          {parsed.emails.length
+            ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
+            : ""}
+        </small>
+        {parsed.invalid.length ? (
+          <small className="form-error" role="alert">
+            Not valid: {parsed.invalid.slice(0, 6).join(", ")}
+            {parsed.invalid.length > 6
+              ? ` +${parsed.invalid.length - 6} more`
+              : ""}
+          </small>
+        ) : null}
+        {overLimit ? (
+          <small className="form-error" role="alert">
+            Appoint at most {MAX_BULK_INVITES} people at a time.
+          </small>
+        ) : null}
+      </label>
+      <div className="role-picker">
+        {ORGANIZATION_ROLES.map((role) => (
+          <label className="choice-row" key={role.value}>
+            <input
+              type="checkbox"
+              checked={roles.includes(role.value)}
+              onChange={(event) =>
+                setRoles((items) =>
+                  event.target.checked
+                    ? [...new Set([...items, role.value])]
+                    : items.filter((item) => item !== role.value),
+                )
+              }
+            />
+            <span>
+              <strong>{role.label}</strong>
+              <small>{role.description}</small>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="field">
+        <span>Record this change under</span>
+        <SelectMenu
+          className="form-select"
+          value={workspaceId}
+          onChange={setWorkspaceId}
+          ariaLabel="Audit workspace"
+          options={organization.workspaces.map((workspace) => ({
+            value: workspace.id,
+            label: workspaceOptionLabel(workspace),
+          }))}
+        />
+        <small>
+          Used only to locate the audit event. It does not grant workspace
+          access.
+        </small>
+      </div>
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <footer className="modal-footer">
+        <span />
+        <button
+          className="button secondary"
+          type="button"
+          onClick={onClose}
+        >
+          Cancel
+        </button>
+        <button
+          className="button primary"
+          type="submit"
+          disabled={
+            busy ||
+            !parsed.emails.length ||
+            parsed.invalid.length > 0 ||
+            overLimit ||
+            !roles.length ||
+            !workspaceId
+          }
+        >
+          <UserPlus />{" "}
+          {parsed.emails.length > 1
+            ? `Create ${parsed.emails.length} appointments`
+            : "Create appointment"}
+        </button>
+      </footer>
+    </form>
+  );
+}
+
 function OrganizationAppointmentDialog({
   organization,
   busy,
@@ -5167,25 +5408,9 @@ function OrganizationAppointmentDialog({
     emails: string[];
     roles: OrganizationRole[];
     anchorWorkspaceId: string;
-  }) => Promise<
-    Array<{
-      email: string;
-      appointmentToken: string;
-      expiresAt: string;
-    }>
-  >;
+  }) => Promise<OrganizationAppointmentItem[]>;
 }) {
-  const [emailDraft, setEmailDraft] = useState("");
-  const [roles, setRoles] = useState<OrganizationRole[]>(["administrator"]);
-  const [workspaceId, setWorkspaceId] = useState(
-    organization.workspaces[0]?.id ?? "",
-  );
-  const [created, setCreated] = useState<
-    Array<{ email: string; appointmentToken: string; expiresAt: string }>
-  >([]);
-  const [error, setError] = useState("");
-  const parsed = parseInviteEmails(emailDraft);
-  const overLimit = parsed.emails.length > MAX_BULK_INVITES;
+  const [created, setCreated] = useState<OrganizationAppointmentItem[]>([]);
   const origin =
     typeof window === "undefined" ? "" : window.location.origin;
 
@@ -5197,199 +5422,19 @@ function OrganizationAppointmentDialog({
       wide
     >
       {created.length ? (
-        <div className="modal-form invite-form created-invite">
-          <CheckCircle2 />
-          <div>
-            <strong>
-              {created.length === 1
-                ? "Appointment queued"
-                : `${created.length} appointments queued`}
-            </strong>
-            <p>
-              Each fallback credential is shown once. Copy the links now.
-            </p>
-          </div>
-          <div className="created-invite-list">
-            {created.map((item) => {
-              const url = `${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`;
-              return (
-                <div className="copy-field" key={item.email}>
-                  <span className="created-invite-email">{item.email}</span>
-                  <input
-                    readOnly
-                    value={url}
-                    aria-label={`${item.email} appointment link`}
-                  />
-                  <button
-                    className="button secondary"
-                    type="button"
-                    onClick={() => navigator.clipboard.writeText(url)}
-                  >
-                    <Copy /> Copy
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          {created.length > 1 ? (
-            <button
-              className="button ghost small"
-              type="button"
-              onClick={() =>
-                navigator.clipboard.writeText(
-                  created
-                    .map(
-                      (item) =>
-                        `${item.email}\t${origin}/app?appointment=${encodeURIComponent(item.appointmentToken)}`,
-                    )
-                    .join("\n"),
-                )
-              }
-            >
-              <Copy /> Copy all links
-            </button>
-          ) : null}
-          <footer className="modal-footer">
-            <span />
-            <button className="button primary" type="button" onClick={onClose}>
-              Done
-            </button>
-          </footer>
-        </div>
+        <OrganizationAppointmentCreatedView
+          created={created}
+          origin={origin}
+          onClose={onClose}
+        />
       ) : (
-        <form
-          className="modal-form invite-form"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            if (
-              !parsed.emails.length ||
-              parsed.invalid.length ||
-              overLimit ||
-              !roles.length ||
-              !workspaceId
-            ) {
-              return;
-            }
-            setError("");
-            try {
-              const result = await onAppoint({
-                emails: parsed.emails,
-                roles,
-                anchorWorkspaceId: workspaceId,
-              });
-              if (result.length) setCreated(result);
-            } catch (nextError) {
-              setError(messageFromError(nextError));
-            }
-          }}
-        >
-          <p className="modal-copy">
-            Organization roles expose governance metadata only. Select workspace
-            access separately from the workspace Members page.
-          </p>
-          <label className="field">
-            <span>Verified account emails</span>
-            <textarea
-              required
-              className="invite-emails"
-              value={emailDraft}
-              onChange={(event) => setEmailDraft(event.target.value)}
-              placeholder={"owner@example.com\nbilling@example.com"}
-              aria-label="Verified account emails"
-              rows={6}
-            />
-            <small>
-              Paste one address per line, or separate them with commas. Each
-              person must already have that verified account.
-              {parsed.emails.length
-                ? ` ${countPhrase(parsed.emails.length, "address")} ready.`
-                : ""}
-            </small>
-            {parsed.invalid.length ? (
-              <small className="form-error" role="alert">
-                Not valid: {parsed.invalid.slice(0, 6).join(", ")}
-                {parsed.invalid.length > 6
-                  ? ` +${parsed.invalid.length - 6} more`
-                  : ""}
-              </small>
-            ) : null}
-            {overLimit ? (
-              <small className="form-error" role="alert">
-                Appoint at most {MAX_BULK_INVITES} people at a time.
-              </small>
-            ) : null}
-          </label>
-          <div className="role-picker">
-            {ORGANIZATION_ROLES.map((role) => (
-              <label className="choice-row" key={role.value}>
-                <input
-                  type="checkbox"
-                  checked={roles.includes(role.value)}
-                  onChange={(event) =>
-                    setRoles((items) =>
-                      event.target.checked
-                        ? [...new Set([...items, role.value])]
-                        : items.filter((item) => item !== role.value),
-                    )
-                  }
-                />
-                <span>
-                  <strong>{role.label}</strong>
-                  <small>{role.description}</small>
-                </span>
-              </label>
-            ))}
-          </div>
-          <div className="field">
-            <span>Record this change under</span>
-            <SelectMenu
-              className="form-select"
-              value={workspaceId}
-              onChange={setWorkspaceId}
-              ariaLabel="Audit workspace"
-              options={organization.workspaces.map((workspace) => ({
-                value: workspace.id,
-                label: workspaceOptionLabel(workspace),
-              }))}
-            />
-            <small>
-              Used only to locate the audit event. It does not grant workspace
-              access.
-            </small>
-          </div>
-          {error ? (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <footer className="modal-footer">
-            <span />
-            <button
-              className="button secondary"
-              type="button"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button
-              className="button primary"
-              type="submit"
-              disabled={
-                busy ||
-                !parsed.emails.length ||
-                parsed.invalid.length > 0 ||
-                overLimit ||
-                !roles.length ||
-                !workspaceId
-              }
-            >
-              <UserPlus />{" "}
-              {parsed.emails.length > 1
-                ? `Create ${parsed.emails.length} appointments`
-                : "Create appointment"}
-            </button>
-          </footer>
-        </form>
+        <OrganizationAppointmentFormView
+          organization={organization}
+          busy={busy}
+          onClose={onClose}
+          onAppoint={onAppoint}
+          onSuccess={setCreated}
+        />
       )}
     </Modal>
   );
