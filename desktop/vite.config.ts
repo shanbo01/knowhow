@@ -11,6 +11,9 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**"] },
   },
   envPrefix: ["VITE_", "TAURI_"],
+  css: {
+    postcss: {},
+  },
   build: {
     target: "es2022",
     minify: "esbuild",
