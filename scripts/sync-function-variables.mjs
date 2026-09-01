@@ -32,7 +32,12 @@ const FUNCTION_VARIABLES = {
       "KNOWHOW_TOKEN_ACTIVE_KID",
       "KNOWHOW_DELETION_RECEIPT_PEPPER",
     ],
-    optional: ["KNOWHOW_PLATFORM_OWNER_EMAILS", "RESEND_API_KEY", "RESEND_FROM"],
+    optional: [
+      "KNOWHOW_PLATFORM_OWNER_EMAILS",
+      "RESEND_API_KEY",
+      "RESEND_FROM",
+      "KNOWHOW_APPWRITE_ENDPOINT",
+    ],
   },
   "knowhow-export": {
     required: [
@@ -40,7 +45,7 @@ const FUNCTION_VARIABLES = {
       "KNOWHOW_SITE_ORIGIN",
       "KNOWHOW_EXPORT_WORKER_SECRET",
     ],
-    optional: [],
+    optional: ["KNOWHOW_APPWRITE_ENDPOINT"],
   },
 };
 
