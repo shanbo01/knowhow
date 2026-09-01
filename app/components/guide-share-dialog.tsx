@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
+const COPY_FEEDBACK_TIMEOUT_MS = 1600;
+
 export function GuideShareDialog({
   open,
   title,
@@ -88,7 +90,7 @@ export function GuideShareDialog({
     if (!effectiveLiveUrl) return;
     await navigator.clipboard.writeText(effectiveLiveUrl);
     setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
+    window.setTimeout(() => setCopied(false), COPY_FEEDBACK_TIMEOUT_MS);
   }
 
   async function run(action: () => Promise<void>) {
