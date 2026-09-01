@@ -284,6 +284,11 @@ if [ -z "$PUBLIC_IP" ] && [ "${KNOWHOW_PREFLIGHT_NO_NET:-}" != "1" ] && have cur
 fi
 [ -n "$PUBLIC_IP" ] && note "this host appears externally as ${PUBLIC_IP}"
 
+if [ -z "${SITE_HOST:-}${APPWRITE_HOST:-}" ]; then
+  # Silence here would read as "DNS is fine" when nothing was actually checked.
+  warn "no hostnames configured yet, so nothing was checked"
+  note "set KNOWHOW_SITE_HOST and APPWRITE_PUBLIC_HOST in ${ENV_FILE}"
+fi
 for ENTRY in "site:${SITE_HOST:-}" "appwrite:${APPWRITE_HOST:-}"; do
   LABEL="${ENTRY%%:*}"; HOST="${ENTRY#*:}"
   [ -n "$HOST" ] || continue
