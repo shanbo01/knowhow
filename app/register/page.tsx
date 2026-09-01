@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { redirectSignedInToApp } from "../../lib/server/signed-in-redirect";
 
 export const metadata: Metadata = {
-  title: "Register | KnowHow",
+  title: "Register",
   robots: { index: false, follow: false },
 };
 

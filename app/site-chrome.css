@@ -1,0 +1,386 @@
+/*
+ * Header and footer shared by every public marketing page.
+ *
+ * These surfaces are deliberately light-only: the marketing site is one
+ * printed-brochure surface rather than part of the themed product shell, so the
+ * palette is written out literally instead of borrowing product tokens that
+ * invert with the workspace theme.
+ */
+
+.site-header,
+.site-footer {
+  --site-ink: #0b0f14;
+  --site-ink-soft: #1b2430;
+  --site-body: #47535f;
+  --site-muted: #6b7785;
+  --site-line: #e3e7ec;
+  --site-surface: #ffffff;
+  --site-soft: #f2f5f8;
+  --site-accent: #c2410c;
+  --site-accent-strong: #9c3409;
+  --site-signal: #ff5a12;
+  --site-night: #0c1116;
+  --site-night-line: #232c37;
+  --site-night-text: #e8edf3;
+  --site-night-muted: #97a4b3;
+  color-scheme: light;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+.site-header {
+  position: sticky;
+  z-index: 60;
+  top: 0;
+  border-bottom: 1px solid var(--site-line);
+  background: rgb(255 255 255 / 0.82);
+  backdrop-filter: saturate(180%) blur(14px);
+}
+
+.site-header-inner {
+  width: min(1200px, 100% - 3rem);
+  min-height: 4.5rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.site-skip {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 5;
+  padding: 0.6rem 0.95rem;
+  color: var(--site-surface);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-decoration: none;
+  background: var(--site-ink);
+  border-radius: 0.6rem;
+  transform: translateY(-160%);
+  transition: transform 140ms ease;
+}
+
+.site-skip:focus-visible {
+  transform: translateY(0);
+}
+
+.site-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--site-ink);
+  text-decoration: none;
+}
+
+.site-brand-mark {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  display: inline-grid;
+  place-items: center;
+  color: var(--site-surface);
+  background: var(--site-ink);
+  border-radius: 0.625rem;
+}
+
+.site-brand-mark::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  background: var(--site-signal);
+  border-radius: 50%;
+}
+
+.site-brand-word {
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.site-nav {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: clamp(1rem, 2.2vw, 1.9rem);
+}
+
+.site-nav a {
+  color: var(--site-body);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.site-nav a:hover,
+.site-nav a:focus-visible {
+  color: var(--site-ink);
+}
+
+/* Present for crawlers and reachable on mobile, but the desktop bar stays
+   short: these two live in the footer and the mobile panel. */
+.site-nav-quiet {
+  display: none;
+}
+
+.site-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.site-signin,
+.site-cta {
+  height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1rem;
+  border-radius: 0.6rem;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.site-signin {
+  color: var(--site-ink-soft);
+  border: 1px solid transparent;
+}
+
+.site-signin:hover {
+  background: var(--site-soft);
+}
+
+.site-cta {
+  color: #ffffff;
+  background: var(--site-ink);
+  border: 1px solid var(--site-ink);
+}
+
+.site-cta:hover {
+  background: var(--site-accent);
+  border-color: var(--site-accent);
+}
+
+.site-menu-button {
+  display: none;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid var(--site-line);
+  border-radius: 0.6rem;
+  cursor: pointer;
+}
+
+.site-menu-button span {
+  width: 15px;
+  height: 1.5px;
+  background: var(--site-ink);
+  border-radius: 2px;
+}
+
+.site-header :focus-visible,
+.site-footer :focus-visible {
+  outline: 2px solid var(--site-accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+@media (max-width: 60rem) {
+  .site-header-inner {
+    width: min(1200px, 100% - 2rem);
+    flex-wrap: wrap;
+  }
+
+  .site-nav {
+    order: 3;
+    flex: 1 0 100%;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding-bottom: 0.5rem;
+    border-top: 1px solid var(--site-line);
+  }
+
+  .site-nav.is-open {
+    display: flex;
+    /* The bar itself is translucent; an open panel must not let the page
+       show through the links. */
+    background: var(--site-surface);
+  }
+
+  .site-nav a {
+    padding: 0.85rem 0.2rem;
+    font-size: 0.95rem;
+    border-bottom: 1px solid var(--site-line);
+  }
+
+  .site-nav a:last-child {
+    border-bottom: 0;
+  }
+
+  .site-nav-quiet {
+    display: block;
+  }
+
+  .site-brand {
+    margin-right: auto;
+  }
+
+  .site-menu-button {
+    display: inline-flex;
+  }
+
+  .site-signin {
+    display: none;
+  }
+}
+
+@media (max-width: 26rem) {
+  .site-cta {
+    padding: 0 0.75rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* ---------------------------------------------------------------- footer -- */
+
+.site-footer {
+  color: var(--site-night-muted);
+  background: var(--site-night);
+}
+
+.site-footer-inner {
+  width: min(1200px, 100% - 3rem);
+  margin: 0 auto;
+  padding: 4rem 0 2.75rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2.4fr);
+  gap: 3rem;
+}
+
+.site-footer .site-brand {
+  color: var(--site-night-text);
+}
+
+.site-footer .site-brand-mark {
+  color: var(--site-night);
+  background: var(--site-night-text);
+}
+
+.site-footer-brand p {
+  max-width: 22rem;
+  margin: 1rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.site-footer-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2rem;
+}
+
+.site-footer-columns h2 {
+  margin: 0 0 0.9rem;
+  color: var(--site-night-text);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.site-footer-columns ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.site-footer-columns a {
+  color: var(--site-night-muted);
+  font-size: 0.88rem;
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+
+.site-footer-columns a:hover,
+.site-footer-columns a:focus-visible {
+  color: var(--site-night-text);
+}
+
+.site-footer-base {
+  width: min(1200px, 100% - 3rem);
+  margin: 0 auto;
+  padding: 1.5rem 0 2.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  border-top: 1px solid var(--site-night-line);
+}
+
+.site-footer-base p {
+  max-width: 46rem;
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 62rem) {
+  .site-footer-inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2.5rem;
+  }
+
+  .site-footer-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2rem 1.5rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .site-footer-inner,
+  .site-footer-base {
+    width: min(1200px, 100% - 2rem);
+  }
+
+  .site-footer-inner {
+    padding-top: 3rem;
+  }
+}
+
+/* Anchor navigation in the header reads better animated, but only for
+   visitors who have not asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.site-header) {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-header *,
+  .site-footer * {
+    transition-duration: 1ms !important;
+  }
+}

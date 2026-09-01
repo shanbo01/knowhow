@@ -21,7 +21,10 @@
   --brand-hover: var(--orange-dark);
   --sidebar: var(--paper);
   min-height: 100vh;
-  overflow: hidden;
+  /* `clip` rather than `hidden`: it contains the decorative gradients without
+     making this element a scroll container, which would strand the sticky
+     site header. */
+  overflow-x: clip;
   color: var(--ink);
   color-scheme: light;
   background:
@@ -36,114 +39,6 @@
       transparent 26rem
     ),
     var(--paper);
-}
-
-.page :global(.product-brand) {
-  color: var(--ink);
-}
-
-.page :global(.product-brand-copy strong) {
-  color: inherit;
-}
-
-.page :global(.product-brand-mark) {
-  border-color: var(--ink);
-  background: var(--ink);
-  color: var(--surface);
-  box-shadow: none;
-}
-
-.page :global(.product-brand-mark)::after {
-  border-color: var(--surface);
-  background: var(--orange);
-}
-
-.header {
-  position: sticky;
-  z-index: 20;
-  top: 0.75rem;
-  width: min(1240px, calc(100% - 2.5rem));
-  min-height: 4.25rem;
-  margin: 0 auto;
-  padding: 0.55rem 0.65rem 0.55rem 0.8rem;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2rem;
-  border: 1px solid rgb(14 19 25 / 0.1);
-  border-radius: 999px;
-  background: rgb(242 244 247 / 0.74);
-  box-shadow: 0 8px 24px rgb(30 41 57 / 0.06);
-  backdrop-filter: blur(18px);
-}
-
-.brandLink {
-  color: inherit;
-  text-decoration: none;
-}
-
-.nav {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(1rem, 2.4vw, 2.2rem);
-}
-
-.nav a,
-.signIn,
-.createAccount {
-  color: var(--ink-soft);
-  font-size: 0.78rem;
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.nav a {
-  padding: 0.55rem 0.15rem;
-  transition: color 150ms ease;
-}
-
-.nav a:hover,
-.nav a[aria-current="page"] {
-  color: var(--orange);
-}
-
-.navActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.35rem;
-}
-
-.signIn,
-.createAccount {
-  min-height: 2.65rem;
-  padding: 0 0.9rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.7rem;
-}
-
-.signIn:hover {
-  background: var(--surface-soft);
-}
-
-.createAccount {
-  padding-inline: 1rem;
-  color: #f9fbfc;
-  background: var(--orange-dark);
-  box-shadow: 0 8px 18px rgb(150 59 23 / 0.22);
-  transition:
-    background-color 150ms ease,
-    transform 150ms ease;
-}
-
-.createAccount:hover {
-  background: var(--ink);
-  transform: translateY(-1px);
 }
 
 .eyebrow {
@@ -213,84 +108,20 @@
   transform: translateY(-1px);
 }
 
-.footer {
-  padding: clamp(2.5rem, 5vw, 4.5rem) max(1.25rem, calc((100% - 1240px) / 2));
-  display: grid;
-  grid-template-columns: minmax(15rem, 0.85fr) minmax(24rem, 1.15fr);
-  gap: 3rem clamp(3rem, 8vw, 8rem);
-  border-top: 1px solid var(--line);
-  color: var(--quiet);
-  background: #e4e8ef;
-}
-
-.footerBrand {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
-.footerBrand p {
-  max-width: 20rem;
-  margin: 0;
-  color: #424d5a;
-  font-size: 0.76rem;
-  line-height: 1.6;
-}
-
-.footerLinks {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 2rem;
-}
-
-.footerLinks > div {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-}
-
-.footerLinks strong {
-  margin-bottom: 0.25rem;
-  color: var(--ink);
-  font-size: 0.68rem;
-}
-
-.footerLinks a {
-  width: fit-content;
-  color: #424d5a;
-  font-size: 0.68rem;
-  text-decoration: none;
-}
-
-.footerLinks a:hover {
-  color: var(--orange-dark);
-}
-
-.footerNote {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding-top: 1.3rem;
-  border-top: 1px solid var(--line);
-  color: #4d5864;
-  font-size: 0.61rem;
-  line-height: 1.55;
-}
-
 /* Shared public information pages */
 .infoHero {
   width: min(920px, calc(100% - 2.5rem));
   margin: 0 auto;
-  padding: clamp(5rem, 10vw, 8rem) 0 3.5rem;
+  padding: clamp(3.5rem, 7vw, 5.5rem) 0 3.5rem;
 }
 
 .infoHero h1 {
   margin: 1rem 0 1.4rem;
   color: var(--ink);
-  font-size: clamp(2.8rem, 6vw, 5.2rem);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.06em;
+  font-size: clamp(2.2rem, 4.6vw, 3.4rem);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
   text-wrap: balance;
 }
 
@@ -543,16 +374,6 @@
 }
 
 @media (max-width: 850px) {
-  .header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 1rem;
-  }
-
-  .nav {
-    justify-content: flex-end;
-    gap: 1rem;
-  }
-
   .infoGrid {
     grid-template-columns: 1fr;
   }
@@ -560,64 +381,9 @@
   .infoGrid article {
     min-height: 15rem;
   }
-
-  .footer {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 700px) {
-  .header {
-    top: 0.45rem;
-    width: min(100% - 1.25rem, 1240px);
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.65rem 1rem;
-    padding: 0.65rem;
-  }
-
-  .brandLink {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .navActions {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .nav {
-    width: 100%;
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: flex-start;
-    overflow-x: auto;
-    padding: 0.15rem 0.1rem 0;
-    scrollbar-width: none;
-  }
-
-  .nav::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nav a {
-    min-height: 2rem;
-    display: inline-flex;
-    align-items: center;
-  }
 }
 
 @media (max-width: 560px) {
-  .signIn,
-.createAccount {
-    min-height: 2.35rem;
-    padding-inline: 0.7rem;
-    font-size: 0.68rem;
-  }
-
-  .page :global(.product-brand-copy strong) {
-    font-size: 0.76rem;
-  }
-
   .actions {
     align-items: stretch;
     flex-direction: column;
@@ -626,10 +392,6 @@
   .actions .primary,
 .actions .secondary {
     width: 100%;
-  }
-
-  .footerLinks {
-    grid-template-columns: 1fr 1fr;
   }
 
   .infoGrid,
@@ -646,8 +408,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .createAccount,
-.primary,
+  .primary,
 .secondary {
     transition: none;
   }

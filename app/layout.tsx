@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import "@fontsource-variable/google-sans-flex/wght.css";
 import { ThemeProvider } from "./components/theme-provider";
 import "./globals.css";
@@ -9,38 +8,50 @@ import "./administration-experience.css";
 import "./ui-system.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { PRODUCT_NAME, PRODUCT_TAGLINE } from "@/lib/marketing-content";
+import { resolveSiteOrigin } from "@/lib/server/site-origin";
 
-const title = "KnowHow — process knowledge that stays useful";
+const title = `${PRODUCT_NAME} — ${PRODUCT_TAGLINE}`;
 const description =
-  "Capture real browser work, turn it into a trusted guide, and see whether the team finished it.";
+  "Capture a task as you do it, turn it into a reviewed step-by-step guide, and publish it where your team will look for it.";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host =
-    requestHeaders.get("x-forwarded-host") ??
-    requestHeaders.get("host") ??
-    "localhost:3001";
-  const protocol =
-    requestHeaders.get("x-forwarded-proto") ??
-    (host.startsWith("localhost") ? "http" : "https");
-  const origin = `${protocol}://${host}`;
+  const origin = await resolveSiteOrigin();
   const imageUrl = `${origin}/og.png`;
 
   return {
     metadataBase: new URL(origin),
-    title,
+    title: {
+      default: title,
+      // Page titles read as "Pricing | KnowHow" without each page repeating the
+      // product name; the home page overrides this with an absolute title.
+      template: `%s | ${PRODUCT_NAME}`,
+    },
+    applicationName: PRODUCT_NAME,
     description,
+    robots: {
+      index: true,
+      follow: true,
+      googleBot: {
+        index: true,
+        follow: true,
+        "max-image-preview": "large",
+        "max-snippet": -1,
+        "max-video-preview": -1,
+      },
+    },
     openGraph: {
       title,
       description,
       type: "website",
-      siteName: "KnowHow",
+      siteName: PRODUCT_NAME,
+      locale: "en",
       images: [
         {
           url: imageUrl,
           width: 1732,
           height: 909,
-          alt: "KnowHow IT operations documentation workspace",
+          alt: "A captured procedure in the KnowHow guide editor",
         },
       ],
     },

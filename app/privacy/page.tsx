@@ -1,12 +1,45 @@
 import type { Metadata } from "next";
+import { resolveSiteOrigin } from "@/lib/server/site-origin";
+import { marketingPageGraph, serializeJsonLd } from "@/lib/structured-data";
 import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
-export const metadata: Metadata = { title: "Privacy notice | KnowHow" };
+const description =
+  "What a KnowHow workspace processes, what must never be submitted to it, and how capture, storage, and deletion are handled.";
 
-export default function PrivacyPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const origin = await resolveSiteOrigin();
+
+  return {
+    title: "Privacy notice",
+    description,
+    alternates: { canonical: `${origin}/privacy` },
+    openGraph: {
+      title: "Privacy notice | KnowHow",
+      description,
+      url: `${origin}/privacy`,
+      type: "website",
+    },
+  };
+}
+
+export default async function PrivacyPage() {
+  const origin = await resolveSiteOrigin();
+
   return (
     <MarketingPage>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: serializeJsonLd(
+            marketingPageGraph(origin, {
+              path: "/privacy",
+              name: "Privacy notice",
+              description,
+            }),
+          ),
+        }}
+      />
       <InfoHero
         eyebrow="Privacy notice"
         title="Clear data boundaries for KnowHow workspaces."
