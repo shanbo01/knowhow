@@ -86,6 +86,9 @@ const captureDemoSteps = [
   },
 ] as const;
 
+const BOOT_ANIMATION_DURATION_MS = 950;
+const BOOT_FINISH_TIMEOUT_MS = 1120;
+
 function particleField(canvas: HTMLCanvasElement, dark: boolean, density: number) {
   const maybeCtx = canvas.getContext("2d");
   if (!maybeCtx) return () => {};
@@ -180,12 +183,12 @@ export function LandingExperience() {
     const startedAt = performance.now();
     let frame = 0;
     const tick = (time: number) => {
-      const progress = Math.min(1, (time - startedAt) / 950);
+      const progress = Math.min(1, (time - startedAt) / BOOT_ANIMATION_DURATION_MS);
       setBootCount(Math.round(progress * 100));
       if (progress < 1) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    const finish = window.setTimeout(() => setBootDone(true), 1120);
+    const finish = window.setTimeout(() => setBootDone(true), BOOT_FINISH_TIMEOUT_MS);
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(finish);
