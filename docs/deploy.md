@@ -80,6 +80,32 @@ _APP_DOMAIN=appwrite.your-domain.com
 _APP_DOMAIN_TARGET=appwrite.your-domain.com
 ```
 
+Two more settings in that file are required, and both fail late rather than
+early if they are missed:
+
+```
+_APP_FUNCTIONS_RUNTIMES="node-22,node-16.0,php-8.0,python-3.9,ruby-3.0"
+_APP_STORAGE_LIMIT=52428800
+```
+
+`node-22` is covered under [the functions](#enable-the-node-runtime-first).
+The storage limit matters because `knowhow_exports` declares a 50 MB maximum
+file size and Appwrite ships a 30 MB ceiling, so pushing that bucket fails with
+`Value must be a valid range between 1 and 30,000,000` — while the other bucket
+pushes fine, which makes it look like a problem with one bucket rather than a
+project-wide limit.
+
+Recreate the affected containers after editing, since a running container keeps
+the values it started with:
+
+```bash
+sudo docker compose up -d --force-recreate appwrite appwrite-worker-functions appwrite-worker-builds
+docker exec appwrite printenv _APP_FUNCTIONS_RUNTIMES
+```
+
+Read the value back from the container rather than the file. It is the only
+thing that proves the change took effect.
+
 ## Generate secrets
 
 Every value below needs at least 32 random bytes and must be unique to this

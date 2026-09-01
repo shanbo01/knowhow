@@ -139,9 +139,11 @@ for (const [functionId, spec] of Object.entries(FUNCTION_VARIABLES)) {
       });
       console.log(`  ${functionId}  ${key}  updated`);
     } else {
+      // Appwrite 1.9 requires an explicit id on create, the same way project
+      // keys do; "unique()" asks the server to allocate one.
       await api(`/functions/${functionId}/variables`, {
         method: "POST",
-        body: JSON.stringify({ key, value }),
+        body: JSON.stringify({ variableId: "unique()", key, value }),
       });
       console.log(`  ${functionId}  ${key}  created`);
     }
