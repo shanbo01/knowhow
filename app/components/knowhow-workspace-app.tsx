@@ -2407,6 +2407,229 @@ function FacetGroup({
   );
 }
 
+function LibraryPreviewHead({
+  guide,
+  revision,
+}: {
+  guide: Guide;
+  revision: GuideRevisionView | null;
+}) {
+  return (
+    <div className="library-preview-head">
+      <div className="library-preview-chips">
+        <StatusBadge status={guide.status} />
+        {guide.restricted ? (
+          <span className="restricted-label">
+            <LockKeyhole /> Restricted
+          </span>
+        ) : (
+          <span className="workspace-label">
+            <Globe2 /> Workspace
+          </span>
+        )}
+        {revision && isCapturedGuideSource(revision.source) ? (
+          <span className="workspace-label">
+            <Sparkles /> Captured
+          </span>
+        ) : null}
+      </div>
+      <SheetTitle className="library-preview-title">
+        {revision?.title ?? guide.title}
+      </SheetTitle>
+      <SheetDescription className="library-preview-summary">
+        {revision?.summary || "No description yet."}
+      </SheetDescription>
+    </div>
+  );
+}
+
+function LibraryPreviewFacts({
+  guide,
+  revision,
+}: {
+  guide: Guide;
+  revision: GuideRevisionView | null;
+}) {
+  const live = guide.publishedRevision;
+  const stepsCount = revision?.steps?.length ?? 0;
+
+  return (
+    <dl className="library-preview-facts">
+      <div>
+        <dt>Owner</dt>
+        <dd>{revision?.authorName ?? "—"}</dd>
+      </div>
+      <div>
+        <dt>Category</dt>
+        <dd>{revision?.category || "Uncategorized"}</dd>
+      </div>
+      <div>
+        <dt>Revision</dt>
+        <dd>
+          {revision ? `Revision ${revision.number}` : "—"}
+          {live && guide.workingRevision && live.number !== revision?.number
+            ? ` · v${live.number} remains live`
+            : ""}
+        </dd>
+      </div>
+      <div>
+        <dt>Last updated</dt>
+        <dd>{formatDate(guide.updatedAt)}</dd>
+      </div>
+      <div>
+        <dt>Views</dt>
+        <dd>{live ? (guide.viewCount ?? 0) : "Not shared"}</dd>
+      </div>
+      <div>
+        <dt>Steps</dt>
+        <dd>{stepsCount}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function LibraryPreviewProcedure({
+  steps,
+  onOpen,
+}: {
+  steps: NonNullable<GuideRevisionView["steps"]>;
+  onOpen: () => void;
+}) {
+  return (
+    <div>
+      <p className="library-preview-label">
+        Procedure
+        {steps.length ? ` · first ${Math.min(6, steps.length)} steps` : ""}
+      </p>
+      {steps.length ? (
+        <ol className="library-preview-steps">
+          {steps.slice(0, 6).map((step) => (
+            <li key={step.id} data-kind={step.kind}>
+              <span>{step.title.trim() || step.description.trim() || "Untitled step"}</span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="library-preview-empty">
+          This revision has no steps yet.
+        </p>
+      )}
+      {steps.length > 6 ? (
+        <button className="button ghost small" type="button" onClick={onOpen}>
+          Read all {steps.length} steps <ArrowRight />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function LibraryPreviewHistory({
+  revisionHistory,
+}: {
+  revisionHistory: NonNullable<Guide["revisionHistory"]>;
+}) {
+  if (!revisionHistory.length) return null;
+
+  return (
+    <div>
+      <p className="library-preview-label">History</p>
+      <ul className="library-preview-history">
+        {revisionHistory.slice(0, 5).map((entry) => (
+          <li key={entry.id}>
+            <strong>Revision {entry.number}</strong>
+            <span>
+              {titleCase(entry.status)} · {entry.authorName} ·{" "}
+              {formatDate(entry.publishedAt ?? entry.createdAt)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function LibraryPreviewFoot({
+  guide,
+  busy,
+  onOpen,
+  onEdit,
+  onShare,
+  onExport,
+  onApprove,
+  onRequestChanges,
+  onPublish,
+  onRestore,
+}: {
+  guide: Guide;
+  busy: boolean;
+  onOpen: () => void;
+  onEdit: () => void;
+  onShare: () => void;
+  onExport: () => void;
+  onApprove: () => void;
+  onRequestChanges: () => void;
+  onPublish: () => void;
+  onRestore: () => void;
+}) {
+  return (
+    <div className="library-preview-foot">
+      <Button type="button" onClick={onOpen}>
+        <Eye /> Open guide
+      </Button>
+      {guide.canEdit && guide.status !== "archived" ? (
+        <Button variant="outline" type="button" onClick={onEdit}>
+          <PenLine /> Edit
+        </Button>
+      ) : null}
+      {guide.canShare && guide.status !== "archived" ? (
+        <Button variant="outline" type="button" onClick={onShare}>
+          <Link2 /> Share
+        </Button>
+      ) : null}
+      {guide.publishedRevision ? (
+        <Button variant="outline" type="button" onClick={onExport}>
+          <Download /> Export
+        </Button>
+      ) : null}
+      {guide.canReview && guide.status === "review" ? (
+        <>
+          <Button
+            variant="secondary"
+            type="button"
+            disabled={busy}
+            onClick={onApprove}
+          >
+            {guide.canPublish ? "Approve and publish" : "Approve"}
+          </Button>
+          <Button
+            variant="ghost"
+            type="button"
+            disabled={busy}
+            onClick={onRequestChanges}
+          >
+            Request changes
+          </Button>
+        </>
+      ) : null}
+      {guide.canPublish && guide.status === "review" && !guide.canReview ? (
+        <Button type="button" disabled={busy} onClick={onPublish}>
+          Publish
+        </Button>
+      ) : null}
+      {guide.canRestore && guide.status === "archived" ? (
+        <Button
+          variant="outline"
+          type="button"
+          disabled={busy}
+          onClick={onRestore}
+        >
+          <RotateCcw /> Restore as draft
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function LibraryPreview({
   guide,
   revision,
@@ -2432,69 +2655,14 @@ function LibraryPreview({
   onPublish: () => void;
   onRestore: () => void;
 }) {
-  const live = guide.publishedRevision;
   const steps = revision?.steps ?? [];
 
   return (
     <>
-      <div className="library-preview-head">
-        <div className="library-preview-chips">
-          <StatusBadge status={guide.status} />
-          {guide.restricted ? (
-            <span className="restricted-label">
-              <LockKeyhole /> Restricted
-            </span>
-          ) : (
-            <span className="workspace-label">
-              <Globe2 /> Workspace
-            </span>
-          )}
-          {revision && isCapturedGuideSource(revision.source) ? (
-            <span className="workspace-label">
-              <Sparkles /> Captured
-            </span>
-          ) : null}
-        </div>
-        <SheetTitle className="library-preview-title">
-          {revision?.title ?? guide.title}
-        </SheetTitle>
-        <SheetDescription className="library-preview-summary">
-          {revision?.summary || "No description yet."}
-        </SheetDescription>
-      </div>
+      <LibraryPreviewHead guide={guide} revision={revision} />
 
       <div className="library-preview-body">
-        <dl className="library-preview-facts">
-          <div>
-            <dt>Owner</dt>
-            <dd>{revision?.authorName ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Category</dt>
-            <dd>{revision?.category || "Uncategorized"}</dd>
-          </div>
-          <div>
-            <dt>Revision</dt>
-            <dd>
-              {revision ? `Revision ${revision.number}` : "—"}
-              {live && guide.workingRevision && live.number !== revision?.number
-                ? ` · v${live.number} remains live`
-                : ""}
-            </dd>
-          </div>
-          <div>
-            <dt>Last updated</dt>
-            <dd>{formatDate(guide.updatedAt)}</dd>
-          </div>
-          <div>
-            <dt>Views</dt>
-            <dd>{live ? (guide.viewCount ?? 0) : "Not shared"}</dd>
-          </div>
-          <div>
-            <dt>Steps</dt>
-            <dd>{steps.length}</dd>
-          </div>
-        </dl>
+        <LibraryPreviewFacts guide={guide} revision={revision} />
 
         {revision?.tags.length ? (
           <div>
@@ -2509,104 +2677,25 @@ function LibraryPreview({
           </div>
         ) : null}
 
-        <div>
-          <p className="library-preview-label">
-            Procedure
-            {steps.length ? ` · first ${Math.min(6, steps.length)} steps` : ""}
-          </p>
-          {steps.length ? (
-            <ol className="library-preview-steps">
-              {steps.slice(0, 6).map((step) => (
-                <li key={step.id} data-kind={step.kind}>
-                  <span>{step.title.trim() || step.description.trim() || "Untitled step"}</span>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="library-preview-empty">
-              This revision has no steps yet.
-            </p>
-          )}
-          {steps.length > 6 ? (
-            <button className="button ghost small" type="button" onClick={onOpen}>
-              Read all {steps.length} steps <ArrowRight />
-            </button>
-          ) : null}
-        </div>
+        <LibraryPreviewProcedure steps={steps} onOpen={onOpen} />
 
-        {guide.revisionHistory?.length ? (
-          <div>
-            <p className="library-preview-label">History</p>
-            <ul className="library-preview-history">
-              {guide.revisionHistory.slice(0, 5).map((entry) => (
-                <li key={entry.id}>
-                  <strong>Revision {entry.number}</strong>
-                  <span>
-                    {titleCase(entry.status)} · {entry.authorName} ·{" "}
-                    {formatDate(entry.publishedAt ?? entry.createdAt)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
+        {guide.revisionHistory ? (
+          <LibraryPreviewHistory revisionHistory={guide.revisionHistory} />
         ) : null}
       </div>
 
-      <div className="library-preview-foot">
-        <Button type="button" onClick={onOpen}>
-          <Eye /> Open guide
-        </Button>
-        {guide.canEdit && guide.status !== "archived" ? (
-          <Button variant="outline" type="button" onClick={onEdit}>
-            <PenLine /> Edit
-          </Button>
-        ) : null}
-        {guide.canShare && guide.status !== "archived" ? (
-          <Button variant="outline" type="button" onClick={onShare}>
-            <Link2 /> Share
-          </Button>
-        ) : null}
-        {guide.publishedRevision ? (
-          <Button variant="outline" type="button" onClick={onExport}>
-            <Download /> Export
-          </Button>
-        ) : null}
-        {guide.canReview && guide.status === "review" ? (
-          <>
-            <Button
-              variant="secondary"
-              type="button"
-              disabled={busy}
-              onClick={onApprove}
-            >
-              {guide.canPublish ? "Approve and publish" : "Approve"}
-            </Button>
-            <Button
-              variant="ghost"
-              type="button"
-              disabled={busy}
-              onClick={onRequestChanges}
-            >
-              Request changes
-            </Button>
-          </>
-        ) : null}
-        {guide.canPublish && guide.status === "review" && !guide.canReview ? (
-          <Button type="button" disabled={busy} onClick={onPublish}>
-            Publish
-          </Button>
-        ) : null}
-        {guide.canRestore && guide.status === "archived" ? (
-          <Button
-            variant="outline"
-            type="button"
-            disabled={busy}
-            onClick={onRestore}
-          >
-            <RotateCcw /> Restore as draft
-          </Button>
-        ) : null}
-      </div>
+      <LibraryPreviewFoot
+        guide={guide}
+        busy={busy}
+        onOpen={onOpen}
+        onEdit={onEdit}
+        onShare={onShare}
+        onExport={onExport}
+        onApprove={onApprove}
+        onRequestChanges={onRequestChanges}
+        onPublish={onPublish}
+        onRestore={onRestore}
+      />
     </>
   );
 }
