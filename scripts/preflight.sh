@@ -339,13 +339,29 @@ if have docker && docker info >/dev/null 2>&1; then
     note "add it in Appwrite's .env and restart Appwrite"
   fi
 
-  # A backup that cannot find its database is not a backup.
+  # A backup that cannot find its database is not a backup. Which engine is
+  # running is read from Appwrite rather than assumed: 1.9 installs MongoDB by
+  # default, and guessing MariaDB here reported a healthy stack as broken.
   DB_CONTAINER="$(sed -n 's/^KNOWHOW_BACKUP_DB_CONTAINER=//p' "$ENV_FILE" 2>/dev/null | tail -1 | tr -d '\r')"
-  DB_CONTAINER="${DB_CONTAINER:-appwrite-mariadb}"
+  if [ -z "$DB_CONTAINER" ]; then
+    ADAPTER="$(docker exec appwrite printenv _APP_DB_ADAPTER 2>/dev/null || true)"
+    case "${ADAPTER:-mongodb}" in
+      mongodb) DB_CONTAINER="appwrite-mongodb" ;;
+      mariadb|mysql) DB_CONTAINER="appwrite-mariadb" ;;
+      postgres*) DB_CONTAINER="appwrite-postgres" ;;
+    esac
+  fi
   if docker inspect "$DB_CONTAINER" >/dev/null 2>&1; then
     pass "database container '${DB_CONTAINER}' found"
   else
     warn "database container '${DB_CONTAINER}' not found; backups would fail"
+  fi
+
+  # Compose prefixes its project name onto volume names.
+  if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qE '(^|_)appwrite-uploads$'; then
+    pass "uploads volume found"
+  else
+    warn "no appwrite-uploads volume; backups would capture no media"
   fi
 else
   note "skipped: docker is not usable, so Appwrite cannot be inspected"
