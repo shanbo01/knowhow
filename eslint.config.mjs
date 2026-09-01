@@ -16,9 +16,10 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
   ]),
   {
-    files: ["desktop/src/**/*.{ts,tsx}", "app/components/guide-favicon.tsx"],
+    files: ["desktop/src/**/*.{ts,tsx}"],
     rules: {
-      // Favicons & desktop recorder previews are loaded dynamically/in-memory,
+      // The desktop recorder renders inside a Tauri webview, not a Next.js
+      // page. Its previews are in-memory data URLs produced by the Rust side,
       // so there is no loader for next/image to route them through.
       "@next/next/no-img-element": "off",
     },
