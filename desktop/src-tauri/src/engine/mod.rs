@@ -1411,6 +1411,7 @@ fn rasterize(
         let Some(scanline) = frame.bgra.get(start..start + region_width * 4) else {
             bail!("captured region falls outside the display frame");
         };
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         for (destination, source) in target.chunks_exact_mut(4).zip(scanline.chunks_exact(4)) {
             destination[0] = source[2];
             destination[1] = source[1];
