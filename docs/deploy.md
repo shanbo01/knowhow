@@ -123,6 +123,38 @@ Use the `KNOWHOW_TOKEN_KEYS_JSON` keyring rather than the legacy
 `KNOWHOW_TOKEN_SIGNING_KEY`. Only the keyring supports rotating a signing key
 without invalidating every outstanding invitation and device token at once.
 
+## Create the project and its API key
+
+The application needs an Appwrite project and a key. Both are made in the
+console, and two details are easy to miss because nothing fails until much
+later.
+
+**The key needs `sessions.write`.** The application creates sessions on a user's
+behalf server-side, so without it every sign-in fails with a generic *"The email
+or password is incorrect"* — the credentials are fine, the key is not. It also
+needs `executions.read` for the readiness probe. Granting only the obvious
+database and storage scopes gets you a deployment that looks healthy and cannot
+log anyone in.
+
+The full set this deployment uses:
+
+```
+users.read users.write sessions.read sessions.write teams.read teams.write
+databases.read databases.write tables.read tables.write columns.read
+columns.write indexes.read indexes.write rows.read rows.write
+collections.read collections.write attributes.read attributes.write
+documents.read documents.write buckets.read buckets.write files.read
+files.write functions.read functions.write executions.read executions.write
+messages.write targets.read locale.read health.read rules.read rules.write
+```
+
+Both the `tables.*` and the older `collections.*` and `attributes.*` scopes are
+required: pushing the schema uses the legacy names internally, and omitting them
+fails partway through creating columns.
+
+**Register the application hostname as a Web platform** under the project's
+settings, or Appwrite may reject browser-originated calls from it.
+
 ## Configure
 
 Copy the template and fill in every placeholder:
@@ -232,6 +264,31 @@ Neither function needs an API key variable. Both prefer the dynamic key Appwrite
 injects per execution, scoped by the `scopes` array in `appwrite.config.json` —
 which is why that array is checked to be non-empty: a function with no scopes
 receives a powerless key and fails at run time rather than at push time.
+
+> **Never update a function with a partial PUT.** Appwrite replaces the whole
+> resource, so a call that omits `scopes` silently strips them, and the next
+> scheduled run fails with `missing scopes`. Change functions by editing
+> `appwrite.config.json` and pushing, which always sends the complete set.
+
+### If a worker cannot reach the API
+
+Appwrite derives `APPWRITE_FUNCTION_API_ENDPOINT` from `_APP_DOMAIN` and
+overwrites any function variable of that name, so a worker cannot be pointed
+elsewhere through configuration alone. On a default install that value is
+`localhost`, which inside a function container is the container itself, and the
+runtimes network cannot resolve the `appwrite` service by name either. The
+symptom is `fetch failed` / `ECONNREFUSED` in the worker's first API call.
+
+Set `KNOWHOW_APPWRITE_ENDPOINT` to an address the runtimes network can reach —
+the Docker gateway and Appwrite's published port work — and both workers prefer
+it over the injected value:
+
+```bash
+docker network inspect runtimes --format '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+The same applies wherever the public hostname is unreachable from inside, or
+presents a certificate the runtime does not trust.
 
 ### Confirm the triggers
 
