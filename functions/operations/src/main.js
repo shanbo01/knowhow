@@ -1775,6 +1775,280 @@ async function cleanupUnreferencedUsers(tables, users, candidateIds) {
   };
 }
 
+function validatePurgeCaseEvidence(row, details) {
+  const workspaceId = row.workspace_id;
+  const organizationId = row.organization_id;
+  if (
+    typeof workspaceId !== "string" ||
+    !workspaceId ||
+    typeof organizationId !== "string" ||
+    !organizationId
+  ) {
+    throw new Error(`PURGE_CASE_SCOPE_INVALID:${row.$id}`);
+  }
+  if (
+    typeof details.approvedBy !== "string" ||
+    !details.approvedBy ||
+    !Number.isFinite(Date.parse(details.approvedAt || ""))
+  ) {
+    throw new Error(`PURGE_APPROVAL_EVIDENCE_INVALID:${row.$id}`);
+  }
+  return { workspaceId, organizationId };
+}
+
+async function preparePurgePlan(
+  tables,
+  row,
+  details,
+  workspaceId,
+  organizationId,
+  now,
+) {
+  const deletingOrganization = await organizationCanBeDeleted(
+    tables,
+    organizationId,
+    workspaceId,
+  );
+  let purgePlan = details.purgePlan;
+  const hadStoredPurgePlan = purgePlan !== undefined;
+  if (hadStoredPurgePlan) {
+    if (
+      !validPurgePlan(purgePlan) ||
+      !(await verifyPurgePlanBinding(
+        purgePlan,
+        row.$id,
+        organizationId,
+        workspaceId,
+      ))
+    ) {
+      throw new Error(`PURGE_PLAN_BINDING_INVALID:${row.$id}`);
+    }
+  } else {
+    if (row.status === "purging")
+      throw new Error(`PURGE_PLAN_REQUIRED:${row.$id}`);
+    purgePlan = await buildPurgePlan(
+      tables,
+      workspaceId,
+      organizationId,
+      deletingOrganization,
+      now.toISOString(),
+      row.$id,
+    );
+  }
+  return { purgePlan, hadStoredPurgePlan };
+}
+
+async function processSinglePurgeCase({ tables, storage, users }, row, now) {
+  let details = payload(row);
+  const { workspaceId, organizationId } = validatePurgeCaseEvidence(
+    row,
+    details,
+  );
+
+  const workspaceHash = await receiptHash(`workspace\0${workspaceId}`);
+  const organizationHash = await receiptHash(
+    `organization\0${organizationId}`,
+  );
+  const approvedByHash = await receiptHash(`actor\0${details.approvedBy}`);
+
+  const { purgePlan, hadStoredPurgePlan } = await preparePurgePlan(
+    tables,
+    row,
+    details,
+    workspaceId,
+    organizationId,
+    now,
+  );
+  if (!hadStoredPurgePlan) {
+    details = { ...details, purgePlan };
+  }
+
+  if (row.status !== "purging" || !hadStoredPurgePlan) {
+    await tables.updateRow({
+      databaseId: DATABASE_ID,
+      tableId: "lifecycle_cases",
+      rowId: row.$id,
+      data: fields(
+        { status: "purging", updated_by: "knowhow_ops" },
+        {
+          ...details,
+          status: "purging",
+          purgeStartedAt: details.purgeStartedAt || now.toISOString(),
+        },
+      ),
+      permissions: [],
+    });
+  }
+
+  const liveWorkspaceTargets = await collectWorkspaceTargets(
+    tables,
+    workspaceId,
+    organizationId,
+    row.$id,
+    false,
+  );
+  assertFrozenRows(
+    liveWorkspaceTargets,
+    purgePlan.workspaceTargets,
+    "workspace",
+  );
+  assertFrozenFiles(
+    liveWorkspaceTargets,
+    purgePlan.workspaceFileTargets,
+    "workspace",
+  );
+
+  let organizationWasDeleted = false;
+  if (purgePlan.organizationDeleted) {
+    if (
+      !(await organizationCanBeDeleted(tables, organizationId, workspaceId))
+    ) {
+      throw new Error("PURGE_SCOPE_CHANGED:organization");
+    }
+    organizationWasDeleted = true;
+  }
+
+  let liveOrganizationTargets = new Map();
+  if (organizationWasDeleted) {
+    liveOrganizationTargets = await collectOrganizationTargets(
+      tables,
+      organizationId,
+      row.$id,
+      manifestKeySet(purgePlan.workspaceTargets),
+    );
+    assertFrozenRows(
+      liveOrganizationTargets,
+      purgePlan.organizationTargets,
+      "organization",
+    );
+    assertFrozenFiles(
+      liveOrganizationTargets,
+      purgePlan.organizationFileTargets,
+      "organization",
+    );
+  }
+
+  let failedFiles = await deletePlannedFiles(
+    storage,
+    purgePlan.workspaceFileTargets,
+  );
+  if (organizationWasDeleted)
+    failedFiles += await deletePlannedFiles(
+      storage,
+      purgePlan.organizationFileTargets,
+    );
+
+  if (failedFiles) {
+    await tables.updateRow({
+      databaseId: DATABASE_ID,
+      tableId: "lifecycle_cases",
+      rowId: row.$id,
+      data: fields(
+        {
+          status: "approved",
+          scheduled_at: new Date(now.getTime() + 60 * 60_000).toISOString(),
+          updated_by: "knowhow_ops",
+        },
+        {
+          ...details,
+          status: "approved",
+          lastFailureClass: "STORAGE_DELETE_FAILED",
+          failedFiles,
+        },
+      ),
+      permissions: [],
+    });
+    return null;
+  }
+
+  await deletePlannedRows(tables, purgePlan.workspaceTargets);
+  if (organizationWasDeleted)
+    await deletePlannedRows(tables, purgePlan.organizationTargets);
+
+  const userCleanup = await cleanupUnreferencedUsers(
+    tables,
+    users,
+    purgePlan.candidateUserIds,
+  );
+
+  const workspaceResidue = await collectWorkspaceTargets(
+    tables,
+    workspaceId,
+    organizationId,
+    row.$id,
+    false,
+  );
+  if (targetKeys(workspaceResidue).size)
+    throw new Error(`PURGE_WORKSPACE_RESIDUE:${row.$id}`);
+
+  if (organizationWasDeleted) {
+    const organizationResidue = await collectOrganizationTargets(
+      tables,
+      organizationId,
+      row.$id,
+    );
+    if (targetKeys(organizationResidue).size)
+      throw new Error(`PURGE_ORGANIZATION_RESIDUE:${row.$id}`);
+  }
+
+  const completedAt = new Date().toISOString();
+  const receipt = {
+    version: 2,
+    deletedRows: purgePlan.workspaceRows,
+    deletedFiles: purgePlan.workspaceFiles,
+    failedFiles: 0,
+    organizationHash,
+    workspaceHash,
+    organizationDeleted: organizationWasDeleted,
+    organizationRowsDeleted: organizationWasDeleted
+      ? purgePlan.organizationRows
+      : 0,
+    organizationFilesDeleted: organizationWasDeleted
+      ? purgePlan.organizationFiles
+      : 0,
+    ...userCleanup,
+  };
+
+  await tables.updateRow({
+    databaseId: DATABASE_ID,
+    tableId: "lifecycle_cases",
+    rowId: row.$id,
+    data: fields(
+      {
+        organization_id: null,
+        workspace_id: null,
+        user_id: null,
+        subject_id: null,
+        slug: null,
+        email: null,
+        kind: "tenant_deletion_approval",
+        status: "completed",
+        idempotency_key: null,
+        request_id: null,
+        occurred_at: completedAt,
+        expires_at: null,
+        scheduled_at: null,
+        deleted_at: null,
+        created_by: "knowhow_ops",
+        updated_by: "knowhow_ops",
+      },
+      {
+        kind: "tenant_deletion_approval",
+        status: "completed",
+        eligibleAt: details.eligibleAt,
+        createdAt: details.createdAt,
+        approvedAt: details.approvedAt,
+        approvedByHash,
+        completedAt,
+        receipt,
+      },
+    ),
+    permissions: [],
+  });
+
+  return { caseId: row.$id, ...receipt };
+}
+
 async function purgeApproved({ tables, storage, users }, now) {
   const due = await listAll(
     tables,
@@ -1790,233 +2064,12 @@ async function purgeApproved({ tables, storage, users }, now) {
     .slice(0, 10);
   const receipts = [];
   for (const row of approved) {
-    let details = payload(row);
-    const workspaceId = row.workspace_id;
-    const organizationId = row.organization_id;
-    if (
-      typeof workspaceId !== "string" ||
-      !workspaceId ||
-      typeof organizationId !== "string" ||
-      !organizationId
-    ) {
-      throw new Error(`PURGE_CASE_SCOPE_INVALID:${row.$id}`);
-    }
-    if (
-      typeof details.approvedBy !== "string" ||
-      !details.approvedBy ||
-      !Number.isFinite(Date.parse(details.approvedAt || ""))
-    ) {
-      throw new Error(`PURGE_APPROVAL_EVIDENCE_INVALID:${row.$id}`);
-    }
-    const workspaceHash = await receiptHash(`workspace\0${workspaceId}`);
-    const organizationHash = await receiptHash(
-      `organization\0${organizationId}`,
+    const receipt = await processSinglePurgeCase(
+      { tables, storage, users },
+      row,
+      now,
     );
-    const approvedByHash = await receiptHash(`actor\0${details.approvedBy}`);
-    const deletingOrganization = await organizationCanBeDeleted(
-      tables,
-      organizationId,
-      workspaceId,
-    );
-    let purgePlan = details.purgePlan;
-    const hadStoredPurgePlan = purgePlan !== undefined;
-    if (hadStoredPurgePlan) {
-      if (
-        !validPurgePlan(purgePlan) ||
-        !(await verifyPurgePlanBinding(
-          purgePlan,
-          row.$id,
-          organizationId,
-          workspaceId,
-        ))
-      ) {
-        throw new Error(`PURGE_PLAN_BINDING_INVALID:${row.$id}`);
-      }
-    } else {
-      if (row.status === "purging")
-        throw new Error(`PURGE_PLAN_REQUIRED:${row.$id}`);
-      purgePlan = await buildPurgePlan(
-        tables,
-        workspaceId,
-        organizationId,
-        deletingOrganization,
-        now.toISOString(),
-        row.$id,
-      );
-      details = { ...details, purgePlan };
-    }
-    if (row.status !== "purging" || !hadStoredPurgePlan) {
-      await tables.updateRow({
-        databaseId: DATABASE_ID,
-        tableId: "lifecycle_cases",
-        rowId: row.$id,
-        data: fields(
-          { status: "purging", updated_by: "knowhow_ops" },
-          {
-            ...details,
-            status: "purging",
-            purgeStartedAt: details.purgeStartedAt || now.toISOString(),
-          },
-        ),
-        permissions: [],
-      });
-    }
-    const liveWorkspaceTargets = await collectWorkspaceTargets(
-      tables,
-      workspaceId,
-      organizationId,
-      row.$id,
-      false,
-    );
-    assertFrozenRows(
-      liveWorkspaceTargets,
-      purgePlan.workspaceTargets,
-      "workspace",
-    );
-    assertFrozenFiles(
-      liveWorkspaceTargets,
-      purgePlan.workspaceFileTargets,
-      "workspace",
-    );
-    let organizationWasDeleted = false;
-    if (purgePlan.organizationDeleted) {
-      if (
-        !(await organizationCanBeDeleted(tables, organizationId, workspaceId))
-      ) {
-        throw new Error("PURGE_SCOPE_CHANGED:organization");
-      }
-      organizationWasDeleted = true;
-    }
-    let liveOrganizationTargets = new Map();
-    if (organizationWasDeleted) {
-      liveOrganizationTargets = await collectOrganizationTargets(
-        tables,
-        organizationId,
-        row.$id,
-        manifestKeySet(purgePlan.workspaceTargets),
-      );
-      assertFrozenRows(
-        liveOrganizationTargets,
-        purgePlan.organizationTargets,
-        "organization",
-      );
-      assertFrozenFiles(
-        liveOrganizationTargets,
-        purgePlan.organizationFileTargets,
-        "organization",
-      );
-    }
-    let failedFiles = await deletePlannedFiles(
-      storage,
-      purgePlan.workspaceFileTargets,
-    );
-    if (organizationWasDeleted)
-      failedFiles += await deletePlannedFiles(
-        storage,
-        purgePlan.organizationFileTargets,
-      );
-    if (failedFiles) {
-      await tables.updateRow({
-        databaseId: DATABASE_ID,
-        tableId: "lifecycle_cases",
-        rowId: row.$id,
-        data: fields(
-          {
-            status: "approved",
-            scheduled_at: new Date(now.getTime() + 60 * 60_000).toISOString(),
-            updated_by: "knowhow_ops",
-          },
-          {
-            ...details,
-            status: "approved",
-            lastFailureClass: "STORAGE_DELETE_FAILED",
-            failedFiles,
-          },
-        ),
-        permissions: [],
-      });
-      continue;
-    }
-    await deletePlannedRows(tables, purgePlan.workspaceTargets);
-    if (organizationWasDeleted)
-      await deletePlannedRows(tables, purgePlan.organizationTargets);
-    const userCleanup = await cleanupUnreferencedUsers(
-      tables,
-      users,
-      purgePlan.candidateUserIds,
-    );
-    const workspaceResidue = await collectWorkspaceTargets(
-      tables,
-      workspaceId,
-      organizationId,
-      row.$id,
-      false,
-    );
-    if (targetKeys(workspaceResidue).size)
-      throw new Error(`PURGE_WORKSPACE_RESIDUE:${row.$id}`);
-    if (organizationWasDeleted) {
-      const organizationResidue = await collectOrganizationTargets(
-        tables,
-        organizationId,
-        row.$id,
-      );
-      if (targetKeys(organizationResidue).size)
-        throw new Error(`PURGE_ORGANIZATION_RESIDUE:${row.$id}`);
-    }
-    const completedAt = new Date().toISOString();
-    const receipt = {
-      version: 2,
-      deletedRows: purgePlan.workspaceRows,
-      deletedFiles: purgePlan.workspaceFiles,
-      failedFiles: 0,
-      organizationHash,
-      workspaceHash,
-      organizationDeleted: organizationWasDeleted,
-      organizationRowsDeleted: organizationWasDeleted
-        ? purgePlan.organizationRows
-        : 0,
-      organizationFilesDeleted: organizationWasDeleted
-        ? purgePlan.organizationFiles
-        : 0,
-      ...userCleanup,
-    };
-    await tables.updateRow({
-      databaseId: DATABASE_ID,
-      tableId: "lifecycle_cases",
-      rowId: row.$id,
-      data: fields(
-        {
-          organization_id: null,
-          workspace_id: null,
-          user_id: null,
-          subject_id: null,
-          slug: null,
-          email: null,
-          kind: "tenant_deletion_approval",
-          status: "completed",
-          idempotency_key: null,
-          request_id: null,
-          occurred_at: completedAt,
-          expires_at: null,
-          scheduled_at: null,
-          deleted_at: null,
-          created_by: "knowhow_ops",
-          updated_by: "knowhow_ops",
-        },
-        {
-          kind: "tenant_deletion_approval",
-          status: "completed",
-          eligibleAt: details.eligibleAt,
-          createdAt: details.createdAt,
-          approvedAt: details.approvedAt,
-          approvedByHash,
-          completedAt,
-          receipt,
-        },
-      ),
-      permissions: [],
-    });
-    receipts.push({ caseId: row.$id, ...receipt });
+    if (receipt) receipts.push(receipt);
   }
   return receipts;
 }
