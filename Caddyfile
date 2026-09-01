@@ -8,8 +8,6 @@
 # copy a client supplied is discarded.
 
 {
-	# Certificate contact and staging toggle live in .env.production.
-	email {$ACME_EMAIL}
 	servers {
 		# Client-supplied forwarded headers are never trusted for the remote
 		# address. Caddy's own connection is the only source.
@@ -44,6 +42,12 @@
 	@static path /_next/static/* /fonts/*
 	header @static Cache-Control "public, max-age=31536000, immutable"
 
+	# internal on a throwaway rig: Caddy signs its own certificate, so there
+	# is no DNS to arrange, no ACME account, and no rate limit to burn while
+	# the stack is still being proved. On a real deployment this is the ACME
+	# contact address instead, and certificates are issued publicly.
+	tls {$KNOWHOW_TLS_MODE}
+
 	reverse_proxy web:3000 {
 		import knowhow_forwarded_headers
 		# Screenshot uploads and generated exports are large and slow; the
@@ -68,6 +72,8 @@
 # be moved off 80 and 443 first — see docs/deploy.md.
 {$APPWRITE_PUBLIC_HOST} {
 	encode zstd gzip
+
+	tls {$KNOWHOW_TLS_MODE}
 
 	reverse_proxy {$APPWRITE_UPSTREAM} {
 		import knowhow_forwarded_headers
