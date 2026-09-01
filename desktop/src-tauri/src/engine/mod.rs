@@ -1411,7 +1411,7 @@ fn rasterize(
         let Some(scanline) = frame.bgra.get(start..start + region_width * 4) else {
             bail!("captured region falls outside the display frame");
         };
-        for (destination, source) in target.chunks_exact_mut(4).zip(scanline.chunks_exact(4)) {
+    for (destination, source) in target.as_chunks_mut::<4>().0.iter_mut().zip(scanline.as_chunks::<4>().0.iter()) {
             destination[0] = source[2];
             destination[1] = source[1];
             destination[2] = source[0];
