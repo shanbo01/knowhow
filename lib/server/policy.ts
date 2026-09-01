@@ -88,26 +88,29 @@ function hasAnyRole(
   return required.some((role) => roles.has(role));
 }
 
-export function authorize(
+function checkPlatformAccess(
   action: PolicyAction,
   context: AuthorizationContext,
-): PolicyDecision {
-  if (!context.isVerifiedIdentity) {
-    return deny("EMAIL_NOT_VERIFIED", "A verified identity is required.");
+): PolicyDecision | null {
+  if (!action.startsWith("platform.")) {
+    return null;
   }
-
-  if (action.startsWith("platform.")) {
-    if (context.supportGrant) {
-      return deny(
-        "SUPPORT_GRANT_NOT_PLATFORM",
-        "Temporary support access cannot exercise platform administration.",
-      );
-    }
-    return context.isPlatformAdministrator
-      ? allow("The actor is a platform administrator.")
-      : deny("PLATFORM_ADMIN_REQUIRED", "Platform administration is required.");
+  if (context.supportGrant) {
+    return deny(
+      "SUPPORT_GRANT_NOT_PLATFORM",
+      "Temporary support access cannot exercise platform administration.",
+    );
   }
+  return context.isPlatformAdministrator
+    ? allow("The actor is a platform administrator.")
+    : deny("PLATFORM_ADMIN_REQUIRED", "Platform administration is required.");
+}
 
+function checkLifecycleAndStatus(
+  action: PolicyAction,
+  context: AuthorizationContext,
+  roles: ReadonlySet<WorkspaceRole>,
+): PolicyDecision | null {
   if (context.membershipStatus !== "active") {
     return deny("MEMBERSHIP_REQUIRED", "An active workspace membership is required.");
   }
@@ -125,7 +128,6 @@ export function authorize(
     return deny("SUBSCRIPTION_READ_ONLY", "The subscription is in read-only grace.");
   }
 
-  const roles = new Set(context.roles);
   if (roles.size === 0) {
     return deny("ROLE_REQUIRED", "No active workspace role grants this action.");
   }
@@ -141,20 +143,35 @@ export function authorize(
     return deny("WORKSPACE_UNAVAILABLE", "The workspace is not active.");
   }
 
-  if (context.supportGrant) {
-    if (
-      action === "workspace.members.manage" ||
-      action === "workspace.groups.manage" ||
-      action === "workspace.invitations.manage" ||
-      action === "workspace.support.decide"
-    ) {
-      return deny(
-        "SUPPORT_GRANT_RESTRICTED",
-        "Temporary support access cannot change membership, invitations, groups, or support governance.",
-      );
-    }
-  }
+  return null;
+}
 
+function checkSupportGrantRestrictions(
+  action: PolicyAction,
+  context: AuthorizationContext,
+): PolicyDecision | null {
+  if (!context.supportGrant) {
+    return null;
+  }
+  if (
+    action === "workspace.members.manage" ||
+    action === "workspace.groups.manage" ||
+    action === "workspace.invitations.manage" ||
+    action === "workspace.support.decide"
+  ) {
+    return deny(
+      "SUPPORT_GRANT_RESTRICTED",
+      "Temporary support access cannot change membership, invitations, groups, or support governance.",
+    );
+  }
+  return null;
+}
+
+function checkWorkspaceManagementActions(
+  action: PolicyAction,
+  context: AuthorizationContext,
+  roles: ReadonlySet<WorkspaceRole>,
+): PolicyDecision | null {
   if (action === "workspace.read" || action === "guide.list") {
     return allow("Active workspace members may access the workspace shell.");
   }
@@ -187,6 +204,80 @@ export function authorize(
       : deny("WORKSPACE_ADMIN_REQUIRED", "Workspace administration is required.");
   }
 
+  return null;
+}
+
+function checkGuideRead(
+  context: AuthorizationContext,
+  roles: ReadonlySet<WorkspaceRole>,
+): PolicyDecision {
+  const guide = context.guide;
+  if (!guide?.revisionStatus) {
+    return deny("GUIDE_CONTEXT_REQUIRED", "Guide authorization context is required.");
+  }
+  if (
+    (guide.revisionStatus === "published" || guide.revisionStatus === "archived") &&
+    guide.isAudienceMember
+  ) {
+    return allow("This published revision is shared with the actor.");
+  }
+  if (guide.isAuthor && hasAnyRole(roles, "creator", "administrator")) {
+    return allow("Guide authors may read their own working revisions.");
+  }
+  if (guide.isAssignedReviewer && roles.has("reviewer")) {
+    return allow("Assigned reviewers may read the review revision.");
+  }
+  if (guide.revisionStatus === "review" && roles.has("publisher")) {
+    return allow("Publishers may inspect a revision that is ready to publish.");
+  }
+  return deny("GUIDE_NOT_SHARED", "The guide is not available to this actor.");
+}
+
+function checkGuidePublish(
+  context: AuthorizationContext,
+  roles: ReadonlySet<WorkspaceRole>,
+): PolicyDecision {
+  const guide = context.guide;
+  if (guide?.sourceType === "capture" && guide.privacyReviewed !== true) {
+    return deny(
+      "PRIVACY_REVIEW_REQUIRED",
+      "Captured guides require a privacy review before publishing.",
+    );
+  }
+  const requireReview = guide?.requireReviewBeforePublish === true;
+  const isPublisher = roles.has("publisher");
+  const isAuthorCreator =
+    guide?.isAuthor === true && hasAnyRole(roles, "creator", "administrator");
+  const mayShareDirect = isPublisher || isAuthorCreator;
+
+  if (guide?.revisionStatus === "draft") {
+    if (!requireReview && mayShareDirect) {
+      return allow("The actor may share this draft with the selected audience.");
+    }
+    return deny(
+      requireReview ? "GUIDE_REVIEW_STATE_REQUIRED" : "PUBLISHER_REQUIRED",
+      requireReview
+        ? "Only a review revision may be published."
+        : "Publisher access is required.",
+    );
+  }
+
+  if (guide?.revisionStatus !== "review") {
+    return deny("GUIDE_REVIEW_STATE_REQUIRED", "Only a review revision may be published.");
+  }
+  if (guide.reviewApproved !== true) {
+    return deny("REVIEW_APPROVAL_REQUIRED", "An approved review is required before publishing.");
+  }
+  return isPublisher
+    ? allow("Publishers may publish an approved, privacy-safe review revision.")
+    : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+}
+
+function checkGuideActions(
+  action: PolicyAction,
+  context: AuthorizationContext,
+  roles: ReadonlySet<WorkspaceRole>,
+): PolicyDecision | null {
   if (action === "guide.create" || action === "capture.create") {
     return hasAnyRole(roles, "administrator", "creator")
       ? allow("Creators may create drafts and captures.")
@@ -200,26 +291,7 @@ export function authorize(
   }
 
   if (action === "guide.read") {
-    const guide = context.guide;
-    if (!guide?.revisionStatus) {
-      return deny("GUIDE_CONTEXT_REQUIRED", "Guide authorization context is required.");
-    }
-    if (
-      (guide.revisionStatus === "published" || guide.revisionStatus === "archived") &&
-      guide.isAudienceMember
-    ) {
-      return allow("This published revision is shared with the actor.");
-    }
-    if (guide.isAuthor && hasAnyRole(roles, "creator", "administrator")) {
-      return allow("Guide authors may read their own working revisions.");
-    }
-    if (guide.isAssignedReviewer && roles.has("reviewer")) {
-      return allow("Assigned reviewers may read the review revision.");
-    }
-    if (guide.revisionStatus === "review" && roles.has("publisher")) {
-      return allow("Publishers may inspect a revision that is ready to publish.");
-    }
-    return deny("GUIDE_NOT_SHARED", "The guide is not available to this actor.");
+    return checkGuideRead(context, roles);
   }
 
   if (action === "guide.update" || action === "guide.submit") {
@@ -241,40 +313,7 @@ export function authorize(
   }
 
   if (action === "guide.publish") {
-    const guide = context.guide;
-    if (guide?.sourceType === "capture" && guide.privacyReviewed !== true) {
-      return deny(
-        "PRIVACY_REVIEW_REQUIRED",
-        "Captured guides require a privacy review before publishing.",
-      );
-    }
-    const requireReview = guide?.requireReviewBeforePublish === true;
-    const isPublisher = roles.has("publisher");
-    const isAuthorCreator =
-      guide?.isAuthor === true && hasAnyRole(roles, "creator", "administrator");
-    const mayShareDirect = isPublisher || isAuthorCreator;
-
-    if (guide?.revisionStatus === "draft") {
-      if (!requireReview && mayShareDirect) {
-        return allow("The actor may share this draft with the selected audience.");
-      }
-      return deny(
-        requireReview ? "GUIDE_REVIEW_STATE_REQUIRED" : "PUBLISHER_REQUIRED",
-        requireReview
-          ? "Only a review revision may be published."
-          : "Publisher access is required.",
-      );
-    }
-
-    if (guide?.revisionStatus !== "review") {
-      return deny("GUIDE_REVIEW_STATE_REQUIRED", "Only a review revision may be published.");
-    }
-    if (guide.reviewApproved !== true) {
-      return deny("REVIEW_APPROVAL_REQUIRED", "An approved review is required before publishing.");
-    }
-    return isPublisher
-      ? allow("Publishers may publish an approved, privacy-safe review revision.")
-      : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+    return checkGuidePublish(context, roles);
   }
 
   // Taking a guide down for editing is the mirror of putting it up, so it is
@@ -308,6 +347,43 @@ export function authorize(
     return canRead && (isWorkingRevision || guide?.exportAllowed === true)
       ? allow("The actor may read the guide and its export policy permits export.")
       : deny("EXPORT_NOT_ALLOWED", "This guide cannot be exported by the actor.");
+  }
+
+  return null;
+}
+
+export function authorize(
+  action: PolicyAction,
+  context: AuthorizationContext,
+): PolicyDecision {
+  if (!context.isVerifiedIdentity) {
+    return deny("EMAIL_NOT_VERIFIED", "A verified identity is required.");
+  }
+
+  const platformDecision = checkPlatformAccess(action, context);
+  if (platformDecision) {
+    return platformDecision;
+  }
+
+  const roles = new Set(context.roles);
+  const lifecycleDecision = checkLifecycleAndStatus(action, context, roles);
+  if (lifecycleDecision) {
+    return lifecycleDecision;
+  }
+
+  const supportGrantDecision = checkSupportGrantRestrictions(action, context);
+  if (supportGrantDecision) {
+    return supportGrantDecision;
+  }
+
+  const workspaceDecision = checkWorkspaceManagementActions(action, context, roles);
+  if (workspaceDecision) {
+    return workspaceDecision;
+  }
+
+  const guideDecision = checkGuideActions(action, context, roles);
+  if (guideDecision) {
+    return guideDecision;
   }
 
   return deny("DEFAULT_DENY", "No policy grants this action.");
