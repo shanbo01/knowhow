@@ -69,6 +69,10 @@ services:
       KNOWHOW_SITE_HOST: ${KNOWHOW_SITE_HOST:?set KNOWHOW_SITE_HOST, the bare hostname}
       APPWRITE_PUBLIC_HOST: ${APPWRITE_PUBLIC_HOST:?set APPWRITE_PUBLIC_HOST, the bare hostname}
       APPWRITE_UPSTREAM: ${APPWRITE_UPSTREAM:-appwrite-traefik:80}
+      # Required, not defaulted: the Caddyfile writes `tls {$KNOWHOW_TLS_MODE}`,
+      # and an empty value is a parse error rather than a sensible fallback.
+      # Compose refusing here is a clearer failure than Caddy crash-looping.
+      KNOWHOW_TLS_MODE: ${KNOWHOW_TLS_MODE:?set KNOWHOW_TLS_MODE to "internal" or the ACME contact email}
     networks:
       - edge
       - appwrite
