@@ -3181,6 +3181,295 @@ function GroupDialog({
   );
 }
 
+function MemberSupportRequestsSection({
+  requests,
+  busy,
+  onResolveSupport,
+}: {
+  requests: SupportAccessRequest[];
+  busy: boolean;
+  onResolveSupport: (request: SupportAccessRequest) => void;
+}) {
+  if (!requests.length) return null;
+
+  return (
+    <section className="card table-card">
+      <div className="section-heading compact">
+        <div>
+          <p className="eyebrow">Needs a decision</p>
+          <h2>Temporary support requests</h2>
+        </div>
+        <CircleAlert />
+      </div>
+      {requests.map((request) => (
+        <div className="member-row" key={request.id}>
+          <span className="avatar">
+            {initials(request.requesterName, request.requesterEmail)}
+          </span>
+          <span className="member-main">
+            <strong>
+              {request.requesterName || request.requesterEmail}
+            </strong>
+            <small>
+              {request.requesterEmail} · requests{" "}
+              {titleCase(request.requestedRole)} access for{" "}
+              {request.requestedDurationHours}{" "}
+              {request.requestedDurationHours === 1 ? "hour" : "hours"}
+            </small>
+            <small className="support-reason">{request.reason}</small>
+          </span>
+          <button
+            className="button ghost small"
+            disabled={busy}
+            onClick={() => onResolveSupport(request)}
+          >
+            <ShieldCheck /> Review
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function MembersDirectorySection({
+  members,
+  busy,
+  onEdit,
+}: {
+  members: WorkspaceMember[];
+  busy: boolean;
+  onEdit: (member: WorkspaceMember) => void;
+}) {
+  const [memberQuery, setMemberQuery] = useState("");
+  const [memberFilter, setMemberFilter] = useState<"all" | "active" | "admins" | "suspended">("all");
+
+  const visibleMembers = useMemo(() => {
+    const query = memberQuery.trim().toLocaleLowerCase();
+    return members.filter((member) => {
+      const matchesQuery =
+        !query ||
+        `${member.name ?? ""} ${member.email} ${member.roles.join(" ")}`
+          .toLocaleLowerCase()
+          .includes(query);
+      const matchesFilter =
+        memberFilter === "all" ||
+        (memberFilter === "active" && member.status === "active") ||
+        (memberFilter === "suspended" && member.status === "suspended") ||
+        (memberFilter === "admins" && member.roles.includes("administrator"));
+      return matchesQuery && matchesFilter;
+    });
+  }, [memberFilter, memberQuery, members]);
+
+  const activeMemberCount = members.filter((member) => member.status === "active").length;
+  const adminCount = members.filter((member) => member.roles.includes("administrator")).length;
+  const suspendedCount = members.filter((member) => member.status === "suspended").length;
+
+  return (
+    <section className="card table-card members-directory directory-panel">
+      <div className="section-heading compact directory-panel-header">
+        <div>
+          <p className="eyebrow">People directory</p>
+          <h2>
+            {countPhrase(members.length, "workspace member")}
+          </h2>
+        </div>
+      </div>
+      <div className="member-directory-toolbar">
+        <div className="directory-filter-tabs" role="group" aria-label="Filter members">
+          {([
+            ["all", "All", members.length],
+            ["active", "Active", activeMemberCount],
+            ["admins", "Admins", adminCount],
+            ["suspended", "Suspended", suspendedCount],
+          ] as const).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              className={memberFilter === value ? "active" : ""}
+              aria-pressed={memberFilter === value}
+              onClick={() => setMemberFilter(value)}
+            >
+              {label}<span>{count}</span>
+            </button>
+          ))}
+        </div>
+        <label className="search-field member-search">
+          <Search />
+          <input
+            value={memberQuery}
+            onChange={(event) => setMemberQuery(event.target.value)}
+            placeholder="Search people or roles"
+            aria-label="Search workspace members"
+          />
+        </label>
+      </div>
+      <div className="member-table-heading" aria-hidden="true">
+        <span>Person</span><span>Status</span><span>Workspace roles</span><span>Groups</span><span />
+      </div>
+      <div className="member-table">
+        {visibleMembers.length ? (
+          visibleMembers.map((member) => (
+            <button
+              className="member-row clickable"
+              disabled={busy}
+              type="button"
+              key={member.id}
+              onClick={() => onEdit(member)}
+            >
+              <span className="avatar">
+                {initials(member.name, member.email)}
+              </span>
+              <span className="member-main">
+                <strong>{member.name || member.email}</strong>
+                <small>{member.email}</small>
+              </span>
+              <span className="member-status-cell"><StatusBadge status={member.status} /></span>
+              <span className="role-list">
+                {member.roles.map((role) => (
+                  <span key={role}>{workspaceRoleLabel(role)}</span>
+                ))}
+              </span>
+              <span className="group-list">
+                {countPhrase(member.groupIds.length, "group")}
+              </span>
+              <ArrowRight />
+            </button>
+          ))
+        ) : (
+          <div className="member-search-empty">
+            <Search />
+            <strong>No members found</strong>
+            <span>Try a different search or status filter.</span>
+            <button type="button" className="button ghost small" onClick={() => { setMemberQuery(""); setMemberFilter("all"); }}>Clear filters</button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ActiveSupportGrantsSection({
+  supportGrants,
+  busy,
+  onRevokeSupport,
+}: {
+  supportGrants: SupportAccessGrant[];
+  busy: boolean;
+  onRevokeSupport: (grant: SupportAccessGrant) => void;
+}) {
+  if (!supportGrants.length) return null;
+
+  return (
+    <section className="card table-card">
+      <div className="section-heading compact">
+        <div>
+          <p className="eyebrow">Temporary identities</p>
+          <h2>Active support access</h2>
+        </div>
+        <LockKeyhole />
+      </div>
+      {supportGrants.map((grant) => (
+        <div className="member-row" key={grant.id}>
+          <span className="avatar">
+            {initials(grant.displayName, grant.email)}
+          </span>
+          <span className="member-main">
+            <strong>{grant.displayName || grant.email}</strong>
+            <small>
+              {grant.email} · {workspaceRoleLabel(grant.role)} access granted{" "}
+              {formatDate(grant.grantedAt)}
+            </small>
+            <small>
+              Expires {formatDate(grant.expiresAt, true)} — every action is
+              recorded in this workspace&apos;s audit history
+            </small>
+          </span>
+          <StatusBadge status="active" />
+          {grant.status === "active" ? (
+            <button
+              className="button danger-button small"
+              disabled={busy}
+              onClick={() => onRevokeSupport(grant)}
+            >
+              <Trash2 /> Revoke now
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function InvitationsDirectorySection({
+  invitations,
+  activeInvitationCount,
+  renderedAt,
+  busy,
+  onRevoke,
+}: {
+  invitations: Invitation[];
+  activeInvitationCount: number;
+  renderedAt: number;
+  busy: boolean;
+  onRevoke: (id: string) => void;
+}) {
+  return (
+    <section className="card table-card invitations-directory directory-panel">
+      <div className="section-heading compact directory-panel-header">
+        <div>
+          <p className="eyebrow">Invitation lifecycle</p>
+          <h2>Invitations</h2>
+        </div>
+        <span className="result-count">{activeInvitationCount} pending</span>
+      </div>
+      {invitations.length ? (
+        invitations.map((invite) => {
+          const expired = Date.parse(invite.expiresAt) <= renderedAt;
+          const status = invite.revokedAt
+            ? "revoked"
+            : invite.useCount >= invite.maxUses
+              ? "accepted"
+              : expired
+                ? "expired"
+                : "active";
+          return (
+            <div className="invite-row" key={invite.id}>
+              <span className="invite-icon">
+                <Link2 />
+              </span>
+              <span className="member-main">
+                <strong>
+                  {invite.label || `${workspaceRoleLabel(invite.role)} invitation`}
+                </strong>
+                <small>
+                  Expires {formatDate(invite.expiresAt, true)} ·{" "}
+                  {invite.useCount}/{invite.maxUses} uses
+                </small>
+              </span>
+              <StatusBadge status={status} />
+              {status === "active" ? (
+                <button
+                  className="button ghost small"
+                  disabled={busy}
+                  onClick={() => onRevoke(invite.id)}
+                >
+                  Revoke
+                </button>
+              ) : null}
+            </div>
+          );
+        })
+      ) : (
+        <EmptyState
+          icon={Link2}
+          title="No invitation links"
+          description="Invitations appear here after you send secure, exact-email access."
+        />
+      )}
+    </section>
+  );
+}
+
 function MembersView({
   members,
   invitations,
@@ -3206,31 +3495,15 @@ function MembersView({
     (item) => item.status === "pending",
   );
   const [renderedAt] = useState(() => Date.now());
-  const [memberQuery, setMemberQuery] = useState("");
-  const [memberFilter, setMemberFilter] = useState<"all" | "active" | "admins" | "suspended">("all");
-  const visibleMembers = useMemo(() => {
-    const query = memberQuery.trim().toLocaleLowerCase();
-    return members.filter((member) => {
-      const matchesQuery = !query ||
-        `${member.name ?? ""} ${member.email} ${member.roles.join(" ")}`
-          .toLocaleLowerCase()
-          .includes(query);
-      const matchesFilter =
-        memberFilter === "all" ||
-        (memberFilter === "active" && member.status === "active") ||
-        (memberFilter === "suspended" && member.status === "suspended") ||
-        (memberFilter === "admins" && member.roles.includes("administrator"));
-      return matchesQuery && matchesFilter;
-    });
-  }, [memberFilter, memberQuery, members]);
+
   const activeMemberCount = members.filter((member) => member.status === "active").length;
   const adminCount = members.filter((member) => member.roles.includes("administrator")).length;
-  const suspendedCount = members.filter((member) => member.status === "suspended").length;
   const activeInvitationCount = invitations.filter((invite) =>
     !invite.revokedAt &&
     invite.useCount < invite.maxUses &&
     Date.parse(invite.expiresAt) > renderedAt,
   ).length;
+
   return (
     <div className="view-stack access-directory-page">
       <div className="page-heading directory-page-heading">
@@ -3248,204 +3521,28 @@ function MembersView({
         <article><span><ShieldCheck /></span><div><strong>{adminCount}</strong><small>Administrators</small></div></article>
         <article><span><Mail /></span><div><strong>{activeInvitationCount}</strong><small>Pending invitations</small></div></article>
       </section>
-      {pendingSupport.length ? (
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Needs a decision</p>
-              <h2>Temporary support requests</h2>
-            </div>
-            <CircleAlert />
-          </div>
-          {pendingSupport.map((request) => (
-            <div className="member-row" key={request.id}>
-              <span className="avatar">
-                {initials(request.requesterName, request.requesterEmail)}
-              </span>
-              <span className="member-main">
-                <strong>
-                  {request.requesterName || request.requesterEmail}
-                </strong>
-                <small>
-                  {request.requesterEmail} · requests{" "}
-                  {titleCase(request.requestedRole)} access for{" "}
-                  {request.requestedDurationHours}{" "}
-                  {request.requestedDurationHours === 1 ? "hour" : "hours"}
-                </small>
-                <small className="support-reason">{request.reason}</small>
-              </span>
-              <button
-                className="button ghost small"
-                disabled={busy}
-                onClick={() => onResolveSupport(request)}
-              >
-                <ShieldCheck /> Review
-              </button>
-            </div>
-          ))}
-        </section>
-      ) : null}
-      <section className="card table-card members-directory directory-panel">
-        <div className="section-heading compact directory-panel-header">
-          <div>
-            <p className="eyebrow">People directory</p>
-            <h2>
-              {countPhrase(members.length, "workspace member")}
-            </h2>
-          </div>
-        </div>
-        <div className="member-directory-toolbar">
-          <div className="directory-filter-tabs" role="group" aria-label="Filter members">
-            {([
-              ["all", "All", members.length],
-              ["active", "Active", activeMemberCount],
-              ["admins", "Admins", adminCount],
-              ["suspended", "Suspended", suspendedCount],
-            ] as const).map(([value, label, count]) => (
-              <button key={value} type="button" className={memberFilter === value ? "active" : ""} aria-pressed={memberFilter === value} onClick={() => setMemberFilter(value)}>
-                {label}<span>{count}</span>
-              </button>
-            ))}
-          </div>
-          <label className="search-field member-search">
-            <Search />
-            <input value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} placeholder="Search people or roles" aria-label="Search workspace members" />
-          </label>
-        </div>
-        <div className="member-table-heading" aria-hidden="true">
-          <span>Person</span><span>Status</span><span>Workspace roles</span><span>Groups</span><span />
-        </div>
-        <div className="member-table">
-          {visibleMembers.length ? (
-            visibleMembers.map((member) => (
-              <button
-                className="member-row clickable"
-                disabled={busy}
-                type="button"
-                key={member.id}
-                onClick={() => onEdit(member)}
-              >
-                <span className="avatar">
-                  {initials(member.name, member.email)}
-                </span>
-                <span className="member-main">
-                  <strong>{member.name || member.email}</strong>
-                  <small>{member.email}</small>
-                </span>
-                <span className="member-status-cell"><StatusBadge status={member.status} /></span>
-                <span className="role-list">
-                  {member.roles.map((role) => (
-                    <span key={role}>{workspaceRoleLabel(role)}</span>
-                  ))}
-                </span>
-                <span className="group-list">
-                  {countPhrase(member.groupIds.length, "group")}
-                </span>
-                <ArrowRight />
-              </button>
-            ))
-          ) : (
-            <div className="member-search-empty">
-              <Search />
-              <strong>No members found</strong>
-              <span>Try a different search or status filter.</span>
-              <button type="button" className="button ghost small" onClick={() => { setMemberQuery(""); setMemberFilter("all"); }}>Clear filters</button>
-            </div>
-          )}
-        </div>
-      </section>
-      {supportGrants.length ? (
-        <section className="card table-card">
-          <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Temporary identities</p>
-              <h2>Active support access</h2>
-            </div>
-            <LockKeyhole />
-          </div>
-          {supportGrants.map((grant) => (
-            <div className="member-row" key={grant.id}>
-              <span className="avatar">
-                {initials(grant.displayName, grant.email)}
-              </span>
-              <span className="member-main">
-                <strong>{grant.displayName || grant.email}</strong>
-                <small>
-                  {grant.email} · {workspaceRoleLabel(grant.role)} access granted{" "}
-                  {formatDate(grant.grantedAt)}
-                </small>
-                <small>
-                  Expires {formatDate(grant.expiresAt, true)} — every action is
-                  recorded in this workspace&apos;s audit history
-                </small>
-              </span>
-              <StatusBadge status="active" />
-              {grant.status === "active" ? (
-                <button
-                  className="button danger-button small"
-                  disabled={busy}
-                  onClick={() => onRevokeSupport(grant)}
-                >
-                  <Trash2 /> Revoke now
-                </button>
-              ) : null}
-            </div>
-          ))}
-        </section>
-      ) : null}
-      <section className="card table-card invitations-directory directory-panel">
-        <div className="section-heading compact directory-panel-header">
-          <div>
-            <p className="eyebrow">Invitation lifecycle</p>
-            <h2>Invitations</h2>
-          </div>
-          <span className="result-count">{activeInvitationCount} pending</span>
-        </div>
-        {invitations.length ? (
-          invitations.map((invite) => {
-            const expired = Date.parse(invite.expiresAt) <= renderedAt;
-            const status = invite.revokedAt
-              ? "revoked"
-              : invite.useCount >= invite.maxUses
-                ? "accepted"
-                : expired
-                  ? "expired"
-                  : "active";
-            return (
-              <div className="invite-row" key={invite.id}>
-                <span className="invite-icon">
-                  <Link2 />
-                </span>
-                <span className="member-main">
-                  <strong>
-                    {invite.label || `${workspaceRoleLabel(invite.role)} invitation`}
-                  </strong>
-                  <small>
-                    Expires {formatDate(invite.expiresAt, true)} ·{" "}
-                    {invite.useCount}/{invite.maxUses} uses
-                  </small>
-                </span>
-                <StatusBadge status={status} />
-                {status === "active" ? (
-                  <button
-                    className="button ghost small"
-                    disabled={busy}
-                    onClick={() => onRevoke(invite.id)}
-                  >
-                    Revoke
-                  </button>
-                ) : null}
-              </div>
-            );
-          })
-        ) : (
-          <EmptyState
-            icon={Link2}
-            title="No invitation links"
-            description="Invitations appear here after you send secure, exact-email access."
-          />
-        )}
-      </section>
+      <MemberSupportRequestsSection
+        requests={pendingSupport}
+        busy={busy}
+        onResolveSupport={onResolveSupport}
+      />
+      <MembersDirectorySection
+        members={members}
+        busy={busy}
+        onEdit={onEdit}
+      />
+      <ActiveSupportGrantsSection
+        supportGrants={supportGrants}
+        busy={busy}
+        onRevokeSupport={onRevokeSupport}
+      />
+      <InvitationsDirectorySection
+        invitations={invitations}
+        activeInvitationCount={activeInvitationCount}
+        renderedAt={renderedAt}
+        busy={busy}
+        onRevoke={onRevoke}
+      />
     </div>
   );
 }
