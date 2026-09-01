@@ -138,6 +138,252 @@ async function workspaceContext(request: Request) {
   };
 }
 
+type WorkspaceContext = Awaited<ReturnType<typeof workspaceContext>>;
+type FileTracker = (fileId: string | null) => void;
+
+async function handleProvisioningLogoUpload(
+  request: Request,
+  initialUrl: URL,
+  requestId: string,
+  trackFile: FileTracker,
+) {
+  const identity = await requireVerifiedSession(request);
+  const { store, objects } = createRequestServices();
+  await consumeFixedWindows(store, [{ scope: "knowhow.provisioning-logo", subject: identity.userId, limit: 20, windowSeconds: 600 }]);
+  const platformRoles = await store.list(TABLES.platformRoles, {
+    filters: [{ field: "user_id", value: identity.userId }, { field: "status", value: "active" }],
+  });
+  if (!platformRoles.some((row) => row.kind === "owner" || row.kind === "operations")) {
+    throw new HttpError(403, "PLATFORM_OPERATIONS_REQUIRED", "Platform operations access is required.");
+  }
+  const runId = requiredId(initialUrl, "runId", "Provisioning run");
+  const run = await store.get(TABLES.provisioningRuns, runId);
+  if (!run || run.user_id !== identity.userId || run.status !== "draft") {
+    throw new HttpError(404, "PROVISIONING_RUN_NOT_FOUND", "Provisioning draft not found.");
+  }
+  const bytes = await boundedBytes(request, 1024 * 1024);
+  const validated = await validateLogo(bytes);
+  const logoId = resourceId("logo");
+  trackFile(logoId);
+  await objects.put({ id: logoId, bytes, filename: `organization-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType });
+  await store.create(
+    TABLES.privateMedia,
+    logoId,
+    rowData(
+      { workspace_id: runId, user_id: identity.userId, subject_id: runId, status: "staged", kind: "provisioning-logo", created_by: identity.userId },
+      { storageFileId: logoId, filename: `organization-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType, byteSize: validated.byteSize, width: validated.width, height: validated.height, sha256: validated.sha256, uploadedBy: identity.userId, createdAt: new Date().toISOString(), deletedAt: null },
+    ),
+  );
+  trackFile(null);
+  return withRequestId(jsonResponse({ mediaId: logoId, requestId }), requestId);
+}
+
+async function handleSupportAttachmentUpload(
+  request: Request,
+  ctx: WorkspaceContext,
+  requestId: string,
+  trackFile: FileTracker,
+) {
+  const { store, objects, identity, workspaceId, access, context } = ctx;
+  requireAuthorized("workspace.read", context);
+  if (
+    access.supportGrant ||
+    !(access.roles.includes("administrator") || access.roles.includes("creator"))
+  ) {
+    throw new HttpError(403, "SUPPORT_TICKET_ROLE_REQUIRED", "A workspace administrator or creator can upload support attachments.");
+  }
+  await new EntitlementService(store, workspaceId).requireFeature("supportEnabled");
+  const contentType = (request.headers.get("content-type") ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (!SUPPORT_ATTACHMENT_TYPES.has(contentType)) {
+    throw new HttpError(415, "SUPPORT_ATTACHMENT_TYPE_INVALID", "Choose a PNG, JPEG, WebP, PDF, JSON, CSV, or text file.");
+  }
+  const bytes = await boundedBytes(request, SUPPORT_ATTACHMENT_LIMIT);
+  if (!bytes.byteLength) {
+    throw new HttpError(400, "MEDIA_EMPTY", "Choose a non-empty file to upload.");
+  }
+  await new EntitlementService(store, workspaceId).assertStorageCapacity(bytes.byteLength);
+  const filename = supportAttachmentFilename(request);
+  const mediaId = resourceId("media");
+  trackFile(mediaId);
+  const timestamp = new Date().toISOString();
+  const sha256 = await sha256Bytes(bytes);
+  await objects.put({ id: mediaId, bytes, filename, contentType });
+  const attachment: SupportAttachmentRecord = {
+    storageFileId: mediaId,
+    filename,
+    contentType,
+    byteSize: bytes.byteLength,
+    sha256,
+    uploadedBy: identity.userId,
+    createdAt: timestamp,
+    deletedAt: null,
+    ticketId: null,
+    messageId: null,
+  };
+  await store.create(
+    TABLES.privateMedia,
+    mediaId,
+    rowData(
+      {
+        organization_id: access.workspace.organizationId,
+        workspace_id: workspaceId,
+        subject_id: mediaId,
+        user_id: identity.userId,
+        status: "staged",
+        kind: "support-attachment",
+        created_by: identity.userId,
+      },
+      attachment,
+    ),
+  );
+  trackFile(null);
+  return withRequestId(
+    jsonResponse({ mediaId, filename, contentType, byteSize: bytes.byteLength, requestId }),
+    requestId,
+  );
+}
+
+async function handleScreenshotUpload(
+  request: Request,
+  ctx: WorkspaceContext,
+  requestId: string,
+  trackFile: FileTracker,
+) {
+  const { store, objects, identity, url, workspaceId, access } = ctx;
+  const guideId = requiredId(url, "guideId", "Guide");
+  const revisionId = requiredId(url, "revisionId", "Revision");
+  const stepId = requiredClientId(url, "stepId", "Step");
+  const authorized = await new GuideAccessService(store).require(
+    identity,
+    workspaceId,
+    guideId,
+    revisionId,
+    "guide.update",
+  );
+  if (authorized.guide.workingRevisionId !== revisionId || authorized.revision.status !== "draft") {
+    throw new HttpError(409, "DRAFT_NOT_EDITABLE", "Only the current draft can receive screenshots.");
+  }
+  if (request.headers.get("x-knowhow-source-rasterized") !== "true") {
+    throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Rasterize the screenshot locally before upload.");
+  }
+  const redactionState = request.headers.get("x-knowhow-redacted") === "true" ? "redacted" : "pending";
+  if (authorized.guide.screenshotsLockedAt && redactionState !== "redacted") {
+    throw new HttpError(409, "SCREENSHOTS_LOCKED", "Upload an already-flattened screenshot after first review.");
+  }
+  const stepRows = await store.list(TABLES.guideSteps, {
+    filters: [{ field: "subject_id", value: revisionId }],
+  });
+  const stepRow = stepRows.find((row) => decodePayload<GuideStepRecord>(row, null as never)?.id === stepId);
+  if (!stepRow) throw new HttpError(404, "STEP_NOT_FOUND", "Draft step not found.");
+  const currentStep = decodePayload<GuideStepRecord>(stepRow, null as never);
+  const bytes = await boundedBytes(request, 5 * 1024 * 1024);
+  const validated = await validateScreenshot(
+    bytes,
+    Number(request.headers.get("x-knowhow-image-width")),
+    Number(request.headers.get("x-knowhow-image-height")),
+  );
+  await new EntitlementService(store, workspaceId).assertStorageCapacity(
+    validated.byteSize,
+    currentStep.screenshotMediaId,
+  );
+  const mediaId = resourceId("media");
+  trackFile(mediaId);
+  await objects.put({
+    id: mediaId,
+    bytes,
+    filename: `screenshot.${validated.contentType === "image/png" ? "png" : "jpg"}`,
+    contentType: validated.contentType,
+  });
+  const timestamp = new Date().toISOString();
+  await store.transaction(async (transaction) => {
+    const media: PrivateMediaRecord = {
+      guideId,
+      revisionId,
+      stepId,
+      storageFileId: mediaId,
+      filename: `screenshot.${validated.contentType === "image/png" ? "png" : "jpg"}`,
+      contentType: validated.contentType,
+      byteSize: validated.byteSize,
+      width: validated.width,
+      height: validated.height,
+      sha256: validated.sha256,
+      redactionState,
+      sourceRasterized: true,
+      uploadedBy: identity.userId,
+      createdAt: timestamp,
+      deletedAt: null,
+    };
+    await transaction.create(TABLES.privateMedia, mediaId, rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, subject_id: revisionId, user_id: identity.userId, status: "ready", kind: validated.contentType, created_by: identity.userId }, media));
+    await transaction.update(TABLES.guideSteps, stepRow.$id, rowData({ updated_by: identity.userId }, { ...currentStep, screenshotMediaId: mediaId }));
+    if (isCapturedGuideSource(authorized.revision.source)) {
+      const nextRevision: RevisionRecord = { ...authorized.revision, updatedAt: timestamp };
+      delete nextRevision.privacyReviewedAt;
+      delete nextRevision.privacyReviewedBy;
+      await transaction.update(TABLES.guideRevisions, revisionId, rowData({ updated_by: identity.userId }, nextRevision));
+    }
+    if (currentStep.screenshotMediaId) {
+      const old = await transaction.get(TABLES.privateMedia, currentStep.screenshotMediaId);
+      if (old && old.workspace_id === workspaceId && old.subject_id === revisionId) {
+        const oldMedia = decodePayload<PrivateMediaRecord>(old, null as never);
+        await transaction.update(TABLES.privateMedia, old.$id, rowData({ status: "quarantined", deleted_at: timestamp, updated_by: identity.userId }, { ...oldMedia, deletedAt: timestamp }));
+      }
+    }
+    await appendAudit(transaction, identity, workspaceId, {
+      action: "guide.screenshot-replaced",
+      targetType: "guide",
+      targetId: guideId,
+      summary: "Draft screenshot replaced with a reviewed raster",
+      metadata: { revisionId, stepId, mediaId, requestId },
+    });
+  });
+  trackFile(null);
+  return withRequestId(jsonResponse({ mediaId, requestId }), requestId);
+}
+
+async function handleWorkspaceLogoUpload(
+  request: Request,
+  ctx: WorkspaceContext,
+  requestId: string,
+  trackFile: FileTracker,
+) {
+  const { store, objects, identity, workspaceId, access, context } = ctx;
+  requireAuthorized("workspace.settings.manage", context);
+  const bytes = await boundedBytes(request, 1024 * 1024);
+  const validated = await validateLogo(bytes);
+  const current = await configuredLogo(store, workspaceId);
+  await new EntitlementService(store, workspaceId).assertStorageCapacity(
+    validated.byteSize,
+    current.value.logoUrl ?? undefined,
+  );
+  const logoId = resourceId("logo");
+  trackFile(logoId);
+  await objects.put({
+    id: logoId,
+    bytes,
+    filename: `workspace-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`,
+    contentType: validated.contentType,
+  });
+  const timestamp = new Date().toISOString();
+  await store.transaction(async (transaction) => {
+    await transaction.create(TABLES.privateMedia, logoId, rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, subject_id: workspaceId, user_id: identity.userId, status: "ready", kind: "workspace-logo", created_by: identity.userId }, { storageFileId: logoId, filename: `workspace-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType, byteSize: validated.byteSize, width: validated.width, height: validated.height, sha256: validated.sha256, uploadedBy: identity.userId, createdAt: timestamp, deletedAt: null }));
+    const next = { ...current.value, logoUrl: logoId };
+    if (current.row) await transaction.update(TABLES.workspaceSettings, current.row.$id, rowData({ updated_by: identity.userId }, next));
+    else await transaction.create(TABLES.workspaceSettings, resourceId("settings"), rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, status: "active", created_by: identity.userId }, next));
+    if (current.value.logoUrl) {
+      const previous = await transaction.get(TABLES.privateMedia, current.value.logoUrl);
+      if (previous && previous.workspace_id === workspaceId) {
+        await transaction.update(TABLES.privateMedia, previous.$id, rowData({ status: "quarantined", deleted_at: timestamp, updated_by: identity.userId }, { ...decodePayload(previous, {}), deletedAt: timestamp }));
+      }
+    }
+    await appendAudit(transaction, identity, workspaceId, { action: "workspace.logo-updated", targetType: "workspace", targetId: workspaceId, summary: "Workspace logo updated", metadata: { byteSize: validated.byteSize, contentType: validated.contentType, requestId } });
+  });
+  trackFile(null);
+  return withRequestId(jsonResponse({ configured: true, requestId }), requestId);
+}
+
 async function configuredLogo(store: RecordStore, workspaceId: string) {
   const settings = await store.list(TABLES.workspaceSettings, {
     filters: [{ field: "workspace_id", value: workspaceId }],
@@ -296,226 +542,25 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const requestId = correlationId(request);
   let createdFileId: string | null = null;
+  const trackFile: FileTracker = (fileId: string | null) => {
+    createdFileId = fileId;
+  };
   try {
     assertCookieMutationRequest(request, allowedRequestOrigins());
     const initialUrl = new URL(request.url);
     if (initialUrl.searchParams.get("kind") === "provisioning-logo") {
-      const identity = await requireVerifiedSession(request);
-      const { store, objects } = createRequestServices();
-      await consumeFixedWindows(store, [{ scope: "knowhow.provisioning-logo", subject: identity.userId, limit: 20, windowSeconds: 600 }]);
-      const platformRoles = await store.list(TABLES.platformRoles, {
-        filters: [{ field: "user_id", value: identity.userId }, { field: "status", value: "active" }],
-      });
-      if (!platformRoles.some((row) => row.kind === "owner" || row.kind === "operations")) {
-        throw new HttpError(403, "PLATFORM_OPERATIONS_REQUIRED", "Platform operations access is required.");
-      }
-      const runId = requiredId(initialUrl, "runId", "Provisioning run");
-      const run = await store.get(TABLES.provisioningRuns, runId);
-      if (!run || run.user_id !== identity.userId || run.status !== "draft") {
-        throw new HttpError(404, "PROVISIONING_RUN_NOT_FOUND", "Provisioning draft not found.");
-      }
-      const bytes = await boundedBytes(request, 1024 * 1024);
-      const validated = await validateLogo(bytes);
-      const logoId = resourceId("logo");
-      createdFileId = logoId;
-      await objects.put({ id: logoId, bytes, filename: `organization-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType });
-      await store.create(
-        TABLES.privateMedia,
-        logoId,
-        rowData(
-          { workspace_id: runId, user_id: identity.userId, subject_id: runId, status: "staged", kind: "provisioning-logo", created_by: identity.userId },
-          { storageFileId: logoId, filename: `organization-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType, byteSize: validated.byteSize, width: validated.width, height: validated.height, sha256: validated.sha256, uploadedBy: identity.userId, createdAt: new Date().toISOString(), deletedAt: null },
-        ),
-      );
-      createdFileId = null;
-      return withRequestId(jsonResponse({ mediaId: logoId, requestId }), requestId);
+      return await handleProvisioningLogoUpload(request, initialUrl, requestId, trackFile);
     }
-    const { store, objects, identity, url, workspaceId, access, context } = await workspaceContext(request);
-    await consumeFixedWindows(store, [{ scope: "knowhow.media-write", subject: identity.userId, limit: 60, windowSeconds: 60 }]);
-    if (url.searchParams.get("kind") === "support-attachment") {
-      requireAuthorized("workspace.read", context);
-      if (
-        access.supportGrant ||
-        !(access.roles.includes("administrator") || access.roles.includes("creator"))
-      ) {
-        throw new HttpError(403, "SUPPORT_TICKET_ROLE_REQUIRED", "A workspace administrator or creator can upload support attachments.");
-      }
-      await new EntitlementService(store, workspaceId).requireFeature("supportEnabled");
-      const contentType = (request.headers.get("content-type") ?? "")
-        .split(";", 1)[0]
-        .trim()
-        .toLowerCase();
-      if (!SUPPORT_ATTACHMENT_TYPES.has(contentType)) {
-        throw new HttpError(415, "SUPPORT_ATTACHMENT_TYPE_INVALID", "Choose a PNG, JPEG, WebP, PDF, JSON, CSV, or text file.");
-      }
-      const bytes = await boundedBytes(request, SUPPORT_ATTACHMENT_LIMIT);
-      if (!bytes.byteLength) {
-        throw new HttpError(400, "MEDIA_EMPTY", "Choose a non-empty file to upload.");
-      }
-      await new EntitlementService(store, workspaceId).assertStorageCapacity(bytes.byteLength);
-      const filename = supportAttachmentFilename(request);
-      const mediaId = resourceId("media");
-      createdFileId = mediaId;
-      const timestamp = new Date().toISOString();
-      const sha256 = await sha256Bytes(bytes);
-      await objects.put({ id: mediaId, bytes, filename, contentType });
-      const attachment: SupportAttachmentRecord = {
-        storageFileId: mediaId,
-        filename,
-        contentType,
-        byteSize: bytes.byteLength,
-        sha256,
-        uploadedBy: identity.userId,
-        createdAt: timestamp,
-        deletedAt: null,
-        ticketId: null,
-        messageId: null,
-      };
-      await store.create(
-        TABLES.privateMedia,
-        mediaId,
-        rowData(
-          {
-            organization_id: access.workspace.organizationId,
-            workspace_id: workspaceId,
-            subject_id: mediaId,
-            user_id: identity.userId,
-            status: "staged",
-            kind: "support-attachment",
-            created_by: identity.userId,
-          },
-          attachment,
-        ),
-      );
-      createdFileId = null;
-      return withRequestId(
-        jsonResponse({ mediaId, filename, contentType, byteSize: bytes.byteLength, requestId }),
-        requestId,
-      );
+    const ctx = await workspaceContext(request);
+    await consumeFixedWindows(ctx.store, [{ scope: "knowhow.media-write", subject: ctx.identity.userId, limit: 60, windowSeconds: 60 }]);
+    const kind = ctx.url.searchParams.get("kind");
+    if (kind === "support-attachment") {
+      return await handleSupportAttachmentUpload(request, ctx, requestId, trackFile);
     }
-    if (url.searchParams.get("kind") === "screenshot") {
-      const guideId = requiredId(url, "guideId", "Guide");
-      const revisionId = requiredId(url, "revisionId", "Revision");
-      const stepId = requiredClientId(url, "stepId", "Step");
-      const authorized = await new GuideAccessService(store).require(
-        identity,
-        workspaceId,
-        guideId,
-        revisionId,
-        "guide.update",
-      );
-      if (authorized.guide.workingRevisionId !== revisionId || authorized.revision.status !== "draft") {
-        throw new HttpError(409, "DRAFT_NOT_EDITABLE", "Only the current draft can receive screenshots.");
-      }
-      if (request.headers.get("x-knowhow-source-rasterized") !== "true") {
-        throw new HttpError(400, "REDACTION_ATTESTATION_REQUIRED", "Rasterize the screenshot locally before upload.");
-      }
-      const redactionState = request.headers.get("x-knowhow-redacted") === "true" ? "redacted" : "pending";
-      if (authorized.guide.screenshotsLockedAt && redactionState !== "redacted") {
-        throw new HttpError(409, "SCREENSHOTS_LOCKED", "Upload an already-flattened screenshot after first review.");
-      }
-      const stepRows = await store.list(TABLES.guideSteps, {
-        filters: [{ field: "subject_id", value: revisionId }],
-      });
-      const stepRow = stepRows.find((row) => decodePayload<GuideStepRecord>(row, null as never)?.id === stepId);
-      if (!stepRow) throw new HttpError(404, "STEP_NOT_FOUND", "Draft step not found.");
-      const currentStep = decodePayload<GuideStepRecord>(stepRow, null as never);
-      const bytes = await boundedBytes(request, 5 * 1024 * 1024);
-      const validated = await validateScreenshot(
-        bytes,
-        Number(request.headers.get("x-knowhow-image-width")),
-        Number(request.headers.get("x-knowhow-image-height")),
-      );
-      await new EntitlementService(store, workspaceId).assertStorageCapacity(
-        validated.byteSize,
-        currentStep.screenshotMediaId,
-      );
-      const mediaId = resourceId("media");
-      createdFileId = mediaId;
-      await objects.put({
-        id: mediaId,
-        bytes,
-        filename: `screenshot.${validated.contentType === "image/png" ? "png" : "jpg"}`,
-        contentType: validated.contentType,
-      });
-      const timestamp = new Date().toISOString();
-      await store.transaction(async (transaction) => {
-        const media: PrivateMediaRecord = {
-          guideId,
-          revisionId,
-          stepId,
-          storageFileId: mediaId,
-          filename: `screenshot.${validated.contentType === "image/png" ? "png" : "jpg"}`,
-          contentType: validated.contentType,
-          byteSize: validated.byteSize,
-          width: validated.width,
-          height: validated.height,
-          sha256: validated.sha256,
-          redactionState,
-          sourceRasterized: true,
-          uploadedBy: identity.userId,
-          createdAt: timestamp,
-          deletedAt: null,
-        };
-        await transaction.create(TABLES.privateMedia, mediaId, rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, subject_id: revisionId, user_id: identity.userId, status: "ready", kind: validated.contentType, created_by: identity.userId }, media));
-        await transaction.update(TABLES.guideSteps, stepRow.$id, rowData({ updated_by: identity.userId }, { ...currentStep, screenshotMediaId: mediaId }));
-        if (isCapturedGuideSource(authorized.revision.source)) {
-          const nextRevision: RevisionRecord = { ...authorized.revision, updatedAt: timestamp };
-          delete nextRevision.privacyReviewedAt;
-          delete nextRevision.privacyReviewedBy;
-          await transaction.update(TABLES.guideRevisions, revisionId, rowData({ updated_by: identity.userId }, nextRevision));
-        }
-        if (currentStep.screenshotMediaId) {
-          const old = await transaction.get(TABLES.privateMedia, currentStep.screenshotMediaId);
-          if (old && old.workspace_id === workspaceId && old.subject_id === revisionId) {
-            const oldMedia = decodePayload<PrivateMediaRecord>(old, null as never);
-            await transaction.update(TABLES.privateMedia, old.$id, rowData({ status: "quarantined", deleted_at: timestamp, updated_by: identity.userId }, { ...oldMedia, deletedAt: timestamp }));
-          }
-        }
-        await appendAudit(transaction, identity, workspaceId, {
-          action: "guide.screenshot-replaced",
-          targetType: "guide",
-          targetId: guideId,
-          summary: "Draft screenshot replaced with a reviewed raster",
-          metadata: { revisionId, stepId, mediaId, requestId },
-        });
-      });
-      createdFileId = null;
-      return withRequestId(jsonResponse({ mediaId, requestId }), requestId);
+    if (kind === "screenshot") {
+      return await handleScreenshotUpload(request, ctx, requestId, trackFile);
     }
-
-    requireAuthorized("workspace.settings.manage", context);
-    const bytes = await boundedBytes(request, 1024 * 1024);
-    const validated = await validateLogo(bytes);
-    const current = await configuredLogo(store, workspaceId);
-    await new EntitlementService(store, workspaceId).assertStorageCapacity(
-      validated.byteSize,
-      current.value.logoUrl ?? undefined,
-    );
-    const logoId = resourceId("logo");
-    createdFileId = logoId;
-    await objects.put({
-      id: logoId,
-      bytes,
-      filename: `workspace-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`,
-      contentType: validated.contentType,
-    });
-    const timestamp = new Date().toISOString();
-    await store.transaction(async (transaction) => {
-      await transaction.create(TABLES.privateMedia, logoId, rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, subject_id: workspaceId, user_id: identity.userId, status: "ready", kind: "workspace-logo", created_by: identity.userId }, { storageFileId: logoId, filename: `workspace-logo.${validated.contentType === "image/png" ? "png" : "jpg"}`, contentType: validated.contentType, byteSize: validated.byteSize, width: validated.width, height: validated.height, sha256: validated.sha256, uploadedBy: identity.userId, createdAt: timestamp, deletedAt: null }));
-      const next = { ...current.value, logoUrl: logoId };
-      if (current.row) await transaction.update(TABLES.workspaceSettings, current.row.$id, rowData({ updated_by: identity.userId }, next));
-      else await transaction.create(TABLES.workspaceSettings, resourceId("settings"), rowData({ organization_id: access.workspace.organizationId, workspace_id: workspaceId, status: "active", created_by: identity.userId }, next));
-      if (current.value.logoUrl) {
-        const previous = await transaction.get(TABLES.privateMedia, current.value.logoUrl);
-        if (previous && previous.workspace_id === workspaceId) {
-          await transaction.update(TABLES.privateMedia, previous.$id, rowData({ status: "quarantined", deleted_at: timestamp, updated_by: identity.userId }, { ...decodePayload(previous, {}), deletedAt: timestamp }));
-        }
-      }
-      await appendAudit(transaction, identity, workspaceId, { action: "workspace.logo-updated", targetType: "workspace", targetId: workspaceId, summary: "Workspace logo updated", metadata: { byteSize: validated.byteSize, contentType: validated.contentType, requestId } });
-    });
-    createdFileId = null;
-    return withRequestId(jsonResponse({ configured: true, requestId }), requestId);
+    return await handleWorkspaceLogoUpload(request, ctx, requestId, trackFile);
   } catch (error) {
     if (createdFileId) {
       try {
