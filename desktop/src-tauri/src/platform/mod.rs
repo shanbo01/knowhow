@@ -126,10 +126,9 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     WindowsRawInput as NativeRawInput, WindowsUia as NativeUia, capture_target_previews,
-    double_click_interval,
-    capture_targets, foreground_context, initialize_process, monitor_descriptors, new_scope,
-    process_at_point, quit_capture_choice, recorder_window_bounds, scope_outline_bounds,
-    windows_device_name,
+    capture_targets, double_click_interval, foreground_context, initialize_process,
+    monitor_descriptors, new_scope, process_at_point, quit_capture_choice, recorder_window_bounds,
+    scope_outline_bounds, windows_device_name,
 };
 
 #[cfg(not(windows))]

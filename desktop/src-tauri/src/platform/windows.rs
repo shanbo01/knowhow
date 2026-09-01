@@ -5,7 +5,10 @@ use std::{
     io::Cursor,
     mem::size_of,
     path::Path,
-    sync::{Arc, mpsc::{self, Sender}},
+    sync::{
+        Arc,
+        mpsc::{self, Sender},
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -65,28 +68,29 @@ use windows::{
             Input::{
                 GetRawInputData, HRAWINPUT,
                 KeyboardAndMouse::{
-                    GetDoubleClickTime, VK_0, VK_9, VK_A, VK_APPS, VK_C, VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN,
-                    VK_END, VK_ESCAPE, VK_EXECUTE, VK_F, VK_HELP, VK_HOME, VK_INSERT, VK_LCONTROL,
-                    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_N, VK_NEXT, VK_NUMLOCK,
-                    VK_O, VK_P, VK_PAUSE, VK_PRINT, VK_PRIOR, VK_R, VK_RCONTROL, VK_RETURN,
-                    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SCROLL, VK_SELECT, VK_SHIFT,
-                    VK_SLEEP, VK_SNAPSHOT, VK_T, VK_TAB, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+                    GetDoubleClickTime, VK_0, VK_9, VK_A, VK_APPS, VK_C, VK_CAPITAL, VK_CONTROL,
+                    VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_EXECUTE, VK_F, VK_HELP, VK_HOME,
+                    VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_N,
+                    VK_NEXT, VK_NUMLOCK, VK_O, VK_P, VK_PAUSE, VK_PRINT, VK_PRIOR, VK_R,
+                    VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S,
+                    VK_SCROLL, VK_SELECT, VK_SHIFT, VK_SLEEP, VK_SNAPSHOT, VK_T, VK_TAB, VK_UP,
+                    VK_V, VK_W, VK_X, VK_Y, VK_Z,
                 },
                 RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY,
                 RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows,
-                GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetCursorPos,
-                GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HWND_MESSAGE, IDNO,
-                IDYES, IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION, MB_YESNOCANCEL, MSG,
-                MessageBoxW, PostThreadMessageW, RI_KEY_BREAK, RI_MOUSE_LEFT_BUTTON_DOWN,
+                GA_ROOT, GW_OWNER, GWL_EXSTYLE, GetAncestor, GetCursorPos, GetForegroundWindow,
+                GetMessageW, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextLengthW,
+                GetWindowTextW, GetWindowThreadProcessId, HWND_MESSAGE, IDNO, IDYES,
+                IsWindowVisible, MB_DEFBUTTON3, MB_ICONQUESTION, MB_YESNOCANCEL, MSG, MessageBoxW,
+                PostThreadMessageW, RI_KEY_BREAK, RI_MOUSE_LEFT_BUTTON_DOWN,
                 RI_MOUSE_LEFT_BUTTON_UP, RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP,
                 RIM_INPUT, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
                 WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_INPUT, WM_QUIT, WM_WTSSESSION_CHANGE,
-                WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-                WTS_SESSION_LOCK, WTS_SESSION_UNLOCK, WindowFromPoint,
+                WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WTS_SESSION_LOCK,
+                WTS_SESSION_UNLOCK, WindowFromPoint,
             },
         },
     },
@@ -1710,7 +1714,10 @@ mod tests {
             VK_ESCAPE.0,
             VK_F5,
         ] {
-            assert!(!key_changes_text(key), "{key:#x} should not count as typing");
+            assert!(
+                !key_changes_text(key),
+                "{key:#x} should not count as typing"
+            );
         }
     }
 
