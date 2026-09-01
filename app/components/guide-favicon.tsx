@@ -51,7 +51,6 @@ export function GuideFavicon({
   if (!ready) return fallback;
   return (
     // Favicons are decorative here; the adjacent guide title is the label.
-    // eslint-disable-next-line @next/next/no-img-element
     <img
       className="guide-favicon"
       src={state.url}
