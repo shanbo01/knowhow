@@ -261,24 +261,75 @@ missing every image.
 
 ## Updating
 
+The whole update is three commands, run in the deployment directory on the host:
+
 ```bash
-git fetch --tags && git checkout <tag>
-./scripts/deploy.sh all
+git fetch origin
+git checkout <branch-or-tag>
+./scripts/deploy.sh env app
 ```
 
-The `env` phase re-stamps `KNOWHOW_RELEASE` from the checked-out commit, and
-`app` rebuilds and replaces the container while Caddy keeps running.
+`env` re-stamps `KNOWHOW_RELEASE` from the checked-out commit; `app` rebuilds the
+image and replaces the container while Caddy keeps serving. Existing secrets in
+`.env.production` are left alone — `env` only generates the ones that are still
+missing or still hold a placeholder.
 
-`NEXT_PUBLIC_*` values and the Content-Security-Policy are compiled into the
-build, so **changing the environment or a public URL needs a rebuild, not a
-restart**. Secrets arrive at run time and only need a restart.
+Run `./scripts/deploy.sh verify` afterwards and read the `release:` line. If it
+still shows the old commit, `env` did not run and the deployment is now lying
+about which version it is.
 
-Client version gates come last and separately. Raising
-`KNOWHOW_EXTENSION_MIN_VERSION` or `KNOWHOW_DESKTOP_MIN_VERSION` returns `426` to
-every client below the new minimum. A browser-store extension auto-updates within
-days; a downloaded archive never updates itself, so raising the minimum locks
-those users out until each re-downloads. Until a store listing exists, treat that
-variable as frozen.
+### How much to run
+
+`all` is always correct and takes a few minutes. Running less is a shortcut, and
+these are the ones that are safe:
+
+| What changed | Run |
+| --- | --- |
+| Application code only | `env app` |
+| A value in `deploy.conf` | `env app` — `NEXT_PUBLIC_*` and the CSP are compiled in |
+| `infrastructure/appwrite/*.json`, or a function | `env push app` |
+| Appwrite's own settings or version | `appwrite`, then `env push app` |
+| A secret already in `.env.production` | `docker compose --env-file .env.production up -d` |
+
+Skipping `env` is what goes wrong most often, because everything keeps working —
+only the reported release is stale, which is exactly the thing you will want to
+trust during the next incident.
+
+### If the working tree is dirty
+
+A deployment host collects edits: a hotfix applied in place, or a schema file an
+Appwrite CLI command reformatted. `git checkout` will refuse rather than discard
+them. Find out what they are before deciding:
+
+```bash
+git status --short
+git diff > ~/pre-update-$(date -u +%Y%m%dT%H%M%SZ).patch
+git diff --stat origin/main            # is any of it missing upstream?
+```
+
+If the diff against the branch you are moving to is empty, the changes are
+already upstream and `git reset --hard` discards nothing. If it is not empty,
+that is unreleased work — get it into a commit before it is lost. Untracked
+files that exist in the target commit block a checkout too; compare them with
+`git show <branch>:<path> | diff - <path>` and remove the ones that match.
+
+`deploy.conf` and `.env.production` are not tracked, so no checkout touches them.
+
+### Updating the extension archive
+
+The extension is built into the image with the deployment origin compiled into
+its `host_permissions`, so an `app` rebuild produces a new archive on the
+download page. It does **not** reach anyone who already installed one — a
+downloaded, unpacked extension never updates itself. Until a store listing
+exists, an extension change means telling people to download and re-load it.
+
+### Client version gates
+
+These come last and separately. Raising `KNOWHOW_EXTENSION_MIN_VERSION` or
+`KNOWHOW_DESKTOP_MIN_VERSION` returns `426` to every client below the new
+minimum, and since nobody's archive updates itself, that locks each of them out
+until they re-download. Until a store listing exists, treat those two variables
+as frozen.
 
 ### Rolling back
 
