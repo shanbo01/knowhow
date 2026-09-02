@@ -231,7 +231,7 @@ export const PLANS: readonly Plan[] = [
     id: "free",
     name: "Free",
     price: "$0",
-    cadence: "forever, no card",
+    cadence: "no card required",
     summary:
       "Enough to standardize your first procedures and prove the format works.",
     cta: { label: "Create a free workspace", href: "/register" },
@@ -374,7 +374,7 @@ export const FAQ: readonly FaqEntry[] = [
   {
     question: "What does KnowHow cost?",
     answer:
-      "The Free plan is $0 forever and covers 3 members, 1 guide creator, 15 guides, and 1 GB of storage. Pro starts as a 14-day trial that needs no payment method and raises those limits to 100 members, 25 creators, 1,000 guides, and 50 GB while adding desktop capture, redaction tools, and file exports. Enterprise is quoted and invoiced directly.",
+      "The Free plan is $0 and covers 3 members, 1 guide creator, 15 guides, and 1 GB of storage. Pro starts as a 14-day trial that needs no payment method and raises those limits to 100 members, 25 creators, 1,000 guides, and 50 GB while adding desktop capture, redaction tools, and file exports. Enterprise is quoted and invoiced directly.",
   },
   {
     question: "Do I need a credit card to try it?",

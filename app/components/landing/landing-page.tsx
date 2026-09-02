@@ -61,7 +61,7 @@ function Hero() {
             </Link>
           </div>
           <p className="kh-hero-note">
-            14-day Pro trial · no payment method · a Free plan that stays free
+            14-day Pro trial · no payment method · no card for the Free plan
           </p>
         </div>
 
