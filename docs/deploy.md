@@ -71,6 +71,25 @@ docker network ls
 docker ps --format '{{.Names}}\t{{.Networks}}'
 ```
 
+### Make Appwrite survive a reboot
+
+Appwrite's compose declares `restart:` on only some of its services. On a stock
+1.9 install the core ones — `appwrite`, `redis`, `traefik`, and the function
+workers — have no policy at all, and `mongodb` has `on-failure`, which does not
+fire after a clean shutdown. A host reboot therefore leaves most of the stack
+down while the KnowHow containers, which use `unless-stopped`, come back.
+
+That asymmetry is the dangerous part: the site answers, so it looks healthy, and
+the only symptom is workers that never run.
+
+```bash
+sudo ./scripts/appwrite-restart-policy.sh ~/appwrite-stack/appwrite
+cd ~/appwrite-stack/appwrite && sudo docker compose up -d
+```
+
+It writes a `docker-compose.override.yml` beside Appwrite's own compose, so an
+Appwrite upgrade does not discard it.
+
 Appwrite must also be told it is behind a TLS-terminating proxy, or it will
 generate `http://` URLs and redirect loops. In Appwrite's `.env`:
 
