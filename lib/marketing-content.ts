@@ -81,7 +81,7 @@ export const HOW_IT_WORKS: readonly HowItWorksStep[] = [
     detail: [
       "Chrome and Edge through the KnowHow Capture extension",
       "Windows applications through the desktop app on Pro",
-      "No keystrokes, clipboard contents, passwords, or form values are collected",
+      "No clipboard contents, no raw keystrokes, and no credentials; what you type into an ordinary field is kept so the step can quote it",
     ],
   },
   {
@@ -164,7 +164,7 @@ export const SECURITY_CONTROLS: readonly {
 }[] = [
   {
     title: "Capture collects less than you would expect",
-    body: "Clicks and screenshots only. Raw keystrokes, clipboard contents, passwords, and form values are never collected.",
+    body: "Clicks, screenshots, and the text typed into ordinary fields, so a step can say what to enter. Clipboard contents and raw keystrokes are never collected, and passwords, usernames, one-time codes, card and account numbers are excluded before anything is recorded. A workspace can switch typed-text capture off for everyone.",
   },
   {
     title: "Redaction happens on the device",
@@ -349,7 +349,7 @@ export const FAQ: readonly FaqEntry[] = [
   {
     question: "Does the capture extension record passwords or keystrokes?",
     answer:
-      "No. KnowHow Capture records clicks and screenshots. It does not collect raw keystrokes, clipboard contents, passwords, or form values. Regions you mask in the editor are flattened into the screenshot in the browser before the image is uploaded.",
+      "No to both. Passwords, usernames, one-time codes, card and account numbers are identified and excluded before anything is recorded, and clipboard contents are never read. A keyboard shortcut is stored as the chord you pressed, such as Ctrl+S, never as the characters you typed. What the extension does keep is the text you enter into ordinary fields, so a step can say what to type; a workspace can switch that off for everyone. Regions you mask in the editor are flattened into the screenshot in the browser before the image is uploaded.",
   },
   {
     question: "Which browsers and operating systems does KnowHow support?",

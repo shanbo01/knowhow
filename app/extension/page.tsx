@@ -8,7 +8,7 @@ import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
 const description =
-  "The KnowHow Capture extension for Chrome and Edge records clicks and screenshots to build a guide. It does not collect clipboard contents, raw keystrokes, passwords, or form values.";
+  "The KnowHow Capture extension for Chrome and Edge records clicks, screenshots, and the text you type into ordinary fields to build a guide. It does not collect clipboard contents, raw keystrokes, or credentials.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const origin = await resolveSiteOrigin();
@@ -45,8 +45,8 @@ export default async function ExtensionPage() {
       />
       <InfoHero
         eyebrow="KnowHow Capture"
-        title="Capture browser work without collecting the inputs."
-        intro="The Chrome and Edge extension records clicks and screenshots. It does not collect clipboard contents, raw keystrokes, passwords, or form values."
+        title="Capture browser work without collecting the secrets."
+        intro="The Chrome and Edge extension records clicks, screenshots, and the text you type into ordinary fields so a step can quote it. Clipboard contents and raw keystrokes are never collected, and passwords, usernames, one-time codes, card and account numbers are excluded before anything is recorded."
       />
       <section className={styles.infoGrid}>
         <article>
