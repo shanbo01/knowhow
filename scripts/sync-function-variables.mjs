@@ -37,6 +37,11 @@ const FUNCTION_VARIABLES = {
       "RESEND_API_KEY",
       "RESEND_FROM",
       "KNOWHOW_APPWRITE_ENDPOINT",
+      "KNOWHOW_SMTP_HOST",
+      "KNOWHOW_SMTP_PORT",
+      "KNOWHOW_SMTP_USERNAME",
+      "KNOWHOW_SMTP_PASSWORD",
+      "KNOWHOW_SMTP_FROM",
     ],
   },
   "knowhow-export": {

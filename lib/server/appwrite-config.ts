@@ -304,7 +304,15 @@ export function deploymentConfigurationIssues(
     if (!release || release === "local" || release === "unversioned") {
       issues.push("release_identity");
     }
-    if (!process.env.RESEND_API_KEY?.trim()) issues.push("email_provider");
+    // Either transport satisfies this. SMTP is not a lesser option: it is the
+    // only one an on-premises or air-gapped install can use, and a deployment
+    // with its own relay should not be told it is misconfigured for declining
+    // to add a third-party email vendor.
+    const hasResend = Boolean(process.env.RESEND_API_KEY?.trim());
+    const hasSmtp = Boolean(
+      process.env.KNOWHOW_SMTP_HOST?.trim() && process.env.KNOWHOW_SMTP_FROM?.trim(),
+    );
+    if (!hasResend && !hasSmtp) issues.push("email_provider");
   }
 
   const publicEnvironment =

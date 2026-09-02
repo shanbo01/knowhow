@@ -1514,6 +1514,46 @@ function emailTemplate(kind, details) {
   };
 }
 
+/**
+ * Whether this deployment sends its own mail over SMTP rather than Resend.
+ *
+ * A deployment that already runs its own mail relay, or one that cannot reach
+ * a third-party API at all, has no use for an HTTP email vendor. SMTP is the
+ * only transport an on-premises install can rely on.
+ */
+function smtpConfigured() {
+  return Boolean(
+    process.env.KNOWHOW_SMTP_HOST?.trim() && process.env.KNOWHOW_SMTP_FROM?.trim(),
+  );
+}
+
+async function sendViaSmtp(email, template) {
+  const port = Number(process.env.KNOWHOW_SMTP_PORT?.trim() || 587);
+  const { createTransport } = await import("nodemailer");
+  const transport = createTransport({
+    host: process.env.KNOWHOW_SMTP_HOST.trim(),
+    port,
+    // 465 is implicit TLS; 587 and 25 start plaintext and upgrade with
+    // STARTTLS, which `secure: false` selects rather than disabling TLS.
+    secure: port === 465,
+    requireTLS: port !== 465,
+    auth: process.env.KNOWHOW_SMTP_USERNAME?.trim()
+      ? {
+          user: process.env.KNOWHOW_SMTP_USERNAME.trim(),
+          pass: process.env.KNOWHOW_SMTP_PASSWORD ?? "",
+        }
+      : undefined,
+  });
+  await transport.sendMail({
+    from: process.env.KNOWHOW_SMTP_FROM.trim(),
+    to: email,
+    subject: template.subject,
+    html: template.html,
+  });
+  transport.close();
+  return "smtp";
+}
+
 async function sendViaResend(email, template, idempotencyKey) {
   const key = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM;
@@ -1588,7 +1628,13 @@ async function deliverNotifications({ tables, messaging, users }, now) {
             delivery = "appwrite-messaging-replay";
           }
         } else if (row.email) {
-          delivery = await sendViaResend(row.email, template, row.$id);
+          // Recipients without an account cannot be reached through Appwrite
+          // Messaging, so this is the only path an invitation takes. SMTP wins
+          // when configured: a deployment that has its own relay should not
+          // also depend on an external API being reachable.
+          delivery = smtpConfigured()
+            ? await sendViaSmtp(row.email, template)
+            : await sendViaResend(row.email, template, row.$id);
         } else {
           throw new Error("NOTIFICATION_TARGET_MISSING");
         }
