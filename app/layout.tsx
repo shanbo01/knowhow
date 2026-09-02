@@ -17,7 +17,6 @@ const description =
 
 export async function generateMetadata(): Promise<Metadata> {
   const origin = await resolveSiteOrigin();
-  const imageUrl = `${origin}/og.png`;
 
   return {
     metadataBase: new URL(origin),
@@ -46,20 +45,14 @@ export async function generateMetadata(): Promise<Metadata> {
       type: "website",
       siteName: PRODUCT_NAME,
       locale: "en",
-      images: [
-        {
-          url: imageUrl,
-          width: 1732,
-          height: 909,
-          alt: "A captured procedure in the KnowHow guide editor",
-        },
-      ],
     },
+    // No image is advertised until there is one worth sharing. A card with a
+    // title and description degrades cleanly; a card pointing at a missing
+    // file renders as broken, so `summary` rather than `summary_large_image`.
     twitter: {
-      card: "summary_large_image",
+      card: "summary",
       title,
       description,
-      images: [imageUrl],
     },
   };
 }
