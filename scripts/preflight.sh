@@ -155,28 +155,37 @@ fi
 # ---------------------------------------------------------------------------
 section "Ports"
 # ---------------------------------------------------------------------------
-port_holder() {
+# Who publishes a port, by container name. `ss -ltnp` needs root to name a
+# process, so ask Docker instead — and Docker is what will be holding it.
+container_publishing() {
   local port="$1"
-  if have ss; then
-    ss -ltnp 2>/dev/null | awk -v p=":${port}$" '$4 ~ p {print $NF; exit}'
-  fi
+  docker ps --format '{{.Names}}	{{.Ports}}' 2>/dev/null     | awk -v p=":${port}->" '$0 ~ p {print $1; exit}'
 }
+port_in_use() {
+  have ss || return 1
+  ss -ltn 2>/dev/null | awk -v p=":$1$" '$4 ~ p {found=1} END {exit !found}'
+}
+
 if ! have ss; then
   note "skipped: ss(1) not available, cannot see what holds 80/443"
 fi
 for PORT in 80 443; do
   have ss || break
-  HOLDER="$(port_holder "$PORT")"
-  if [ -z "$HOLDER" ]; then
+  HOLDER="$(container_publishing "$PORT")"
+  if ! port_in_use "$PORT"; then
     pass "port ${PORT} is free for Caddy"
-  else
+  elif printf '%s' "$HOLDER" | grep -q 'caddy'; then
+    # Expected once deployed. This runs before a first deploy and again on
+    # every later one, so our own proxy holding the port is success.
+    pass "port ${PORT} held by this deployment's Caddy"
+  elif printf '%s' "$HOLDER" | grep -qi 'traefik'; then
     # Appwrite's Traefik binds these by default and has to give them up.
-    if printf '%s' "$HOLDER" | grep -qi 'docker\|traefik'; then
-      fail "port ${PORT} is held by a container — Caddy cannot bind it"
-      note "remove the ports: mapping from Appwrite's traefik service"
-    else
-      fail "port ${PORT} is already in use: ${HOLDER}"
-    fi
+    fail "port ${PORT} is held by ${HOLDER} — Caddy cannot bind it"
+    note "reinstall Appwrite with --http-port/--https-port, or drop its ports: mapping"
+  elif [ -n "$HOLDER" ]; then
+    fail "port ${PORT} is published by container ${HOLDER}"
+  else
+    fail "port ${PORT} is in use by a process outside Docker"
   fi
 done
 note "inbound 80/443 must also be open in the cloud firewall; that cannot be checked from here"

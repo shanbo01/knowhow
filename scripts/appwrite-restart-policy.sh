@@ -24,8 +24,13 @@ COMPOSE="${APPWRITE_DIR}/docker-compose.yml"
 [ -f "${COMPOSE}" ] || { echo "no docker-compose.yml in ${APPWRITE_DIR}" >&2; exit 1; }
 
 OVERRIDE="${APPWRITE_DIR}/docker-compose.override.yml"
+# Appwrite's install directory is root-owned. Build the file somewhere writable
+# and install it with sudo only if a direct write is refused, so this works the
+# same whether or not the caller remembered sudo.
+STAGED="$(mktemp)"
+trap 'rm -f "${STAGED}"' EXIT
 
-python3 - "${COMPOSE}" > "${OVERRIDE}" <<'PY'
+python3 - "${COMPOSE}" > "${STAGED}" <<'PY'
 import re, sys
 
 source = open(sys.argv[1], encoding="utf-8").read()
@@ -57,6 +62,10 @@ for name in services:
     print("    restart: unless-stopped")
 print(f"# {len(services)} services", file=sys.stderr)
 PY
+
+if ! cp "${STAGED}" "${OVERRIDE}" 2>/dev/null; then
+  sudo cp "${STAGED}" "${OVERRIDE}" || { echo "could not write ${OVERRIDE}" >&2; exit 1; }
+fi
 
 COUNT="$(grep -c 'restart: unless-stopped' "${OVERRIDE}")"
 echo "wrote ${OVERRIDE} covering ${COUNT} services"

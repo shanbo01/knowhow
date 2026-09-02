@@ -1,479 +1,220 @@
-# Deploying KnowHow on a Linux VPS
+# Deploying KnowHow
 
-This covers the web application: how it is built, how it starts, and how it
-comes back after a reboot. Appwrite is deployed separately from its own compose
-file; the one change required on that side is in
-[Prepare Appwrite](#prepare-appwrite) below.
+One command stands up a deployment:
 
-> **Status.** This document describes what currently exists and has been
-> verified. Remaining gaps are listed in [Known gaps](#known-gaps); none of them
-> stop a deployment from running.
+```bash
+cp deploy.conf.example deploy.conf   # edit it
+./scripts/deploy.sh all
+```
+
+Everything below explains what that does, what it cannot do for you, and how to
+run the deployment afterwards. If you are in a hurry, read
+[Before you start](#before-you-start) and [What it cannot do](#what-it-cannot-do-for-you);
+the rest is reference.
+
+---
 
 ## What runs
 
 | Container | Image | Ports | Restart |
 | --- | --- | --- | --- |
-| `caddy` | `caddy:2-alpine` | 80, 443 published | `unless-stopped` |
+| `caddy` | `caddy:2-alpine` | 80 and 443, published | `unless-stopped` |
 | `web` | built from `Dockerfile` | 3000, network-internal only | `unless-stopped` |
-| Appwrite | its own compose file | none published | set by Appwrite |
+| Appwrite | its own compose file | 8080/8443, so Caddy can have 80/443 | `unless-stopped` |
 
-Only Caddy is reachable from the internet. The application has no `ports:`
-mapping at all, so there is no route to it that bypasses TLS or the forwarded
-header pinning in the `Caddyfile`.
+Caddy is the only process reachable from the internet. The application declares
+no published port at all, so there is no route to it that bypasses TLS or the
+forwarded-header pinning in the `Caddyfile`.
 
-## Prerequisites
+---
 
-- A VPS with Docker Engine and the Compose plugin
-- DNS `A` records for two hostnames pointing at the VPS: one for the
-  application, one for Appwrite
-- Ports 80 and 443 open; port 22 restricted to your key
+## Before you start
 
-Enable Docker at boot before anything else. Nothing below survives a reboot
-without it:
+**A host.** Linux, Docker with the Compose plugin, and Docker enabled at boot:
 
 ```bash
 sudo systemctl enable --now docker
 ```
 
-## Check the host first
+8 GB of memory is comfortable and 4 GB is the floor — the image build is the
+heaviest thing that will ever run there, and an undersized host shows up as an
+OOM kill partway through a build that reads like a broken Dockerfile.
+
+**Two hostnames**, both resolving to the machine, with 80 and 443 open in the
+cloud firewall. Certificates cannot be issued before DNS is live. For a test rig
+with no domain, `sslip.io` resolves `app.203-0-113-10.sslip.io` to `203.0.113.10`
+with no registration, and `KNOWHOW_TLS_MODE="internal"` makes Caddy sign its own
+certificate so no ACME is involved at all.
+
+**`deploy.conf`.** Copy the example and fill it in. It is sourced by the shell,
+so **quote every value** — an unquoted `KnowHow <mail@example.com>` is read as a
+redirect and will not parse.
+
+---
+
+## The phases
+
+`./scripts/deploy.sh all` runs these in order and stops at the first failure.
+Each is idempotent, so fix the problem and run the same command again — there is
+nothing to unpick. Any phase can also be run alone:
+
+| Phase | What it does |
+| --- | --- |
+| `preflight` | Memory, disk, Docker at boot, ports, clock, DNS, config sanity |
+| `appwrite` | Installs Appwrite on non-conflicting ports; sets the runtimes, storage limit, domain, SMTP, and restart policies |
+| `provision` | Console account, project, API key with the right scopes, web platform |
+| `env` | Generates `.env.production` and its secrets |
+| `push` | Tables, buckets, functions, function variables |
+| `app` | Builds the image and starts the stack behind Caddy |
+| `verify` | Reads the readiness endpoint and reports what is left |
 
 ```bash
-./scripts/preflight.sh
+./scripts/deploy.sh --list
+./scripts/deploy.sh push        # just re-push the schema and functions
 ```
 
-Read-only: it starts nothing, changes nothing, and prints no secret values. It
-checks the things that otherwise fail halfway through a deploy for boring
-reasons — memory and disk, Docker enabled at boot, whether anything already
-holds 80 and 443, clock sync, DNS, whether `node-22` is enabled in Appwrite, and
-whether `.env.production` still contains template placeholders or short secrets.
+### What each phase gets right that is easy to get wrong
 
-Run it again after any change on the Appwrite side. Failures block a deploy;
-warnings are worth knowing but do not.
+These are the things that cost hours when done by hand. The script does them so
+you do not have to know them, but they are worth knowing when something breaks.
 
-Two checks it cannot do from inside the host: whether your cloud firewall
-actually allows inbound 80 and 443, and whether the address DNS points at is
-this machine. For the second, set `KNOWHOW_EXPECTED_PUBLIC_IP` and it will
-verify; otherwise it prints what resolved for you to confirm.
+**The API key needs `sessions.write`.** The application creates sessions on a
+user's behalf server-side. Without that scope every sign-in fails with *"The
+email or password is incorrect"* while the credentials are perfectly good — a
+deployment that looks healthy and cannot log anyone in. It also needs
+`executions.read` for the readiness probe, and the older `collections.*`,
+`attributes.*` and `documents.*` names alongside the `tables.*` ones, because
+pushing the schema uses the legacy spelling internally.
 
-## Prepare Appwrite
+**Appwrite does not enable Node 22.** A stock install offers four runtimes and
+none of them is `node-22`, which both workers require. The `appwrite` phase sets
+`_APP_FUNCTIONS_RUNTIMES` and then reads the value back *from the container*,
+because the file is not proof that a running process picked it up.
 
-Appwrite ships its own Traefik, which binds 80 and 443 by default. Caddy needs
-those ports, so Appwrite's proxy has to stop publishing them and be reached over
-the Docker network instead.
+**The storage ceiling is below what the schema asks for.** `knowhow_exports`
+declares a 50 MB maximum file size against Appwrite's 30 MB default, so that one
+bucket fails to push while the other succeeds — which looks like a bad bucket
+rather than a project-wide limit.
 
-In Appwrite's `docker-compose.yml`, remove the `ports:` mapping from the
-`traefik` service. Leave the service itself alone — Caddy forwards to it by
-container name. Then confirm the network name and the container name, and set
-`APPWRITE_NETWORK` and `APPWRITE_UPSTREAM` to match:
+**Appwrite does not survive a reboot out of the box.** Its compose sets a restart
+policy on only some services; the core ones have none, and its database has
+`on-failure`, which does not fire after a clean shutdown. The host comes back
+with the site answering and every worker silently absent. The phase writes a
+`docker-compose.override.yml` beside Appwrite's own compose so an upgrade does
+not discard the fix.
+
+**Workers cannot reach the API by default.** Appwrite derives
+`APPWRITE_FUNCTION_API_ENDPOINT` from `_APP_DOMAIN` and overwrites any function
+variable of that name, so a worker cannot be redirected through configuration.
+On a default install that value is `localhost`, which inside a function
+container is the container itself. The `env` phase sets
+`KNOWHOW_APPWRITE_ENDPOINT` to the Docker gateway, which both workers prefer.
+
+**Never update a function with a partial `PUT`.** Appwrite replaces the whole
+resource, so a call that omits `scopes` strips them and the next scheduled run
+fails with `missing scopes`. Change functions through `appwrite.config.json` and
+re-run the `push` phase.
+
+---
+
+## What it cannot do for you
+
+Three things need a person.
+
+**1. DNS and the firewall.** Preflight checks that the names resolve here, but
+it cannot open a cloud firewall or create a record.
+
+**2. The first owner.** Administration is only reachable by someone holding an
+owner role, and the first one cannot be granted from inside the product. Sign up
+through the site, verify the email, then:
 
 ```bash
-docker network ls
-docker ps --format '{{.Names}}\t{{.Networks}}'
+node --env-file=.env.production scripts/bootstrap-platform-owner.mjs \
+  --email=you@example.com --confirm
 ```
 
-### Make Appwrite survive a reboot
+It refuses once any active owner exists, so it can create the first and never a
+second. Every later role is granted from Administration, where the change is
+attributed to whoever made it.
 
-Appwrite's compose declares `restart:` on only some of its services. On a stock
-1.9 install the core ones — `appwrite`, `redis`, `traefik`, and the function
-workers — have no policy at all, and `mongodb` has `on-failure`, which does not
-fire after a clean shutdown. A host reboot therefore leaves most of the stack
-down while the KnowHow containers, which use `unless-stopped`, come back.
+**3. Backups.** See below. Nothing else on this page matters as much.
 
-That asymmetry is the dangerous part: the site answers, so it looks healthy, and
-the only symptom is workers that never run.
+---
 
-```bash
-sudo ./scripts/appwrite-restart-policy.sh ~/appwrite-stack/appwrite
-cd ~/appwrite-stack/appwrite && sudo docker compose up -d
-```
+## Email
 
-It writes a `docker-compose.override.yml` beside Appwrite's own compose, so an
-Appwrite upgrade does not discard it.
+Two transports, and they cover different recipients.
 
-Appwrite must also be told it is behind a TLS-terminating proxy, or it will
-generate `http://` URLs and redirect loops. In Appwrite's `.env`:
+**Appwrite sends verification and password-recovery mail** using the `_APP_SMTP_*`
+settings, which the `appwrite` phase writes from your `KNOWHOW_SMTP_*` values.
 
-```
-_APP_OPTIONS_FORCE_HTTPS=enabled
-_APP_DOMAIN=appwrite.your-domain.com
-_APP_DOMAIN_TARGET=appwrite.your-domain.com
-```
+**The application sends invitations** to people who do not yet have an account —
+the one message it delivers itself. That path uses `KNOWHOW_SMTP_*` when set and
+falls back to Resend otherwise. SMTP is the only option an air-gapped or
+on-premises install has.
 
-Two more settings in that file are required, and both fail late rather than
-early if they are missed:
+Setting `KNOWHOW_SMTP_HOST` and `KNOWHOW_SMTP_FROM` satisfies the configuration
+check; so does `RESEND_API_KEY`. Neither being set is what makes readiness report
+a configuration failure.
 
-```
-_APP_FUNCTIONS_RUNTIMES="node-22,node-16.0,php-8.0,python-3.9,ruby-3.0"
-_APP_STORAGE_LIMIT=52428800
-```
-
-`node-22` is covered under [the functions](#enable-the-node-runtime-first).
-The storage limit matters because `knowhow_exports` declares a 50 MB maximum
-file size and Appwrite ships a 30 MB ceiling, so pushing that bucket fails with
-`Value must be a valid range between 1 and 30,000,000` — while the other bucket
-pushes fine, which makes it look like a problem with one bucket rather than a
-project-wide limit.
-
-Recreate the affected containers after editing, since a running container keeps
-the values it started with:
-
-```bash
-sudo docker compose up -d --force-recreate appwrite appwrite-worker-functions appwrite-worker-builds
-docker exec appwrite printenv _APP_FUNCTIONS_RUNTIMES
-```
-
-Read the value back from the container rather than the file. It is the only
-thing that proves the change took effect.
-
-## Generate secrets
-
-Every value below needs at least 32 random bytes and must be unique to this
-deployment. Never copy one from a local profile.
-
-```bash
-openssl rand -hex 32
-```
-
-Generate a separate value for each of `KNOWHOW_EXPORT_WORKER_SECRET`,
-`KNOWHOW_RATE_LIMIT_PEPPER`, `KNOWHOW_DELETION_RECEIPT_PEPPER`, and the key
-inside `KNOWHOW_TOKEN_KEYS_JSON`.
-
-Use the `KNOWHOW_TOKEN_KEYS_JSON` keyring rather than the legacy
-`KNOWHOW_TOKEN_SIGNING_KEY`. Only the keyring supports rotating a signing key
-without invalidating every outstanding invitation and device token at once.
-
-## Create the project and its API key
-
-The application needs an Appwrite project and a key. Both are made in the
-console, and two details are easy to miss because nothing fails until much
-later.
-
-**The key needs `sessions.write`.** The application creates sessions on a user's
-behalf server-side, so without it every sign-in fails with a generic *"The email
-or password is incorrect"* — the credentials are fine, the key is not. It also
-needs `executions.read` for the readiness probe. Granting only the obvious
-database and storage scopes gets you a deployment that looks healthy and cannot
-log anyone in.
-
-The full set this deployment uses:
-
-```
-users.read users.write sessions.read sessions.write teams.read teams.write
-databases.read databases.write tables.read tables.write columns.read
-columns.write indexes.read indexes.write rows.read rows.write
-collections.read collections.write attributes.read attributes.write
-documents.read documents.write buckets.read buckets.write files.read
-files.write functions.read functions.write executions.read executions.write
-messages.write targets.read locale.read health.read rules.read rules.write
-```
-
-Both the `tables.*` and the older `collections.*` and `attributes.*` scopes are
-required: pushing the schema uses the legacy names internally, and omitting them
-fails partway through creating columns.
-
-**Register the application hostname as a Web platform** under the project's
-settings, or Appwrite may reject browser-originated calls from it.
-
-## Configure
-
-Copy the template and fill in every placeholder:
-
-```bash
-cp .env.controlled.example .env.production
-```
-
-`.env.production` is gitignored and must stay that way. It serves two purposes at
-once — Compose reads it for `${...}` substitution, and hands the same values to
-the container — which is why every command below passes `--env-file`.
-
-Two settings deserve attention:
-
-**`APPWRITE_INTERNAL_ENDPOINT`** should address Appwrite by container name over
-the private network, with the name listed in `KNOWHOW_APPWRITE_INTERNAL_HOSTS`:
-
-```
-KNOWHOW_APPWRITE_INTERNAL_HOSTS=appwrite-traefik
-APPWRITE_INTERNAL_ENDPOINT=http://appwrite-traefik/v1
-APPWRITE_ENDPOINT=https://appwrite.your-domain.com/v1
-```
-
-The public endpoint stays HTTPS regardless: browsers, the desktop app, and the
-export function all reach Appwrite from outside the network. Only bare DNS
-labels are accepted in the internal allowlist — a label has no dot, so it can
-never name a public host, and loopback names are rejected outright.
-
-**`KNOWHOW_RELEASE`** must be an immutable identifier. The configuration checker
-rejects `local` and `unversioned`. Use the commit you are deploying:
-
-```bash
-echo "KNOWHOW_RELEASE=$(git rev-parse --short HEAD)" >> .env.production
-```
-
-## Deploy
-
-```bash
-docker compose --env-file .env.production up -d --build
-```
-
-The build takes several minutes. It compiles the application, builds the capture
-extension archive with this deployment's origin baked in, and traces the server
-into a standalone runtime.
-
-Caddy obtains certificates on first start. Watch for it:
-
-```bash
-docker compose --env-file .env.production logs -f caddy
-```
-
-Then confirm the application is serving:
-
-```bash
-curl -fsS https://your-domain.com/api/health
-```
-
-## Deploy the Appwrite Functions
-
-Two functions do the work no web request can: `knowhow-operations` sweeps the
-lifecycle, expiries, usage rollups, purges, and the notification queue, and
-`knowhow-export` turns queued export jobs into files. Both are declared in
-`appwrite.config.json` and pushed with the CLI, which is pinned as a
-devDependency so the version cannot drift from the server.
-
-Without them, nothing fails loudly: exports queue forever, invitation and
-verification emails are never sent, trials never expire, and deleted workspaces
-are never purged.
-
-### Enable the Node runtime first
-
-Appwrite ships with only four runtimes enabled, and Node 22 is not one of them.
-Check what your instance actually has:
-
-```bash
-npx appwrite functions list-runtimes
-```
-
-If `node-22` is absent, add it to `_APP_FUNCTIONS_RUNTIMES` in Appwrite's `.env`
-and restart Appwrite. Both functions declare `"engines": { "node": ">=22" }`, so
-an older runtime is not a workaround. A push against an instance without it
-fails with `Runtime "node-22" is not supported`.
-
-### Push, then supply the variables
-
-```bash
-npx appwrite login
-npm run appwrite:functions:push
-```
-
-The functions' environment variables cannot travel in the config: most are
-secrets, and a committed file is the wrong place for a signing key. Sync them
-from the deployment's own environment instead. It prints a plan first and
-changes nothing until `--apply`:
-
-```bash
-node --env-file=.env.production scripts/sync-function-variables.mjs
-node --env-file=.env.production scripts/sync-function-variables.mjs --apply
-```
-
-Values are never printed — only key names and whether each was created, updated,
-or already current. Secrets are rewritten every run, because Appwrite redacts
-them on read and an unchanged secret is otherwise indistinguishable from a
-rotated one.
-
-Neither function needs an API key variable. Both prefer the dynamic key Appwrite
-injects per execution, scoped by the `scopes` array in `appwrite.config.json` —
-which is why that array is checked to be non-empty: a function with no scopes
-receives a powerless key and fails at run time rather than at push time.
-
-> **Never update a function with a partial PUT.** Appwrite replaces the whole
-> resource, so a call that omits `scopes` silently strips them, and the next
-> scheduled run fails with `missing scopes`. Change functions by editing
-> `appwrite.config.json` and pushing, which always sends the complete set.
-
-### If a worker cannot reach the API
-
-Appwrite derives `APPWRITE_FUNCTION_API_ENDPOINT` from `_APP_DOMAIN` and
-overwrites any function variable of that name, so a worker cannot be pointed
-elsewhere through configuration alone. On a default install that value is
-`localhost`, which inside a function container is the container itself, and the
-runtimes network cannot resolve the `appwrite` service by name either. The
-symptom is `fetch failed` / `ECONNREFUSED` in the worker's first API call.
-
-Set `KNOWHOW_APPWRITE_ENDPOINT` to an address the runtimes network can reach —
-the Docker gateway and Appwrite's published port work — and both workers prefer
-it over the injected value:
-
-```bash
-docker network inspect runtimes --format '{{(index .IPAM.Config 0).Gateway}}'
-```
-
-The same applies wherever the public hostname is unreachable from inside, or
-presents a certificate the runtime does not trust.
-
-### Confirm the triggers
-
-`knowhow-export` runs on two triggers: a row created in `export_jobs`, and a
-five-minute sweep that retries jobs the event missed. `knowhow-operations` runs
-on schedule only. Neither is executable over HTTP, which
-`npm run appwrite:check` enforces.
-
-```bash
-npx appwrite functions list
-```
-
-Then queue an export from the application and confirm the file appears.
+---
 
 ## Health and readiness
 
 Two endpoints, for two different questions.
 
-`/api/health` is liveness: is this process serving? It touches nothing else, so
-it stays green while a dependency is down. **This is what uptime monitoring and
-the container health check should watch** — restarting the application because
-Appwrite hiccuped would only make an outage longer.
+`/api/health` is **liveness**: is this process serving? It touches nothing else,
+so it stays green while a dependency is down. Point uptime monitoring and the
+container health check here — restarting the application because Appwrite
+hiccuped only makes an outage longer.
 
-`/api/health?ready=1` is readiness: is the whole deployment able to do its job?
-It checks identity, the database, both buckets, configuration, the notification
-queue, and whether the operations worker is actually running. Use it after a
-deploy, and for alerting that a human should look at something.
+`/api/health?ready=1` is **readiness**: can the deployment do its job? It checks
+identity, the database, both buckets, configuration, the notification queue, and
+whether the operations worker is actually running.
 
-Readiness reads Appwrite's own execution history for `knowhow-operations`
-rather than asking the worker to report on itself — a worker wedged mid-run
-cannot report its own failure, but a missing execution is visible from outside.
-**`APPWRITE_API_KEY` therefore needs the `executions.read` scope**, or readiness
-reports `workerState: "invalid"` and never goes green.
-
-A red probe names its own cause:
-
-```bash
-curl -s 'https://your-domain.com/api/health?ready=1' | jq '.checks'
-```
+Readiness reads Appwrite's own execution history rather than asking the worker to
+report on itself — a worker wedged mid-run cannot report its own failure, but a
+missing execution is visible from outside. A red probe names its cause:
 
 | `workerState` | Meaning |
 | --- | --- |
-| `ready` | The function completed a scheduled run recently |
-| `missing` | It has never run — not deployed, or the schedule is not set |
-| `stale` | Its last run is older than 15 minutes; check `workerLastRunSeconds` |
-| `failed` | Its last run errored; read the function's logs in Appwrite |
-| `invalid` | Readiness could not be established — usually the missing `executions.read` scope |
+| `ready` | Completed a scheduled run recently |
+| `missing` | Never run — not deployed, or no schedule |
+| `stale` | Last run older than 15 minutes; see `workerLastRunSeconds` |
+| `failed` | Last run errored; read the function's logs in Appwrite |
+| `invalid` | Cannot be established — usually a missing `executions.read` scope |
 
-A queued notification is normal for most of every five-minute cycle, so
-readiness only fails on one that has outlived three cycles
-(`notificationQueueOverdue`). A queue with work in it is not an unhealthy queue.
-Any terminally failed delivery does fail readiness, since nothing retries it.
+A queued notification is normal for most of every five-minute cycle, so readiness
+only fails on one that has outlived three cycles. A queue with work in it is not
+an unhealthy queue.
 
-## Grant the first Administration owner
-
-Platform roles are only writable through the administration API, which itself
-requires an existing owner. A fresh deployment therefore has no way in, and this
-is it.
-
-Create the account through the normal sign-up flow first and verify its email
-address — a controlled deployment will not promote an unverified account. Then:
-
-```bash
-docker compose --env-file .env.production run --rm ops \
-  scripts/bootstrap-platform-owner.mjs --email=you@your-domain.com --confirm
-```
-
-`--confirm` is required outside development, because this grants permanent
-administrative access to every workspace on the deployment.
-
-The script refuses to run once any active owner exists. That is what makes it
-safe to leave in place: it can create the first owner and never a second. Grant
-every later role from Administration, where the change is attributed to the
-person who made it.
-
-Note the separate `ops` image. It exists because `node-appwrite` is bundled into
-the server output rather than left external, so a script inside the deployed
-runtime could not import it.
-
-## Verify the reboot path
-
-This is the step people skip and regret. Do it before there is any real data.
-
-```bash
-sudo reboot
-```
-
-Wait, reconnect, and check that everything returned without being asked:
-
-```bash
-docker ps --format '{{.Names}}\t{{.Status}}'
-curl -fsS https://your-domain.com/api/health
-```
-
-Every container should be `Up`, including Appwrite's. If Appwrite's did not
-return, its compose file is missing restart policies or Docker is not enabled at
-boot.
-
-## Build-time versus runtime configuration
-
-Next.js inlines every `NEXT_PUBLIC_*` value into the client bundle, and freezes
-response headers — including the Content-Security-Policy built from
-`APPWRITE_ENDPOINT` — into the routes manifest at build time. Those are build
-arguments, so **an image is specific to one environment**, and changing any of
-them requires a rebuild rather than a restart.
-
-Secrets are never build arguments. They arrive through `env_file` at run time and
-can be rotated with a restart.
-
-## Updating
-
-```bash
-git fetch --tags && git checkout <tag>
-echo "KNOWHOW_RELEASE=<tag>" >> .env.production   # or edit in place
-docker compose --env-file .env.production up -d --build
-```
-
-Compose replaces the `web` container and leaves Caddy running, so the only
-interruption is the application restart.
-
-Order matters when a release also changes Appwrite resources: push the schema
-first, then the functions, then the application. Client version gates come last
-and separately — raising `KNOWHOW_EXTENSION_MIN_VERSION` or
-`KNOWHOW_DESKTOP_MIN_VERSION` returns `426` to every client below the new
-minimum, so only raise them once the new client has been available long enough
-to have been installed.
-
-### Rolling back
-
-Images are tagged with the release, so a rollback is a rebuild at the previous
-tag. Note that this does **not** roll back Appwrite schema changes — keep column
-changes additive so that an application rollback is always safe on its own.
+---
 
 ## Backups
 
 Two things cannot be rebuilt from this repository: Appwrite's database, and the
-storage volume holding captured screenshots and generated exports. Everything
-else — the image, the schema, the functions — is reproducible from a git tag.
+volume holding screenshots and generated exports.
 
 ```bash
 sudo ./scripts/backup.sh
 ```
 
-The script dumps the database with `--single-transaction`, so it stays
-consistent without locking the site, archives the uploads volume, then
-**verifies what it wrote**: both archives must be valid gzip streams, and the
-dump must be large enough and contain table definitions. A dump that succeeds
-against the wrong schema is otherwise indistinguishable from a good one until
-the day you need it.
+It detects the database engine from the running container, dumps it, archives the
+uploads volume, and then **verifies what it wrote** — both archives must be valid
+gzip, and the dump must be large enough and actually contain the schema. A dump
+taken against the wrong database is otherwise indistinguishable from a good one
+until the day you need it.
 
-### Send it off the host
-
-A backup on the same disk as the data it protects is not a backup. Set one
-destination in `.env.production`; the script warns loudly if neither is set:
+Set one off-host destination in `.env.production`, or the backup sits on the same
+disk as the data it protects:
 
 ```
-KNOWHOW_BACKUP_RCLONE_REMOTE=b2:knowhow-backups   # any rclone remote
+KNOWHOW_BACKUP_RCLONE_REMOTE="b2:knowhow-backups"
 # or
-KNOWHOW_BACKUP_RSYNC_TARGET=user@backup-host:/srv/knowhow
+KNOWHOW_BACKUP_RSYNC_TARGET="user@backup-host:/srv/knowhow"
 ```
 
-Local copies are pruned after `KNOWHOW_BACKUP_KEEP_DAYS` (14 by default).
-Off-host copies are never pruned by this script — that retention belongs to the
-provider, so the copy that matters most is never deleted by a bug here.
-
-### Run it nightly
+Run it nightly with a systemd timer:
 
 ```ini
 # /etc/systemd/system/knowhow-backup.service
@@ -500,39 +241,57 @@ Persistent=true
 WantedBy=timers.target
 ```
 
-```bash
-sudo systemctl enable --now knowhow-backup.timer
-sudo systemctl list-timers knowhow-backup.timer
-```
-
-The script exits non-zero on any failure, so a broken backup shows up in
-`systemctl status` rather than passing silently.
-
 ### Rehearse the restore
 
-Do this once, on a scratch host, **before there is real customer data**. It is
-the only step that turns a backup into a safety net.
+Do it once, on a **separate** host, before there is real data.
 
 ```bash
 ./scripts/restore.sh /var/backups/knowhow/<timestamp> --confirm
 ```
 
-It verifies checksums before touching anything, clears the uploads volume
-before unpacking so no orphaned files survive, and refuses to run against
-`KNOWHOW_ENVIRONMENT=production` unless the intent is stated a second time.
+Do not rehearse on the host you are about to deploy to. Restoring drops and
+recreates every collection underneath a running Appwrite, which can leave it
+unable to create projects afterwards.
 
-Afterwards, restart the stack and confirm a guide opens **with its screenshots
-loading** — a restored database with an empty volume looks healthy on the
-dashboard and is missing every image.
+Afterwards, confirm a guide opens **with its screenshots loading**. A restored
+database with an empty volume looks perfectly healthy on the dashboard and is
+missing every image.
+
+---
+
+## Updating
+
+```bash
+git fetch --tags && git checkout <tag>
+./scripts/deploy.sh all
+```
+
+The `env` phase re-stamps `KNOWHOW_RELEASE` from the checked-out commit, and
+`app` rebuilds and replaces the container while Caddy keeps running.
+
+`NEXT_PUBLIC_*` values and the Content-Security-Policy are compiled into the
+build, so **changing the environment or a public URL needs a rebuild, not a
+restart**. Secrets arrive at run time and only need a restart.
+
+Client version gates come last and separately. Raising
+`KNOWHOW_EXTENSION_MIN_VERSION` or `KNOWHOW_DESKTOP_MIN_VERSION` returns `426` to
+every client below the new minimum. A browser-store extension auto-updates within
+days; a downloaded archive never updates itself, so raising the minimum locks
+those users out until each re-downloads. Until a store listing exists, treat that
+variable as frozen.
+
+### Rolling back
+
+Images are tagged with the release, so a rollback is a rebuild at the previous
+tag. It does **not** roll back Appwrite schema changes — keep column changes
+additive so an application rollback is always safe on its own.
+
+---
 
 ## Known gaps
 
-These are tracked and not yet done. A deployment works without them, but is not
-fully operable:
-
-- **No automated backups.** Nothing dumps Appwrite's database or storage
-  volumes, and no restore has been rehearsed. Do this before real customer data
-  exists, not after.
-- **500s carry no stack trace.** `lib/server/telemetry.ts` records only the
-  error type, so an unexpected failure in production gives you `"TypeError"` and
-  nothing else to work from.
+- **No automated backups until you configure them.** The script exists; the timer
+  is yours to install, and the restore is yours to rehearse.
+- **`scripts/deploy.sh` assumes Appwrite lives on the same host.** A managed or
+  remote Appwrite works, but the `appwrite` phase has nothing to configure and
+  should be skipped.

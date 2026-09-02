@@ -61,15 +61,20 @@ Copy `.env.example` to `.env.local` and supply the local or hosted Appwrite valu
 
 ## Deploying
 
-The web application ships as a container behind Caddy, with Appwrite self-hosted
-alongside it. `docs/deploy.md` is the runbook: preparing Appwrite, generating
-secrets, the first deploy, verifying that the stack returns after a reboot, and
-what is still missing.
+One command, on a Linux host with Docker:
 
 ```bash
-cp .env.controlled.example .env.production
-docker compose --env-file .env.production up -d --build
+cp deploy.conf.example deploy.conf   # edit it
+./scripts/deploy.sh all
 ```
+
+It installs and configures Appwrite, provisions the project and its API key,
+generates secrets, pushes the schema and workers, builds the image, and reports
+readiness. Every phase is idempotent, so the same command updates an existing
+deployment.
+
+`docs/deploy.md` covers what it does, the three things only a person can do
+(DNS, the first owner, backups), and how to run the deployment afterwards.
 
 ## Companion builds
 

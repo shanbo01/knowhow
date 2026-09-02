@@ -1,0 +1,86 @@
+# Deployment profile for scripts/deploy.sh.
+#
+# This file is sourced by the shell, so quote every value. An unquoted address
+# like KnowHow <a@b.com> is read as a redirect and fails to parse.
+#
+#   cp deploy.conf.example deploy.conf   and edit
+#
+# This describes the host and how to reach it. Secrets for the application are
+# generated into .env.production by the `env` phase; the only secrets here are
+# the ones that come from outside — the Appwrite console login and SMTP.
+#
+# Keep it out of source control: deploy.conf is gitignored.
+
+# --------------------------------------------------------------------------
+# Hostnames. Both must already resolve to this machine, and 80/443 must be
+# open, before certificates can be issued.
+# --------------------------------------------------------------------------
+KNOWHOW_SITE_HOST="app.example.com"
+APPWRITE_PUBLIC_HOST="appwrite.example.com"
+
+# TLS issuance. Your ACME contact email for a real deployment; "internal" makes
+# Caddy sign its own certificate, which suits a rig with no domain.
+KNOWHOW_TLS_MODE="ops@example.com"
+
+# Optional: preflight verifies DNS points here rather than only reporting it.
+# KNOWHOW_EXPECTED_PUBLIC_IP=203.0.113.10
+
+# --------------------------------------------------------------------------
+# Appwrite
+# --------------------------------------------------------------------------
+# Where Appwrite is installed, or will be. It must not publish 80 or 443 —
+# Caddy needs those — so the install uses these ports instead.
+APPWRITE_DIR="~/appwrite-stack/appwrite"
+APPWRITE_PORT="8080"
+APPWRITE_HTTPS_PORT="8443"
+APPWRITE_VERSION="1.9.6"
+APPWRITE_PROJECT="knowhow"
+
+# The Docker network Appwrite's compose creates, and the name Caddy and the
+# application use to reach it from inside. Confirm with `docker network ls`.
+APPWRITE_NETWORK="appwrite"
+APPWRITE_UPSTREAM="appwrite-traefik:80"
+APPWRITE_INTERNAL_HOST="appwrite-traefik"
+
+# Console login. Created on the first run and reused afterwards. This is a real
+# administrative credential for the Appwrite console — treat it as one.
+APPWRITE_CONSOLE_EMAIL="admin@example.com"
+APPWRITE_CONSOLE_PASSWORD="replace-with-a-strong-password"
+
+# --------------------------------------------------------------------------
+# Application
+# --------------------------------------------------------------------------
+# production or staging. Both are validated identically; production addtionally
+# makes scripts/restore.sh demand an explicit data-loss acknowledgement.
+KNOWHOW_ENVIRONMENT="production"
+
+# disabled | private_beta | open. `open` lets anyone who reaches the host
+# create an account.
+KNOWHOW_REGISTRATION_MODE="private_beta"
+
+# Where deletion approvals, support, and lead notices go.
+KNOWHOW_OWNER_EMAIL="you@example.com"
+
+# Keep at or below the core count. The image build is the heaviest thing that
+# runs on this host.
+KNOWHOW_BUILD_CPUS="2"
+
+# --------------------------------------------------------------------------
+# Outbound email for invitations to people who have no account yet. Everything
+# else is sent by Appwrite, which the `appwrite` phase configures from these
+# same values. Leave unset to use Resend instead (set RESEND_* in
+# .env.production), but note that SMTP is the only option an air-gapped or
+# on-premises install has.
+# --------------------------------------------------------------------------
+KNOWHOW_SMTP_HOST="smtp.example.com"
+KNOWHOW_SMTP_PORT="587"
+KNOWHOW_SMTP_USERNAME="replace-with-smtp-username"
+KNOWHOW_SMTP_PASSWORD="replace-with-smtp-password"
+KNOWHOW_SMTP_FROM="KnowHow <notifications@example.com>"
+
+# --------------------------------------------------------------------------
+# Only when the proxy uses a certificate the host does not trust — Caddy's
+# internal CA, or a private PKI. Node ships its own trust store, so scripts
+# that talk to Appwrite over HTTPS need pointing at the root explicitly.
+# --------------------------------------------------------------------------
+# KNOWHOW_CA_BUNDLE=/home/you/caddy-root.crt
