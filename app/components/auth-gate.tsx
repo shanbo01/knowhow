@@ -30,6 +30,7 @@ export type AuthGateProps = {
     email: string,
     password: string,
     betaCode?: string,
+    acceptedTerms?: boolean,
   ) => Promise<void> | void;
   allowSignUp?: boolean;
   publicSignUp?: boolean;
@@ -206,6 +207,7 @@ export function AuthGate({
           cleanEmail,
           password,
           requiresBetaCode ? cleanBetaCode : undefined,
+          acceptedTerms,
         );
       } else {
         await onSignIn(cleanEmail, password);

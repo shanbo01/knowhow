@@ -964,6 +964,7 @@ export default function Home() {
     email: string,
     password: string,
     betaCode?: string,
+    acceptedTerms = false,
   ) => {
     setBusy(true);
     setError("");
@@ -986,10 +987,11 @@ export default function Home() {
         );
         setSignupCredential(effectiveCredential);
       }
-      await signUpAccount({
+      const created = await signUpAccount({
         name,
         email,
         password,
+        acceptedTerms,
         ...(effectiveCredential
           ? {
               credentialKind: effectiveCredential.kind,
@@ -1002,13 +1004,15 @@ export default function Home() {
       if (!nextUser)
         throw new Error("The secure session could not be restored.");
       setUser(nextUser);
-      try {
-        await sendEmailVerification(`${window.location.origin}/verify`);
+      // Sign-up sends the verification email itself, so there is nothing to ask
+      // for here. Asking anyway sent a second one, and left the outcome
+      // depending on a request the browser might never make.
+      if (created?.verificationSent) {
         setVerificationSent(true);
-      } catch (verificationError) {
+      } else {
         setVerificationSent(false);
         setError(
-          `Your account was created, but the verification email could not be sent. ${errorMessage(verificationError)}`,
+          "Your account was created, but the verification email could not be sent. Use the resend link to try again.",
         );
       }
     } catch (nextError) {

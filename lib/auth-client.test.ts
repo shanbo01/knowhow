@@ -182,12 +182,13 @@ test("signInWithPassword and signUp invoke correct auth endpoints", async () => 
     password: "pass123",
   });
 
-  await signUp({ name: "Bob", email: "bob@example.com", password: "pass" });
+  await signUp({ name: "Bob", email: "bob@example.com", password: "pass", acceptedTerms: true });
   assert.equal(fetchCalls[1].url, "/api/auth/sign-up");
   assert.deepEqual(JSON.parse(fetchCalls[1].init?.body as string), {
     name: "Bob",
     email: "bob@example.com",
     password: "pass",
+    acceptedTerms: true,
   });
 });
 
@@ -340,6 +341,7 @@ test("signUp forwards the optional credentialKind and credential fields", async 
     password: "pw",
     credentialKind: "invite",
     credential: "invite-token-1",
+    acceptedTerms: true,
   });
 
   assert.deepEqual(JSON.parse(fetchCalls[0].init?.body as string), {
@@ -348,13 +350,14 @@ test("signUp forwards the optional credentialKind and credential fields", async 
     password: "pw",
     credentialKind: "invite",
     credential: "invite-token-1",
+    acceptedTerms: true,
   });
 });
 
 test("signUp sends the csrf header when the cookie is present", async () => {
   mockResponse = { ok: true, status: 200, body: {} };
 
-  await signUp({ name: "D", email: "d@example.com", password: "pw" });
+  await signUp({ name: "D", email: "d@example.com", password: "pw", acceptedTerms: true });
 
   const headers = fetchCalls[0].init?.headers as Record<string, string>;
   assert.equal(headers["x-csrf-token"], "mock-csrf-token-123");
@@ -446,4 +449,64 @@ test("getAuthSession returns null on 401 without reading the body", async () => 
   jsonThrows = true;
 
   assert.equal(await getAuthSession(), null);
+});
+
+// ---------------------------------------------------------------------------
+// Terms acceptance
+//
+// The sign-up form had a Terms checkbox that only ever guarded the browser.
+// Anything calling the endpoint directly created an account having agreed to
+// nothing, and no record was kept of who agreed to what. These pin the client
+// half: the flag has to reach the server for the server to be able to refuse.
+// ---------------------------------------------------------------------------
+
+test("signUp transmits terms acceptance", async () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+    return new Response(JSON.stringify({ created: true, verificationSent: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    await signUp({
+      name: "Ada",
+      email: "ada@example.com",
+      password: "correct horse",
+      acceptedTerms: true,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/auth/sign-up");
+    assert.equal(
+      (calls[0].body as { acceptedTerms?: unknown }).acceptedTerms,
+      true,
+      "acceptance must reach the server, not stop at the checkbox",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("signUp surfaces whether the verification email was sent", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ created: true, verificationSent: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  try {
+    const result = await signUp({
+      name: "Ada",
+      email: "ada@example.com",
+      password: "correct horse",
+      acceptedTerms: true,
+    });
+    // The caller needs this to decide between "check your inbox" and offering
+    // a resend; sign-up no longer asks for the email in a second request.
+    assert.equal(result.verificationSent, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

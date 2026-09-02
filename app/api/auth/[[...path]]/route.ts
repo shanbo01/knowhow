@@ -28,11 +28,19 @@ import {
 } from "@/lib/server/request-services";
 import { requireRecentTotp } from "@/lib/server/session-identity";
 import { consumeFixedWindows } from "@/lib/server/rate-limit-service";
+import { recordHttpFailure } from "@/lib/server/telemetry";
 import { BetaAccessService } from "@/lib/server/beta-access-service";
 import {
   registrationMode,
   signupAdmission,
 } from "@/lib/server/registration-mode";
+
+/**
+ * The revision of the Terms and Privacy notice a sign-up agrees to. Bump this
+ * when the published text changes materially, so an accepted-at timestamp says
+ * what was accepted rather than only when.
+ */
+const TERMS_VERSION = "2026-09-02";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -210,6 +218,18 @@ export async function POST(request: Request, context: Context) {
     if (path === "sign-up") {
       const name = text(body.name, "Name", 2, 128);
       const email = text(body.email, "Email", 5, 320).toLowerCase();
+      // The sign-up form has a Terms checkbox, but it only ever guarded the
+      // browser: anything calling this endpoint directly created an account
+      // without agreeing to anything, and nothing recorded that a person had.
+      // Acceptance is a precondition here, and is written to the account below
+      // so there is a record of which version was agreed and when.
+      if (body.acceptedTerms !== true) {
+        throw new HttpError(
+          400,
+          "TERMS_NOT_ACCEPTED",
+          "Accept the Terms and Privacy notice to create an account.",
+        );
+      }
       await consumeFixedWindows(store, [{ scope: "auth.sign-up.email", subject: email, limit: 3, windowSeconds: 3_600 }]);
       const password = text(body.password, "Password", 8, 1_024);
       const credentialKind = body.credentialKind;
@@ -273,8 +293,42 @@ export async function POST(request: Request, context: Context) {
         }
         throw error;
       }
+      // Record what was agreed to, not merely that something was. Preferences
+      // travel with the account, so this survives without a schema change.
+      await users
+        .updatePrefs({
+          userId,
+          prefs: {
+            termsAcceptedAt: new Date().toISOString(),
+            termsVersion: TERMS_VERSION,
+          },
+        })
+        .catch(() => undefined);
+
       const session = await account.createEmailPasswordSession({ email, password });
-      const response = authJson({ created: true, requestId }, requestId);
+
+      // Send the verification email here rather than leaving the browser to ask
+      // for it in a second request. That request could fail, or never be made —
+      // by an API client, or a tab closed a moment too early — and the account
+      // was then stranded unverified with nothing in the inbox to explain it.
+      let verificationSent = false;
+      try {
+        await createSessionAppwrite(session.secret).account.createVerification({
+          url: `${requestPublicOrigin(request)}/verify`,
+        });
+        verificationSent = true;
+      } catch (error) {
+        // The account exists and is usable; the person can ask again from the
+        // banner. Failing the whole sign-up over an unsent email would be worse.
+        recordHttpFailure(error, {
+          requestId,
+          errorCode: "VERIFICATION_SEND_FAILED",
+          status: 500,
+          operation: "auth.sign-up.verification",
+        });
+      }
+
+      const response = authJson({ created: true, verificationSent, requestId }, requestId);
       appendSessionCookies(response, request, config.projectId, session.secret, session.expire);
       return response;
     }

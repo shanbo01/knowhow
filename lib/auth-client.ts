@@ -17,6 +17,9 @@ type AuthResponse = {
   required?: boolean;
   enabled?: boolean;
   resumed?: boolean;
+  // Sign-up reports whether it managed to send the verification email, so the
+  // caller can show the resend prompt instead of assuming one arrived.
+  verificationSent?: boolean;
   secret?: string;
   uri?: string;
   qrCodeDataUrl?: string;
@@ -81,6 +84,10 @@ export function signUp(input: {
   password: string;
   credentialKind?: "invite" | "appointment" | "beta";
   credential?: string;
+  // The server refuses a sign-up without this. It is not a formality: the
+  // checkbox used to guard the browser alone, so anything calling the API
+  // directly created an account having agreed to nothing.
+  acceptedTerms: boolean;
 }) {
   return authRequest("sign-up", {
     method: "POST",
