@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import test, { describe, it } from "node:test";
+import test, { afterEach, describe, it } from "node:test";
 import {
   HttpError,
   assertCsrfToken,
   assertTrustedOrigin,
+  publicAppOrigin,
   readJsonObject,
   requireBearerToken,
   resolveExtensionOrigin,
@@ -439,6 +440,71 @@ describe("resolveExtensionOrigin", () => {
           allowUnlistedInDevelopment: true,
         }),
       /not allowed/,
+    );
+  });
+});
+
+describe("publicAppOrigin", () => {
+  const CONFIGURED = process.env.KNOWHOW_PUBLIC_APP_ORIGIN;
+  afterEach(() => {
+    if (CONFIGURED === undefined) delete process.env.KNOWHOW_PUBLIC_APP_ORIGIN;
+    else process.env.KNOWHOW_PUBLIC_APP_ORIGIN = CONFIGURED;
+  });
+
+  // A standalone Next server behind a proxy reports its own bind address in
+  // request.url, so this is what the request actually looks like in production.
+  const internalRequest = (headers: Record<string, string> = {}) =>
+    new Request("https://0.0.0.0:3000/api/extension/capture/finish", {
+      method: "POST",
+      headers,
+    });
+
+  it("prefers the configured origin over the address the server is bound to", () => {
+    process.env.KNOWHOW_PUBLIC_APP_ORIGIN = "https://app.example.com";
+    assert.equal(publicAppOrigin(internalRequest()), "https://app.example.com");
+  });
+
+  it("never returns the bind address when a proxy declared the public host", () => {
+    delete process.env.KNOWHOW_PUBLIC_APP_ORIGIN;
+    assert.equal(
+      publicAppOrigin(
+        internalRequest({
+          "x-forwarded-host": "app.example.com",
+          "x-forwarded-proto": "https",
+        }),
+      ),
+      "https://app.example.com",
+    );
+  });
+
+  it("ignores a trailing path on the configured origin", () => {
+    process.env.KNOWHOW_PUBLIC_APP_ORIGIN = "https://app.example.com/w/team";
+    assert.equal(publicAppOrigin(internalRequest()), "https://app.example.com");
+  });
+
+  it("falls back to the request when the configured origin is unusable", () => {
+    process.env.KNOWHOW_PUBLIC_APP_ORIGIN = "not-a-url";
+    assert.equal(
+      publicAppOrigin(
+        internalRequest({
+          "x-forwarded-host": "app.example.com",
+          "x-forwarded-proto": "https",
+        }),
+      ),
+      "https://app.example.com",
+    );
+  });
+
+  it("refuses a configured origin with a scheme a browser cannot open", () => {
+    process.env.KNOWHOW_PUBLIC_APP_ORIGIN = "javascript:alert(1)";
+    assert.equal(
+      publicAppOrigin(
+        internalRequest({
+          "x-forwarded-host": "app.example.com",
+          "x-forwarded-proto": "https",
+        }),
+      ),
+      "https://app.example.com",
     );
   });
 });

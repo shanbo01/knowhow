@@ -60,6 +60,30 @@ export function requestPublicOrigin(request: Request): string {
   return new URL(request.url).origin;
 }
 
+/**
+ * The origin to put in a link a client will later navigate to.
+ *
+ * `request.url` is not it. Behind a proxy, a standalone Next server reports its
+ * own bind address there, so a link built from it points at `0.0.0.0:3000` —
+ * routable from nowhere, including the machine that served it. The deployment
+ * already knows its public origin; ask it first, and only fall back to reading
+ * it off the request when nothing is configured (a developer running locally).
+ */
+export function publicAppOrigin(request: Request): string {
+  const configured = process.env.KNOWHOW_PUBLIC_APP_ORIGIN?.trim();
+  if (configured) {
+    try {
+      const origin = new URL(configured);
+      if (origin.protocol === "https:" || origin.protocol === "http:") {
+        return origin.origin;
+      }
+    } catch {
+      // Falls through to the request, and the configuration check reports it.
+    }
+  }
+  return requestPublicOrigin(request);
+}
+
 function requestHostOrigin(request: Request): string | null {
   const host = request.headers.get("host")?.split(",", 1)[0]?.trim();
   if (

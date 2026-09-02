@@ -1335,7 +1335,13 @@ async function openOrFocusEditorTab(editUrl) {
   return withReviewTabMutation(async () => {
     let target;
     try {
-      target = new URL(editUrl, KNOWHOW_ORIGIN);
+      // Only the path and query are taken from the response. `new URL` would
+      // otherwise let an absolute editUrl replace the origin entirely, so a
+      // server that reported the wrong one — or was made to — could send this
+      // browser anywhere. The origin the extension was built for is the only
+      // one it ever navigates to.
+      const supplied = new URL(editUrl, KNOWHOW_ORIGIN);
+      target = new URL(supplied.pathname + supplied.search, KNOWHOW_ORIGIN);
     } catch {
       return null;
     }

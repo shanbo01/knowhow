@@ -22,7 +22,7 @@ import { ExtensionAuthService } from "./extension-auth-service";
 import type { DesktopCredential } from "./desktop-auth-service";
 import { GuideAccessService } from "./guide-access-service";
 import { normalizeGuideSteps } from "./guide-input";
-import { HttpError, readJsonObject } from "./http-security";
+import { HttpError, publicAppOrigin, readJsonObject } from "./http-security";
 import { resourceId } from "./ids";
 import { inputInteger, inputObject, inputText, slugify } from "./input";
 import { sha256Bytes, validateFavicon, validateScreenshot } from "./media-validation";
@@ -997,7 +997,10 @@ export class ExtensionCaptureService {
     const workspaceRow = await this.store.get(TABLES.workspaces, capture.workspaceId);
     const workspace = workspaceRow ? decodePayload<WorkspaceRecord>(workspaceRow, null as never) : null;
     if (!workspace) throw new HttpError(404, "WORKSPACE_NOT_FOUND", "Workspace not found.");
-    return new URL(`/w/${encodeURIComponent(workspace.slug)}/guides/${encodeURIComponent(capture.guideId)}/edit`, request.url).toString();
+    return new URL(
+      `/w/${encodeURIComponent(workspace.slug)}/guides/${encodeURIComponent(capture.guideId)}/edit`,
+      publicAppOrigin(request),
+    ).toString();
   }
 }
 
