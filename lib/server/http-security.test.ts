@@ -6,6 +6,7 @@ import {
   assertTrustedOrigin,
   readJsonObject,
   requireBearerToken,
+  resolveExtensionOrigin,
 } from "./http-security";
 
 test("readJsonObject throws 415 JSON_REQUIRED when Content-Type is missing or not application/json", async () => {
@@ -357,6 +358,87 @@ describe("requireBearerToken", () => {
           requestWith({ authorization: `Bearer ${"a".repeat(16385)}` }),
         ),
       /Sign in/,
+    );
+  });
+});
+
+describe("resolveExtensionOrigin", () => {
+  const ALLOWED = "chrome-extension://phbofjenfnnnnndghhinoldlfbpaedpo";
+  const OTHER = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+
+  const requestWith = (headers: Record<string, string>) =>
+    new Request("https://knowhow.example.com/api/extension/pair", {
+      method: "POST",
+      headers,
+    });
+
+  it("allows a request the browser sent without an Origin", () => {
+    // Chrome omits Origin for a service-worker fetch covered by
+    // host_permissions, and the extension cannot add one. Rejecting this
+    // rejects every real capture request.
+    assert.equal(resolveExtensionOrigin(requestWith({}), [ALLOWED]), null);
+  });
+
+  it("still allows a missing Origin when no allowlist is configured", () => {
+    assert.equal(resolveExtensionOrigin(requestWith({}), []), null);
+  });
+
+  it("accepts an allowlisted extension origin", () => {
+    assert.equal(
+      resolveExtensionOrigin(requestWith({ origin: ALLOWED }), [ALLOWED]),
+      ALLOWED,
+    );
+  });
+
+  it("rejects an extension origin that is not allowlisted", () => {
+    assert.throws(
+      () => resolveExtensionOrigin(requestWith({ origin: OTHER }), [ALLOWED]),
+      (error: unknown) => {
+        assert(error instanceof HttpError);
+        assert.equal(error.status, 403);
+        assert.equal(error.code, "EXTENSION_ORIGIN_DENIED");
+        return true;
+      },
+    );
+  });
+
+  it("rejects a web page origin even when it is the deployment itself", () => {
+    assert.throws(
+      () =>
+        resolveExtensionOrigin(
+          requestWith({ origin: "https://knowhow.example.com" }),
+          [ALLOWED],
+        ),
+      /not allowed/,
+    );
+  });
+
+  it("accepts any well-formed extension origin in development only", () => {
+    assert.equal(
+      resolveExtensionOrigin(requestWith({ origin: OTHER }), [], {
+        allowUnlistedInDevelopment: true,
+      }),
+      OTHER,
+    );
+  });
+
+  it("does not let the development allowance override a configured allowlist", () => {
+    assert.throws(
+      () =>
+        resolveExtensionOrigin(requestWith({ origin: OTHER }), [ALLOWED], {
+          allowUnlistedInDevelopment: true,
+        }),
+      /not allowed/,
+    );
+  });
+
+  it("rejects a malformed origin in development rather than trusting the shape", () => {
+    assert.throws(
+      () =>
+        resolveExtensionOrigin(requestWith({ origin: "chrome-extension://x" }), [], {
+          allowUnlistedInDevelopment: true,
+        }),
+      /not allowed/,
     );
   });
 });

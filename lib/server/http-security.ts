@@ -115,6 +115,53 @@ export function assertTrustedOrigin(
   }
 }
 
+export const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}$/;
+
+/**
+ * Resolves the calling extension's origin, or null when the browser did not
+ * send one.
+ *
+ * A missing `Origin` is the normal case, not a suspicious one. The capture
+ * extension holds `host_permissions` for the deployment, so Chrome treats its
+ * service-worker requests as permitted rather than cross-origin and sends no
+ * `Origin` at all. The extension cannot supply one either: `Origin` is a
+ * forbidden header name, and `fetch` silently drops any attempt to set it.
+ *
+ * Requiring the header therefore rejects exactly the client it was meant to
+ * admit, and it buys nothing against the client it was meant to exclude —
+ * `Origin` is only evidence when a browser sets it, and anything that is not a
+ * browser can send whatever it likes. What actually authenticates these
+ * requests is the bearer token and the paired device behind it.
+ *
+ * So: enforce the allowlist whenever an origin *is* present, and let the
+ * absence pass through to the token check.
+ */
+export function resolveExtensionOrigin(
+  request: Request,
+  allowedOrigins: readonly string[],
+  { allowUnlistedInDevelopment = false } = {},
+): string | null {
+  const origin = request.headers.get("origin")?.trim() ?? "";
+  if (!origin) return null;
+
+  if (
+    allowUnlistedInDevelopment &&
+    allowedOrigins.length === 0 &&
+    EXTENSION_ORIGIN_PATTERN.test(origin)
+  ) {
+    return origin;
+  }
+
+  if (!allowedOrigins.includes(origin)) {
+    throw new HttpError(
+      403,
+      "EXTENSION_ORIGIN_DENIED",
+      "This browser extension build is not allowed.",
+    );
+  }
+  return origin;
+}
+
 function cookieValue(request: Request, name: string) {
   const header = request.headers.get("cookie") ?? "";
   for (const part of header.split(";")) {

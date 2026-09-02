@@ -1,6 +1,12 @@
 import { ExtensionAuthService } from "../../../../lib/server/extension-auth-service";
 import { ExtensionCaptureService } from "../../../../lib/server/extension-capture-service";
-import { HttpError, jsonResponse, toErrorResponse } from "../../../../lib/server/http-security";
+import {
+  EXTENSION_ORIGIN_PATTERN,
+  HttpError,
+  jsonResponse,
+  resolveExtensionOrigin,
+  toErrorResponse,
+} from "../../../../lib/server/http-security";
 import {
   correlationId,
   createRequestServices,
@@ -18,24 +24,16 @@ function originAllowlist() {
   return (process.env.KNOWHOW_EXTENSION_ORIGINS ?? "")
     .split(",")
     .map((value) => value.trim())
-    .filter((value) => /^chrome-extension:\/\/[a-p]{32}$/.test(value));
+    .filter((value) => EXTENSION_ORIGIN_PATTERN.test(value));
 }
 
 function extensionOrigin(request: Request) {
-  const origin = request.headers.get("origin")?.trim() ?? "";
-  const allowed = originAllowlist();
-  const production = process.env.KNOWHOW_ENVIRONMENT === "production" || process.env.KNOWHOW_ENVIRONMENT === "staging";
-  if (!origin) {
-    if (production) throw new HttpError(403, "EXTENSION_ORIGIN_REQUIRED", "The browser extension origin is required.");
-    return null;
-  }
-  if (!production && allowed.length === 0 && /^chrome-extension:\/\/[a-p]{32}$/.test(origin)) {
-    return origin;
-  }
-  if (!allowed.includes(origin)) {
-    throw new HttpError(403, "EXTENSION_ORIGIN_DENIED", "This browser extension build is not allowed.");
-  }
-  return origin;
+  const production =
+    process.env.KNOWHOW_ENVIRONMENT === "production" ||
+    process.env.KNOWHOW_ENVIRONMENT === "staging";
+  return resolveExtensionOrigin(request, originAllowlist(), {
+    allowUnlistedInDevelopment: !production,
+  });
 }
 
 function withExtensionHeaders(response: Response, requestId: string, origin: string | null) {
