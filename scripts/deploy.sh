@@ -414,15 +414,25 @@ PY
   info "3. set up backups: scripts/backup.sh, and rehearse scripts/restore.sh once"
 }
 
-case "${1}" in
-  all)
-    for p in $PHASES; do "phase_${p}" || exit 1; done
-    printf '
-%sDeployment complete.%s
-' "$G" "$N" ;;
-  *)
-    case " $PHASES " in
-      *" $1 "*) "phase_$1" ;;
-      *) usage; die "unknown phase: $1" ;;
-    esac ;;
-esac
+# Phases may be given as a list — `env app` is a common pair — so expand `all`
+# and validate every name before running anything. An unknown or ignored
+# argument must fail loudly: a run that silently skips a phase still exits 0,
+# and the deployment then disagrees with what its operator believes happened.
+REQUESTED=""
+FULL_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    all) REQUESTED="${REQUESTED} ${PHASES}"; FULL_RUN=1 ;;
+    *)
+      case " $PHASES " in
+        *" $arg "*) REQUESTED="${REQUESTED} ${arg}" ;;
+        *) usage; die "unknown phase: $arg" ;;
+      esac ;;
+  esac
+done
+
+for p in $REQUESTED; do "phase_${p}" || exit 1; done
+
+if [ "$FULL_RUN" = "1" ]; then
+  printf '\n%sDeployment complete.%s\n' "$G" "$N"
+fi

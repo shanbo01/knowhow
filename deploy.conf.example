@@ -18,8 +18,11 @@
 KNOWHOW_SITE_HOST="app.example.com"
 APPWRITE_PUBLIC_HOST="appwrite.example.com"
 
-# TLS issuance. Your ACME contact email for a real deployment; "internal" makes
-# Caddy sign its own certificate, which suits a rig with no domain.
+# TLS issuance. One value for the whole deployment, covering both hostnames —
+# not one per user. An email is the ACME contact for publicly trusted
+# certificates; "internal" makes Caddy sign its own, which suits a rig with no
+# domain but breaks the capture extension: its fetches cannot be told to accept
+# an untrusted certificate and fail as "Failed to fetch".
 KNOWHOW_TLS_MODE="ops@example.com"
 
 # Optional: preflight verifies DNS points here rather than only reporting it.

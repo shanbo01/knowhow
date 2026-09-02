@@ -43,8 +43,10 @@ OOM kill partway through a build that reads like a broken Dockerfile.
 **Two hostnames**, both resolving to the machine, with 80 and 443 open in the
 cloud firewall. Certificates cannot be issued before DNS is live. For a test rig
 with no domain, `sslip.io` resolves `app.203-0-113-10.sslip.io` to `203.0.113.10`
-with no registration, and `KNOWHOW_TLS_MODE="internal"` makes Caddy sign its own
-certificate so no ACME is involved at all.
+with no registration. `KNOWHOW_TLS_MODE="internal"` makes Caddy sign its own
+certificate so no ACME is involved at all — convenient while the stack is being
+proved, but it stops the capture extension from connecting. See
+[Certificates](#certificates).
 
 **`deploy.conf`.** Copy the example and fill it in. It is sourced by the shell,
 so **quote every value** — an unquoted `KnowHow <mail@example.com>` is read as a
@@ -138,6 +140,56 @@ second. Every later role is granted from Administration, where the change is
 attributed to whoever made it.
 
 **3. Backups.** See below. Nothing else on this page matters as much.
+
+---
+
+## Certificates
+
+`KNOWHOW_TLS_MODE` is one value for the whole deployment, and it decides how
+Caddy gets its certificates. It has nothing to do with the people who use
+KnowHow — there is no per-user entry.
+
+```bash
+KNOWHOW_TLS_MODE="ops@yourdomain.com"   # ACME contact; real, publicly trusted certs
+KNOWHOW_TLS_MODE="internal"             # Caddy signs its own; a throwaway rig only
+```
+
+Both hostnames — the application and Appwrite — are covered by that single
+entry. With an email, Caddy registers one ACME account and uses it for every
+certificate it issues on the host. Let's Encrypt uses the address only to warn
+you about a certificate that is about to expire unrenewed, so make it an
+operator mailbox that will still be read in a year. It is not written into the
+certificate and is not visible to visitors.
+
+**`internal` costs more than a browser warning.** It is genuinely useful while a
+host is still being proved — no DNS to arrange, no ACME account, no rate limit
+to burn — but a self-signed certificate breaks the capture extension. You can
+click through the browser's interstitial for the page itself; the extension's
+own `fetch` calls get no such prompt, fail at the TLS layer, and surface as
+`Failed to fetch` on the pairing step and in the side panel. Nothing in the
+application logs will show a cause, because no request ever arrived.
+
+So switch before testing anything that involves the extension:
+
+```bash
+# in deploy.conf
+KNOWHOW_TLS_MODE="ops@yourdomain.com"
+
+./scripts/deploy.sh env app
+```
+
+Issuance needs 80 and 443 reachable from the internet and DNS already pointing
+here. `sslip.io` hostnames work for this — they resolve without registration and
+are ordinary names to Let's Encrypt. Confirm what is actually being served
+rather than trusting the padlock:
+
+```bash
+echo | openssl s_client -connect 127.0.0.1:443 -servername "$KNOWHOW_SITE_HOST" 2>/dev/null \
+  | openssl x509 -noout -issuer -dates
+```
+
+A `Caddy Local Authority` issuer means it is still self-signed. Setting
+`KNOWHOW_TLS_MODE` back to `internal` and re-running `env app` reverts it.
 
 ---
 
