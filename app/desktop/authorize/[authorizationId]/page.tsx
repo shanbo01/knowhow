@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import DesktopAuthorizationClient from "./desktop-authorization-client";
 
 export const metadata: Metadata = {
-  title: "Connect KnowHow Capture | KnowHow",
+  title: "Connect KnowHow Capture",
   description: "Approve a named Windows device for private workflow capture.",
   robots: { index: false, follow: false },
 };

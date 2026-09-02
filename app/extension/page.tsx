@@ -1,15 +1,48 @@
 import type { Metadata } from "next";
+import { resolveSiteOrigin } from "@/lib/server/site-origin";
+import { marketingPageGraph, serializeJsonLd } from "@/lib/structured-data";
 import { Camera, KeyRound, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { ExtensionInstallInstructions } from "../components/extension-install-instructions";
 import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
-export const metadata: Metadata = { title: "KnowHow Capture extension" };
+const description =
+  "The KnowHow Capture extension for Chrome and Edge records clicks and screenshots to build a guide. It does not collect clipboard contents, raw keystrokes, passwords, or form values.";
 
-export default function ExtensionPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const origin = await resolveSiteOrigin();
+
+  return {
+    title: "KnowHow Capture extension",
+    description,
+    alternates: { canonical: `${origin}/extension` },
+    openGraph: {
+      title: "KnowHow Capture extension",
+      description,
+      url: `${origin}/extension`,
+      type: "website",
+    },
+  };
+}
+
+export default async function ExtensionPage() {
+  const origin = await resolveSiteOrigin();
+
   return (
     <MarketingPage>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: serializeJsonLd(
+            marketingPageGraph(origin, {
+              path: "/extension",
+              name: "KnowHow Capture extension",
+              description,
+            }),
+          ),
+        }}
+      />
       <InfoHero
         eyebrow="KnowHow Capture"
         title="Capture browser work without collecting the inputs."

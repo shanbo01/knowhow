@@ -8,9 +8,15 @@ export const PUBLIC_MARKETING_PATHS = [
   "/terms",
 ] as const;
 
-export function getPublicSiteOrigin(): string {
+/**
+ * The configured public origin, or null when it is absent or unusable. Callers
+ * that can fall back to the incoming request — pages resolving a canonical URL,
+ * for instance — need to tell "not configured" apart from "configured to the
+ * local default", which is why this is separate from the getter below.
+ */
+export function configuredPublicSiteOrigin(): string | null {
   const configured = process.env.KNOWHOW_SITE_ORIGIN?.trim();
-  if (!configured) return DEFAULT_PUBLIC_ORIGIN;
+  if (!configured) return null;
 
   try {
     const url = new URL(configured);
@@ -22,10 +28,14 @@ export function getPublicSiteOrigin(): string {
       url.search ||
       url.hash
     ) {
-      return DEFAULT_PUBLIC_ORIGIN;
+      return null;
     }
     return url.origin;
   } catch {
-    return DEFAULT_PUBLIC_ORIGIN;
+    return null;
   }
+}
+
+export function getPublicSiteOrigin(): string {
+  return configuredPublicSiteOrigin() ?? DEFAULT_PUBLIC_ORIGIN;
 }

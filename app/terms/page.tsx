@@ -1,14 +1,45 @@
 import type { Metadata } from "next";
+import { resolveSiteOrigin } from "@/lib/server/site-origin";
+import { marketingPageGraph, serializeJsonLd } from "@/lib/structured-data";
 import { InfoHero, MarketingPage } from "../components/marketing-shell";
 import styles from "../marketing.module.css";
 
-export const metadata: Metadata = {
-  title: "Terms summary | KnowHow",
-};
+const description =
+  "An operational summary of how KnowHow may be used: accounts and workspaces, permitted use, trials and plans, and what requires a signed agreement.";
 
-export default function TermsPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const origin = await resolveSiteOrigin();
+
+  return {
+    title: "Terms summary",
+    description,
+    alternates: { canonical: `${origin}/terms` },
+    openGraph: {
+      title: "Terms summary | KnowHow",
+      description,
+      url: `${origin}/terms`,
+      type: "website",
+    },
+  };
+}
+
+export default async function TermsPage() {
+  const origin = await resolveSiteOrigin();
+
   return (
     <MarketingPage>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: serializeJsonLd(
+            marketingPageGraph(origin, {
+              path: "/terms",
+              name: "Terms summary",
+              description,
+            }),
+          ),
+        }}
+      />
       <InfoHero
         eyebrow="Terms summary"
         title="Use KnowHow for internal business-process guidance."
