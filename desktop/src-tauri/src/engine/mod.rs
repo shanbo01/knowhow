@@ -604,7 +604,9 @@ fn handle_event<U: UiAutomationClient>(
             // when the author clicked into it, when it is still the same field.
             let observed = uia.focused_element_semantic().ok();
             let target = match (state.last_focus.clone(), observed) {
-                (Some(previous), Some(current)) if same_text_target(&previous, &current) => previous,
+                (Some(previous), Some(current)) if same_text_target(&previous, &current) => {
+                    previous
+                }
                 (_, Some(current)) => current,
                 (Some(previous), None) => previous,
                 (None, None) => fallback_metadata(&foreground),
@@ -725,15 +727,7 @@ fn emit_keyboard_action<U: UiAutomationClient>(
         .unwrap_or_else(|_| fallback_metadata(&foreground));
     let region = capture_region(scope, &foreground, &frame);
     emit(
-        action,
-        frame,
-        metadata,
-        foreground,
-        None,
-        region,
-        order,
-        emissions,
-        on_status,
+        action, frame, metadata, foreground, None, region, order, emissions, on_status,
     );
     None
 }
@@ -755,7 +749,8 @@ fn flush_keyboard<U: UiAutomationClient>(
         action, retries, ..
     } = pending;
     // A returned action means the display ring had nothing to photograph yet.
-    if let Some(action) = emit_keyboard_action(action, uia, scope, frames, order, emissions, on_status)
+    if let Some(action) =
+        emit_keyboard_action(action, uia, scope, frames, order, emissions, on_status)
     {
         if retries >= MAX_FRAME_RETRIES {
             on_status(
@@ -903,8 +898,8 @@ fn flush_text<U: UiAutomationClient>(
         on_status("Activity outside the selected scope is ignored.".to_owned());
         return;
     }
-    let readable = settings.capture_typed_text
-        && target.password_status == PasswordStatus::NotPassword;
+    let readable =
+        settings.capture_typed_text && target.password_status == PasswordStatus::NotPassword;
     let text = readable.then(|| target.value.clone()).flatten();
     // Nothing was actually typed: the keys moved the caret or edited nothing.
     // Reporting a step here is how arrow keys used to become "Enter text".
@@ -1027,7 +1022,13 @@ fn process_emission(emission: PendingEmission, on_step: &StepCallback, on_status
             // The crop is decided first: it is what the reader actually sees, so
             // the click marker is sized against it rather than against the whole
             // screenshot it was cut from.
-            let crop = contextual_crop(&action, &metadata, region, processed.width, processed.height);
+            let crop = contextual_crop(
+                &action,
+                &metadata,
+                region,
+                processed.width,
+                processed.height,
+            );
             let annotations = annotations(&action, &metadata, region, crop.as_ref());
             let text = if metadata.password_status == PasswordStatus::NotPassword {
                 exact_text
@@ -1431,7 +1432,8 @@ fn rasterize(
     }
     let mut mask_count = 0_usize;
     let mut mask = |image: &mut RgbaImage, bounds: Bounds| {
-        if let Some(bounds) = global_to_image_bounds(bounds, region, image.width(), image.height()) {
+        if let Some(bounds) = global_to_image_bounds(bounds, region, image.width(), image.height())
+        {
             solid_mask(image, bounds);
             mask_count += 1;
         }
@@ -1469,8 +1471,12 @@ fn region_in_frame_pixels(region: Bounds, frame: &DesktopFrame) -> Option<Bounds
     let visible = region.intersection(monitor)?;
     let scale_x = f64::from(frame.width) / f64::from(monitor.width.max(1));
     let scale_y = f64::from(frame.height) / f64::from(monitor.height.max(1));
-    let x = (f64::from(visible.x - monitor.x) * scale_x).floor().max(0.0) as u32;
-    let y = (f64::from(visible.y - monitor.y) * scale_y).floor().max(0.0) as u32;
+    let x = (f64::from(visible.x - monitor.x) * scale_x)
+        .floor()
+        .max(0.0) as u32;
+    let y = (f64::from(visible.y - monitor.y) * scale_y)
+        .floor()
+        .max(0.0) as u32;
     let width = ((f64::from(visible.width) * scale_x).round() as u32)
         .min(frame.width.saturating_sub(x))
         .max(1);
@@ -1679,9 +1685,12 @@ mod tests {
 
     #[test]
     fn a_clicked_control_keeps_the_whole_control_inside_the_crop() {
-        let Some(crop) =
-            contextual_crop_for_geometry(Some((0.5, 0.5)), Some((0.42, 0.46, 0.16, 0.08)), 1920, 1080)
-        else {
+        let Some(crop) = contextual_crop_for_geometry(
+            Some((0.5, 0.5)),
+            Some((0.42, 0.46, 0.16, 0.08)),
+            1920,
+            1080,
+        ) else {
             panic!("a click on a known control must produce a contextual crop");
         };
         assert!(crop.x <= 0.42 && crop.x + crop.width >= 0.58);

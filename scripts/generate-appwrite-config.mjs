@@ -25,6 +25,54 @@ assert.deepEqual(
   "table IDs must be unique",
 );
 
+// The deployable functions are declared in appwrite.config.json rather than
+// generated, because their shape belongs to the Appwrite CLI. What is checked
+// here is that each declaration still points at code that exists, and asks for
+// a runtime the function's own package.json agrees with — a rename or a moved
+// entrypoint otherwise surfaces only as a failed push.
+const appwriteConfig = JSON.parse(
+  await readFile(path.join(root, "appwrite.config.json"), "utf8"),
+);
+const declaredFunctions = appwriteConfig.functions ?? [];
+assert.ok(declaredFunctions.length > 0, "appwrite.config.json declares no functions");
+for (const fn of declaredFunctions) {
+  const label = fn.$id ?? "(unnamed function)";
+  assert.match(label, /^[a-z][a-z0-9-]{0,35}$/, `${label} is not a valid function ID`);
+  assert.ok(fn.path, `${label} has no path`);
+  const functionRoot = path.join(root, fn.path);
+  const manifestPath = path.join(functionRoot, "package.json");
+  const entrypoint = path.join(functionRoot, fn.entrypoint ?? "");
+  for (const [description, target] of [
+    ["directory", functionRoot],
+    ["package.json", manifestPath],
+    ["entrypoint", entrypoint],
+  ]) {
+    assert.ok(
+      await readFile(target).then(
+        () => true,
+        (error) => error.code === "EISDIR",
+      ),
+      `${label} ${description} is missing: ${path.relative(root, target)}`,
+    );
+  }
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const engine = manifest.engines?.node ?? "";
+  const major = /(\d+)/.exec(engine)?.[1];
+  assert.ok(
+    major && fn.runtime === `node-${major}`,
+    `${label} declares runtime ${fn.runtime} but its package.json engines.node is "${engine}"`,
+  );
+  assert.ok(
+    Array.isArray(fn.scopes) && fn.scopes.length > 0,
+    `${label} declares no scopes; its dynamic API key would be powerless`,
+  );
+  assert.deepEqual(
+    fn.execute,
+    [],
+    `${label} must not be executable over HTTP; it is triggered by schedule and events`,
+  );
+}
+
 const check = process.argv.includes("--check");
 for (const [name, contents] of Object.entries(rendered)) {
   const target = output(name);

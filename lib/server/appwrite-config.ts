@@ -36,6 +36,41 @@ function controlledEnvironment(
   return CONTROLLED_ENVIRONMENTS.has(environment);
 }
 
+/**
+ * Container hostnames the *internal* endpoint alone may use over plain HTTP.
+ *
+ * When Appwrite is self-hosted beside the application, forcing internal calls
+ * back out through the public HTTPS hostname costs a DNS lookup and a TLS
+ * handshake per request, and fails whenever the proxy does. A bare DNS label on
+ * a private Docker network is the correct target — and because a label carries
+ * no dot, it can never name a public host. The allowlist stays explicit so no
+ * deployment downgrades to HTTP by accident.
+ */
+function configuredContainerHosts(
+  environment: AppwriteServerConfig["environment"],
+) {
+  if (!controlledEnvironment(environment)) return new Set<string>();
+  const entries = (process.env.KNOWHOW_APPWRITE_INTERNAL_HOSTS ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (
+    entries.some(
+      (value) =>
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::\d{1,5})?$/.test(value) ||
+        // A loopback name resolves inside the application's own container, so
+        // it never reaches Appwrite. Keeping the existing guard in force here
+        // stops a controlled deployment silently pointing at nothing.
+        LOCAL_ENDPOINT_HOSTS.has(value.split(":")[0]),
+    )
+  ) {
+    throw new Error(
+      "KNOWHOW_APPWRITE_INTERNAL_HOSTS must contain bare, non-loopback container hostnames, without dots.",
+    );
+  }
+  return new Set(entries);
+}
+
 function configuredAppwriteHosts(
   environment: AppwriteServerConfig["environment"],
 ) {
@@ -65,6 +100,7 @@ function appwriteEndpoint(
   environment: AppwriteServerConfig["environment"],
   localHosts: ReadonlySet<string>,
   remoteHosts: ReadonlySet<string>,
+  containerHosts: ReadonlySet<string> = new Set(),
 ) {
   if (value !== value.trim()) {
     throw new Error(`${name} must not contain surrounding whitespace.`);
@@ -76,14 +112,19 @@ function appwriteEndpoint(
     throw new Error(`${name} must be a valid URL.`);
   }
   const controlled = controlledEnvironment(environment);
+  const containerHost =
+    controlled && containerHosts.has(endpoint.host.toLowerCase());
   const hostAllowed = controlled
-    ? remoteHosts.has(endpoint.host.toLowerCase()) &&
-      !LOCAL_ENDPOINT_HOSTS.has(endpoint.hostname)
+    ? containerHost ||
+      (remoteHosts.has(endpoint.host.toLowerCase()) &&
+        !LOCAL_ENDPOINT_HOSTS.has(endpoint.hostname))
     : localHosts.has(endpoint.hostname);
+  const protocolAllowed = controlled
+    ? endpoint.protocol === "https:" ||
+      (containerHost && endpoint.protocol === "http:")
+    : ["http:", "https:"].includes(endpoint.protocol);
   if (
-    (controlled
-      ? endpoint.protocol !== "https:"
-      : !["http:", "https:"].includes(endpoint.protocol)) ||
+    !protocolAllowed ||
     !hostAllowed ||
     endpoint.pathname.replace(/\/$/, "") !== "/v1" ||
     endpoint.username ||
@@ -94,7 +135,7 @@ function appwriteEndpoint(
   ) {
     throw new Error(
       controlled
-        ? `${name} must be an exact HTTPS Appwrite /v1 endpoint on an allowlisted host.`
+        ? `${name} must be an exact HTTPS Appwrite /v1 endpoint on an allowlisted host, or an allowlisted container host from KNOWHOW_APPWRITE_INTERNAL_HOSTS.`
         : `${name} must be an exact local Appwrite /v1 endpoint.`,
     );
   }
@@ -145,6 +186,9 @@ function exactApplicationOrigin(
 export function getAppwriteServerConfig(): AppwriteServerConfig {
   const environment = deploymentEnvironment();
   const remoteHosts = configuredAppwriteHosts(environment);
+  // The public endpoint never accepts a container host: browsers, the desktop
+  // app, and the export function all have to reach it from outside the network.
+  const containerHosts = configuredContainerHosts(environment);
   const endpoint = appwriteEndpoint(
     required("APPWRITE_ENDPOINT"),
     "APPWRITE_ENDPOINT",
@@ -162,6 +206,7 @@ export function getAppwriteServerConfig(): AppwriteServerConfig {
           environment,
           LOCAL_INTERNAL_HOSTS,
           remoteHosts,
+          containerHosts,
         )
       : endpoint,
     projectId: required("APPWRITE_PROJECT_ID"),
@@ -259,7 +304,15 @@ export function deploymentConfigurationIssues(
     if (!release || release === "local" || release === "unversioned") {
       issues.push("release_identity");
     }
-    if (!process.env.RESEND_API_KEY?.trim()) issues.push("email_provider");
+    // Either transport satisfies this. SMTP is not a lesser option: it is the
+    // only one an on-premises or air-gapped install can use, and a deployment
+    // with its own relay should not be told it is misconfigured for declining
+    // to add a third-party email vendor.
+    const hasResend = Boolean(process.env.RESEND_API_KEY?.trim());
+    const hasSmtp = Boolean(
+      process.env.KNOWHOW_SMTP_HOST?.trim() && process.env.KNOWHOW_SMTP_FROM?.trim(),
+    );
+    if (!hasResend && !hasSmtp) issues.push("email_provider");
   }
 
   const publicEnvironment =

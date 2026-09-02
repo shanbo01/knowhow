@@ -41,8 +41,14 @@ function workerSecret() {
 }
 
 function services(req) {
+  // See the note in the operations worker: the injected endpoint is derived
+  // from _APP_DOMAIN and cannot be overridden by a function variable, so a
+  // deployment whose domain the runtimes network cannot reach needs this.
   const client = new Client()
-    .setEndpoint(required("APPWRITE_FUNCTION_API_ENDPOINT"))
+    .setEndpoint(
+      process.env.KNOWHOW_APPWRITE_ENDPOINT?.trim() ||
+        required("APPWRITE_FUNCTION_API_ENDPOINT"),
+    )
     .setProject(required("APPWRITE_FUNCTION_PROJECT_ID"))
     .setKey(req.headers["x-appwrite-key"] || required("APPWRITE_FUNCTION_API_KEY"));
   return { tables: new TablesDB(client) };
@@ -98,6 +104,52 @@ async function processJob(jobId) {
   return { jobId, status: result.status, skipped: Boolean(result.skipped) };
 }
 
+/**
+ * What actually went wrong, not merely its class name.
+ *
+ * A scheduled worker has no one watching it fail, so its log line is the whole
+ * investigation. Reporting only the constructor name turns every fault into the
+ * word "TypeError" with nothing to act on. The cause chain matters as much as
+ * the stack: the outermost error is usually a wrapper.
+ *
+ * Values that look like credentials are masked first — these lines are written
+ * to an execution log that is read, copied, and pasted elsewhere.
+ */
+function redactSecrets(value) {
+  return String(value)
+    .replace(/\b[a-f0-9]{32,}\b/gi, "[redacted]")
+    .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted]")
+    .replace(
+      /((?:api[_-]?key|key|token|secret|password|authorization|pepper)["'\s]*[:=]["'\s]*)[^\s,;&"']+/gi,
+      "$1[redacted]",
+    );
+}
+
+function failureDetail(caught) {
+  const chain = [];
+  let current = caught;
+  const seen = new Set();
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (current instanceof Error) {
+      chain.push({
+        type: current.name.slice(0, 80),
+        message: redactSecrets(current.message).slice(0, 512),
+        stack: current.stack ? redactSecrets(current.stack).slice(0, 4000) : undefined,
+      });
+      current = current.cause;
+    } else {
+      chain.push({ type: typeof current, message: redactSecrets(current).slice(0, 512) });
+      break;
+    }
+  }
+  return {
+    failureClass: caught instanceof Error ? caught.name : "UnknownError",
+    error: chain,
+  };
+}
+
 const exportWorker = async ({ req, res, log, error }) => {
   const requestId = crypto.randomUUID();
   try {
@@ -135,7 +187,7 @@ const exportWorker = async ({ req, res, log, error }) => {
       JSON.stringify({
         event: "knowhow.exports.failed",
         requestId,
-        failureClass: caught instanceof Error ? caught.name : "UnknownError",
+        ...failureDetail(caught),
       }),
     );
     return res.json({ ok: false, requestId }, 500);

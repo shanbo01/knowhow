@@ -1,0 +1,43 @@
+# Build inputs only. Everything the image needs is source; everything else is
+# either regenerated during the build or must never reach the image at all.
+
+.git
+.github
+node_modules
+.next
+.next-stale*
+out
+dist
+extension/dist
+outputs
+work
+.tmp
+
+# The Windows capture app is released through its own signed pipeline and has
+# no place in the web image. Its Rust target directory is also enormous.
+desktop
+
+# Secrets. These are gitignored too, but a stray local file must never be
+# copied into a layer, where it would persist even if a later stage deleted it.
+.env
+.env.*
+!.env.example
+!.env.controlled.example
+.dev.vars*
+*.pem
+
+# Local artifacts
+*.log
+*.tsbuildinfo
+coverage
+playwright-report
+test-results
+blob-report
+.DS_Store
+Thumbs.db
+
+# Deployment files are read by the host, not copied into the image.
+Dockerfile
+.dockerignore
+compose.yaml
+Caddyfile

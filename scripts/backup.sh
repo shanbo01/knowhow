@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+#
+# Backs up everything a KnowHow deployment cannot be rebuilt without: Appwrite's
+# database, and the storage volume holding captured screenshots and generated
+# exports.
+#
+#   ./scripts/backup.sh
+#
+# Designed to be run from cron or a systemd timer. It exits non-zero on any
+# failure so the timer surfaces it, and it verifies what it wrote rather than
+# assuming the dump succeeded — a backup that has never been read is a belief,
+# not a safety net.
+#
+# Configuration comes from the environment; every value below has a default
+# matching a stock Appwrite install. Override in .env.production.
+
+set -euo pipefail
+
+BACKUP_DIR="${KNOWHOW_BACKUP_DIR:-/var/backups/knowhow}"
+KEEP_DAYS="${KNOWHOW_BACKUP_KEEP_DAYS:-14}"
+
+# Appwrite 1.9 installs MongoDB by default and also supports MariaDB and
+# PostgreSQL. Which one is running is read from the container rather than
+# assumed: backing up the wrong engine fails at the worst possible moment.
+DB_ADAPTER="${KNOWHOW_BACKUP_DB_ADAPTER:-}"
+DB_CONTAINER="${KNOWHOW_BACKUP_DB_CONTAINER:-}"
+DB_USER="${_APP_DB_USER:-user}"
+DB_PASS="${_APP_DB_PASS:-password}"
+DB_SCHEMA="${_APP_DB_SCHEMA:-appwrite}"
+UPLOADS_VOLUME="${KNOWHOW_BACKUP_UPLOADS_VOLUME:-}"
+
+# Off-host destination. Set one of these, or the backup lives on the same disk
+# as the thing it protects, which is not a backup.
+RCLONE_REMOTE="${KNOWHOW_BACKUP_RCLONE_REMOTE:-}"
+RSYNC_TARGET="${KNOWHOW_BACKUP_RSYNC_TARGET:-}"
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+WORK="${BACKUP_DIR}/${STAMP}"
+
+log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
+die() { printf 'backup failed: %s\n' "$*" >&2; exit 1; }
+
+command -v docker >/dev/null || die "docker is not on PATH"
+
+if [ -z "${DB_ADAPTER}" ]; then
+  DB_ADAPTER="$(docker exec appwrite printenv _APP_DB_ADAPTER 2>/dev/null || true)"
+  DB_ADAPTER="${DB_ADAPTER:-mongodb}"
+fi
+if [ -z "${DB_CONTAINER}" ]; then
+  case "${DB_ADAPTER}" in
+    mongodb) DB_CONTAINER="appwrite-mongodb" ;;
+    mariadb|mysql) DB_CONTAINER="appwrite-mariadb" ;;
+    postgres*) DB_CONTAINER="appwrite-postgres" ;;
+    *) die "unrecognised database adapter '${DB_ADAPTER}'; set KNOWHOW_BACKUP_DB_CONTAINER" ;;
+  esac
+fi
+
+docker inspect "${DB_CONTAINER}" >/dev/null 2>&1 \
+  || die "database container '${DB_CONTAINER}' not found; set KNOWHOW_BACKUP_DB_CONTAINER"
+# Compose prefixes volumes with its project name, so the uploads volume is
+# usually appwrite_appwrite-uploads rather than appwrite-uploads. Match on the
+# suffix instead of guessing the prefix.
+if [ -z "${UPLOADS_VOLUME}" ]; then
+  UPLOADS_VOLUME="$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)appwrite-uploads$' | head -1)"
+  [ -n "${UPLOADS_VOLUME}" ] \
+    || die "no appwrite-uploads volume found; set KNOWHOW_BACKUP_UPLOADS_VOLUME"
+fi
+docker volume inspect "${UPLOADS_VOLUME}" >/dev/null 2>&1 \
+  || die "volume '${UPLOADS_VOLUME}' not found; set KNOWHOW_BACKUP_UPLOADS_VOLUME"
+
+mkdir -p "${WORK}"
+# The dump contains every row in the deployment. Keep it unreadable to others
+# from the moment it exists, not after it is written.
+chmod 700 "${BACKUP_DIR}" "${WORK}"
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+log "dumping ${DB_SCHEMA} from ${DB_CONTAINER} (${DB_ADAPTER})"
+
+case "${DB_ADAPTER}" in
+  mongodb)
+    DB_FILE="database.archive.gz"
+    # --archive streams a single file to stdout and --gzip compresses inside
+    # it, so mongorestore reads the result back without unpacking first.
+    docker exec "${DB_CONTAINER}" \
+      mongodump \
+        --quiet \
+        --archive \
+        --gzip \
+        --username="${DB_USER}" \
+        --password="${DB_PASS}" \
+        --authenticationDatabase=admin \
+      > "${WORK}/${DB_FILE}"
+    ;;
+  mariadb|mysql)
+    DB_FILE="database.sql.gz"
+    DUMP_BIN="mariadb-dump"
+    docker exec "${DB_CONTAINER}" sh -c "command -v mariadb-dump" >/dev/null 2>&1 \
+      || DUMP_BIN="mysqldump"
+    # --single-transaction keeps the dump consistent without locking the site.
+    # The password reaches the client through the environment rather than argv,
+    # where it would be visible to every process on the host.
+    docker exec -e MYSQL_PWD="${DB_PASS}" "${DB_CONTAINER}" \
+      "${DUMP_BIN}" \
+        --user="${DB_USER}" \
+        --single-transaction \
+        --quick \
+        --routines \
+        --triggers \
+        --databases "${DB_SCHEMA}" \
+      | gzip -9 > "${WORK}/${DB_FILE}"
+    ;;
+  postgres*)
+    DB_FILE="database.dump.gz"
+    docker exec -e PGPASSWORD="${DB_PASS}" "${DB_CONTAINER}" \
+      pg_dump --username="${DB_USER}" --format=custom "${DB_SCHEMA}" \
+      | gzip -9 > "${WORK}/${DB_FILE}"
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+log "archiving volume ${UPLOADS_VOLUME}"
+docker run --rm \
+  -v "${UPLOADS_VOLUME}:/data:ro" \
+  -v "${WORK}:/backup" \
+  alpine:3 \
+  tar czf /backup/uploads.tar.gz -C /data .
+
+# ---------------------------------------------------------------------------
+# Verify before trusting
+# ---------------------------------------------------------------------------
+log "verifying archives"
+gzip -t "${WORK}/${DB_FILE}" || die "database dump is not a valid gzip stream"
+gzip -t "${WORK}/uploads.tar.gz" || die "uploads archive is not a valid gzip stream"
+
+# A dump that authenticated but selected nothing still compresses cleanly, so
+# check the size and then look for evidence the schema was actually read.
+DB_BYTES="$(gzip -dc "${WORK}/${DB_FILE}" | wc -c)"
+[ "${DB_BYTES}" -gt 10240 ] \
+  || die "database dump is only ${DB_BYTES} bytes; check the schema and credentials"
+
+# Searching a decompressed stream needs care here. Both `grep -q` and `head`
+# close the pipe as soon as they have what they need, which SIGPIPEs the
+# decompressor — and under `pipefail` that reads as a failed pipeline no matter
+# what was found. Disabling it for the search is the difference between a check
+# that verifies the dump and one that rejects every dump ever taken.
+archive_contains() {
+  local file="$1" limit="$2" needle="$3" found
+  set +o pipefail
+  gzip -dc "${file}" | head -c "${limit}" | grep -qa -- "${needle}"
+  found=$?
+  set -o pipefail
+  return "${found}"
+}
+
+case "${DB_ADAPTER}" in
+  mariadb|mysql)
+    archive_contains "${WORK}/${DB_FILE}" 8388608 "CREATE TABLE" \
+      || die "database dump contains no table definitions"
+    ;;
+  mongodb)
+    # The archive prelude names every database and collection it carries.
+    archive_contains "${WORK}/${DB_FILE}" 262144 "${DB_SCHEMA}" \
+      || die "database archive names no ${DB_SCHEMA} collections"
+    ;;
+esac
+
+( cd "${WORK}" && sha256sum ./*.gz > SHA256SUMS )
+log "database $(du -h "${WORK}/${DB_FILE}" | cut -f1), uploads $(du -h "${WORK}/uploads.tar.gz" | cut -f1)"
+
+# ---------------------------------------------------------------------------
+# Off-host copy
+# ---------------------------------------------------------------------------
+if [ -n "${RCLONE_REMOTE}" ]; then
+  command -v rclone >/dev/null || die "KNOWHOW_BACKUP_RCLONE_REMOTE is set but rclone is not installed"
+  log "copying to ${RCLONE_REMOTE}"
+  rclone copy "${WORK}" "${RCLONE_REMOTE}/${STAMP}" --checksum
+elif [ -n "${RSYNC_TARGET}" ]; then
+  command -v rsync >/dev/null || die "KNOWHOW_BACKUP_RSYNC_TARGET is set but rsync is not installed"
+  log "copying to ${RSYNC_TARGET}"
+  rsync -a --checksum "${WORK}/" "${RSYNC_TARGET}/${STAMP}/"
+else
+  printf '\n  WARNING: no off-host destination configured.\n' >&2
+  printf '  This backup is on the same disk as the data it protects. Set\n' >&2
+  printf '  KNOWHOW_BACKUP_RCLONE_REMOTE or KNOWHOW_BACKUP_RSYNC_TARGET.\n\n' >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Prune
+# ---------------------------------------------------------------------------
+# Local copies only. Whatever is off-host is governed by that provider's own
+# retention, so this never deletes the copy that matters most.
+find "${BACKUP_DIR}" -mindepth 1 -maxdepth 1 -type d -mtime "+${KEEP_DAYS}" \
+  -exec rm -rf {} + 2>/dev/null || true
+
+log "backup complete: ${WORK}"

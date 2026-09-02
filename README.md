@@ -59,6 +59,23 @@ npm run workers:local:watch
 
 Copy `.env.example` to `.env.local` and supply the local or hosted Appwrite values before starting the web app or workers. Never commit `.env.local`.
 
+## Deploying
+
+One command, on a Linux host with Docker:
+
+```bash
+cp deploy.conf.example deploy.conf   # edit it
+./scripts/deploy.sh all
+```
+
+It installs and configures Appwrite, provisions the project and its API key,
+generates secrets, pushes the schema and workers, builds the image, and reports
+readiness. Every phase is idempotent, so the same command updates an existing
+deployment.
+
+`docs/deploy.md` covers what it does, the three things only a person can do
+(DNS, the first owner, backups), and how to run the deployment afterwards.
+
 ## Companion builds
 
 ```powershell

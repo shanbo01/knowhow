@@ -1,9 +1,54 @@
 {
   "projectId": "knowhow-local",
+  "projectName": "KnowHow",
   "endpoint": "http://localhost/v1",
   "includes": {
     "buckets": "./infrastructure/appwrite/buckets.json",
     "tablesDB": "./infrastructure/appwrite/databases.json",
     "tables": "./infrastructure/appwrite/tables.json"
-  }
+  },
+  "functions": [
+    {
+      "$id": "knowhow-operations",
+      "name": "KnowHow operations",
+      "runtime": "node-22",
+      "path": "functions/operations",
+      "entrypoint": "src/main.js",
+      "commands": "npm ci --omit=dev",
+      "execute": [],
+      "events": [],
+      "schedule": "*/5 * * * *",
+      "timeout": 900,
+      "enabled": true,
+      "logging": true,
+      "specification": "s-1vcpu-1gb",
+      "scopes": [
+        "rows.read",
+        "rows.write",
+        "users.read",
+        "users.write",
+        "files.read",
+        "files.write",
+        "messages.write"
+      ]
+    },
+    {
+      "$id": "knowhow-export",
+      "name": "KnowHow export worker",
+      "runtime": "node-22",
+      "path": "functions/export",
+      "entrypoint": "src/main.js",
+      "commands": "npm ci --omit=dev",
+      "execute": [],
+      "events": [
+        "databases.knowhow_core.tables.export_jobs.rows.*.create"
+      ],
+      "schedule": "*/5 * * * *",
+      "timeout": 300,
+      "enabled": true,
+      "logging": true,
+      "specification": "s-0.5vcpu-512mb",
+      "scopes": ["rows.read"]
+    }
+  ]
 }
