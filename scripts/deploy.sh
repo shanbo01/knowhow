@@ -164,9 +164,30 @@ phase_appwrite() {
     appwrite_env_set _APP_SMTP_SECURE "tls"
     appwrite_env_set _APP_SMTP_USERNAME "${KNOWHOW_SMTP_USERNAME:-}"
     appwrite_env_set _APP_SMTP_PASSWORD "${KNOWHOW_SMTP_PASSWORD:-}"
-    appwrite_env_set _APP_SYSTEM_EMAIL_ADDRESS "${KNOWHOW_SMTP_SYSTEM_FROM:-${KNOWHOW_SMTP_FROM:-}}"
-    appwrite_env_set _APP_SYSTEM_EMAIL_NAME "KnowHow"
-    ok "system mail routed over SMTP"
+    # KNOWHOW_SMTP_FROM is a From header, so "KnowHow <mail@example.com>" is a
+    # correct value for it — the application sends that verbatim. Appwrite
+    # splits the two apart, and _APP_SYSTEM_EMAIL_ADDRESS must hold a bare
+    # address: give it the display form and the From header it builds nests one
+    # inside the other. Providers accept that over SMTP and then drop it, so the
+    # send is logged as a success and no mail is ever delivered.
+    local system_from bare_address display_name
+    system_from="${KNOWHOW_SMTP_SYSTEM_FROM:-${KNOWHOW_SMTP_FROM:-}}"
+    case "$system_from" in
+      *"<"*">"*)
+        bare_address="${system_from#*<}"; bare_address="${bare_address%%>*}"
+        display_name="${system_from%%<*}"
+        # Trim surrounding whitespace and quotes from the display name.
+        display_name="$(printf '%s' "$display_name" | sed 's/^[[:space:]]*"\{0,1\}//; s/"\{0,1\}[[:space:]]*$//')"
+        ;;
+      *) bare_address="$system_from"; display_name="" ;;
+    esac
+    case "$bare_address" in
+      *@*.*) ;;
+      *) die "KNOWHOW_SMTP_FROM does not contain an email address: ${system_from}" ;;
+    esac
+    appwrite_env_set _APP_SYSTEM_EMAIL_ADDRESS "$bare_address"
+    appwrite_env_set _APP_SYSTEM_EMAIL_NAME "${display_name:-KnowHow}"
+    ok "system mail routed over SMTP as ${bare_address}"
   else
     warn "no SMTP configured; Appwrite cannot send verification or recovery mail"
   fi
