@@ -1162,7 +1162,11 @@ function OverviewView({
                 or write your own, ask{" "}
                 {administratorNames.length
                   ? `${listPhrase(administratorNames)} for Creator access.`
-                  : "a workspace administrator for Creator access."}
+                  : "a workspace administrator for Creator access."}{" "}
+                <a href="/help" target="_blank" rel="noreferrer">
+                  How KnowHow works
+                </a>{" "}
+                explains what the levels mean.
               </p>
             </div>
           </section>
@@ -7399,8 +7403,12 @@ export function KnowHowWorkspaceApp({
                     </nav>
                   </SidebarGroup>
                 ) : null}
-                {supportNavigation.length || showSetupNav ? (
-                  <SidebarGroup className="workspace-nav-group support-nav-group">
+                {/*
+                  Not gated on support access or remaining setup steps: the
+                  help link belongs to everyone, and a member with neither is
+                  the one most likely to need it.
+                */}
+                <SidebarGroup className="workspace-nav-group support-nav-group">
                     <nav className="main-nav" aria-label="Help navigation">
                       <SidebarMenu>
                         {showSetupNav ? (
@@ -7490,10 +7498,25 @@ export function KnowHowWorkspaceApp({
                             </SidebarMenuButton>
                           </SidebarMenuItem>
                         ))}
+                        {/*
+                          Reachable by everyone, including a read-only member
+                          with nothing shared with them yet — who is exactly the
+                          person most likely to be wondering what this is.
+                        */}
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            tooltip="How KnowHow works"
+                            type="button"
+                            onClick={() =>
+                              window.open("/help", "_blank", "noopener,noreferrer")
+                            }
+                          >
+                            <BookOpen /><span>How KnowHow works</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
                       </SidebarMenu>
                     </nav>
-                  </SidebarGroup>
-                ) : null}
+                </SidebarGroup>
             </>
           </SidebarContent>
         </Sidebar>

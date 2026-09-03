@@ -10,6 +10,9 @@ const PRIORITY: Record<string, number> = {
   "/": 1,
   "/extension": 0.8,
   "/contact": 0.7,
+  // Answers the question an invited teammate arrives with, so it is
+  // findable rather than buried under the legal pages.
+  "/help": 0.7,
   "/privacy": 0.4,
   "/terms": 0.4,
 };

@@ -730,10 +730,18 @@ export class BootstrapService {
         completedAt: firstPublishedAt,
       },
     ];
-    const onboardingCompletedAt = onboardingSteps.every(
-      (step) => step.completed,
-    )
-      ? (onboardingSteps
+    // Onboarding is finished when the workspace has done the thing it exists
+    // to do — a guide made, and a guide shared. The rest of the list is
+    // scaffolding: confirming a policy, pinning a toolbar icon and inviting
+    // somebody are steps toward that, not evidence of it, and counting them
+    // equally is how a workspace could complete its onboarding without anyone
+    // ever reading a procedure.
+    const ACTIVATION_STEPS = new Set(["first_capture", "first_guide", "first_publication"]);
+    const activationSteps = onboardingSteps.filter((step) =>
+      ACTIVATION_STEPS.has(step.id),
+    );
+    const onboardingCompletedAt = activationSteps.every((step) => step.completed)
+      ? (activationSteps
           .map((step) => step.completedAt!)
           .sort()
           .at(-1) ?? null)

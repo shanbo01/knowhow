@@ -19,6 +19,7 @@ const columns = [
     links: [
       { label: "Where teams start", href: "/#use-cases" },
       { label: "Frequently asked questions", href: "/#faq" },
+      { label: "How KnowHow works", href: "/help" },
       { label: "Contact us", href: "/contact" },
     ],
   },
