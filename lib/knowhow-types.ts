@@ -151,6 +151,8 @@ export type Guide = {
   canShare: boolean;
   canArchive: boolean;
   canUnpublish: boolean;
+  /** Return a submitted revision to draft without a review decision. */
+  canUnsubmit: boolean;
   canDuplicate: boolean;
   canRestore: boolean;
   canDelete: boolean;
@@ -237,6 +239,8 @@ export type WorkspaceMember = {
   roles: WorkspaceRole[];
   groupIds: string[];
   joinedAt?: string;
+  /** A KnowHow owner account, which no workspace may suspend. */
+  platformProtected?: boolean;
 };
 
 export type WorkspaceGroup = {

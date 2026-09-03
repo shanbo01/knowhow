@@ -214,6 +214,9 @@ export class GuideCommandService {
     if (action === "reviewGuide") {
       return this.review(identity, payload, workspaceAccess, context);
     }
+    if (action === "unsubmitGuide") {
+      return this.unsubmit(identity, payload, workspaceAccess, context);
+    }
     if (action === "publishGuide") {
       return this.publish(identity, payload, workspaceAccess, context, options);
     }
@@ -913,10 +916,11 @@ export class GuideCommandService {
       ],
       limit: 1,
     });
+    // requireAuthorized("guide.review") above already established that this
+    // actor is an assigned reviewer, so there is no unassigned case left to
+    // let an administrator through. A revision whose reviewers have all been
+    // suspended is unstuck by withdrawing it, not by deciding it.
     const assignment = assignments[0];
-    if (!assignment && !workspaceAccess.roles.includes("administrator")) {
-      throw new HttpError(403, "REVIEWER_REQUIRED", "An assigned reviewer is required.");
-    }
     const decidedAt = nowIso();
     const assignmentPayload = { assignedAt: assignment?.$createdAt ?? decidedAt, assignedBy: stringValue(assignment?.created_by, identity.userId), decidedAt };
     if (assignment) {
@@ -949,6 +953,74 @@ export class GuideCommandService {
       metadata: { revisionId: revision.row.$id },
     });
     return { reviewed: true };
+  }
+
+  /**
+   * Returns a submitted revision to draft without a review decision.
+   *
+   * Submitting was a one-way door. A review revision cannot be edited, and
+   * only an assigned reviewer can decide it, so a workspace that suspends its
+   * reviewers after a submission leaves that revision frozen with nobody able
+   * to move it. This is the mirror of submitting: the author changes their
+   * mind, or an administrator recovers a stranded revision.
+   */
+  private async unsubmit(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.workingRevisionId || guide.deletedAt || guide.archivedAt) {
+      throw new HttpError(409, "WITHDRAW_NOT_AVAILABLE", "This guide has no revision in review.");
+    }
+    const revision = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
+    const facts = await this.guideFacts(identity, workspaceAccess, guide, revision);
+    requireAuthorized("guide.unsubmit", { ...context, guide: facts });
+
+    const withdrawnAt = nowIso();
+    const nextRevision: RevisionRecord = {
+      ...revision.value,
+      status: "draft",
+      updatedAt: withdrawnAt,
+    };
+    delete nextRevision.reviewedBy;
+    delete nextRevision.reviewedAt;
+    delete nextRevision.submittedBy;
+    delete nextRevision.submittedAt;
+    await this.store.update(
+      TABLES.guideRevisions,
+      revision.row.$id,
+      rowData({ status: "draft", updated_by: identity.userId }, nextRevision),
+    );
+    // The pending assignments described a review that is no longer happening.
+    // Clearing them means a later submission assigns whoever holds the role
+    // then, rather than resurrecting decisions from an abandoned round.
+    for (const row of await this.store.list(TABLES.reviewAssignments, {
+      filters: [{ field: "subject_id", value: revision.row.$id }],
+    })) {
+      await this.store.delete(TABLES.reviewAssignments, row.$id);
+    }
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData({ status: "draft", updated_by: identity.userId }, { ...guide, updatedAt: withdrawnAt }),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.review-withdrawn",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} withdrawn from review`,
+      metadata: { revisionId: revision.row.$id },
+    });
+    return { withdrawn: true };
   }
 
   private async publish(
@@ -1131,6 +1203,13 @@ export class GuideCommandService {
           );
         }
       } else {
+        // A revision already in review is authorized as the publish it is
+        // about to become. The check has to come first: publish() would refuse
+        // an unauthorized caller a moment later, but the audience would
+        // already have been rewritten, leaving authorization dependent on the
+        // store rolling the write back.
+        const facts = await this.guideFacts(identity, workspaceAccess, guide, working);
+        requireAuthorized("guide.publish", { ...context, guide: facts });
         await this.replaceAudiences(identity, workspaceAccess, working.row.$id, audiences);
       }
       return this.publish(identity, payload, workspaceAccess, context, options);

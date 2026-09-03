@@ -3379,16 +3379,29 @@ export class CommandService {
           "owner",
         ),
       );
+      // The invariant is that an organization is never left without an owner.
+      // It can only be broken by a change that gives ownership up, so it is
+      // checked there and nowhere else.
+      //
+      // It used to be checked on every edit against a floor of two, which no
+      // organization could satisfy: provisioning creates exactly one owner, so
+      // the sole owner of a new organization was refused even when the change
+      // left ownership untouched — granting themselves Billing returned 409.
+      // Two owners is good practice, not something the system can promise on
+      // an organization's behalf, so it is advice in the interface now.
+      const wasOwner =
+        memberRow.status === "active" &&
+        Boolean(current.roles?.includes("owner"));
       const targetRemainsOwner =
         status === "active" && nextRoles.includes("owner");
       const ownersAfterChange =
         activeOwners.filter((row) => row.$id !== memberId).length +
         (targetRemainsOwner ? 1 : 0);
-      if (ownersAfterChange < 2) {
+      if (wasOwner && !targetRemainsOwner && ownersAfterChange < 1) {
         throw new HttpError(
           409,
           "MINIMUM_ORGANIZATION_OWNERS",
-          "Keep at least two active organization owners.",
+          "Appoint another organization owner first.",
         );
       }
       await this.store.update(
@@ -5354,6 +5367,7 @@ export class CommandService {
       [
         "saveGuide",
         "reviewGuide",
+        "unsubmitGuide",
         "publishGuide",
         "shareGuide",
         "unshareGuide",

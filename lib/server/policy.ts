@@ -20,6 +20,7 @@ export type PolicyAction =
   | "guide.create"
   | "guide.update"
   | "guide.submit"
+  | "guide.unsubmit"
   | "guide.review"
   | "guide.publish"
   | "guide.unpublish"
@@ -230,6 +231,29 @@ export function authorize(
     return isDraft && mayEdit
       ? allow("The actor may change this draft.")
       : deny("DRAFT_EDITOR_REQUIRED", "Only an authorized draft editor may do this.");
+  }
+
+  // Submitting is the only transition with no way back: a review revision can
+  // be edited by nobody, and only an assigned reviewer can decide it. Suspend
+  // every reviewer after a submission and the revision is frozen for good.
+  // Withdrawing is the mirror of submitting, so the author may do it, and an
+  // administrator may do it for a revision whose reviewers have gone.
+  if (action === "guide.unsubmit") {
+    if (context.guide?.revisionStatus !== "review") {
+      return deny(
+        "GUIDE_REVIEW_STATE_REQUIRED",
+        "Only a revision in review may be withdrawn.",
+      );
+    }
+    if (context.guide.isAuthor && hasAnyRole(roles, "creator", "administrator")) {
+      return allow("Authors may withdraw their own submitted revision.");
+    }
+    return roles.has("administrator")
+      ? allow("Workspace administrators may withdraw a submitted revision.")
+      : deny(
+          "DRAFT_EDITOR_REQUIRED",
+          "Only the author or a workspace administrator may withdraw this revision.",
+        );
   }
 
   if (action === "guide.review") {

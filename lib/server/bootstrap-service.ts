@@ -57,7 +57,10 @@ function numberValue(value: unknown, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
+function memberView(
+  row: StoredRecord<RecordData>,
+  platformOwnerUserIds: ReadonlySet<string> = new Set(),
+): WorkspaceMember {
   const details = decodePayload<WorkspaceMemberRecord>(row, {
     name: stringValue(row.email),
     roles: [],
@@ -77,7 +80,27 @@ function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
     roles: details.roles,
     groupIds: details.groupIds,
     joinedAt: details.joinedAt,
+    // The command layer refuses to suspend a KnowHow owner. Saying so here
+    // keeps the interface from offering a button that can only ever fail.
+    platformProtected: platformOwnerUserIds.has(stringValue(row.user_id)),
   };
+}
+
+/**
+ * The user ids of every active KnowHow owner, as one query rather than one per
+ * member: only a handful of accounts hold the role, and the member list needs
+ * to know which of its rows are protected from suspension.
+ */
+async function platformOwnerUserIds(
+  store: RecordStore,
+): Promise<ReadonlySet<string>> {
+  const rows = await store.list(TABLES.platformRoles, {
+    filters: [
+      { field: "kind", value: "owner" },
+      { field: "status", value: "active" },
+    ],
+  });
+  return new Set(rows.map((row) => stringValue(row.user_id)).filter(Boolean));
 }
 
 function groupView(
@@ -411,6 +434,12 @@ function hydrateGuides(
           ...accessServiceContext,
           guide: published.facts,
         }).allowed,
+      canUnsubmit:
+        working !== null &&
+        authorize("guide.unsubmit", {
+          ...accessServiceContext,
+          guide: working.facts,
+        }).allowed,
       canDuplicate:
         Boolean(source.publishedRevisionId ?? source.workingRevisionId) &&
         authorize("guide.create", accessServiceContext).allowed,
@@ -508,6 +537,7 @@ export class BootstrapService {
       onboardingRows,
       extensionDeviceRows,
       desktopDeviceRows,
+      platformOwners,
     ] = await Promise.all([
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
       this.store.list(TABLES.workspaceMembers, { filters }),
@@ -557,8 +587,9 @@ export class BootstrapService {
         order: "desc",
         limit: 20,
       }),
+      platformOwnerUserIds(this.store),
     ]);
-    const members = memberRows.map(memberView);
+    const members = memberRows.map((row) => memberView(row, platformOwners));
     const groups = groupRows.map((row) => groupView(row, groupMembershipRows));
     const publishedRevisionIds = new Set(
       guideRows.guides
@@ -1087,7 +1118,11 @@ export class BootstrapService {
       loadGuideRows(this.store, workspaceId),
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
     ]);
-    const members = memberRows.map(memberView);
+    // These members resolve author names and group audiences for the guide
+    // list; they are not the member directory, so the protection flag is not
+    // needed here. Passed explicitly because `.map(memberView)` would hand the
+    // array index to the second parameter.
+    const members = memberRows.map((row) => memberView(row));
     for (const member of members) {
       member.groupIds = groupMembershipRows
         .filter((row) => row.user_id === member.userId)
@@ -1222,6 +1257,7 @@ export class BootstrapService {
               canShare: false,
               canArchive: false,
               canUnpublish: false,
+              canUnsubmit: false,
               canDuplicate: false,
               canRestore: false,
               canDelete: false,

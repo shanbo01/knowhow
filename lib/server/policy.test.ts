@@ -432,3 +432,54 @@ test("requireAuthorized - throws HttpError on deny", () => {
     (err) => err instanceof HttpError && err.status === 403 && err.code === "EMAIL_NOT_VERIFIED",
   );
 });
+
+test("authorize - guide.unsubmit rescues a stranded review", () => {
+  const review = { revisionStatus: "review" as const };
+
+  // The author changing their mind is the ordinary case.
+  assert.equal(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { ...review, isAuthor: true },
+    }).allowed,
+    true,
+  );
+
+  // An administrator can recover a revision whose reviewers have all been
+  // suspended, which is the deadlock this action exists for.
+  assert.equal(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["administrator"],
+      guide: { ...review, isAuthor: false },
+    }).allowed,
+    true,
+  );
+
+  // Nobody else, including the publisher who would eventually release it.
+  for (const roles of [["publisher"], ["reviewer"], ["viewer"]] as const) {
+    assert.equal(
+      authorize("guide.unsubmit", {
+        ...baseContext,
+        roles: [...roles],
+        guide: { ...review, isAuthor: false },
+      }).allowed,
+      false,
+    );
+  }
+
+  // A draft was never submitted, so there is nothing to withdraw.
+  assert.deepEqual(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["administrator"],
+      guide: { revisionStatus: "draft", isAuthor: true },
+    }),
+    {
+      allowed: false,
+      code: "GUIDE_REVIEW_STATE_REQUIRED",
+      reason: "Only a revision in review may be withdrawn.",
+    },
+  );
+});

@@ -1627,6 +1627,23 @@ function GuidesView({
     setTab("drafts");
   }
 
+  async function withdrawGuide(guide: Guide) {
+    if (!guide.canUnsubmit) return;
+    if (
+      !(await askToConfirm({
+        title: "Withdraw this guide from review?",
+        description:
+          "The guide becomes an editable draft again and the pending review is cancelled. Submit it again when it is ready.",
+        confirmLabel: "Withdraw from review",
+      }))
+    )
+      return;
+    await onAction("unsubmitGuide", { guideId: guide.id }, "Guide withdrawn from review");
+    setSelected([]);
+    setPreviewId(null);
+    setTab("drafts");
+  }
+
   function guideMenu(guide: Guide) {
     const revision = libraryRevision(guide, tab);
     return (
@@ -1707,6 +1724,17 @@ function GuidesView({
                 onClick={() => void unpublishGuide(guide)}
               >
                 <Undo2 /> Return to draft
+              </DropdownMenuItem>
+            </>
+          ) : null}
+          {guide.canUnsubmit && guide.status === "review" ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={busy}
+                onClick={() => void withdrawGuide(guide)}
+              >
+                <Undo2 /> Withdraw from review
               </DropdownMenuItem>
             </>
           ) : null}
@@ -3596,6 +3624,7 @@ function MemberDialog({
   member,
   isCurrentUser,
   isPlatformOwner,
+  isLastAdministrator,
   busy,
   onClose,
   onSave,
@@ -3604,6 +3633,7 @@ function MemberDialog({
   member: WorkspaceMember;
   isCurrentUser: boolean;
   isPlatformOwner: boolean;
+  isLastAdministrator: boolean;
   busy: boolean;
   onClose: () => void;
   onSave: (roles: WorkspaceRole[]) => Promise<void>;
@@ -3638,34 +3668,47 @@ function MemberDialog({
             <div><span className="field-label">Workspace roles</span><small>Select every role this person needs.</small></div>
             <span>{countPhrase(roles.length, "role")} selected</span>
           </div>
-          {WORKSPACE_ROLES.map((role) => (
-            <label className={`choice-row permission-option${roles.includes(role) ? " selected" : ""}`} key={role}>
-              <input
-                type="checkbox"
-                checked={roles.includes(role)}
-                onChange={() =>
-                  setRoles((items) =>
-                    items.includes(role)
-                      ? items.filter((item) => item !== role)
-                      : [...items, role],
-                  )
-                }
-              />
-              <span>
-                <strong>{workspaceRoleLabel(role)}</strong>
-                <small>{ROLE_COPY[role]}</small>
-              </span>
-            </label>
-          ))}
+          {WORKSPACE_ROLES.map((role) => {
+            // The command layer refuses to remove the workspace's only
+            // administrator. Locking the box says so while there is still time
+            // to add someone, instead of failing after Save.
+            const locked = role === "administrator" && isLastAdministrator;
+            return (
+              <label className={`choice-row permission-option${roles.includes(role) ? " selected" : ""}${locked ? " is-locked" : ""}`} key={role}>
+                <input
+                  type="checkbox"
+                  checked={roles.includes(role)}
+                  disabled={locked}
+                  onChange={() =>
+                    setRoles((items) =>
+                      items.includes(role)
+                        ? items.filter((item) => item !== role)
+                        : [...items, role],
+                    )
+                  }
+                />
+                <span>
+                  <strong>{workspaceRoleLabel(role)}</strong>
+                  <small>
+                    {locked
+                      ? "The only administrator. Give someone else this role first."
+                      : ROLE_COPY[role]}
+                  </small>
+                </span>
+              </label>
+            );
+          })}
         </section>
         <PolicyNote icon={Shield} className="member-access-note">
           This member belongs to {countPhrase(member.groupIds.length, "group")} and may also receive workspace-wide or direct guide audiences.
         </PolicyNote>
-        {isCurrentUser || isPlatformOwner ? (
+        {isCurrentUser || isPlatformOwner || isLastAdministrator ? (
           <PolicyNote icon={ShieldCheck} className="member-protected-note">
             {isPlatformOwner
               ? "This KnowHow owner account is protected from workspace suspension."
-              : "You cannot suspend your own workspace account."}
+              : isLastAdministrator
+                ? "The only administrator cannot be suspended. Give someone else that role first."
+                : "You cannot suspend your own workspace account."}
           </PolicyNote>
         ) : (
           <section className="member-danger-zone">
@@ -4337,6 +4380,7 @@ function SettingsView({
   initial,
   busy,
   removeBrandingEnabled,
+  reviewerCount,
   onSave,
   onRefresh,
   onRegisterNavigationGuard,
@@ -4346,6 +4390,7 @@ function SettingsView({
   initial: WorkspaceSettings;
   busy: boolean;
   removeBrandingEnabled: boolean;
+  reviewerCount: number;
   onSave: (settings: WorkspaceSettings) => Promise<void>;
   onRefresh: () => Promise<BootstrapResponse>;
   onRegisterNavigationGuard: (guard: NavigationGuard | null) => void;
@@ -4607,13 +4652,28 @@ function SettingsView({
             <input
               type="checkbox"
               checked={settings.requireReviewBeforePublish}
+              // Turning this on without a reviewer stops the workspace
+              // publishing anything at all: drafts can only move to review, and
+              // a review only a reviewer can decide. Switching it back off is
+              // always allowed.
+              disabled={
+                !settings.requireReviewBeforePublish && reviewerCount === 0
+              }
               onChange={(event) =>
                 update("requireReviewBeforePublish", event.target.checked)
               }
             />
             <span className="settings-switch" aria-hidden="true" />
           </label>
-          <PolicyNote icon={LockKeyhole}>Administrators cannot bypass required review.</PolicyNote>
+          {reviewerCount === 0 ? (
+            <PolicyNote icon={LockKeyhole}>
+              Nobody holds the Reviewer role yet. Give someone that role in
+              People &amp; access first, or drafts submitted for review will have
+              nobody to approve them.
+            </PolicyNote>
+          ) : (
+            <PolicyNote icon={LockKeyhole}>Administrators cannot bypass required review.</PolicyNote>
+          )}
         </section>
         <section className="card settings-card settings-card-compact">
           <div className="settings-title">
@@ -5495,7 +5555,8 @@ function OrganizationMemberDialog({
       >
         <p className="modal-copy">
           Changing these roles never changes the person&apos;s workspace
-          membership or guide audiences. At least two active owners must remain.
+          membership or guide audiences. An organization always keeps at least
+          one owner; appoint a second so nobody is ever locked out.
         </p>
         <div className="role-picker">
           {ORGANIZATION_ROLES.map((role) => (
@@ -7839,6 +7900,13 @@ export function KnowHowWorkspaceApp({
                 initial={workspace.settings}
                 busy={busy || !workspaceMutable}
                 removeBrandingEnabled={entitlements.removeBranding}
+                reviewerCount={
+                  members.filter(
+                    (item) =>
+                      item.status === "active" &&
+                      item.roles.includes("reviewer"),
+                  ).length
+                }
                 onRefresh={onRefresh}
                 onRegisterNavigationGuard={onRegisterNavigationGuard}
                 onSave={async (settings) => {
@@ -7877,10 +7945,16 @@ export function KnowHowWorkspaceApp({
           <MemberDialog
             member={dialog.member}
             isCurrentUser={dialog.member.userId === data.viewer.id}
-            isPlatformOwner={Boolean(
-              dialog.member.userId === data.viewer.id &&
-                data.viewer.platformRoles?.includes("owner"),
-            )}
+            isPlatformOwner={Boolean(dialog.member.platformProtected)}
+            isLastAdministrator={
+              dialog.member.status === "active" &&
+              dialog.member.roles.includes("administrator") &&
+              members.filter(
+                (item) =>
+                  item.status === "active" &&
+                  item.roles.includes("administrator"),
+              ).length <= 1
+            }
             busy={busy}
             onClose={() => setDialog(null)}
             onSave={async (nextRoles) => {

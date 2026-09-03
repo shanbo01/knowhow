@@ -163,6 +163,7 @@ export async function loadPublicGuide(
     canShare: false,
     canArchive: false,
     canUnpublish: false,
+    canUnsubmit: false,
     canDuplicate: false,
     canRestore: false,
     canDelete: false,
