@@ -3683,6 +3683,13 @@ export function KnowHowWorkspaceApp({
                 supportGrants={supportGrants}
                 busy={busy || !workspaceMutable}
                 onEdit={(member) => setDialog({ type: "member", member })}
+                onResend={(invitationId) => {
+                  void command(
+                    "resendInvite",
+                    { invitationId },
+                    "Invitation queued again",
+                  ).catch(() => undefined);
+                }}
                 onRevoke={(invitationId) => {
                   void askToConfirm({
                     title: "Revoke this invitation?",

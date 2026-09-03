@@ -574,6 +574,7 @@ export class BootstrapService {
       extensionDeviceRows,
       desktopDeviceRows,
       platformOwners,
+      deliveryRows,
     ] = await Promise.all([
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
       this.store.list(TABLES.workspaceMembers, { filters }),
@@ -624,6 +625,14 @@ export class BootstrapService {
         limit: 20,
       }),
       platformOwnerUserIds(this.store),
+      // Invitation emails are the deliveries a workspace admin can act on, so
+      // only those are fetched; the rest of the queue is platform business.
+      this.store.list(TABLES.notificationDeliveries, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "kind", value: "invitation.created" },
+        ],
+      }),
     ]);
     const members = memberRows.map((row) => memberView(row, platformOwners));
     const groups = groupRows.map((row) => groupView(row, groupMembershipRows));
@@ -773,9 +782,26 @@ export class BootstrapService {
           .at(-1) ?? null)
       : null;
 
+    // The delivery row keyed to each invitation, so the list can report what
+    // actually happened to the email instead of assuming it left.
+    // Retrying a delivery queues a second row against the same invitation, so
+    // the latest attempt is the one that describes where things stand — an
+    // older failure next to a newer success would otherwise be reported as the
+    // outcome.
+    const deliveryBySubject = new Map<string, StoredRecord<RecordData>>();
+    for (const row of deliveryRows) {
+      const subject = stringValue(row.subject_id);
+      if (!subject) continue;
+      const held = deliveryBySubject.get(subject);
+      if (!held || stringValue(row.$createdAt) > stringValue(held.$createdAt)) {
+        deliveryBySubject.set(subject, row);
+      }
+    }
     const invitations: Invitation[] = isAdmin
       ? invitationRows.map((row) => {
           const details = decodePayload<Partial<Invitation>>(row, {});
+          const delivery = deliveryBySubject.get(row.$id);
+          const deliveryStatus = stringValue(delivery?.status);
           return {
             id: row.$id,
             label: details.label ?? "Invitation",
@@ -785,6 +811,17 @@ export class BootstrapService {
             useCount: numberValue(details.useCount),
             revokedAt: row.status === "revoked" ? row.$updatedAt : null,
             createdAt: row.$createdAt,
+            delivery: {
+              state:
+                deliveryStatus === "sent"
+                  ? "sent"
+                  : deliveryStatus === "failed"
+                    ? "failed"
+                    : deliveryStatus === "queued"
+                      ? "pending"
+                      : "unknown",
+              at: delivery ? stringValue(delivery.occurred_at) || null : null,
+            },
           };
         })
       : [];

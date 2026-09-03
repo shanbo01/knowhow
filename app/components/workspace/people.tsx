@@ -354,6 +354,24 @@ export function GroupDialog({
   );
 }
 
+/**
+ * What to say about an invitation's email, when there is anything to say.
+ *
+ * Silent on a delivered one: an invitation that worked needs no commentary. A
+ * failure is the case worth naming, because it is otherwise indistinguishable
+ * from an invitation sitting in somebody's spam folder.
+ */
+function deliveryNote(invite: Invitation) {
+  switch (invite.delivery?.state) {
+    case "failed":
+      return "email could not be delivered";
+    case "pending":
+      return "email queued";
+    default:
+      return "";
+  }
+}
+
 export function MembersView({
   members,
   invitations,
@@ -362,6 +380,7 @@ export function MembersView({
   busy,
   onEdit,
   onRevoke,
+  onResend,
   onResolveSupport,
   onRevokeSupport,
 }: {
@@ -372,6 +391,7 @@ export function MembersView({
   busy: boolean;
   onEdit: (member: WorkspaceMember) => void;
   onRevoke: (id: string) => void;
+  onResend: (id: string) => void;
   onResolveSupport: (request: SupportAccessRequest) => void;
   onRevokeSupport: (grant: SupportAccessGrant) => void;
 }) {
@@ -596,9 +616,19 @@ export function MembersView({
                   <small>
                     Expires {formatDate(invite.expiresAt, true)} ·{" "}
                     {invite.useCount}/{invite.maxUses} uses
+                    {deliveryNote(invite) ? ` · ${deliveryNote(invite)}` : ""}
                   </small>
                 </span>
                 <StatusBadge status={status} />
+                {status === "active" && invite.delivery?.state === "failed" ? (
+                  <button
+                    className="button ghost small"
+                    disabled={busy}
+                    onClick={() => onResend(invite.id)}
+                  >
+                    <Mail /> Resend
+                  </button>
+                ) : null}
                 {status === "active" ? (
                   <button
                     className="button ghost small"
@@ -957,12 +987,13 @@ export function InviteDialog({
             <div>
               <strong>
                 {created.length === 1
-                  ? "Invitation sent"
-                  : `${created.length} invitations sent`}
+                  ? "Invitation created"
+                  : `${created.length} invitations created`}
               </strong>
               <p>
-                We emailed each person. The link below is a one-time backup if
-                the email is delayed.
+                The email is queued and usually arrives within a few minutes;
+                People &amp; access shows whether it did. Sending them this link
+                works either way, and is the surer thing right now.
               </p>
             </div>
             <div className="created-invite-list">
@@ -972,8 +1003,14 @@ export function InviteDialog({
                   <div className="copy-field" key={item.email}>
                     <span className="created-invite-email">{item.email}</span>
                     <input readOnly value={url} aria-label={`${item.email} invitation link`} />
+                    {/*
+                      Primary, not secondary. The link is the path that works
+                      whatever the mail queue does, and it was styled as the
+                      afterthought to an email the dialog had already claimed
+                      to have sent.
+                    */}
                     <button
-                      className="button secondary"
+                      className="button primary"
                       type="button"
                       onClick={() => navigator.clipboard.writeText(url)}
                     >

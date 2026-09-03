@@ -279,6 +279,19 @@ export type Invitation = {
   revokedAt: string | null;
   createdAt: string;
   inviteUrl?: string;
+  /**
+   * What became of the email, read from the delivery queue rather than assumed.
+   *
+   * Creating an invitation only queues one; a worker sends it minutes later and
+   * can fail permanently. The dialog used to report "sent" at creation, so an
+   * invitation that never left the building looked identical to one that
+   * arrived — which is the half of the missing-invitations problem the admin
+   * who sent it could actually have noticed.
+   */
+  delivery?: {
+    state: "sent" | "pending" | "failed" | "unknown";
+    at: string | null;
+  };
 };
 
 export type SupportAccessRequest = {

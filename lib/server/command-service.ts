@@ -4998,6 +4998,86 @@ export class CommandService {
       return { revoked: true };
     }
 
+    // A queued invitation that failed permanently has no other way out: the
+    // worker has exhausted its retries, and the credential it was carrying was
+    // discarded with the last one. Re-queueing the delivery is the only honest
+    // recovery, and it needs the invitation still to be live.
+    if (action === "resendInvite") {
+      requireAuthorized("workspace.invitations.manage", context);
+      const invitationId = inputText(payload.invitationId, "Invitation", {
+        min: 1,
+        max: 36,
+      });
+      const invitation = await this.store.get(TABLES.invitations, invitationId);
+      if (!invitation || invitation.workspace_id !== workspaceId) {
+        throw new HttpError(404, "INVITATION_NOT_FOUND", "Invitation not found.");
+      }
+      if (invitation.status !== "active") {
+        throw new HttpError(
+          409,
+          "INVITATION_NOT_ACTIVE",
+          "This invitation is no longer active. Create a new one.",
+        );
+      }
+      const details = decodePayload<{
+        role?: WorkspaceRole;
+        label?: string;
+      }>(invitation, {});
+      const email = stringValue(invitation.email);
+      if (!email) {
+        throw new HttpError(
+          409,
+          "INVITATION_EMAIL_MISSING",
+          "This invitation has no address to send to.",
+        );
+      }
+      // A fresh credential, because the discarded one cannot be recovered and
+      // the stored hash is what the redemption compares against.
+      const expiresAtSeconds = Math.floor(Date.parse(stringValue(invitation.expires_at)) / 1_000);
+      if (!Number.isFinite(expiresAtSeconds) || expiresAtSeconds * 1_000 <= Date.now()) {
+        throw new HttpError(
+          409,
+          "INVITATION_EXPIRED",
+          "This invitation has expired. Create a new one.",
+        );
+      }
+      const token = await signInviteToken({
+        jti: invitationId,
+        workspaceId,
+        role: (details.role ?? "viewer") as Exclude<WorkspaceRole, "administrator">,
+        email,
+        expiresAt: expiresAtSeconds,
+      });
+      await this.store.update(
+        TABLES.invitations,
+        invitationId,
+        rowData(
+          { subject_id: await hashToken(token), updated_by: identity.userId },
+          details,
+        ),
+      );
+      await queueNotification(this.store, {
+        organizationId: workspaceAccess.workspace.organizationId,
+        workspaceId,
+        email,
+        kind: "invitation.created",
+        subjectId: invitationId,
+        idempotencyKey: `${options.idempotencyKey}:invitation-resend`,
+        payload: {
+          expiresAt: stringValue(invitation.expires_at),
+          credential: token,
+          workspaceName: workspaceAccess.workspace.name,
+        },
+      });
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "invitation.resent",
+        targetType: "invitation",
+        targetId: invitationId,
+        summary: "Workspace invitation delivery retried",
+      });
+      return { resent: true };
+    }
+
     if (action === "updateMember") {
       requireAuthorized("workspace.members.manage", context);
       const memberId = inputText(payload.memberId, "Member", {
