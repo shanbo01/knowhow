@@ -37,6 +37,7 @@ import {
   registerReauthenticationHandler,
 } from "../../lib/knowhow-client";
 import {
+  acknowledgeMfaRecoveryCodes,
   authHealth,
   beginMfaChallenge,
   beginMfaEnrollment,
@@ -625,6 +626,8 @@ export default function Home() {
     secret?: string;
     qrCodeDataUrl?: string;
     recoveryCodes?: string[];
+    /** Set when these codes superseded an unfinished attempt's set. */
+    replaced?: boolean;
   } | null>(null);
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(
     cachedProductSession?.bootstrap ?? null,
@@ -1165,16 +1168,22 @@ export default function Home() {
         secret={mfaEnrollment.secret}
         qrCodeDataUrl={mfaEnrollment.qrCodeDataUrl}
         recoveryCodes={mfaEnrollment.recoveryCodes}
+        replacedRecoveryCodes={mfaEnrollment.replaced}
         onBegin={async () => {
           setBusy(true);
           setError("");
           try {
             const setup = await beginMfaEnrollment();
+            // An abandoned enrollment hands back a fresh set, because the
+            // previous one can never be shown again.
+            if (setup.recoveryCodes?.length) {
+              setMfaEnrollment({
+                recoveryCodes: setup.recoveryCodes,
+                replaced: Boolean(setup.replacedRecoveryCodes),
+              });
+              return;
+            }
             if (setup.enabled && setup.resumed) {
-              if (setup.recoveryCodes?.length) {
-                setMfaEnrollment({ recoveryCodes: setup.recoveryCodes });
-                return;
-              }
               const challenge = await beginMfaChallenge("totp");
               if (!challenge.challengeId) {
                 throw new Error(
@@ -1221,6 +1230,9 @@ export default function Home() {
           setBusy(true);
           setError("");
           try {
+            // Turning multi-factor on happens here, after the codes have been
+            // saved — not when they were generated.
+            await acknowledgeMfaRecoveryCodes();
             const challenge = await beginMfaChallenge("totp");
             if (!challenge.challengeId) {
               throw new Error(
@@ -1240,6 +1252,9 @@ export default function Home() {
           }
         }}
         onCancel={() => {
+          // Safe to leave now: multi-factor is only switched on by
+          // acknowledging the codes, so an abandoned enrollment locks nobody
+          // out. Re-entering setup issues a fresh set.
           setMfaEnrollment(null);
           setError("");
         }}

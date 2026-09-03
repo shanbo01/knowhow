@@ -27,6 +27,7 @@ import {
   withRequestId,
 } from "@/lib/server/request-services";
 import { requireRecentTotp } from "@/lib/server/session-identity";
+import { issueRecoveryCodes } from "@/lib/server/mfa-recovery";
 import { consumeFixedWindows } from "@/lib/server/rate-limit-service";
 import { BetaAccessService } from "@/lib/server/beta-access-service";
 import {
@@ -366,17 +367,24 @@ export async function POST(request: Request, context: Context) {
       }
       const factors = await scoped.account.listMFAFactors();
       if (factors.totp) {
-        let recoveryCodes: string[] | undefined;
-        if (!factors.recoveryCode) {
-          const recovery = await scoped.account.createMFARecoveryCodes();
-          recoveryCodes = recovery.recoveryCodes;
+        // An authenticator already exists. If multi-factor is on, enrollment
+        // finished and there is nothing to re-issue: recovery codes are shown
+        // once and cannot be read back, so the only honest offer here is the
+        // regenerate action in Account security.
+        if (user.mfa) {
+          return authJson({ enabled: true, resumed: true, requestId }, requestId);
         }
-        if (!user.mfa) await scoped.account.updateMFA({ mfa: true });
+        // Multi-factor is off with an authenticator present, so a previous
+        // enrollment was abandoned before its codes were acknowledged. Those
+        // codes cannot be shown again, so replace them and say so, rather than
+        // leaving the account holding a set nobody has.
+        const recovery = await issueRecoveryCodes(scoped.account);
         return authJson(
           {
-            enabled: true,
+            enabled: false,
             resumed: true,
-            ...(recoveryCodes ? { recoveryCodes } : {}),
+            replacedRecoveryCodes: true,
+            recoveryCodes: recovery.recoveryCodes,
             requestId,
           },
           requestId,
@@ -396,10 +404,30 @@ export async function POST(request: Request, context: Context) {
     if (path === "mfa/enroll/complete") {
       const otp = text(body.otp, "Authentication code", 6, 12);
       await scoped.account.updateMFAAuthenticator({ type: AuthenticatorType.Totp, otp });
-      const recovery = await scoped.account.createMFARecoveryCodes();
-      await scoped.account.updateMFA({ mfa: true });
+      const recovery = await issueRecoveryCodes(scoped.account);
+      // Deliberately does not enable multi-factor. The codes have been shown
+      // but not yet saved, and enabling here is what let a browser closed on
+      // this screen leave an account enforcing a factor whose recovery codes
+      // its owner had never read. `mfa/enroll/acknowledge` turns it on.
       return authJson(
-        { enabled: true, recoveryCodes: recovery.recoveryCodes, requestId },
+        { enabled: false, recoveryCodes: recovery.recoveryCodes, requestId },
+        requestId,
+      );
+    }
+    if (path === "mfa/enroll/acknowledge") {
+      const factors = await scoped.account.listMFAFactors();
+      if (!factors.totp) {
+        throw new HttpError(
+          409,
+          "MFA_NOT_ENROLLED",
+          "Set up an authenticator before turning on multi-factor sign-in.",
+        );
+      }
+      const user = await scoped.account.get();
+      if (!user.mfa) await scoped.account.updateMFA({ mfa: true });
+      const nextUser = await scoped.account.get();
+      return authJson(
+        { enabled: true, user: serializeUser(nextUser), requestId },
         requestId,
       );
     }

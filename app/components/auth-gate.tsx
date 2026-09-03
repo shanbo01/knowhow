@@ -664,6 +664,7 @@ export function MfaEnrollmentGate({
   secret,
   qrCodeDataUrl,
   recoveryCodes,
+  replacedRecoveryCodes,
   onBegin,
   onComplete,
   onAcknowledge,
@@ -675,6 +676,8 @@ export function MfaEnrollmentGate({
   secret?: string;
   qrCodeDataUrl?: string;
   recoveryCodes?: string[];
+  /** These codes replaced an unfinished attempt's set, which no longer works. */
+  replacedRecoveryCodes?: boolean;
   onBegin: () => void | Promise<void>;
   onComplete: (otp: string) => void | Promise<void>;
   onAcknowledge: () => void | Promise<void>;
@@ -735,11 +738,12 @@ export function MfaEnrollmentGate({
           ) : recoveryCodes ? (
             <>
               <div className="auth-card-heading">
-                <p className="auth-eyebrow">Show once</p>
+                <p className="auth-eyebrow">Shown once</p>
                 <h2 id="mfa-enroll-heading">Save your recovery codes</h2>
                 <p>
-                  Each code works once. Store them outside KnowHow; they cannot
-                  be shown again.
+                  {replacedRecoveryCodes
+                    ? "Your earlier setup was not finished, so these replace the codes from that attempt — those no longer work. Each code below works once."
+                    : "These get you in if you lose your authenticator. Each code works once. Store them outside KnowHow."}
                 </p>
               </div>
               <ol className="mfa-recovery-codes" aria-label="Recovery codes">
@@ -757,7 +761,10 @@ export function MfaEnrollmentGate({
                 />
                 <span>
                   <strong>I saved these codes securely</strong>
-                  <small>They will disappear after continuing.</small>
+                  <small>
+                    Multi-factor sign-in switches on when you continue, not
+                    before — so nothing is locked until these are safe.
+                  </small>
                 </span>
               </label>
               <button
@@ -771,7 +778,7 @@ export function MfaEnrollmentGate({
                 ) : (
                   <CheckCircle2 />
                 )}{" "}
-                Continue and verify
+                Turn on multi-factor sign-in
               </button>
             </>
           ) : (
