@@ -1,5 +1,8 @@
 import { TABLES } from "@/lib/server/appwrite-resources";
-import { deploymentConfigurationIssues } from "@/lib/server/appwrite-config";
+import {
+  deploymentConfigurationIssues,
+  emailTransportConfigured,
+} from "@/lib/server/appwrite-config";
 import { jsonResponse } from "@/lib/server/http-security";
 import { workerReadiness } from "@/lib/server/worker-readiness";
 import {
@@ -80,6 +83,7 @@ export async function GET(request: Request) {
     } else {
       queueCheck = "failed";
     }
+    const mailReady = emailTransportConfigured();
     const infrastructureReady = infrastructureChecks.every(
       (check) => check.status === "fulfilled",
     );
@@ -120,6 +124,11 @@ export async function GET(request: Request) {
             notificationQueue: queueReady ? "ok" : "failed",
             notificationQueueOverdue: notificationQueue.overdue,
             notificationQueueFailed: notificationQueue.terminalFailed,
+            // Reported in every environment, not only the controlled ones the
+            // configuration issue list covers: a workspace whose invitations
+            // silently fail looks identical to a healthy one from the outside,
+            // and this is the check that separates them.
+            emailTransport: mailReady ? "ok" : "failed",
             configuration: issues.length ? "failed" : "ok",
             configurationIssueCount: issues.length,
           },

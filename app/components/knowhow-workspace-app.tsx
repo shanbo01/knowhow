@@ -414,6 +414,12 @@ function countPhrase(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/** "Ada", "Ada or Blake", "Ada, Blake or Kit" — for naming who to ask. */
+function listPhrase(items: string[], conjunction = "or") {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} ${conjunction} ${items[items.length - 1]}`;
+}
+
 const INVITE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_BULK_INVITES = 50;
 
@@ -1084,6 +1090,13 @@ function OverviewView({
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 6);
   const firstName = viewerName.trim().split(/\s+/)[0] || "there";
+  const administratorNames = data.members
+    .filter(
+      (member) =>
+        member.status === "active" && member.roles.includes("administrator"),
+    )
+    .map((member) => member.name?.trim() || member.email)
+    .slice(0, 3);
 
   return (
     <div className="workspace-overview">
@@ -1125,7 +1138,25 @@ function OverviewView({
       ) : null}
 
       {guides.length === 0 ? (
-        data.onboarding.completedAt || !(canManageAccess || canCapture) ? (
+        !canCreate && !canManageAccess ? (
+          // Read-only members reach an empty library with no command they are
+          // allowed to run. Telling them to write a guide under an action row
+          // that renders nothing reads as a broken page, so say what is
+          // actually missing and who can grant it.
+          <section className="first-run-panel">
+            <div>
+              <p className="eyebrow">Nothing shared yet</p>
+              <h2>Your access is read-only for now.</h2>
+              <p>
+                Guides appear here once someone shares one with you. To record
+                or write your own, ask{" "}
+                {administratorNames.length
+                  ? `${listPhrase(administratorNames)} for Creator access.`
+                  : "a workspace administrator for Creator access."}
+              </p>
+            </div>
+          </section>
+        ) : data.onboarding.completedAt || !(canManageAccess || canCapture) ? (
           <section className="first-run-panel">
             <div>
               <p className="eyebrow">Get started</p>
@@ -3579,6 +3610,10 @@ function MemberDialog({
   onSuspend: () => Promise<void>;
 }) {
   const [roles, setRoles] = useState(member.roles);
+  // Refusals here are ordinary outcomes, not crashes: the last administrator
+  // cannot be demoted, and a platform owner cannot be suspended. The shell's
+  // error banner renders underneath this modal, so it has to be said in here.
+  const [error, setError] = useState("");
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
   return (
     <Modal
@@ -3640,18 +3675,29 @@ function MemberDialog({
             type="button"
             disabled={busy}
             onClick={() => {
+              setError("");
               void askToConfirm({
                 title: member.status === "suspended" ? `Restore ${member.name || member.email}?` : `Suspend ${member.name || member.email}?`,
                 description: member.status === "suspended" ? "Restore this member's workspace access?" : "They will lose workspace access immediately. Their guides and audit history remain.",
                 confirmLabel: member.status === "suspended" ? "Restore member" : "Suspend member",
                 tone: member.status === "suspended" ? "default" : "danger",
-              }).then((confirmed) => { if (confirmed) void onSuspend(); });
+              }).then((confirmed) => {
+                if (!confirmed) return;
+                void onSuspend().catch((nextError) =>
+                  setError(messageFromError(nextError)),
+                );
+              });
             }}
           >
             {member.status === "suspended" ? "Restore" : "Suspend"}
           </button>
           </section>
         )}
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
         <footer className="modal-footer">
           <span />
           <button className="button secondary" type="button" onClick={onClose}>
@@ -3661,7 +3707,12 @@ function MemberDialog({
             className="button primary"
             type="button"
             disabled={busy || roles.length === 0}
-            onClick={() => onSave(roles)}
+            onClick={() => {
+              setError("");
+              void onSave(roles).catch((nextError) =>
+                setError(messageFromError(nextError)),
+              );
+            }}
           >
             <Check /> Save
           </button>
@@ -3690,7 +3741,7 @@ function InviteDialog({
 }) {
   const [label, setLabel] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
-  const [role, setRole] = useState<WorkspaceRole>("viewer");
+  const [role, setRole] = useState<WorkspaceRole>("creator");
   const [expires, setExpires] = useState(72);
   const [created, setCreated] = useState<
     Array<{ email: string; token: string }>

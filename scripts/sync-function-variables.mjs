@@ -113,6 +113,25 @@ if (missing.length) {
   fail(`the environment is missing required values:\n  ${missing.join("\n  ")}`);
 }
 
+// Neither mail transport is individually required — an on-premises install
+// uses SMTP, a hosted one may use Resend — but having no transport at all is
+// not a valid deployment. The operations worker delivers every invitation, and
+// an invited person has no Appwrite account for Messaging to reach, so with
+// both unset each invitation is queued, retried five times, and marked failed
+// where only platform staff will ever see it.
+const hasResend =
+  Boolean(process.env.RESEND_API_KEY?.trim()) &&
+  Boolean(process.env.RESEND_FROM?.trim());
+const hasSmtp =
+  Boolean(process.env.KNOWHOW_SMTP_HOST?.trim()) &&
+  Boolean(process.env.KNOWHOW_SMTP_FROM?.trim());
+if (!hasResend && !hasSmtp) {
+  fail(
+    "no email transport is configured, so invitations cannot be delivered.\n" +
+      "  Set KNOWHOW_SMTP_HOST and KNOWHOW_SMTP_FROM, or RESEND_API_KEY and RESEND_FROM.",
+  );
+}
+
 let changed = 0;
 for (const [functionId, spec] of Object.entries(FUNCTION_VARIABLES)) {
   const wanted = new Map();

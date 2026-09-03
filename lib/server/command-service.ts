@@ -716,17 +716,33 @@ export class CommandService {
     return { appointmentId, token, expiresAt };
   }
 
+  /**
+   * The invitation the setup wizard sends on the owner's behalf.
+   *
+   * The role is a parameter rather than a constant because the first teammate
+   * a workspace invites is the one person guaranteed to want to make something:
+   * a viewer lands in a workspace with nothing shared with them yet and no
+   * command they are allowed to run, which reads as a broken product rather
+   * than as a permission boundary.
+   */
   private async createSelfServiceInvite(
     identity: AuthenticatedIdentity,
-    input: { organizationId: string; workspaceId: string; email: string },
+    input: {
+      organizationId: string;
+      workspaceId: string;
+      email: string;
+      role?: Exclude<WorkspaceRole, "administrator">;
+    },
     options: CommandOptions,
   ) {
+    const role: Exclude<WorkspaceRole, "administrator"> =
+      input.role ?? "creator";
     const invitationId = resourceId("invite");
     const expiresAtSeconds = Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
     const token = await signInviteToken({
       jti: invitationId,
       workspaceId: input.workspaceId,
-      role: "viewer",
+      role,
       email: input.email,
       expiresAt: expiresAtSeconds,
     });
@@ -741,14 +757,14 @@ export class CommandService {
           email: input.email,
           subject_id: await hashToken(token),
           status: "active",
-          kind: "viewer",
+          kind: role,
           expires_at: expiresAt,
           created_by: identity.userId,
           request_id: options.requestId,
         },
         {
           label: `Invite ${input.email}`,
-          role: "viewer",
+          role,
           maxUses: 1,
           useCount: 0,
           createdAt: nowIso(),
