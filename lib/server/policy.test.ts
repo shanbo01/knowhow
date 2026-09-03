@@ -611,3 +611,45 @@ test("authorize - guide.archive follows the same line as delete", () => {
     false,
   );
 });
+
+test("authorize - guide.undelete mirrors who could delete", () => {
+  const own = { isAuthor: true, hasBeenPublished: false };
+
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.undelete", { ...baseContext, roles: ["creator"], guide: own }).allowed,
+    true,
+  );
+
+  // Anyone who could not have deleted it has no business restoring it.
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: false, hasBeenPublished: false },
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    authorize("guide.undelete", { ...baseContext, roles: ["viewer"], guide: own }).allowed,
+    false,
+  );
+
+  // Restoring is a change, so a read-only subscription refuses it.
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["publisher"],
+      lifecycleAccess: "read_only",
+      guide: own,
+    }).code,
+    "SUBSCRIPTION_READ_ONLY",
+  );
+});

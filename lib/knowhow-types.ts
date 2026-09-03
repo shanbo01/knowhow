@@ -185,6 +185,20 @@ export type Guide = {
   >;
 };
 
+/**
+ * A guide in deletion quarantine, listed only for people who could restore it.
+ *
+ * Deleting is reversible but not undoable: `remove()` overwrites the guide and
+ * revision statuses without recording them, so a restored guide comes back
+ * archived rather than to whatever state it was deleted from.
+ */
+export type DeletedGuide = {
+  id: string;
+  title: string;
+  deletedAt: string;
+  deletedByName: string | null;
+};
+
 export type WorkspaceSummary = {
   id: string;
   organizationId: string;
@@ -974,6 +988,8 @@ export type WorkspaceBundle = {
   members: WorkspaceMember[];
   groups: WorkspaceGroup[];
   guides: Guide[];
+  /** Guides in deletion quarantine that the viewer could restore. */
+  deletedGuides: DeletedGuide[];
   invitations: Invitation[];
   supportRequests: SupportAccessRequest[];
   supportGrants: SupportAccessGrant[];

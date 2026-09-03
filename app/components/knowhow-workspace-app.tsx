@@ -102,6 +102,7 @@ import {
 import type {
   Audience,
   BootstrapResponse,
+  DeletedGuide,
   DesktopCaptureDevice,
   Guide,
   GuideRevisionView,
@@ -1327,6 +1328,7 @@ function visibleSelection(chosen: string[], entries: Array<[string, number]>) {
 
 function GuidesView({
   guides,
+  deletedGuides,
   newGuideAction,
   guideLimitNotice,
   onOpen,
@@ -1338,6 +1340,7 @@ function GuidesView({
   canCreate,
 }: {
   guides: Guide[];
+  deletedGuides: DeletedGuide[];
   newGuideAction: ReactNode;
   guideLimitNotice: ReactNode;
   onOpen: (guide: Guide) => void;
@@ -2348,6 +2351,52 @@ function GuidesView({
             <X /> Clear
           </button>
         </div>
+      ) : null}
+
+      {/*
+        Deletion used to be final: the guide, its revisions and its screenshots
+        were marked and then unreachable, with no path back for the person who
+        mis-clicked. It sits under Archived because that is where retired
+        guides already live, and it is only ever populated for people who could
+        restore what is in it.
+      */}
+      {tab === "archived" && deletedGuides.length ? (
+        <section className="library-deleted">
+          <div className="library-deleted-heading">
+            <strong>Recently deleted</strong>
+            <small>
+              Restored guides come back archived, then any revision can be
+              restored into a new draft.
+            </small>
+          </div>
+          <ul className="library-deleted-list">
+            {deletedGuides.map((entry) => (
+              <li key={entry.id}>
+                <span>
+                  <strong>{entry.title}</strong>
+                  <small>
+                    Deleted {formatDate(entry.deletedAt, true)}
+                    {entry.deletedByName ? ` by ${entry.deletedByName}` : ""}
+                  </small>
+                </span>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    void onAction(
+                      "undeleteGuide",
+                      { guideId: entry.id },
+                      `${entry.title} restored`,
+                    )
+                  }
+                >
+                  <Undo2 /> Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       <Sheet
@@ -7702,6 +7751,7 @@ export function KnowHowWorkspaceApp({
             {view === "Guides" ? (
               <GuidesView
                 guides={guides}
+                deletedGuides={active.deletedGuides ?? []}
                 canCreate={canCreate && workspaceMutable}
                 newGuideAction={
                   <GuideCreateMenu

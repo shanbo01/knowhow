@@ -6987,3 +6987,71 @@
     overflow-y: auto;
   }
 }
+
+/*
+ * Recently deleted.
+ *
+ * Sits under the archived list because that is where retired guides already
+ * live. Deliberately quiet: it is a recovery path, not a place to browse.
+ */
+.experience-shell .library-deleted {
+  margin-top: 1.75rem;
+  padding: 1.1rem 1.25rem 1.25rem;
+  border: 1px dashed var(--experience-line);
+  border-radius: 1rem;
+  background: var(--experience-panel);
+  display: grid;
+  gap: 0.85rem;
+}
+
+.experience-shell .library-deleted-heading {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.experience-shell .library-deleted-heading strong {
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+
+.experience-shell .library-deleted-heading small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.experience-shell .library-deleted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.experience-shell .library-deleted-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--experience-line);
+  border-radius: 0.75rem;
+  background: var(--surface, transparent);
+}
+
+.experience-shell .library-deleted-list li > span {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.experience-shell .library-deleted-list li strong {
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.experience-shell .library-deleted-list li small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}

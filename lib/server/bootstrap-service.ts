@@ -1,6 +1,7 @@
 import type {
   AuditEvent,
   BootstrapResponse,
+  DeletedGuide,
   Guide,
   GuideRevisionView,
   Invitation,
@@ -291,7 +292,10 @@ function hydrateGuides(
   usageRows: Array<StoredRecord<RecordData>> = [],
 ) {
   const accessServiceContext = {
-    isVerifiedIdentity: true,
+    // The real state, not an assertion. These are the same decisions the
+    // command layer will make, so asserting a verified identity here offered
+    // an unverified person a Publish button their next click would be refused.
+    isVerifiedIdentity: access.emailVerified,
     membershipStatus: access.membershipStatus,
     workspaceStatus: access.workspace.status,
     roles: access.roles,
@@ -310,10 +314,32 @@ function hydrateGuides(
   const viewer = members.find((member) => member.userId === identity.userId);
   const groupIds = new Set(viewer?.groupIds ?? []);
   const guides: Guide[] = [];
+  const deletedGuides: DeletedGuide[] = [];
 
   for (const row of rows.guides) {
     const source = decodePayload<GuideRecord>(row, null as never);
-    if (!source || source.deletedAt || row.status === "deleted") continue;
+    if (!source) continue;
+    if (source.deletedAt || row.status === "deleted") {
+      // Listed separately rather than dropped. A deleted guide is out of the
+      // library but not gone, and the only people told about it are the ones
+      // who could put it back.
+      const mayRestore = authorize("guide.undelete", {
+        ...accessServiceContext,
+        guide: {
+          isAuthor: source.authorUserId === identity.userId,
+          hasBeenPublished: Boolean(source.publishedRevisionId),
+        },
+      }).allowed;
+      if (mayRestore && source.deletedAt) {
+        deletedGuides.push({
+          id: row.$id,
+          title: source.title,
+          deletedAt: source.deletedAt,
+          deletedByName: memberNames.get(stringValue(row.updated_by)) ?? null,
+        });
+      }
+      continue;
+    }
     const revisionRows = rows.revisions
       .filter((revision) => revision.subject_id === row.$id)
       .sort(
@@ -482,7 +508,7 @@ function hydrateGuides(
       }),
     });
   }
-  return guides;
+  return { guides, deletedGuides };
 }
 
 function metricView(
@@ -624,7 +650,7 @@ export class BootstrapService {
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
-    const guides = hydrateGuides(
+    const { guides, deletedGuides } = hydrateGuides(
       identity,
       access,
       guideRows,
@@ -929,6 +955,7 @@ export class BootstrapService {
       members,
       groups,
       guides,
+      deletedGuides,
       invitations,
       supportRequests,
       supportGrants,
@@ -1152,13 +1179,15 @@ export class BootstrapService {
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
+    // This caller wants the library only; the quarantine list belongs to the
+    // workspace bundle, which is where it is acted on.
     return hydrateGuides(
       identity,
       access,
       guideRows,
       members,
       settings.requireReviewBeforePublish,
-    );
+    ).guides;
   }
 
   async bootstrap(

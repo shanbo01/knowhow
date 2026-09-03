@@ -238,6 +238,9 @@ export class GuideCommandService {
     if (action === "deleteGuide") {
       return this.remove(identity, payload, workspaceAccess, context);
     }
+    if (action === "undeleteGuide") {
+      return this.undelete(identity, payload, workspaceAccess, context);
+    }
     if (action === "restoreRevision") {
       return this.restore(identity, payload, workspaceAccess, context, options);
     }
@@ -1694,6 +1697,108 @@ export class GuideCommandService {
       metadata: { mediaCount: mediaRows.filter((candidate) => revisionIds.has(stringValue(candidate.subject_id))).length },
     });
     return { deleted: true };
+  }
+
+  /**
+   * Brings a guide back out of deletion quarantine.
+   *
+   * Deleting was one-way: the guide, its revisions and its screenshots were
+   * marked and then unreachable, and `restore()` refused anything quarantined
+   * with a message about a recovery case that had no customer-facing path
+   * behind it. A mis-clicked delete on a capture somebody had just spent
+   * twenty minutes recording was final.
+   *
+   * The guide returns as archived rather than to whatever it was before,
+   * because `remove()` overwrites the guide and revision statuses without
+   * recording them — there is no prior state left to return to, and guessing
+   * risks putting something back in front of an audience. Archived is the
+   * honest resting place: the guide is in the library, readable, and one
+   * ordinary "restore revision" away from being a draft again.
+   */
+  private async undelete(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.deletedAt) {
+      throw new HttpError(409, "GUIDE_NOT_DELETED", "This guide is not deleted.");
+    }
+    requireAuthorized("guide.undelete", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
+
+    const restoredAt = nowIso();
+    const revisions = await this.store.list(TABLES.guideRevisions, {
+      filters: [{ field: "subject_id", value: guideId }],
+    });
+    const revisionIds = new Set(revisions.map((row) => row.$id));
+    for (const row of revisions) {
+      const value = decodePayload<RevisionRecord>(row, null as never);
+      await this.store.update(
+        TABLES.guideRevisions,
+        row.$id,
+        rowData(
+          { status: "archived", deleted_at: null, updated_by: identity.userId },
+          { ...value, status: "archived", updatedAt: restoredAt },
+        ),
+      );
+    }
+    // The screenshots were quarantined alongside the guide. Without releasing
+    // them the guide comes back with its steps illustrated by missing images.
+    const mediaRows = await this.store.list(TABLES.privateMedia, {
+      filters: [{ field: "workspace_id", value: workspaceId }],
+    });
+    let releasedMedia = 0;
+    for (const row of mediaRows) {
+      if (!revisionIds.has(stringValue(row.subject_id))) continue;
+      if (row.status !== "quarantined") continue;
+      const media = mediaValue(row);
+      // The quarantine stamp goes with the quarantine, so the released record
+      // does not claim to have been deleted at a time it is now readable.
+      const released = { ...(media as Record<string, unknown>) };
+      delete released.deletedAt;
+      await this.store.update(
+        TABLES.privateMedia,
+        row.$id,
+        rowData(
+          { status: "ready", deleted_at: null, updated_by: identity.userId },
+          released,
+        ),
+      );
+      releasedMedia += 1;
+    }
+
+    const restoredGuide = { ...guide };
+    delete restoredGuide.deletedAt;
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData(
+        { status: "archived", deleted_at: null, updated_by: identity.userId },
+        { ...restoredGuide, archivedAt: guide.archivedAt ?? restoredAt, updatedAt: restoredAt },
+      ),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.undeleted",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} restored from deletion quarantine`,
+      metadata: { releasedMedia },
+    });
+    return { restored: true };
   }
 
   private async restore(

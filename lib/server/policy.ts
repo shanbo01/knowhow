@@ -26,6 +26,7 @@ export type PolicyAction =
   | "guide.unpublish"
   | "guide.archive"
   | "guide.delete"
+  | "guide.undelete"
   | "guide.export"
   | "capture.create"
   | "capture.update";
@@ -384,6 +385,26 @@ export function authorize(
       return allow("Authors may delete their own guide before it goes live.");
     }
     return deny("GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
+  }
+
+  // Taking a deletion back is granted to whoever could have done it, so a
+  // mistake is undone by the person who made it rather than escalated. It is
+  // deliberately not wider than that: a guide in quarantine was removed on
+  // purpose, and anyone who could not have removed it has no business
+  // returning it to the library.
+  if (action === "guide.undelete") {
+    if (roles.has("publisher")) {
+      return allow("Publishers may restore a deleted guide.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may restore a guide they deleted.");
+    }
+    return deny("GUIDE_DELETE_FORBIDDEN", "You cannot restore this guide.");
   }
 
   if (action === "guide.export") {

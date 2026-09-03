@@ -5402,6 +5402,7 @@ export class CommandService {
         "duplicateGuide",
         "archiveGuide",
         "deleteGuide",
+        "undeleteGuide",
         "restoreRevision",
       ].includes(action)
     ) {
