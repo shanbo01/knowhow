@@ -224,7 +224,7 @@ export class GuideCommandService {
       return this.share(identity, payload, workspaceAccess, context, options);
     }
     if (action === "unshareGuide") {
-      return this.unshare(identity, payload, workspaceAccess);
+      return this.unshare(identity, payload, workspaceAccess, context);
     }
     if (action === "unpublishGuide") {
       return this.unpublish(identity, payload, workspaceAccess, context);
@@ -236,7 +236,7 @@ export class GuideCommandService {
       return this.archive(identity, payload, workspaceAccess, context);
     }
     if (action === "deleteGuide") {
-      return this.remove(identity, payload, workspaceAccess);
+      return this.remove(identity, payload, workspaceAccess, context);
     }
     if (action === "restoreRevision") {
       return this.restore(identity, payload, workspaceAccess, context, options);
@@ -1248,6 +1248,7 @@ export class GuideCommandService {
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
     workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
   ) {
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
@@ -1259,19 +1260,17 @@ export class GuideCommandService {
     if (!guide?.publishedRevisionId || guide.deletedAt || guide.archivedAt) {
       throw new HttpError(409, "UNSHARE_NOT_AVAILABLE", "This guide is not live.");
     }
+    // Taking the audience away is the same decision as returning a guide to
+    // draft, and was written out here a second time in the same shape. One
+    // statement of it, in the engine, so the two cannot drift apart.
     const settings = await this.settings(workspaceId);
-    const isPublisher = workspaceAccess.roles.includes("publisher");
-    const isAuthorCreator =
-      guide.authorUserId === identity.userId &&
-      (workspaceAccess.roles.includes("creator") ||
-        workspaceAccess.roles.includes("administrator"));
-    if (!isPublisher && !(isAuthorCreator && !settings.requireReviewBeforePublish)) {
-      throw new HttpError(
-        403,
-        "PUBLISHER_REQUIRED",
-        "Publisher access is required to stop sharing this guide.",
-      );
-    }
+    requireAuthorized("guide.unpublish", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        requireReviewBeforePublish: settings.requireReviewBeforePublish,
+      },
+    });
 
     await this.replaceAudiences(
       identity,
@@ -1610,13 +1609,22 @@ export class GuideCommandService {
     workspaceAccess: WorkspaceAccess,
     context: AuthorizationContext,
   ) {
-    requireAuthorized("guide.archive", context);
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
     const guideRow = await this.store.get(TABLES.guides, guideId);
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    // Authorized after the guide is loaded, not before: archiving now turns on
+    // who wrote it and whether it ever went live, so the decision needs the
+    // guide in hand.
+    requireAuthorized("guide.archive", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
     const archivedAt = nowIso();
     const revisions = await this.store.list(TABLES.guideRevisions, {
       filters: [{ field: "subject_id", value: guideId }],
@@ -1642,6 +1650,7 @@ export class GuideCommandService {
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
     workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
   ) {
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
@@ -1649,14 +1658,16 @@ export class GuideCommandService {
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) return { deleted: true };
-    const mayDelete =
-      workspaceAccess.roles.includes("publisher") ||
-      (guide.authorUserId === identity.userId &&
-        (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator")) &&
-        !guide.publishedRevisionId);
-    if (!mayDelete) {
-      throw new HttpError(403, "GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
-    }
+    // Deleting used to be decided here, by hand, which meant it never ran the
+    // membership, lifecycle and support-grant checks that every other guide
+    // action gets from the policy engine.
+    requireAuthorized("guide.delete", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
     const deletedAt = nowIso();
     const [revisions, mediaRows] = await Promise.all([
       this.store.list(TABLES.guideRevisions, { filters: [{ field: "subject_id", value: guideId }] }),

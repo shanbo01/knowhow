@@ -386,6 +386,14 @@ function hydrateGuides(
       isAuthor: source.authorUserId === identity.userId,
       requireReviewBeforePublish,
     };
+    // Archiving and deleting turn on who owns the guide and whether it ever
+    // went live, not on any one revision, so they are decided from the guide
+    // itself rather than from whichever revision happens to be open.
+    const ownershipFacts = {
+      isAuthor: source.authorUserId === identity.userId,
+      hasBeenPublished: Boolean(source.publishedRevisionId),
+      requireReviewBeforePublish,
+    };
     const canPublishWorking = working
       ? authorize("guide.publish", {
           ...accessServiceContext,
@@ -394,10 +402,10 @@ function hydrateGuides(
       : false;
     const canChangeLiveAudience =
       Boolean(published) &&
-      (access.roles.includes("publisher") ||
-        (source.authorUserId === identity.userId &&
-          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
-          !requireReviewBeforePublish));
+      authorize("guide.unpublish", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed;
     guides.push({
       id: row.$id,
       workspaceId: access.workspaceRow.$id,
@@ -422,7 +430,10 @@ function hydrateGuides(
         : false,
       canPublish: canPublishWorking,
       canShare: canPublishWorking || canChangeLiveAudience,
-      canArchive: authorize("guide.archive", accessServiceContext).allowed,
+      canArchive: authorize("guide.archive", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed,
       // Only offered on a live guide with no draft already open, which is the
       // one state the command can act on.
       canUnpublish:
@@ -446,11 +457,10 @@ function hydrateGuides(
       canRestore:
         source.authorUserId === identity.userId &&
         (access.roles.includes("creator") || access.roles.includes("administrator")),
-      canDelete:
-        access.roles.includes("publisher") ||
-        (source.authorUserId === identity.userId &&
-          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
-          !source.publishedRevisionId),
+      canDelete: authorize("guide.delete", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
       screenshotsLockedAt: source.screenshotsLockedAt ?? undefined,

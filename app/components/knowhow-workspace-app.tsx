@@ -121,6 +121,17 @@ import type {
 } from "../../lib/knowhow-types";
 import { WORKSPACE_ROLES } from "../../lib/knowhow-types";
 import {
+  ACCESS_TIERS,
+  ACCESS_TIER_LABELS,
+  ACCESS_TIER_SUMMARIES,
+  INVITABLE_TIERS,
+  isCanonicalForTier,
+  rolesForTier,
+  tierForRoles,
+  type AccessTier,
+  type InvitableTier,
+} from "../../lib/workspace-access-tiers";
+import {
   guideEditorHref,
   guideHref,
   newGuideHref,
@@ -267,13 +278,12 @@ const SECTION_TO_VIEW: Record<WorkspaceSection, View> = {
   administration: "Administration",
 };
 
-const ROLE_COPY: Record<WorkspaceRole, string> = {
-  administrator: "Manage workspace settings, people, groups, and audit; does not grant guide access",
-  creator: "Create and edit their own private drafts",
-  reviewer: "Read and decide only assigned review drafts",
-  publisher: "Publish approved revisions and archive guides",
-  viewer: "Read published guides shared with them",
-};
+// The per-role descriptions that used to live here are gone with the checkbox
+// grid that showed them. One of them — "does not grant guide access" on
+// administrator — had been false for as long as policy.ts had granted that
+// role guide.create, guide.update and guide.publish. Access levels describe
+// themselves once, in workspace-access-tiers.ts, so there is no second copy to
+// drift from what the engine actually decides.
 
 function workspaceRoleLabel(role: WorkspaceRole) {
   if (role === "administrator") return "Administrator";
@@ -3639,7 +3649,13 @@ function MemberDialog({
   onSave: (roles: WorkspaceRole[]) => Promise<void>;
   onSuspend: () => Promise<void>;
 }) {
-  const [roles, setRoles] = useState(member.roles);
+  const [tier, setTier] = useState<AccessTier>(() => tierForRoles(member.roles));
+  // Memberships written before the ladder existed can hold combinations no
+  // level produces. They are shown at their nearest level, and named here so
+  // an administrator is not surprised when saving rewrites them.
+  const legacyRoles = isCanonicalForTier(member.roles)
+    ? null
+    : member.roles.map(workspaceRoleLabel).join(", ");
   // Refusals here are ordinary outcomes, not crashes: the last administrator
   // cannot be demoted, and a platform owner cannot be suspended. The shell's
   // error banner renders underneath this modal, so it has to be said in here.
@@ -3665,39 +3681,47 @@ function MemberDialog({
         </div>
         <section className="role-picker permission-section">
           <div className="permission-section-heading">
-            <div><span className="field-label">Workspace roles</span><small>Select every role this person needs.</small></div>
-            <span>{countPhrase(roles.length, "role")} selected</span>
+            <div>
+              <span className="field-label">Workspace access</span>
+              <small>Each level includes everything below it.</small>
+            </div>
           </div>
-          {WORKSPACE_ROLES.map((role) => {
+          {ACCESS_TIERS.map((option) => {
             // The command layer refuses to remove the workspace's only
-            // administrator. Locking the box says so while there is still time
-            // to add someone, instead of failing after Save.
-            const locked = role === "administrator" && isLastAdministrator;
+            // administrator. Locking the choice says so while there is still
+            // time to give someone else the role, instead of failing on save.
+            const locked = isLastAdministrator && option !== "admin";
             return (
-              <label className={`choice-row permission-option${roles.includes(role) ? " selected" : ""}${locked ? " is-locked" : ""}`} key={role}>
+              <label
+                className={`choice-row permission-option${tier === option ? " selected" : ""}${locked ? " is-locked" : ""}`}
+                key={option}
+              >
                 <input
-                  type="checkbox"
-                  checked={roles.includes(role)}
+                  type="radio"
+                  name="workspace-access-tier"
+                  checked={tier === option}
                   disabled={locked}
-                  onChange={() =>
-                    setRoles((items) =>
-                      items.includes(role)
-                        ? items.filter((item) => item !== role)
-                        : [...items, role],
-                    )
-                  }
+                  onChange={() => setTier(option)}
                 />
                 <span>
-                  <strong>{workspaceRoleLabel(role)}</strong>
-                  <small>
-                    {locked
-                      ? "The only administrator. Give someone else this role first."
-                      : ROLE_COPY[role]}
-                  </small>
+                  <strong>{ACCESS_TIER_LABELS[option]}</strong>
+                  <small>{ACCESS_TIER_SUMMARIES[option]}</small>
                 </span>
               </label>
             );
           })}
+          {isLastAdministrator ? (
+            <PolicyNote icon={LockKeyhole}>
+              The only administrator. Make someone else an Admin before
+              changing this.
+            </PolicyNote>
+          ) : null}
+          {legacyRoles ? (
+            <PolicyNote icon={Shield}>
+              This member holds an older combination of roles
+              ({legacyRoles}). Saving will move them to the level shown above.
+            </PolicyNote>
+          ) : null}
         </section>
         <PolicyNote icon={Shield} className="member-access-note">
           This member belongs to {countPhrase(member.groupIds.length, "group")} and may also receive workspace-wide or direct guide audiences.
@@ -3749,10 +3773,10 @@ function MemberDialog({
           <button
             className="button primary"
             type="button"
-            disabled={busy || roles.length === 0}
+            disabled={busy}
             onClick={() => {
               setError("");
-              void onSave(roles).catch((nextError) =>
+              void onSave(rolesForTier(tier)).catch((nextError) =>
                 setError(messageFromError(nextError)),
               );
             }}
@@ -3784,7 +3808,7 @@ function InviteDialog({
 }) {
   const [label, setLabel] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
-  const [role, setRole] = useState<WorkspaceRole>("creator");
+  const [tier, setTier] = useState<InvitableTier>("creator");
   const [expires, setExpires] = useState(72);
   const [created, setCreated] = useState<
     Array<{ email: string; token: string }>
@@ -3813,7 +3837,11 @@ function InviteDialog({
           const result = await onCreate({
             emails: parsed.emails,
             label: label.trim(),
-            role,
+            // The three invitable levels share their names with the roles the
+            // token already carries, so the wire format is unchanged and
+            // outstanding invitations keep working. The server expands the
+            // name into that level's full role set when it is redeemed.
+            role: tier,
             expiresInHours: expires,
           });
           if (result.length) setCreated(result);
@@ -3916,51 +3944,54 @@ function InviteDialog({
             <section className="invite-composer-section invite-access-section">
               <div className="form-section-heading">
                 <span className="form-section-icon"><UserCog /></span>
-                <div><strong>Invitation access</strong><small>Choose the initial role, expiry, and an optional internal label.</small></div>
+                <div><strong>What can they do?</strong><small>Each level includes everything below it, and can be changed later.</small></div>
               </div>
-            <div className="invite-settings">
-              <label className="field">
-                <span>Internal label <small>Optional</small></span>
-                <input
-                  value={label}
-                  onChange={(event) => setLabel(event.target.value)}
-                  placeholder="August contractor onboarding"
-                />
-              </label>
               <div className="field">
-                <span>Starting role</span>
                 <SelectMenu
                   className="form-select"
-                  value={role}
-                  onChange={(value) => setRole(value as WorkspaceRole)}
+                  value={tier}
+                  onChange={(value) => setTier(value as InvitableTier)}
                   ariaLabel="Invitation access"
-                  options={[
-                    { value: "viewer", label: "Viewer — can view shared guides" },
-                    { value: "creator", label: "Creator — can create guides" },
-                    { value: "reviewer", label: "Reviewer — reviews assigned drafts" },
-                    { value: "publisher", label: "Publisher — publishes approved revisions" },
-                  ]}
-                />
-                <small>
-                  Roles are additive and can be adjusted after membership.
-                </small>
-              </div>
-              <div className="field">
-                <span>Expires after</span>
-                <SelectMenu
-                  className="form-select"
-                  value={String(expires)}
-                  onChange={(value) => setExpires(Number(value))}
-                  ariaLabel="Invitation expiry"
-                  options={[
-                    { value: "24", label: "24 hours" },
-                    { value: "72", label: "3 days" },
-                    { value: "168", label: "7 days" },
-                    { value: "720", label: "30 days" },
-                  ]}
+                  options={INVITABLE_TIERS.map((option) => ({
+                    value: option,
+                    label: `${ACCESS_TIER_LABELS[option]} — ${ACCESS_TIER_SUMMARIES[option].replace(/^Also /, "").replace(/\.$/, "")}`,
+                  }))}
                 />
               </div>
-            </div>
+              {/*
+                Expiry and the internal label were asked before anyone had
+                sent a single invitation. Both have defaults that are right
+                almost always, and both are visible on the invitation
+                afterwards, so they are settings rather than questions.
+              */}
+              <details className="invite-advanced">
+                <summary>More options</summary>
+                <div className="invite-settings">
+                  <label className="field">
+                    <span>Internal label <small>Optional</small></span>
+                    <input
+                      value={label}
+                      onChange={(event) => setLabel(event.target.value)}
+                      placeholder="August contractor onboarding"
+                    />
+                  </label>
+                  <div className="field">
+                    <span>Expires after</span>
+                    <SelectMenu
+                      className="form-select"
+                      value={String(expires)}
+                      onChange={(value) => setExpires(Number(value))}
+                      ariaLabel="Invitation expiry"
+                      options={[
+                        { value: "24", label: "24 hours" },
+                        { value: "72", label: "3 days" },
+                        { value: "168", label: "7 days" },
+                        { value: "720", label: "30 days" },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </details>
             </section>
             <PolicyNote icon={LockKeyhole} className="invite-security-note">
               Every invitation is exact-email, single-use, expiring, and audited. There are no generic invite links.

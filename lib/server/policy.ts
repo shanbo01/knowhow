@@ -25,6 +25,7 @@ export type PolicyAction =
   | "guide.publish"
   | "guide.unpublish"
   | "guide.archive"
+  | "guide.delete"
   | "guide.export"
   | "capture.create"
   | "capture.update";
@@ -39,6 +40,12 @@ export interface GuideAuthorizationFacts {
   privacyReviewed?: boolean;
   reviewApproved?: boolean;
   requireReviewBeforePublish?: boolean;
+  /**
+   * Whether the guide has ever been published. Deleting is refused to an
+   * author once their work has been live to an audience — that is a
+   * publisher's decision, because other people have come to rely on it.
+   */
+  hasBeenPublished?: boolean;
 }
 
 export interface SupportGrantFacts {
@@ -342,10 +349,41 @@ export function authorize(
     return deny("PUBLISHER_REQUIRED", "Publisher access is required.");
   }
 
+  // Retiring a guide follows the same line as deleting one: a publisher may
+  // retire anything, and an author may retire their own work up until the
+  // point other people were told to rely on it.
   if (action === "guide.archive") {
-    return roles.has("publisher")
-      ? allow("Publishers may archive guide revisions.")
-      : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+    if (roles.has("publisher")) {
+      return allow("Publishers may archive guide revisions.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may archive their own guide before it goes live.");
+    }
+    return deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+  }
+
+  // Deletion had no entry here at all: the rule was hand-written in the
+  // command layer and again in the bootstrap view, so it also skipped the
+  // membership, lifecycle and support-grant checks above. Same rule, stated
+  // once, in the place that already knows the rest of the context.
+  if (action === "guide.delete") {
+    if (roles.has("publisher")) {
+      return allow("Publishers may delete guides.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may delete their own guide before it goes live.");
+    }
+    return deny("GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
   }
 
   if (action === "guide.export") {

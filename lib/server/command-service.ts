@@ -4,6 +4,7 @@ import type {
   WorkspaceRole,
   WorkspaceSettings,
 } from "../knowhow-types";
+import { rolesForTier, tierForRoles } from "../workspace-access-tiers";
 import { AccessService, type PlatformRole } from "./access-service";
 import { BetaAccessService } from "./beta-access-service";
 import { DesktopAuthService } from "./desktop-auth-service";
@@ -3541,7 +3542,11 @@ export class CommandService {
             },
             {
               name: identity.name,
-              roles: [claims.role],
+              // The invitation carries one role name; the membership stores
+              // the whole level it stands for. A publisher who could not read
+              // or draft was never a coherent thing to be, and inviting
+              // somebody into that set is how it used to happen.
+              roles: rolesForTier(tierForRoles([claims.role])),
               groupIds: [],
               joinedAt: nowIso(),
             } satisfies WorkspaceMemberRecord,

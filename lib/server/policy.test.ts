@@ -519,3 +519,95 @@ test("authorize - guide.unsubmit rescues a stranded review", () => {
     },
   );
 });
+
+test("authorize - guide.delete is a policy decision, not an inline rule", () => {
+  const unpublished = { isAuthor: true, hasBeenPublished: false };
+
+  // A publisher may delete anything in the library.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+
+  // An author may delete their own work right up until it went live.
+  assert.equal(
+    authorize("guide.delete", { ...baseContext, roles: ["creator"], guide: unpublished }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: true },
+    }).allowed,
+    false,
+  );
+
+  // Somebody else's draft is not theirs to remove.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: false, hasBeenPublished: false },
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    authorize("guide.delete", { ...baseContext, roles: ["viewer"], guide: unpublished }).allowed,
+    false,
+  );
+
+  // Routing it through the engine is what gives deletion the lifecycle and
+  // membership checks it never ran when the rule was written out by hand.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      membershipStatus: "suspended",
+      guide: unpublished,
+    }).code,
+    "MEMBERSHIP_REQUIRED",
+  );
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      lifecycleAccess: "read_only",
+      guide: unpublished,
+    }).code,
+    "SUBSCRIPTION_READ_ONLY",
+  );
+});
+
+test("authorize - guide.archive follows the same line as delete", () => {
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+  // An author may retire their own guide until other people were told to
+  // rely on it; after that it is a publisher's call.
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: false },
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: true },
+    }).allowed,
+    false,
+  );
+});
