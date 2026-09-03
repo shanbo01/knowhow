@@ -31,7 +31,7 @@ import { TABLES } from "../../../../lib/server/appwrite-resources";
 import { EntitlementService } from "../../../../lib/server/entitlement-service";
 import { requireAuthorized } from "../../../../lib/server/policy";
 import type { RecordStore } from "../../../../lib/server/record-store";
-import { requireVerifiedSession } from "../../../../lib/server/session-identity";
+import { getSessionIdentity } from "../../../../lib/server/session-identity";
 import { consumeFixedWindows } from "../../../../lib/server/rate-limit-service";
 import { authorizeWorkspaceLogo } from "../../../../lib/server/workspace-logo-media";
 
@@ -122,7 +122,7 @@ function attachmentDisposition(filename: string) {
 }
 
 async function workspaceContext(request: Request) {
-  const identity = await requireVerifiedSession(request);
+  const identity = await getSessionIdentity(request);
   const services = createRequestServices();
   const url = new URL(request.url);
   const workspaceId = requiredId(url, "workspaceId", "Workspace");
@@ -300,7 +300,7 @@ export async function POST(request: Request) {
     assertCookieMutationRequest(request, allowedRequestOrigins());
     const initialUrl = new URL(request.url);
     if (initialUrl.searchParams.get("kind") === "provisioning-logo") {
-      const identity = await requireVerifiedSession(request);
+      const identity = await getSessionIdentity(request);
       const { store, objects } = createRequestServices();
       await consumeFixedWindows(store, [{ scope: "knowhow.provisioning-logo", subject: identity.userId, limit: 20, windowSeconds: 600 }]);
       const platformRoles = await store.list(TABLES.platformRoles, {

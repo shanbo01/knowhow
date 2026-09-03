@@ -33,7 +33,7 @@ import {
   createRequestServices,
   withRequestId,
 } from "../../../../lib/server/request-services";
-import { requireVerifiedSession } from "../../../../lib/server/session-identity";
+import { getSessionIdentity } from "../../../../lib/server/session-identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     if (!IDEMPOTENCY_KEY.test(idempotencyKey)) {
       throw new HttpError(400, "IDEMPOTENCY_KEY_INVALID", "A valid idempotency key is required.");
     }
-    const identity = await requireVerifiedSession(request);
+    const identity = await getSessionIdentity(request);
     const { store, objects, exportObjects } = createRequestServices();
     if (format === "pdf" || format === "html" || format === "pptx") {
       await new EntitlementService(store, workspaceId).requireFeature(
@@ -258,7 +258,7 @@ export async function GET(request: Request) {
     if (!ID.test(jobId)) {
       throw new HttpError(400, "EXPORT_JOB_ID_INVALID", "Export job ID is invalid.");
     }
-    const identity = await requireVerifiedSession(request);
+    const identity = await getSessionIdentity(request);
     const { store, objects, exportObjects } = createRequestServices();
     await consumeFixedWindows(store, [
       {

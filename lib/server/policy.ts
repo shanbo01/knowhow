@@ -89,12 +89,36 @@ function hasAnyRole(
   return required.some((role) => roles.has(role));
 }
 
+/**
+ * The actions an unverified address must not reach.
+ *
+ * Verification proves the address belongs to the person holding it, so it
+ * gates the operations that send something outward or hand access to someone
+ * else — publishing to an audience, exporting a copy that leaves the
+ * workspace, and changing who is in it. Reading and drafting reach nobody but
+ * the author, so they do not wait on an inbox: a person who cannot try the
+ * product until they find an email mostly does not come back.
+ *
+ * Platform administration is absent because it is gated far more tightly
+ * elsewhere, and it never runs for an ordinary signup.
+ */
+const VERIFIED_IDENTITY_ACTIONS: ReadonlySet<PolicyAction> = new Set([
+  "guide.publish",
+  "guide.export",
+  "workspace.invitations.manage",
+  "workspace.members.manage",
+  "workspace.groups.manage",
+]);
+
 export function authorize(
   action: PolicyAction,
   context: AuthorizationContext,
 ): PolicyDecision {
-  if (!context.isVerifiedIdentity) {
-    return deny("EMAIL_NOT_VERIFIED", "A verified identity is required.");
+  if (!context.isVerifiedIdentity && VERIFIED_IDENTITY_ACTIONS.has(action)) {
+    return deny(
+      "EMAIL_NOT_VERIFIED",
+      "Verify your email address to do this.",
+    );
   }
 
   if (action.startsWith("platform.")) {

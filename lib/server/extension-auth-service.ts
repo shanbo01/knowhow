@@ -76,12 +76,21 @@ function randomCredential(bytes = 32) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * A paired device is not a session, so it cannot speak for the account's
+ * verification state — the device record stores an address, not whether that
+ * address was ever confirmed. This surface authorizes `capture.create` and
+ * nothing else, which is deliberately available before verification, so the
+ * value is unused today. It is stated as false rather than true so that a
+ * verification-gated action added to this surface later fails closed instead
+ * of trusting a claim no device is in a position to make.
+ */
 function identityFrom(row: StoredRecord<RecordData>, details: ExtensionDeviceDetails): AuthenticatedIdentity {
   return {
     userId: String(row.user_id),
     email: details.email,
     name: details.displayName || details.email,
-    emailVerified: true,
+    emailVerified: false,
     mfaEnabled: false,
   };
 }

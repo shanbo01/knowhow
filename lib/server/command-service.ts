@@ -656,6 +656,18 @@ export class CommandService {
       workspaceAdministrator?: boolean;
     } = { workspaceAdministrator: true },
   ) {
+    // An appointment posts a credential to an address the caller typed, so it
+    // is one of the few things an unverified account must not reach. The
+    // organization-owner path is now available before verification, unlike the
+    // platform path, so the requirement lives here where the mail is sent
+    // rather than at each caller.
+    if (!identity.emailVerified) {
+      throw new HttpError(
+        403,
+        "EMAIL_NOT_VERIFIED",
+        "Verify your email address before appointing anyone.",
+      );
+    }
     const appointmentId = resourceId("appoint");
     const expiresAtSeconds = Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
     const token = await signAppointmentToken({
@@ -1106,8 +1118,18 @@ export class CommandService {
       return service.complete(identity, payload as SelfServiceSetupInput, {
         requestId: options.requestId,
         reauthenticated: options.reauthenticated,
-        createInvite: (input) =>
-          this.createSelfServiceInvite(identity, input, options),
+        // Setting up a workspace no longer waits on a verified address, but
+        // sending mail to a third party does: an unverified account that can
+        // post an invitation to any address is a way to send mail from this
+        // domain to someone who never asked for it. The workspace is created
+        // either way; the teammate is invited from People & access once the
+        // owner has verified.
+        ...(identity.emailVerified
+          ? {
+              createInvite: (input: Parameters<typeof this.createSelfServiceInvite>[1]) =>
+                this.createSelfServiceInvite(identity, input, options),
+            }
+          : {}),
       });
     }
 

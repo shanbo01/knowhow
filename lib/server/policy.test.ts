@@ -10,14 +10,45 @@ const baseContext: AuthorizationContext = {
   roles: ["viewer"],
 };
 
-test("authorize - unverified identity", () => {
-  const ctx: AuthorizationContext = { ...baseContext, isVerifiedIdentity: false };
-  const res = authorize("workspace.read", ctx);
-  assert.deepEqual(res, {
-    allowed: false,
-    code: "EMAIL_NOT_VERIFIED",
-    reason: "A verified identity is required.",
-  });
+// Verification gates the actions that reach somebody else, not the product.
+// An unverified person reads, captures and drafts; they cannot publish to an
+// audience, export a copy out, or change who is in the workspace.
+test("authorize - unverified identity gates only outbound actions", () => {
+  const ctx: AuthorizationContext = {
+    ...baseContext,
+    isVerifiedIdentity: false,
+    roles: ["administrator", "creator", "publisher"],
+  };
+
+  assert.equal(authorize("workspace.read", ctx).allowed, true);
+  assert.equal(authorize("guide.list", ctx).allowed, true);
+  assert.equal(authorize("guide.create", ctx).allowed, true);
+  assert.equal(authorize("capture.create", ctx).allowed, true);
+  assert.equal(
+    authorize("guide.update", {
+      ...ctx,
+      guide: { revisionStatus: "draft", isAuthor: true },
+    }).allowed,
+    true,
+  );
+
+  for (const action of [
+    "guide.publish",
+    "guide.export",
+    "workspace.invitations.manage",
+    "workspace.members.manage",
+    "workspace.groups.manage",
+  ] as const) {
+    assert.deepEqual(
+      authorize(action, ctx),
+      {
+        allowed: false,
+        code: "EMAIL_NOT_VERIFIED",
+        reason: "Verify your email address to do this.",
+      },
+      `${action} must wait for a verified address`,
+    );
+  }
 });
 
 test("authorize - platform actions", () => {
@@ -428,7 +459,12 @@ test("authorize - guide.export", () => {
 
 test("requireAuthorized - throws HttpError on deny", () => {
   assert.throws(
-    () => requireAuthorized("workspace.read", { ...baseContext, isVerifiedIdentity: false }),
+    () =>
+      requireAuthorized("workspace.invitations.manage", {
+        ...baseContext,
+        roles: ["administrator"],
+        isVerifiedIdentity: false,
+      }),
     (err) => err instanceof HttpError && err.status === 403 && err.code === "EMAIL_NOT_VERIFIED",
   );
 });

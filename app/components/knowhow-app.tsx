@@ -17,7 +17,7 @@ import {
   AuthGate,
   MfaEnrollmentGate,
   MfaGate,
-  VerificationGate,
+  VerificationBanner,
   type BackendState,
 } from "./auth-gate";
 import {
@@ -807,9 +807,10 @@ export default function Home() {
       activeWorkspaceId: cachedProductSession?.activeWorkspaceId ?? "",
     };
     try {
-      if (nextUser.emailVerification) {
-        await loadBootstrap();
-      }
+      // Loaded whether or not the address is verified. An unverified person
+      // reads, captures and drafts; the server withholds only the actions that
+      // reach someone else.
+      await loadBootstrap();
     } catch (nextError) {
       setBootstrap(null);
       setError(errorMessage(nextError));
@@ -824,7 +825,7 @@ export default function Home() {
   }, [restore]);
 
   useEffect(() => {
-    if (!user?.emailVerification || !bootstrap || appointmentToken) return;
+    if (!bootstrap || appointmentToken) return;
     const frame = window.requestAnimationFrame(() => {
       const activeWorkspace = bootstrap.activeWorkspace?.workspace;
       const fallback =
@@ -892,7 +893,7 @@ export default function Home() {
   }, [appointmentToken, bootstrap, loadBootstrap, navigate, route, user]);
 
   useEffect(() => {
-    if (!user?.emailVerification || !bootstrap) return;
+    if (!bootstrap) return;
     const returnTo = window.sessionStorage.getItem(RETURN_TO_AFTER_AUTH_KEY);
     if (
       returnTo &&
@@ -1381,20 +1382,6 @@ export default function Home() {
     );
   }
 
-  if (!user.emailVerification) {
-    return (
-      <VerificationGate
-        email={user.email}
-        busy={busy}
-        sent={verificationSent}
-        error={error}
-        onSend={sendVerification}
-        onRefresh={refreshVerification}
-        onSignOut={signOut}
-      />
-    );
-  }
-
   if (!bootstrap) {
     return (
       <WorkspaceRecovery
@@ -1683,6 +1670,15 @@ export default function Home() {
 
   return (
     <>
+      {user.emailVerification ? null : (
+        <VerificationBanner
+          email={user.email}
+          busy={busy}
+          sent={verificationSent}
+          onSend={sendVerification}
+          onRefresh={refreshVerification}
+        />
+      )}
       <KnowHowWorkspaceApp
         key={activeWorkspaceId}
         data={bootstrap}

@@ -15,8 +15,8 @@ import {
   withRequestId,
 } from "../../../lib/server/request-services";
 import {
+  getSessionIdentity,
   requireRecentTotp,
-  requireVerifiedSession,
 } from "../../../lib/server/session-identity";
 import { consumeFixedWindows } from "../../../lib/server/rate-limit-service";
 
@@ -64,7 +64,7 @@ function responseWithRequestId(
 export async function GET(request: Request) {
   const requestId = correlationId(request);
   try {
-    const identity = await requireVerifiedSession(request);
+    const identity = await getSessionIdentity(request);
     const { store } = createRequestServices();
     await consumeFixedWindows(store, [
       {
@@ -98,7 +98,7 @@ export async function POST(request: Request) {
   const requestId = correlationId(request);
   try {
     assertCookieMutationRequest(request, allowedRequestOrigins());
-    const identity = await requireVerifiedSession(request);
+    const identity = await getSessionIdentity(request);
     const { store, objects } = createRequestServices();
     const body = await readJsonObject(request, 1_500_000);
     const action = inputText(body.action, "Action", { min: 2, max: 100 });
