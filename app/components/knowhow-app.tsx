@@ -20,11 +20,9 @@ import {
   VerificationBanner,
   type BackendState,
 } from "./auth-gate";
-import {
-  OrganizationView,
-  PlatformProvisioningDialog,
-  KnowHowWorkspaceApp,
-} from "./knowhow-workspace-app";
+import { KnowHowWorkspaceApp } from "./knowhow-workspace-app";
+import { PlatformProvisioningDialog } from "./workspace/provisioning";
+import { OrganizationView } from "./workspace/organization";
 import { ProductBrand } from "./product-brand";
 import {
   SelfServiceSetup,
