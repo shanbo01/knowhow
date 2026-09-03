@@ -126,10 +126,17 @@ import {
   ACCESS_TIER_SUMMARIES,
   INVITABLE_TIERS,
   isCanonicalForTier,
+  isCanonicalForOrganizationTier,
+  ORGANIZATION_TIERS,
+  ORGANIZATION_TIER_LABELS,
+  ORGANIZATION_TIER_SUMMARIES,
+  organizationTierForRoles,
+  rolesForOrganizationTier,
   rolesForTier,
   tierForRoles,
   type AccessTier,
   type InvitableTier,
+  type OrganizationTier,
 } from "../../lib/workspace-access-tiers";
 import {
   guideEditorHref,
@@ -4763,32 +4770,11 @@ function SettingsView({
   );
 }
 
-const ORGANIZATION_ROLES: Array<{
-  value: OrganizationRole;
-  label: string;
-  description: string;
-}> = [
-    {
-      value: "owner",
-      label: "Owner",
-      description: "Full organization authority, including owner appointments and settings",
-    },
-    {
-      value: "administrator",
-      label: "Administrator",
-      description: "Organization identity, people, and workspace directory without guide access",
-    },
-    {
-      value: "billing",
-      label: "Billing",
-      description: "Commercial terms and usage summaries",
-    },
-    {
-      value: "security_auditor",
-      label: "Security auditor",
-      description: "Membership and security metadata, without guide content",
-    },
-  ];
+// The four organization roles this table described are gone from the
+// interface. Only one line was ever enforced — owners appoint people and
+// change access, everyone else with organization access manages the
+// directory — so ORGANIZATION_TIERS states that line, and billing and
+// security auditor stopped being names a customer has to learn.
 
 export function OrganizationView({
   organization,
@@ -5322,7 +5308,7 @@ function OrganizationAppointmentDialog({
   >;
 }) {
   const [emailDraft, setEmailDraft] = useState("");
-  const [roles, setRoles] = useState<OrganizationRole[]>(["administrator"]);
+  const [appointedTier, setAppointedTier] = useState<OrganizationTier>("administrator");
   const [workspaceId, setWorkspaceId] = useState(
     organization.workspaces[0]?.id ?? "",
   );
@@ -5411,7 +5397,6 @@ function OrganizationAppointmentDialog({
               !parsed.emails.length ||
               parsed.invalid.length ||
               overLimit ||
-              !roles.length ||
               !workspaceId
             ) {
               return;
@@ -5420,7 +5405,7 @@ function OrganizationAppointmentDialog({
             try {
               const result = await onAppoint({
                 emails: parsed.emails,
-                roles,
+                roles: rolesForOrganizationTier(appointedTier),
                 anchorWorkspaceId: workspaceId,
               });
               if (result.length) setCreated(result);
@@ -5430,8 +5415,9 @@ function OrganizationAppointmentDialog({
           }}
         >
           <p className="modal-copy">
-            Organization roles expose governance metadata only. Select workspace
-            access separately from the workspace Members page.
+            Organization access covers the organization itself — its details,
+            its workspace directory, and who else has access. Workspace access
+            and guide audiences are set separately, on the Members page.
           </p>
           <label className="field">
             <span>Verified account emails</span>
@@ -5466,22 +5452,20 @@ function OrganizationAppointmentDialog({
             ) : null}
           </label>
           <div className="role-picker">
-            {ORGANIZATION_ROLES.map((role) => (
-              <label className="choice-row" key={role.value}>
+            {ORGANIZATION_TIERS.map((option) => (
+              <label
+                className={`choice-row permission-option${appointedTier === option ? " selected" : ""}`}
+                key={option}
+              >
                 <input
-                  type="checkbox"
-                  checked={roles.includes(role.value)}
-                  onChange={(event) =>
-                    setRoles((items) =>
-                      event.target.checked
-                        ? [...new Set([...items, role.value])]
-                        : items.filter((item) => item !== role.value),
-                    )
-                  }
+                  type="radio"
+                  name="appointed-organization-tier"
+                  checked={appointedTier === option}
+                  onChange={() => setAppointedTier(option)}
                 />
                 <span>
-                  <strong>{role.label}</strong>
-                  <small>{role.description}</small>
+                  <strong>{ORGANIZATION_TIER_LABELS[option]}</strong>
+                  <small>{ORGANIZATION_TIER_SUMMARIES[option]}</small>
                 </span>
               </label>
             ))}
@@ -5525,7 +5509,6 @@ function OrganizationAppointmentDialog({
                 !parsed.emails.length ||
                 parsed.invalid.length > 0 ||
                 overLimit ||
-                !roles.length ||
                 !workspaceId
               }
             >
@@ -5555,15 +5538,38 @@ function OrganizationMemberDialog({
     status: "active" | "revoked",
   ) => Promise<void>;
 }) {
-  const [roles, setRoles] = useState(member.roles);
-  const [status, setStatus] = useState<"active" | "revoked">(
-    member.status === "active" ? "active" : "revoked",
+  const [tier, setTier] = useState<OrganizationTier>(() =>
+    organizationTierForRoles(member.roles),
   );
+  // Billing and security auditor are weaker than administrator, so a
+  // membership holding one is shown at the administrator level but saving it
+  // there grants more than it had. Say so before it happens.
+  const legacyRoles = isCanonicalForOrganizationTier(member.roles)
+    ? null
+    : member.roles.map(organizationRoleLabel).join(", ");
   const [error, setError] = useState("");
   const { askToConfirm, dialog: confirmDialog } = useConfirmDialog();
+
+  async function revoke() {
+    setError("");
+    const confirmed = await askToConfirm({
+      title: `Revoke ${member.name || member.email}'s organization access?`,
+      description:
+        "Organization authority ends immediately. Their workspace membership and guides are not affected.",
+      confirmLabel: "Revoke access",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    try {
+      await onSave(rolesForOrganizationTier(tier), "revoked");
+    } catch (nextError) {
+      setError(messageFromError(nextError));
+    }
+  }
+
   return (
     <Modal
-      title={`Organization roles · ${member.name || member.email}`}
+      title={`Organization access · ${member.name || member.email}`}
       eyebrow="Owner-controlled authority"
       onClose={onClose}
     >
@@ -5573,62 +5579,69 @@ function OrganizationMemberDialog({
           event.preventDefault();
           setError("");
           try {
-            if (member.status === "active" && status === "revoked") {
-              const confirmed = await askToConfirm({
-                title: `Revoke ${member.name || member.email}'s organization membership?`,
-                description: "Organization governance access ends immediately. Workspace memberships remain separate.",
-                confirmLabel: "Revoke membership",
-                tone: "danger",
-              });
-              if (!confirmed) return;
-            }
-            await onSave(roles, status);
+            await onSave(rolesForOrganizationTier(tier), "active");
           } catch (nextError) {
             setError(messageFromError(nextError));
           }
         }}
       >
         <p className="modal-copy">
-          Changing these roles never changes the person&apos;s workspace
-          membership or guide audiences. An organization always keeps at least
-          one owner; appoint a second so nobody is ever locked out.
+          This is authority over the organization — its details, its workspace
+          directory, and who else has access. It never changes the
+          person&apos;s workspace membership or which guides they can read. An
+          organization always keeps at least one owner; appoint a second so
+          nobody is ever locked out.
         </p>
         <div className="role-picker">
-          {ORGANIZATION_ROLES.map((role) => (
-            <label className="choice-row" key={role.value}>
+          {ORGANIZATION_TIERS.map((option) => (
+            <label
+              className={`choice-row permission-option${tier === option ? " selected" : ""}`}
+              key={option}
+            >
               <input
-                type="checkbox"
-                checked={roles.includes(role.value)}
-                onChange={(event) =>
-                  setRoles((items) =>
-                    event.target.checked
-                      ? [...new Set([...items, role.value])]
-                      : items.filter((item) => item !== role.value),
-                  )
-                }
+                type="radio"
+                name="organization-tier"
+                checked={tier === option}
+                onChange={() => setTier(option)}
               />
               <span>
-                <strong>{role.label}</strong>
-                <small>{role.description}</small>
+                <strong>{ORGANIZATION_TIER_LABELS[option]}</strong>
+                <small>{ORGANIZATION_TIER_SUMMARIES[option]}</small>
               </span>
             </label>
           ))}
         </div>
-        <label className="choice-row emphasized">
-          <input
-            type="checkbox"
-            checked={status === "active"}
-            onChange={(event) =>
-              setStatus(event.target.checked ? "active" : "revoked")
-            }
-          />
-          <span>
-            <strong>Active organization membership</strong>
-            <small>
-              Revocation takes effect immediately for organization governance.
-            </small>
-          </span>
-        </label>
+        {legacyRoles ? (
+          <PolicyNote icon={Shield}>
+            This person holds an older set of organization roles
+            ({legacyRoles}). Saving will move them to the level above, which
+            grants more than they have today.
+          </PolicyNote>
+        ) : null}
+        {member.status === "active" ? (
+          <section className="member-danger-zone">
+            <div>
+              <strong>Revoke organization access</strong>
+              <small>
+                Takes effect immediately. Their workspace membership and guides
+                are untouched.
+              </small>
+            </div>
+            <button
+              className="button danger-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void revoke()}
+            >
+              Revoke
+            </button>
+          </section>
+        ) : (
+          <PolicyNote icon={ShieldCheck}>
+            Organization access is revoked. Saving restores it at the level
+            selected above.
+          </PolicyNote>
+        )}
         {error ? (
           <p className="form-error" role="alert">
             {error}
@@ -5639,12 +5652,8 @@ function OrganizationMemberDialog({
           <button className="button secondary" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={busy || !roles.length}
-          >
-            <ShieldCheck /> Save roles
+          <button className="button primary" type="submit" disabled={busy}>
+            <ShieldCheck /> Save access
           </button>
         </footer>
       </form>

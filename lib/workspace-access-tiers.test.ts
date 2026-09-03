@@ -3,7 +3,11 @@ import { describe, it } from "node:test";
 import {
   ACCESS_TIERS,
   INVITABLE_TIERS,
+  isCanonicalForOrganizationTier,
   isCanonicalForTier,
+  ORGANIZATION_TIERS,
+  organizationTierForRoles,
+  rolesForOrganizationTier,
   rolesForTier,
   tierForRoles,
 } from "./workspace-access-tiers";
@@ -75,5 +79,51 @@ describe("access tiers", () => {
     it("ignores order when checking canonical form", () => {
       assert.ok(isCanonicalForTier(["creator", "viewer"]));
     });
+  });
+});
+
+describe("organization access tiers", () => {
+  it("round-trips both levels", () => {
+    for (const tier of ORGANIZATION_TIERS) {
+      assert.equal(
+        organizationTierForRoles(rolesForOrganizationTier(tier)),
+        tier,
+      );
+      assert.ok(isCanonicalForOrganizationTier(rolesForOrganizationTier(tier)));
+    }
+  });
+
+  it("treats ownership as the only step up", () => {
+    assert.equal(organizationTierForRoles(["owner"]), "owner");
+    assert.equal(organizationTierForRoles(["administrator"]), "administrator");
+    assert.equal(organizationTierForRoles([]), "administrator");
+  });
+
+  // Owner must survive being held alongside anything else, because the
+  // command layer still requires exactly that role to appoint people.
+  it("keeps owner when it is held with other roles", () => {
+    assert.equal(organizationTierForRoles(["billing", "owner"]), "owner");
+    assert.ok(rolesForOrganizationTier("owner").includes("owner"));
+  });
+
+  // Billing and security auditor are weaker than administrator, so a
+  // membership holding one is not canonical: saving it grants more than it
+  // had, and the dialog has to say so first.
+  it("reports the weaker legacy roles as non-canonical", () => {
+    for (const role of ["billing", "security_auditor"] as const) {
+      assert.equal(organizationTierForRoles([role]), "administrator");
+      assert.ok(
+        !isCanonicalForOrganizationTier([role]),
+        `${role} must be flagged as an upgrade before saving`,
+      );
+    }
+  });
+
+  it("never writes billing or security auditor", () => {
+    for (const tier of ORGANIZATION_TIERS) {
+      const written = rolesForOrganizationTier(tier);
+      assert.ok(!written.includes("billing"));
+      assert.ok(!written.includes("security_auditor"));
+    }
   });
 });

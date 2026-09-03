@@ -1,4 +1,5 @@
 import { type WorkspaceRole } from "./guide-contracts";
+import type { OrganizationRole } from "./knowhow-types";
 
 /**
  * The four levels of workspace access a person can hold.
@@ -104,3 +105,70 @@ export const INVITABLE_TIERS: readonly InvitableTier[] = [
   "creator",
   "publisher",
 ];
+
+/**
+ * Organization access, on the same two-question footing as workspace access.
+ *
+ * The stored shape offers four roles — owner, administrator, billing and
+ * security_auditor — but only one line has ever been enforced: owners appoint
+ * people and change roles, and everyone else with organization access can
+ * rename and add workspaces. Billing granted nothing the interface acted on,
+ * and security auditor granted a subset of what administrator already had.
+ * Four names for two levels of authority is three names too many.
+ *
+ * As with workspace access this is a view over the stored roles. Nothing
+ * re-authorizes: the command layer still requires `owner` for appointments and
+ * role changes exactly as before.
+ */
+export const ORGANIZATION_TIERS = ["administrator", "owner"] as const;
+
+export type OrganizationTier = (typeof ORGANIZATION_TIERS)[number];
+
+const ORGANIZATION_TIER_ROLES: Record<
+  OrganizationTier,
+  readonly OrganizationRole[]
+> = {
+  administrator: ["administrator"],
+  owner: ["owner"],
+};
+
+export const ORGANIZATION_TIER_LABELS: Record<OrganizationTier, string> = {
+  administrator: "Administrator",
+  owner: "Owner",
+};
+
+export const ORGANIZATION_TIER_SUMMARIES: Record<OrganizationTier, string> = {
+  administrator:
+    "Organization details and the workspace directory. Cannot change who has organization access.",
+  owner:
+    "Everything an administrator can do, plus appointing people and changing their access.",
+};
+
+export function rolesForOrganizationTier(
+  tier: OrganizationTier,
+): OrganizationRole[] {
+  return [...ORGANIZATION_TIER_ROLES[tier]];
+}
+
+/**
+ * Only ownership is a real step up, so anything that is not an owner reads as
+ * an administrator. Billing and security auditor are weaker than that in
+ * practice, which is why a membership holding one is reported as non-canonical
+ * — saving it at this level grants administrator rather than describing what
+ * it already had, and the interface says so before it happens.
+ */
+export function organizationTierForRoles(
+  roles: readonly OrganizationRole[],
+): OrganizationTier {
+  return roles.includes("owner") ? "owner" : "administrator";
+}
+
+export function isCanonicalForOrganizationTier(
+  roles: readonly OrganizationRole[],
+): boolean {
+  const canonical = rolesForOrganizationTier(organizationTierForRoles(roles));
+  return (
+    roles.length === canonical.length &&
+    roles.every((role) => canonical.includes(role))
+  );
+}
