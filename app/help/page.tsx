@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { resolveSiteOrigin } from "@/lib/server/site-origin";
 import { marketingPageGraph, serializeJsonLd } from "@/lib/structured-data";
 import {
@@ -61,6 +62,20 @@ export default async function HelpPage() {
         title="The procedure, written down while someone does it."
         intro={PRODUCT_SUMMARY}
       />
+      {/*
+        What the product actually produces, before any of the words explaining
+        it. Loaded eagerly and sized in the markup: it is the first thing on
+        the page, so it should not arrive after the text has already reflowed.
+      */}
+      <figure className={styles.helpHero}>
+        <Image
+          src="/help/help-hero.jpg"
+          alt="A published KnowHow guide open on a laptop, showing numbered steps with annotated screenshots."
+          width={1400}
+          height={788}
+          priority
+        />
+      </figure>
       <section className={styles.legal}>
         <h2>The life of a guide</h2>
         <p>
@@ -69,16 +84,25 @@ export default async function HelpPage() {
           default.
         </p>
         {HOW_IT_WORKS.map((stage, index) => (
-          <div key={stage.id}>
-            <h3>
-              {index + 1}. {stage.title}
-            </h3>
-            <p>{stage.summary}</p>
-            <ul>
-              {stage.detail.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
+          <div className={styles.helpStage} key={stage.id}>
+            {/* Decorative: the heading beside it already names the stage. */}
+            <Image
+              src={`/help/lifecycle-${stage.id}.png`}
+              alt=""
+              width={48}
+              height={48}
+            />
+            <div>
+              <h3>
+                {index + 1}. {stage.title}
+              </h3>
+              <p>{stage.summary}</p>
+              <ul>
+                {stage.detail.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         ))}
 
