@@ -359,6 +359,9 @@ const definitions = [
     [
       index("by_status_schedule", ["status", "scheduled_at"]),
       index("by_workspace", ["workspace_id"]),
+      // A workspace reads back the delivery of its own invitations, to report
+      // whether each one was actually sent rather than assuming it was.
+      index("by_workspace_kind", ["workspace_id", "kind"]),
       index("by_idempotency", ["idempotency_key"], "unique"),
     ],
   ],

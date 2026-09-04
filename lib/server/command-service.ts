@@ -4,6 +4,7 @@ import type {
   WorkspaceRole,
   WorkspaceSettings,
 } from "../knowhow-types";
+import { rolesForTier, tierForRoles } from "../workspace-access-tiers";
 import { AccessService, type PlatformRole } from "./access-service";
 import { BetaAccessService } from "./beta-access-service";
 import { DesktopAuthService } from "./desktop-auth-service";
@@ -656,6 +657,18 @@ export class CommandService {
       workspaceAdministrator?: boolean;
     } = { workspaceAdministrator: true },
   ) {
+    // An appointment posts a credential to an address the caller typed, so it
+    // is one of the few things an unverified account must not reach. The
+    // organization-owner path is now available before verification, unlike the
+    // platform path, so the requirement lives here where the mail is sent
+    // rather than at each caller.
+    if (!identity.emailVerified) {
+      throw new HttpError(
+        403,
+        "EMAIL_NOT_VERIFIED",
+        "Verify your email address before appointing anyone.",
+      );
+    }
     const appointmentId = resourceId("appoint");
     const expiresAtSeconds = Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
     const token = await signAppointmentToken({
@@ -716,17 +729,33 @@ export class CommandService {
     return { appointmentId, token, expiresAt };
   }
 
+  /**
+   * The invitation the setup wizard sends on the owner's behalf.
+   *
+   * The role is a parameter rather than a constant because the first teammate
+   * a workspace invites is the one person guaranteed to want to make something:
+   * a viewer lands in a workspace with nothing shared with them yet and no
+   * command they are allowed to run, which reads as a broken product rather
+   * than as a permission boundary.
+   */
   private async createSelfServiceInvite(
     identity: AuthenticatedIdentity,
-    input: { organizationId: string; workspaceId: string; email: string },
+    input: {
+      organizationId: string;
+      workspaceId: string;
+      email: string;
+      role?: Exclude<WorkspaceRole, "administrator">;
+    },
     options: CommandOptions,
   ) {
+    const role: Exclude<WorkspaceRole, "administrator"> =
+      input.role ?? "creator";
     const invitationId = resourceId("invite");
     const expiresAtSeconds = Math.floor(Date.now() / 1_000) + 14 * 24 * 60 * 60;
     const token = await signInviteToken({
       jti: invitationId,
       workspaceId: input.workspaceId,
-      role: "viewer",
+      role,
       email: input.email,
       expiresAt: expiresAtSeconds,
     });
@@ -741,14 +770,14 @@ export class CommandService {
           email: input.email,
           subject_id: await hashToken(token),
           status: "active",
-          kind: "viewer",
+          kind: role,
           expires_at: expiresAt,
           created_by: identity.userId,
           request_id: options.requestId,
         },
         {
           label: `Invite ${input.email}`,
-          role: "viewer",
+          role,
           maxUses: 1,
           useCount: 0,
           createdAt: nowIso(),
@@ -1090,8 +1119,18 @@ export class CommandService {
       return service.complete(identity, payload as SelfServiceSetupInput, {
         requestId: options.requestId,
         reauthenticated: options.reauthenticated,
-        createInvite: (input) =>
-          this.createSelfServiceInvite(identity, input, options),
+        // Setting up a workspace no longer waits on a verified address, but
+        // sending mail to a third party does: an unverified account that can
+        // post an invitation to any address is a way to send mail from this
+        // domain to someone who never asked for it. The workspace is created
+        // either way; the teammate is invited from People & access once the
+        // owner has verified.
+        ...(identity.emailVerified
+          ? {
+              createInvite: (input: Parameters<typeof this.createSelfServiceInvite>[1]) =>
+                this.createSelfServiceInvite(identity, input, options),
+            }
+          : {}),
       });
     }
 
@@ -3363,16 +3402,29 @@ export class CommandService {
           "owner",
         ),
       );
+      // The invariant is that an organization is never left without an owner.
+      // It can only be broken by a change that gives ownership up, so it is
+      // checked there and nowhere else.
+      //
+      // It used to be checked on every edit against a floor of two, which no
+      // organization could satisfy: provisioning creates exactly one owner, so
+      // the sole owner of a new organization was refused even when the change
+      // left ownership untouched — granting themselves Billing returned 409.
+      // Two owners is good practice, not something the system can promise on
+      // an organization's behalf, so it is advice in the interface now.
+      const wasOwner =
+        memberRow.status === "active" &&
+        Boolean(current.roles?.includes("owner"));
       const targetRemainsOwner =
         status === "active" && nextRoles.includes("owner");
       const ownersAfterChange =
         activeOwners.filter((row) => row.$id !== memberId).length +
         (targetRemainsOwner ? 1 : 0);
-      if (ownersAfterChange < 2) {
+      if (wasOwner && !targetRemainsOwner && ownersAfterChange < 1) {
         throw new HttpError(
           409,
           "MINIMUM_ORGANIZATION_OWNERS",
-          "Keep at least two active organization owners.",
+          "Appoint another organization owner first.",
         );
       }
       await this.store.update(
@@ -3490,7 +3542,11 @@ export class CommandService {
             },
             {
               name: identity.name,
-              roles: [claims.role],
+              // The invitation carries one role name; the membership stores
+              // the whole level it stands for. A publisher who could not read
+              // or draft was never a coherent thing to be, and inviting
+              // somebody into that set is how it used to happen.
+              roles: rolesForTier(tierForRoles([claims.role])),
               groupIds: [],
               joinedAt: nowIso(),
             } satisfies WorkspaceMemberRecord,
@@ -4942,6 +4998,86 @@ export class CommandService {
       return { revoked: true };
     }
 
+    // A queued invitation that failed permanently has no other way out: the
+    // worker has exhausted its retries, and the credential it was carrying was
+    // discarded with the last one. Re-queueing the delivery is the only honest
+    // recovery, and it needs the invitation still to be live.
+    if (action === "resendInvite") {
+      requireAuthorized("workspace.invitations.manage", context);
+      const invitationId = inputText(payload.invitationId, "Invitation", {
+        min: 1,
+        max: 36,
+      });
+      const invitation = await this.store.get(TABLES.invitations, invitationId);
+      if (!invitation || invitation.workspace_id !== workspaceId) {
+        throw new HttpError(404, "INVITATION_NOT_FOUND", "Invitation not found.");
+      }
+      if (invitation.status !== "active") {
+        throw new HttpError(
+          409,
+          "INVITATION_NOT_ACTIVE",
+          "This invitation is no longer active. Create a new one.",
+        );
+      }
+      const details = decodePayload<{
+        role?: WorkspaceRole;
+        label?: string;
+      }>(invitation, {});
+      const email = stringValue(invitation.email);
+      if (!email) {
+        throw new HttpError(
+          409,
+          "INVITATION_EMAIL_MISSING",
+          "This invitation has no address to send to.",
+        );
+      }
+      // A fresh credential, because the discarded one cannot be recovered and
+      // the stored hash is what the redemption compares against.
+      const expiresAtSeconds = Math.floor(Date.parse(stringValue(invitation.expires_at)) / 1_000);
+      if (!Number.isFinite(expiresAtSeconds) || expiresAtSeconds * 1_000 <= Date.now()) {
+        throw new HttpError(
+          409,
+          "INVITATION_EXPIRED",
+          "This invitation has expired. Create a new one.",
+        );
+      }
+      const token = await signInviteToken({
+        jti: invitationId,
+        workspaceId,
+        role: (details.role ?? "viewer") as Exclude<WorkspaceRole, "administrator">,
+        email,
+        expiresAt: expiresAtSeconds,
+      });
+      await this.store.update(
+        TABLES.invitations,
+        invitationId,
+        rowData(
+          { subject_id: await hashToken(token), updated_by: identity.userId },
+          details,
+        ),
+      );
+      await queueNotification(this.store, {
+        organizationId: workspaceAccess.workspace.organizationId,
+        workspaceId,
+        email,
+        kind: "invitation.created",
+        subjectId: invitationId,
+        idempotencyKey: `${options.idempotencyKey}:invitation-resend`,
+        payload: {
+          expiresAt: stringValue(invitation.expires_at),
+          credential: token,
+          workspaceName: workspaceAccess.workspace.name,
+        },
+      });
+      await appendAudit(this.store, identity, workspaceId, {
+        action: "invitation.resent",
+        targetType: "invitation",
+        targetId: invitationId,
+        summary: "Workspace invitation delivery retried",
+      });
+      return { resent: true };
+    }
+
     if (action === "updateMember") {
       requireAuthorized("workspace.members.manage", context);
       const memberId = inputText(payload.memberId, "Member", {
@@ -5338,6 +5474,7 @@ export class CommandService {
       [
         "saveGuide",
         "reviewGuide",
+        "unsubmitGuide",
         "publishGuide",
         "shareGuide",
         "unshareGuide",
@@ -5345,6 +5482,7 @@ export class CommandService {
         "duplicateGuide",
         "archiveGuide",
         "deleteGuide",
+        "undeleteGuide",
         "restoreRevision",
       ].includes(action)
     ) {

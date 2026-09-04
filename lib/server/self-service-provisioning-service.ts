@@ -1,3 +1,4 @@
+import type { WorkspaceRole } from "../knowhow-types";
 import { appendAudit } from "./audit-service";
 import {
   DEFAULT_WORKSPACE_SETTINGS,
@@ -93,6 +94,7 @@ export type SelfServiceSetupOptions = {
     organizationId: string;
     workspaceId: string;
     email: string;
+    role?: Exclude<WorkspaceRole, "administrator">;
   }) => Promise<SelfServiceSetupResult["invite"]>;
 };
 
@@ -570,6 +572,7 @@ export class SelfServiceProvisioningService {
         organizationId: ids.organizationId,
         workspaceId: ids.workspaceId,
         email: required.inviteEmail,
+        role: "creator",
       });
     }
 

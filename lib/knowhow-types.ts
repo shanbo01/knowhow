@@ -151,6 +151,8 @@ export type Guide = {
   canShare: boolean;
   canArchive: boolean;
   canUnpublish: boolean;
+  /** Return a submitted revision to draft without a review decision. */
+  canUnsubmit: boolean;
   canDuplicate: boolean;
   canRestore: boolean;
   canDelete: boolean;
@@ -181,6 +183,20 @@ export type Guide = {
       | "source"
     >
   >;
+};
+
+/**
+ * A guide in deletion quarantine, listed only for people who could restore it.
+ *
+ * Deleting is reversible but not undoable: `remove()` overwrites the guide and
+ * revision statuses without recording them, so a restored guide comes back
+ * archived rather than to whatever state it was deleted from.
+ */
+export type DeletedGuide = {
+  id: string;
+  title: string;
+  deletedAt: string;
+  deletedByName: string | null;
 };
 
 export type WorkspaceSummary = {
@@ -237,6 +253,8 @@ export type WorkspaceMember = {
   roles: WorkspaceRole[];
   groupIds: string[];
   joinedAt?: string;
+  /** A KnowHow owner account, which no workspace may suspend. */
+  platformProtected?: boolean;
 };
 
 export type WorkspaceGroup = {
@@ -261,6 +279,19 @@ export type Invitation = {
   revokedAt: string | null;
   createdAt: string;
   inviteUrl?: string;
+  /**
+   * What became of the email, read from the delivery queue rather than assumed.
+   *
+   * Creating an invitation only queues one; a worker sends it minutes later and
+   * can fail permanently. The dialog used to report "sent" at creation, so an
+   * invitation that never left the building looked identical to one that
+   * arrived — which is the half of the missing-invitations problem the admin
+   * who sent it could actually have noticed.
+   */
+  delivery?: {
+    state: "sent" | "pending" | "failed" | "unknown";
+    at: string | null;
+  };
 };
 
 export type SupportAccessRequest = {
@@ -970,6 +1001,8 @@ export type WorkspaceBundle = {
   members: WorkspaceMember[];
   groups: WorkspaceGroup[];
   guides: Guide[];
+  /** Guides in deletion quarantine that the viewer could restore. */
+  deletedGuides: DeletedGuide[];
   invitations: Invitation[];
   supportRequests: SupportAccessRequest[];
   supportGrants: SupportAccessGrant[];

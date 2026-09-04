@@ -20,6 +20,12 @@ export type WorkspaceAccess = {
   lifecycleAccess: LifecycleAccess;
   lifecycle: LifecycleEvaluation;
   subscription: SubscriptionRecord | null;
+  /**
+   * Carried on the access record rather than passed to `context()` so that a
+   * caller cannot forget it. Every authorization decision reads the identity's
+   * real state; nothing asserts it.
+   */
+  emailVerified: boolean;
 };
 
 function activeExpiry(value: unknown) {
@@ -93,6 +99,7 @@ export class AccessService {
         lifecycleAccess,
         lifecycle,
         subscription: subscription?.value ?? null,
+        emailVerified: identity.emailVerified,
       };
     }
 
@@ -119,6 +126,7 @@ export class AccessService {
           lifecycleAccess,
           lifecycle,
           subscription: subscription?.value ?? null,
+          emailVerified: identity.emailVerified,
         };
       }
     }
@@ -133,6 +141,7 @@ export class AccessService {
         lifecycleAccess,
         lifecycle,
         subscription: subscription?.value ?? null,
+        emailVerified: identity.emailVerified,
       };
     }
     return null;
@@ -146,7 +155,7 @@ export class AccessService {
 
   context(access: WorkspaceAccess, isPlatformAdministrator = false): AuthorizationContext {
     return {
-      isVerifiedIdentity: true,
+      isVerifiedIdentity: access.emailVerified,
       isPlatformAdministrator,
       membershipStatus: access.membershipStatus,
       workspaceStatus: access.workspace.status as WorkspaceStatus,

@@ -9,10 +9,7 @@ import {
   CheckCircle2,
   LoaderCircle,
   LogOut,
-  MailPlus,
-  Palette,
   ShieldCheck,
-  UsersRound,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -29,7 +26,6 @@ export type SelfServiceSetupDraft = {
 
 type SetupStep = 0 | 1 | 2 | 3;
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_ACCENT = "#e85d24";
 
 function cleanDraft(draft: SelfServiceSetupDraft): SelfServiceSetupDraft {
@@ -70,10 +66,12 @@ export function SelfServiceSetup({
   const [step, setStep] = useState<SetupStep>(() => initialStep(initialDraft));
   const [localError, setLocalError] = useState("");
 
+  // Two questions, both of which the product genuinely cannot guess. The
+  // accent colour and the first teammate used to be asked here, before anyone
+  // had seen a guide: both are settings with sensible defaults, reachable from
+  // inside the product once there is something to apply them to.
   const steps = [
-    { label: "Organization", icon: Building2 },
-    { label: "Workspace", icon: Palette },
-    { label: "Teammate", icon: UsersRound },
+    { label: "Names", icon: Building2 },
     { label: "Review", icon: ShieldCheck },
   ] as const;
 
@@ -86,18 +84,13 @@ export function SelfServiceSetup({
   }
 
   function validateCurrentStep() {
-    if (step === 0 && (draft.organizationName?.trim().length ?? 0) < 2) {
-      return "Enter the organization name your team will recognize.";
-    }
-    if (step === 1 && (draft.workspaceName?.trim().length ?? 0) < 2) {
-      return "Enter a name for your first workspace.";
-    }
-    if (
-      step === 2 &&
-      draft.inviteEmail?.trim() &&
-      !EMAIL_PATTERN.test(draft.inviteEmail.trim().toLowerCase())
-    ) {
-      return "Enter a valid teammate email or leave it blank for now.";
+    if (step === 0) {
+      if ((draft.organizationName?.trim().length ?? 0) < 2) {
+        return "Enter the organization name your team will recognize.";
+      }
+      if ((draft.workspaceName?.trim().length ?? 0) < 2) {
+        return "Enter a name for your first workspace.";
+      }
     }
     return "";
   }
@@ -109,7 +102,7 @@ export function SelfServiceSetup({
       return;
     }
     await onSave(cleanDraft(draft));
-    setStep((current) => Math.min(3, current + 1) as SetupStep);
+    setStep((current) => Math.min(1, current + 1) as SetupStep);
   }
 
   async function finishLater() {
@@ -149,8 +142,8 @@ export function SelfServiceSetup({
           <p className="auth-eyebrow">14-day trial</p>
           <h1>Build the home for your team&apos;s know-how.</h1>
           <p>
-            Welcome, {viewerName || "there"}. Two short setup choices create an
-            organization and workspace that you own.
+            Welcome, {viewerName || "there"}. Name the organization and its
+            first workspace, and they are yours.
           </p>
           <div className="self-service-assurance">
             <ShieldCheck aria-hidden="true" />
@@ -195,8 +188,8 @@ export function SelfServiceSetup({
 
           {step === 0 ? (
             <div className="self-service-panel">
-              <p className="auth-eyebrow">Step 1 of 4</p>
-              <h2 id="setup-heading">Tell us about your organization</h2>
+              <p className="auth-eyebrow">Step 1 of 2</p>
+              <h2 id="setup-heading">Name your organization and workspace</h2>
               <p>
                 This is the company space your workspaces live in. Legal details
                 can wait.
@@ -239,93 +232,26 @@ export function SelfServiceSetup({
                   />
                 </label>
               </div>
-            </div>
-          ) : null}
-
-          {step === 1 ? (
-            <div className="self-service-panel">
-              <p className="auth-eyebrow">Step 2 of 4</p>
-              <h2 id="setup-heading">Name your first workspace</h2>
-              <p>
-                A workspace keeps guides, members, approvals, and analytics
-                together. More workspaces can be added later when your plan
-                allows.
-              </p>
               <label className="self-service-field">
                 <span>Workspace name</span>
                 <input
-                  autoFocus
                   value={draft.workspaceName ?? ""}
                   onChange={(event) =>
                     update("workspaceName", event.target.value)
                   }
                   placeholder="Operations playbooks"
                 />
-              </label>
-              <label className="self-service-color-field">
-                <span
-                  className="self-service-color-preview"
-                  style={{
-                    backgroundColor: draft.accentColor || DEFAULT_ACCENT,
-                  }}
-                  aria-hidden="true"
-                />
-                <span>
-                  <strong>Workspace accent</strong>
-                  <small>Used for navigation and guide highlights.</small>
-                </span>
-                <input
-                  type="color"
-                  aria-label="Workspace accent color"
-                  value={draft.accentColor || DEFAULT_ACCENT}
-                  onChange={(event) =>
-                    update("accentColor", event.target.value)
-                  }
-                />
+                <small>
+                  A workspace keeps guides, members and approvals together. You
+                  can add more later.
+                </small>
               </label>
             </div>
           ) : null}
 
-          {step === 2 ? (
+          {step === 1 ? (
             <div className="self-service-panel">
-              <p className="auth-eyebrow">Step 3 of 4</p>
-              <h2 id="setup-heading">Bring one teammate—or skip for now</h2>
-              <p>
-                We can prepare a single-use viewer invitation so you can prove
-                the full publish-and-complete journey with another person.
-              </p>
-              <label className="self-service-field">
-                <span>
-                  Teammate email <small>Optional</small>
-                </span>
-                <input
-                  autoFocus
-                  type="email"
-                  inputMode="email"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  value={draft.inviteEmail ?? ""}
-                  onChange={(event) =>
-                    update("inviteEmail", event.target.value)
-                  }
-                  placeholder="teammate@company.com"
-                  autoComplete="off"
-                />
-              </label>
-              <div className="self-service-note">
-                <MailPlus aria-hidden="true" />
-                <p>
-                  The invitation is bound to the exact email address, expires,
-                  and can be revoked. It never grants organization
-                  administration.
-                </p>
-              </div>
-            </div>
-          ) : null}
-
-          {step === 3 ? (
-            <div className="self-service-panel">
-              <p className="auth-eyebrow">Step 4 of 4</p>
+              <p className="auth-eyebrow">Step 2 of 2</p>
               <h2 id="setup-heading">Ready to create your workspace</h2>
               <p>
                 Confirm the details below. Setup is atomic: either every
@@ -343,10 +269,6 @@ export function SelfServiceSetup({
                 <div>
                   <dt>Trial</dt>
                   <dd>14 days · no payment method</dd>
-                </div>
-                <div>
-                  <dt>Initial teammate</dt>
-                  <dd>{draft.inviteEmail?.trim() || "Skipped for now"}</dd>
                 </div>
               </dl>
               <div className="self-service-ready">
@@ -385,7 +307,7 @@ export function SelfServiceSetup({
             ) : (
               <span />
             )}
-            {step < 3 ? (
+            {step < 1 ? (
               <button
                 className="self-service-primary"
                 type="button"

@@ -4,6 +4,7 @@ export const PUBLIC_MARKETING_PATHS = [
   "/",
   "/extension",
   "/contact",
+  "/help",
   "/privacy",
   "/terms",
 ] as const;

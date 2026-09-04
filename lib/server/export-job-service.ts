@@ -217,6 +217,12 @@ export async function processExportJob(
   const { row, details } = claim;
   const leaseId = details.leaseId!;
   try {
+    // Replays the requester so the export is re-authorized against roles,
+    // audience and export policy as they stand now, rather than trusting the
+    // decision made when the job was queued. The identity factors are stated
+    // as satisfied because they were checked against the live session at that
+    // point — `guide.export` requires a verified address, and verification is
+    // never withdrawn — and this worker has no session to re-check them from.
     const identity: AuthenticatedIdentity = {
       userId: details.requester.userId,
       email: details.requester.email,

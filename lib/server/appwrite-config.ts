@@ -237,6 +237,27 @@ export function getAppwriteServerConfig(): AppwriteServerConfig {
   return config;
 }
 
+/**
+ * Whether this deployment can deliver mail to someone who has no account yet.
+ *
+ * That recipient is every person a workspace invites, and Appwrite Messaging
+ * cannot reach them — the operations worker falls through to SMTP, then to
+ * Resend. With neither pair set the send throws, retries five times and is
+ * marked failed where only platform staff can see it, so the workspace that
+ * sent the invitation is told nothing. Treat a missing transport as a
+ * configuration fault rather than a default.
+ */
+export function emailTransportConfigured() {
+  const hasResend = Boolean(
+    process.env.RESEND_API_KEY?.trim() && process.env.RESEND_FROM?.trim(),
+  );
+  const hasSmtp = Boolean(
+    process.env.KNOWHOW_SMTP_HOST?.trim() &&
+      process.env.KNOWHOW_SMTP_FROM?.trim(),
+  );
+  return hasResend || hasSmtp;
+}
+
 export function deploymentConfigurationIssues(
   config = getAppwriteServerConfig(),
 ) {
@@ -308,11 +329,12 @@ export function deploymentConfigurationIssues(
     // only one an on-premises or air-gapped install can use, and a deployment
     // with its own relay should not be told it is misconfigured for declining
     // to add a third-party email vendor.
-    const hasResend = Boolean(process.env.RESEND_API_KEY?.trim());
-    const hasSmtp = Boolean(
-      process.env.KNOWHOW_SMTP_HOST?.trim() && process.env.KNOWHOW_SMTP_FROM?.trim(),
-    );
-    if (!hasResend && !hasSmtp) issues.push("email_provider");
+    //
+    // Both halves of each pair are required. The sender address is not
+    // optional decoration: `sendViaResend` throws RESEND_NOT_CONFIGURED
+    // without RESEND_FROM, so accepting the key alone reports a healthy
+    // deployment whose every invitation fails.
+    if (!emailTransportConfigured()) issues.push("email_provider");
   }
 
   const publicEnvironment =

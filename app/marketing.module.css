@@ -417,3 +417,53 @@
     animation-duration: 1.5s;
   }
 }
+
+/*
+ * Help page imagery.
+ *
+ * The hero shows a real guide being read, because "what does this produce"
+ * is the question a new reader arrives with and a paragraph answers it more
+ * slowly than a picture. The stage marks replace the numerals the lifecycle
+ * used to carry: the sequence is still numbered in the heading, so the icon
+ * carries the character of each stage rather than repeating its position.
+ */
+.helpHero {
+  width: min(920px, calc(100% - 2.5rem));
+  margin: 0 auto clamp(2rem, 4vw, 3rem);
+  border: 1px solid var(--line);
+  border-radius: 1.1rem;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgb(35 47 64 / 0.08);
+  line-height: 0;
+}
+
+.helpHero img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.helpStage {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  gap: 0 1.1rem;
+  align-items: start;
+  margin-bottom: 2rem;
+}
+
+.helpStage img {
+  width: 3rem;
+  height: 3rem;
+  margin-top: 0.35rem;
+}
+
+.helpStage h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 32rem) {
+  .helpStage {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+}

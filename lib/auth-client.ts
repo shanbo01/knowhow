@@ -20,6 +20,8 @@ type AuthResponse = {
   // Sign-up reports whether it managed to send the verification email, so the
   // caller can show the resend prompt instead of assuming one arrived.
   verificationSent?: boolean;
+  /** The previous recovery codes were replaced and no longer work. */
+  replacedRecoveryCodes?: boolean;
   secret?: string;
   uri?: string;
   qrCodeDataUrl?: string;
@@ -175,6 +177,15 @@ export function completeMfaEnrollment(otp: string) {
     method: "POST",
     body: JSON.stringify({ otp }),
   });
+}
+
+/**
+ * Turns multi-factor sign-in on, once the recovery codes have been saved.
+ * Enrollment deliberately stops short of this so that abandoning the codes
+ * screen cannot leave an account enforcing a factor it cannot recover.
+ */
+export function acknowledgeMfaRecoveryCodes() {
+  return authRequest("mfa/enroll/acknowledge", { method: "POST", body: "{}" });
 }
 
 export function regenerateMfaRecoveryCodes() {

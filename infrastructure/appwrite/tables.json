@@ -7801,6 +7801,14 @@
         ]
       },
       {
+        "key": "by_workspace_kind",
+        "type": "key",
+        "columns": [
+          "workspace_id",
+          "kind"
+        ]
+      },
+      {
         "key": "by_idempotency",
         "type": "unique",
         "columns": [

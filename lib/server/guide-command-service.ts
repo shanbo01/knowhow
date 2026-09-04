@@ -214,6 +214,9 @@ export class GuideCommandService {
     if (action === "reviewGuide") {
       return this.review(identity, payload, workspaceAccess, context);
     }
+    if (action === "unsubmitGuide") {
+      return this.unsubmit(identity, payload, workspaceAccess, context);
+    }
     if (action === "publishGuide") {
       return this.publish(identity, payload, workspaceAccess, context, options);
     }
@@ -221,7 +224,7 @@ export class GuideCommandService {
       return this.share(identity, payload, workspaceAccess, context, options);
     }
     if (action === "unshareGuide") {
-      return this.unshare(identity, payload, workspaceAccess);
+      return this.unshare(identity, payload, workspaceAccess, context);
     }
     if (action === "unpublishGuide") {
       return this.unpublish(identity, payload, workspaceAccess, context);
@@ -233,7 +236,10 @@ export class GuideCommandService {
       return this.archive(identity, payload, workspaceAccess, context);
     }
     if (action === "deleteGuide") {
-      return this.remove(identity, payload, workspaceAccess);
+      return this.remove(identity, payload, workspaceAccess, context);
+    }
+    if (action === "undeleteGuide") {
+      return this.undelete(identity, payload, workspaceAccess, context);
     }
     if (action === "restoreRevision") {
       return this.restore(identity, payload, workspaceAccess, context, options);
@@ -913,10 +919,11 @@ export class GuideCommandService {
       ],
       limit: 1,
     });
+    // requireAuthorized("guide.review") above already established that this
+    // actor is an assigned reviewer, so there is no unassigned case left to
+    // let an administrator through. A revision whose reviewers have all been
+    // suspended is unstuck by withdrawing it, not by deciding it.
     const assignment = assignments[0];
-    if (!assignment && !workspaceAccess.roles.includes("administrator")) {
-      throw new HttpError(403, "REVIEWER_REQUIRED", "An assigned reviewer is required.");
-    }
     const decidedAt = nowIso();
     const assignmentPayload = { assignedAt: assignment?.$createdAt ?? decidedAt, assignedBy: stringValue(assignment?.created_by, identity.userId), decidedAt };
     if (assignment) {
@@ -949,6 +956,74 @@ export class GuideCommandService {
       metadata: { revisionId: revision.row.$id },
     });
     return { reviewed: true };
+  }
+
+  /**
+   * Returns a submitted revision to draft without a review decision.
+   *
+   * Submitting was a one-way door. A review revision cannot be edited, and
+   * only an assigned reviewer can decide it, so a workspace that suspends its
+   * reviewers after a submission leaves that revision frozen with nobody able
+   * to move it. This is the mirror of submitting: the author changes their
+   * mind, or an administrator recovers a stranded revision.
+   */
+  private async unsubmit(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.workingRevisionId || guide.deletedAt || guide.archivedAt) {
+      throw new HttpError(409, "WITHDRAW_NOT_AVAILABLE", "This guide has no revision in review.");
+    }
+    const revision = await this.loadRevision(guide.workingRevisionId, guideId, workspaceId);
+    const facts = await this.guideFacts(identity, workspaceAccess, guide, revision);
+    requireAuthorized("guide.unsubmit", { ...context, guide: facts });
+
+    const withdrawnAt = nowIso();
+    const nextRevision: RevisionRecord = {
+      ...revision.value,
+      status: "draft",
+      updatedAt: withdrawnAt,
+    };
+    delete nextRevision.reviewedBy;
+    delete nextRevision.reviewedAt;
+    delete nextRevision.submittedBy;
+    delete nextRevision.submittedAt;
+    await this.store.update(
+      TABLES.guideRevisions,
+      revision.row.$id,
+      rowData({ status: "draft", updated_by: identity.userId }, nextRevision),
+    );
+    // The pending assignments described a review that is no longer happening.
+    // Clearing them means a later submission assigns whoever holds the role
+    // then, rather than resurrecting decisions from an abandoned round.
+    for (const row of await this.store.list(TABLES.reviewAssignments, {
+      filters: [{ field: "subject_id", value: revision.row.$id }],
+    })) {
+      await this.store.delete(TABLES.reviewAssignments, row.$id);
+    }
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData({ status: "draft", updated_by: identity.userId }, { ...guide, updatedAt: withdrawnAt }),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.review-withdrawn",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} withdrawn from review`,
+      metadata: { revisionId: revision.row.$id },
+    });
+    return { withdrawn: true };
   }
 
   private async publish(
@@ -1131,6 +1206,13 @@ export class GuideCommandService {
           );
         }
       } else {
+        // A revision already in review is authorized as the publish it is
+        // about to become. The check has to come first: publish() would refuse
+        // an unauthorized caller a moment later, but the audience would
+        // already have been rewritten, leaving authorization dependent on the
+        // store rolling the write back.
+        const facts = await this.guideFacts(identity, workspaceAccess, guide, working);
+        requireAuthorized("guide.publish", { ...context, guide: facts });
         await this.replaceAudiences(identity, workspaceAccess, working.row.$id, audiences);
       }
       return this.publish(identity, payload, workspaceAccess, context, options);
@@ -1169,6 +1251,7 @@ export class GuideCommandService {
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
     workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
   ) {
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
@@ -1180,19 +1263,17 @@ export class GuideCommandService {
     if (!guide?.publishedRevisionId || guide.deletedAt || guide.archivedAt) {
       throw new HttpError(409, "UNSHARE_NOT_AVAILABLE", "This guide is not live.");
     }
+    // Taking the audience away is the same decision as returning a guide to
+    // draft, and was written out here a second time in the same shape. One
+    // statement of it, in the engine, so the two cannot drift apart.
     const settings = await this.settings(workspaceId);
-    const isPublisher = workspaceAccess.roles.includes("publisher");
-    const isAuthorCreator =
-      guide.authorUserId === identity.userId &&
-      (workspaceAccess.roles.includes("creator") ||
-        workspaceAccess.roles.includes("administrator"));
-    if (!isPublisher && !(isAuthorCreator && !settings.requireReviewBeforePublish)) {
-      throw new HttpError(
-        403,
-        "PUBLISHER_REQUIRED",
-        "Publisher access is required to stop sharing this guide.",
-      );
-    }
+    requireAuthorized("guide.unpublish", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        requireReviewBeforePublish: settings.requireReviewBeforePublish,
+      },
+    });
 
     await this.replaceAudiences(
       identity,
@@ -1531,13 +1612,22 @@ export class GuideCommandService {
     workspaceAccess: WorkspaceAccess,
     context: AuthorizationContext,
   ) {
-    requireAuthorized("guide.archive", context);
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
     const guideRow = await this.store.get(TABLES.guides, guideId);
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    // Authorized after the guide is loaded, not before: archiving now turns on
+    // who wrote it and whether it ever went live, so the decision needs the
+    // guide in hand.
+    requireAuthorized("guide.archive", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
     const archivedAt = nowIso();
     const revisions = await this.store.list(TABLES.guideRevisions, {
       filters: [{ field: "subject_id", value: guideId }],
@@ -1563,6 +1653,7 @@ export class GuideCommandService {
     identity: AuthenticatedIdentity,
     payload: Record<string, unknown>,
     workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
   ) {
     const workspaceId = workspaceAccess.workspaceRow.$id;
     const guideId = resourceInput(payload.guideId, "Guide");
@@ -1570,14 +1661,16 @@ export class GuideCommandService {
     if (!guideRow || guideRow.workspace_id !== workspaceId) throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
     const guide = decodePayload<GuideRecord>(guideRow, null as never);
     if (guide.deletedAt) return { deleted: true };
-    const mayDelete =
-      workspaceAccess.roles.includes("publisher") ||
-      (guide.authorUserId === identity.userId &&
-        (workspaceAccess.roles.includes("creator") || workspaceAccess.roles.includes("administrator")) &&
-        !guide.publishedRevisionId);
-    if (!mayDelete) {
-      throw new HttpError(403, "GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
-    }
+    // Deleting used to be decided here, by hand, which meant it never ran the
+    // membership, lifecycle and support-grant checks that every other guide
+    // action gets from the policy engine.
+    requireAuthorized("guide.delete", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
     const deletedAt = nowIso();
     const [revisions, mediaRows] = await Promise.all([
       this.store.list(TABLES.guideRevisions, { filters: [{ field: "subject_id", value: guideId }] }),
@@ -1604,6 +1697,108 @@ export class GuideCommandService {
       metadata: { mediaCount: mediaRows.filter((candidate) => revisionIds.has(stringValue(candidate.subject_id))).length },
     });
     return { deleted: true };
+  }
+
+  /**
+   * Brings a guide back out of deletion quarantine.
+   *
+   * Deleting was one-way: the guide, its revisions and its screenshots were
+   * marked and then unreachable, and `restore()` refused anything quarantined
+   * with a message about a recovery case that had no customer-facing path
+   * behind it. A mis-clicked delete on a capture somebody had just spent
+   * twenty minutes recording was final.
+   *
+   * The guide returns as archived rather than to whatever it was before,
+   * because `remove()` overwrites the guide and revision statuses without
+   * recording them — there is no prior state left to return to, and guessing
+   * risks putting something back in front of an audience. Archived is the
+   * honest resting place: the guide is in the library, readable, and one
+   * ordinary "restore revision" away from being a draft again.
+   */
+  private async undelete(
+    identity: AuthenticatedIdentity,
+    payload: Record<string, unknown>,
+    workspaceAccess: WorkspaceAccess,
+    context: AuthorizationContext,
+  ) {
+    const workspaceId = workspaceAccess.workspaceRow.$id;
+    const guideId = resourceInput(payload.guideId, "Guide");
+    const guideRow = await this.store.get(TABLES.guides, guideId);
+    if (!guideRow || guideRow.workspace_id !== workspaceId) {
+      throw new HttpError(404, "GUIDE_NOT_FOUND", "Guide not found.");
+    }
+    const guide = decodePayload<GuideRecord>(guideRow, null as never);
+    if (!guide?.deletedAt) {
+      throw new HttpError(409, "GUIDE_NOT_DELETED", "This guide is not deleted.");
+    }
+    requireAuthorized("guide.undelete", {
+      ...context,
+      guide: {
+        isAuthor: guide.authorUserId === identity.userId,
+        hasBeenPublished: Boolean(guide.publishedRevisionId),
+      },
+    });
+
+    const restoredAt = nowIso();
+    const revisions = await this.store.list(TABLES.guideRevisions, {
+      filters: [{ field: "subject_id", value: guideId }],
+    });
+    const revisionIds = new Set(revisions.map((row) => row.$id));
+    for (const row of revisions) {
+      const value = decodePayload<RevisionRecord>(row, null as never);
+      await this.store.update(
+        TABLES.guideRevisions,
+        row.$id,
+        rowData(
+          { status: "archived", deleted_at: null, updated_by: identity.userId },
+          { ...value, status: "archived", updatedAt: restoredAt },
+        ),
+      );
+    }
+    // The screenshots were quarantined alongside the guide. Without releasing
+    // them the guide comes back with its steps illustrated by missing images.
+    const mediaRows = await this.store.list(TABLES.privateMedia, {
+      filters: [{ field: "workspace_id", value: workspaceId }],
+    });
+    let releasedMedia = 0;
+    for (const row of mediaRows) {
+      if (!revisionIds.has(stringValue(row.subject_id))) continue;
+      if (row.status !== "quarantined") continue;
+      const media = mediaValue(row);
+      // The quarantine stamp goes with the quarantine, so the released record
+      // does not claim to have been deleted at a time it is now readable.
+      const released = { ...(media as Record<string, unknown>) };
+      delete released.deletedAt;
+      await this.store.update(
+        TABLES.privateMedia,
+        row.$id,
+        rowData(
+          { status: "ready", deleted_at: null, updated_by: identity.userId },
+          released,
+        ),
+      );
+      releasedMedia += 1;
+    }
+
+    const restoredGuide = { ...guide };
+    delete restoredGuide.deletedAt;
+    await this.store.update(
+      TABLES.guides,
+      guideId,
+      rowData(
+        { status: "archived", deleted_at: null, updated_by: identity.userId },
+        { ...restoredGuide, archivedAt: guide.archivedAt ?? restoredAt, updatedAt: restoredAt },
+      ),
+    );
+    await appendAudit(this.store, identity, workspaceId, {
+      action: "guide.undeleted",
+      targetType: "guide",
+      targetId: guideId,
+      targetLabel: guide.title,
+      summary: `${guide.title} restored from deletion quarantine`,
+      metadata: { releasedMedia },
+    });
+    return { restored: true };
   }
 
   private async restore(

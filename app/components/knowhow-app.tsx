@@ -17,14 +17,12 @@ import {
   AuthGate,
   MfaEnrollmentGate,
   MfaGate,
-  VerificationGate,
+  VerificationBanner,
   type BackendState,
 } from "./auth-gate";
-import {
-  OrganizationView,
-  PlatformProvisioningDialog,
-  KnowHowWorkspaceApp,
-} from "./knowhow-workspace-app";
+import { KnowHowWorkspaceApp } from "./knowhow-workspace-app";
+import { PlatformProvisioningDialog } from "./workspace/provisioning";
+import { OrganizationView } from "./workspace/organization";
 import { ProductBrand } from "./product-brand";
 import {
   SelfServiceSetup,
@@ -37,6 +35,7 @@ import {
   registerReauthenticationHandler,
 } from "../../lib/knowhow-client";
 import {
+  acknowledgeMfaRecoveryCodes,
   authHealth,
   beginMfaChallenge,
   beginMfaEnrollment,
@@ -625,6 +624,8 @@ export default function Home() {
     secret?: string;
     qrCodeDataUrl?: string;
     recoveryCodes?: string[];
+    /** Set when these codes superseded an unfinished attempt's set. */
+    replaced?: boolean;
   } | null>(null);
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(
     cachedProductSession?.bootstrap ?? null,
@@ -807,9 +808,10 @@ export default function Home() {
       activeWorkspaceId: cachedProductSession?.activeWorkspaceId ?? "",
     };
     try {
-      if (nextUser.emailVerification) {
-        await loadBootstrap();
-      }
+      // Loaded whether or not the address is verified. An unverified person
+      // reads, captures and drafts; the server withholds only the actions that
+      // reach someone else.
+      await loadBootstrap();
     } catch (nextError) {
       setBootstrap(null);
       setError(errorMessage(nextError));
@@ -824,7 +826,7 @@ export default function Home() {
   }, [restore]);
 
   useEffect(() => {
-    if (!user?.emailVerification || !bootstrap || appointmentToken) return;
+    if (!bootstrap || appointmentToken) return;
     const frame = window.requestAnimationFrame(() => {
       const activeWorkspace = bootstrap.activeWorkspace?.workspace;
       const fallback =
@@ -892,7 +894,7 @@ export default function Home() {
   }, [appointmentToken, bootstrap, loadBootstrap, navigate, route, user]);
 
   useEffect(() => {
-    if (!user?.emailVerification || !bootstrap) return;
+    if (!bootstrap) return;
     const returnTo = window.sessionStorage.getItem(RETURN_TO_AFTER_AUTH_KEY);
     if (
       returnTo &&
@@ -1168,16 +1170,22 @@ export default function Home() {
         secret={mfaEnrollment.secret}
         qrCodeDataUrl={mfaEnrollment.qrCodeDataUrl}
         recoveryCodes={mfaEnrollment.recoveryCodes}
+        replacedRecoveryCodes={mfaEnrollment.replaced}
         onBegin={async () => {
           setBusy(true);
           setError("");
           try {
             const setup = await beginMfaEnrollment();
+            // An abandoned enrollment hands back a fresh set, because the
+            // previous one can never be shown again.
+            if (setup.recoveryCodes?.length) {
+              setMfaEnrollment({
+                recoveryCodes: setup.recoveryCodes,
+                replaced: Boolean(setup.replacedRecoveryCodes),
+              });
+              return;
+            }
             if (setup.enabled && setup.resumed) {
-              if (setup.recoveryCodes?.length) {
-                setMfaEnrollment({ recoveryCodes: setup.recoveryCodes });
-                return;
-              }
               const challenge = await beginMfaChallenge("totp");
               if (!challenge.challengeId) {
                 throw new Error(
@@ -1224,6 +1232,9 @@ export default function Home() {
           setBusy(true);
           setError("");
           try {
+            // Turning multi-factor on happens here, after the codes have been
+            // saved — not when they were generated.
+            await acknowledgeMfaRecoveryCodes();
             const challenge = await beginMfaChallenge("totp");
             if (!challenge.challengeId) {
               throw new Error(
@@ -1243,6 +1254,9 @@ export default function Home() {
           }
         }}
         onCancel={() => {
+          // Safe to leave now: multi-factor is only switched on by
+          // acknowledging the codes, so an abandoned enrollment locks nobody
+          // out. Re-entering setup issues a fresh set.
           setMfaEnrollment(null);
           setError("");
         }}
@@ -1381,20 +1395,6 @@ export default function Home() {
               }
             : undefined
         }
-      />
-    );
-  }
-
-  if (!user.emailVerification) {
-    return (
-      <VerificationGate
-        email={user.email}
-        busy={busy}
-        sent={verificationSent}
-        error={error}
-        onSend={sendVerification}
-        onRefresh={refreshVerification}
-        onSignOut={signOut}
       />
     );
   }
@@ -1687,6 +1687,15 @@ export default function Home() {
 
   return (
     <>
+      {user.emailVerification ? null : (
+        <VerificationBanner
+          email={user.email}
+          busy={busy}
+          sent={verificationSent}
+          onSend={sendVerification}
+          onRefresh={refreshVerification}
+        />
+      )}
       <KnowHowWorkspaceApp
         key={activeWorkspaceId}
         data={bootstrap}

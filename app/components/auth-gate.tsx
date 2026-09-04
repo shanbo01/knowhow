@@ -666,6 +666,7 @@ export function MfaEnrollmentGate({
   secret,
   qrCodeDataUrl,
   recoveryCodes,
+  replacedRecoveryCodes,
   onBegin,
   onComplete,
   onAcknowledge,
@@ -677,6 +678,8 @@ export function MfaEnrollmentGate({
   secret?: string;
   qrCodeDataUrl?: string;
   recoveryCodes?: string[];
+  /** These codes replaced an unfinished attempt's set, which no longer works. */
+  replacedRecoveryCodes?: boolean;
   onBegin: () => void | Promise<void>;
   onComplete: (otp: string) => void | Promise<void>;
   onAcknowledge: () => void | Promise<void>;
@@ -737,11 +740,12 @@ export function MfaEnrollmentGate({
           ) : recoveryCodes ? (
             <>
               <div className="auth-card-heading">
-                <p className="auth-eyebrow">Show once</p>
+                <p className="auth-eyebrow">Shown once</p>
                 <h2 id="mfa-enroll-heading">Save your recovery codes</h2>
                 <p>
-                  Each code works once. Store them outside KnowHow; they cannot
-                  be shown again.
+                  {replacedRecoveryCodes
+                    ? "Your earlier setup was not finished, so these replace the codes from that attempt — those no longer work. Each code below works once."
+                    : "These get you in if you lose your authenticator. Each code works once. Store them outside KnowHow."}
                 </p>
               </div>
               <ol className="mfa-recovery-codes" aria-label="Recovery codes">
@@ -759,7 +763,10 @@ export function MfaEnrollmentGate({
                 />
                 <span>
                   <strong>I saved these codes securely</strong>
-                  <small>They will disappear after continuing.</small>
+                  <small>
+                    Multi-factor sign-in switches on when you continue, not
+                    before — so nothing is locked until these are safe.
+                  </small>
                 </span>
               </label>
               <button
@@ -773,7 +780,7 @@ export function MfaEnrollmentGate({
                 ) : (
                   <CheckCircle2 />
                 )}{" "}
-                Continue and verify
+                Turn on multi-factor sign-in
               </button>
             </>
           ) : (
@@ -866,120 +873,75 @@ export function MfaEnrollmentGate({
   );
 }
 
-export function VerificationGate({
+/**
+ * The standing reminder that replaces the verification wall.
+ *
+ * Verification used to block the whole product, which meant a new account saw
+ * nothing until it found an email. It now gates only the actions that reach
+ * somebody else — publishing, exporting, and changing who is in the
+ * workspace — so this says which ones those are and stays until it is done.
+ * Deliberately not dismissible: the person is holding a workspace they cannot
+ * yet share.
+ */
+export function VerificationBanner({
   email,
   busy,
   sent,
-  error,
   onSend,
   onRefresh,
-  onSignOut,
 }: {
   email: string;
   busy: boolean;
   sent: boolean;
-  error?: string;
   onSend: () => void | Promise<void>;
   onRefresh: () => void | Promise<void>;
-  onSignOut: () => void | Promise<void>;
 }) {
-  const [resendCooldown, setResendCooldown] = useState(0);
+  const [cooldown, setCooldown] = useState(0);
 
   useEffect(() => {
-    if (resendCooldown <= 0) return;
+    if (cooldown <= 0) return;
     const timer = window.setInterval(
-      () => setResendCooldown((seconds) => Math.max(0, seconds - 1)),
+      () => setCooldown((seconds) => Math.max(0, seconds - 1)),
       1000,
     );
     return () => window.clearInterval(timer);
-  }, [resendCooldown]);
-
-  async function sendAgain() {
-    await onSend();
-    setResendCooldown(30);
-  }
+  }, [cooldown]);
 
   return (
-    <main className="auth-shell">
-      <section className="auth-intro" aria-labelledby="verify-brand-title">
-        <div className="auth-brand">
-          <ProductBrand id="verify-brand-title" />
-        </div>
-        <div className="auth-intro-copy">
-          <p className="auth-eyebrow">Account protection</p>
-          <h1>Verify the address that controls your access.</h1>
-          <p>
-            Email verification confirms the address that owns this account.
-            After that you can create a workspace or join one you were invited
-            to.
-          </p>
-        </div>
-        <div className="auth-trust-note">
-          <ShieldCheck aria-hidden="true" />
-          <span>
-            No workspace data is available until verification succeeds.
-          </span>
-        </div>
-      </section>
-      <section className="auth-panel" aria-labelledby="verify-title">
-        <div className="auth-card verify-card">
-          <span className="verify-icon" aria-hidden="true">
-            <MailCheck />
-          </span>
-          <div className="auth-card-heading">
-            <p className="auth-eyebrow">Check your inbox</p>
-            <h2 id="verify-title">Verify your work email</h2>
-            <p>
-              We need to confirm <strong>{email}</strong> before you can create
-              or join a workspace.
-            </p>
-          </div>
-          {sent ? (
-            <p className="success-banner" role="status">
-              Verification email sent. Open the link, then return here.
-            </p>
-          ) : null}
-          {error ? (
-            <p className="auth-form-message" role="alert">
-              {error}
-            </p>
-          ) : null}
-          <button
-            className="auth-primary-button"
-            type="button"
-            onClick={onRefresh}
-            disabled={busy}
-          >
-            {busy ? <LoaderCircle className="auth-spin" /> : <RefreshCw />}I
-            have verified my email
-          </button>
-          <button
-            className="auth-secondary-button"
-            type="button"
-            onClick={() => void sendAgain()}
-            disabled={busy || resendCooldown > 0}
-          >
-            {resendCooldown > 0
-              ? `Send again in ${resendCooldown}s`
-              : sent
-                ? "Send verification email again"
-                : "Send verification email"}
-          </button>
-          <p className="auth-help-copy">
-            No email? Check spam, confirm the address above, then send it again.
-            If delivery still fails,{" "}
-            <Link href="/contact">contact support</Link>.
-          </p>
-          <button
-            className="text-button"
-            type="button"
-            onClick={onSignOut}
-            disabled={busy}
-          >
-            Use another account
-          </button>
-        </div>
-      </section>
-    </main>
+    <div className="verification-banner" role="status">
+      <MailCheck aria-hidden="true" />
+      <div className="verification-banner-copy">
+        <strong>
+          {sent
+            ? `Verification sent to ${email}`
+            : `Verify ${email} to publish, export, or invite anyone`}
+        </strong>
+        <small>
+          Everything else is available now — capture a workflow, write a guide,
+          and read what has been shared with you.
+        </small>
+      </div>
+      <div className="verification-banner-actions">
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy || cooldown > 0}
+          onClick={async () => {
+            await onSend();
+            setCooldown(30);
+          }}
+        >
+          {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend email"}
+        </button>
+        <button
+          type="button"
+          className="button secondary"
+          disabled={busy}
+          onClick={() => void onRefresh()}
+        >
+          I&apos;ve verified
+        </button>
+      </div>
+    </div>
   );
 }

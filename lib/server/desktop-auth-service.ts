@@ -184,11 +184,16 @@ function identityFrom(
       "The desktop credential is incomplete.",
     );
   }
+  // A paired device cannot speak for the account's verification state; it
+  // holds an address, not a confirmation of one. This surface authorizes
+  // `capture.create` and nothing else, which is available before verification,
+  // so the value is unused today — and stated as false so that anything
+  // verification-gated added here later fails closed.
   return {
     userId: String(row.user_id),
     email: details.email,
     name: details.displayName,
-    emailVerified: true,
+    emailVerified: false,
     mfaEnabled: false,
   };
 }

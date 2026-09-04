@@ -1,6 +1,7 @@
 import type {
   AuditEvent,
   BootstrapResponse,
+  DeletedGuide,
   Guide,
   GuideRevisionView,
   Invitation,
@@ -57,7 +58,10 @@ function numberValue(value: unknown, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
+function memberView(
+  row: StoredRecord<RecordData>,
+  platformOwnerUserIds: ReadonlySet<string> = new Set(),
+): WorkspaceMember {
   const details = decodePayload<WorkspaceMemberRecord>(row, {
     name: stringValue(row.email),
     roles: [],
@@ -77,7 +81,27 @@ function memberView(row: StoredRecord<RecordData>): WorkspaceMember {
     roles: details.roles,
     groupIds: details.groupIds,
     joinedAt: details.joinedAt,
+    // The command layer refuses to suspend a KnowHow owner. Saying so here
+    // keeps the interface from offering a button that can only ever fail.
+    platformProtected: platformOwnerUserIds.has(stringValue(row.user_id)),
   };
+}
+
+/**
+ * The user ids of every active KnowHow owner, as one query rather than one per
+ * member: only a handful of accounts hold the role, and the member list needs
+ * to know which of its rows are protected from suspension.
+ */
+async function platformOwnerUserIds(
+  store: RecordStore,
+): Promise<ReadonlySet<string>> {
+  const rows = await store.list(TABLES.platformRoles, {
+    filters: [
+      { field: "kind", value: "owner" },
+      { field: "status", value: "active" },
+    ],
+  });
+  return new Set(rows.map((row) => stringValue(row.user_id)).filter(Boolean));
 }
 
 function groupView(
@@ -268,7 +292,10 @@ function hydrateGuides(
   usageRows: Array<StoredRecord<RecordData>> = [],
 ) {
   const accessServiceContext = {
-    isVerifiedIdentity: true,
+    // The real state, not an assertion. These are the same decisions the
+    // command layer will make, so asserting a verified identity here offered
+    // an unverified person a Publish button their next click would be refused.
+    isVerifiedIdentity: access.emailVerified,
     membershipStatus: access.membershipStatus,
     workspaceStatus: access.workspace.status,
     roles: access.roles,
@@ -287,10 +314,32 @@ function hydrateGuides(
   const viewer = members.find((member) => member.userId === identity.userId);
   const groupIds = new Set(viewer?.groupIds ?? []);
   const guides: Guide[] = [];
+  const deletedGuides: DeletedGuide[] = [];
 
   for (const row of rows.guides) {
     const source = decodePayload<GuideRecord>(row, null as never);
-    if (!source || source.deletedAt || row.status === "deleted") continue;
+    if (!source) continue;
+    if (source.deletedAt || row.status === "deleted") {
+      // Listed separately rather than dropped. A deleted guide is out of the
+      // library but not gone, and the only people told about it are the ones
+      // who could put it back.
+      const mayRestore = authorize("guide.undelete", {
+        ...accessServiceContext,
+        guide: {
+          isAuthor: source.authorUserId === identity.userId,
+          hasBeenPublished: Boolean(source.publishedRevisionId),
+        },
+      }).allowed;
+      if (mayRestore && source.deletedAt) {
+        deletedGuides.push({
+          id: row.$id,
+          title: source.title,
+          deletedAt: source.deletedAt,
+          deletedByName: memberNames.get(stringValue(row.updated_by)) ?? null,
+        });
+      }
+      continue;
+    }
     const revisionRows = rows.revisions
       .filter((revision) => revision.subject_id === row.$id)
       .sort(
@@ -363,6 +412,14 @@ function hydrateGuides(
       isAuthor: source.authorUserId === identity.userId,
       requireReviewBeforePublish,
     };
+    // Archiving and deleting turn on who owns the guide and whether it ever
+    // went live, not on any one revision, so they are decided from the guide
+    // itself rather than from whichever revision happens to be open.
+    const ownershipFacts = {
+      isAuthor: source.authorUserId === identity.userId,
+      hasBeenPublished: Boolean(source.publishedRevisionId),
+      requireReviewBeforePublish,
+    };
     const canPublishWorking = working
       ? authorize("guide.publish", {
           ...accessServiceContext,
@@ -371,10 +428,10 @@ function hydrateGuides(
       : false;
     const canChangeLiveAudience =
       Boolean(published) &&
-      (access.roles.includes("publisher") ||
-        (source.authorUserId === identity.userId &&
-          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
-          !requireReviewBeforePublish));
+      authorize("guide.unpublish", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed;
     guides.push({
       id: row.$id,
       workspaceId: access.workspaceRow.$id,
@@ -399,7 +456,10 @@ function hydrateGuides(
         : false,
       canPublish: canPublishWorking,
       canShare: canPublishWorking || canChangeLiveAudience,
-      canArchive: authorize("guide.archive", accessServiceContext).allowed,
+      canArchive: authorize("guide.archive", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed,
       // Only offered on a live guide with no draft already open, which is the
       // one state the command can act on.
       canUnpublish:
@@ -411,17 +471,22 @@ function hydrateGuides(
           ...accessServiceContext,
           guide: published.facts,
         }).allowed,
+      canUnsubmit:
+        working !== null &&
+        authorize("guide.unsubmit", {
+          ...accessServiceContext,
+          guide: working.facts,
+        }).allowed,
       canDuplicate:
         Boolean(source.publishedRevisionId ?? source.workingRevisionId) &&
         authorize("guide.create", accessServiceContext).allowed,
       canRestore:
         source.authorUserId === identity.userId &&
         (access.roles.includes("creator") || access.roles.includes("administrator")),
-      canDelete:
-        access.roles.includes("publisher") ||
-        (source.authorUserId === identity.userId &&
-          (access.roles.includes("creator") || access.roles.includes("administrator")) &&
-          !source.publishedRevisionId),
+      canDelete: authorize("guide.delete", {
+        ...accessServiceContext,
+        guide: ownershipFacts,
+      }).allowed,
       createdAt: source.createdAt,
       updatedAt: source.updatedAt,
       screenshotsLockedAt: source.screenshotsLockedAt ?? undefined,
@@ -443,7 +508,7 @@ function hydrateGuides(
       }),
     });
   }
-  return guides;
+  return { guides, deletedGuides };
 }
 
 function metricView(
@@ -508,6 +573,8 @@ export class BootstrapService {
       onboardingRows,
       extensionDeviceRows,
       desktopDeviceRows,
+      platformOwners,
+      deliveryRows,
     ] = await Promise.all([
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
       this.store.list(TABLES.workspaceMembers, { filters }),
@@ -557,8 +624,17 @@ export class BootstrapService {
         order: "desc",
         limit: 20,
       }),
+      platformOwnerUserIds(this.store),
+      // Invitation emails are the deliveries a workspace admin can act on, so
+      // only those are fetched; the rest of the queue is platform business.
+      this.store.list(TABLES.notificationDeliveries, {
+        filters: [
+          { field: "workspace_id", value: workspaceId },
+          { field: "kind", value: "invitation.created" },
+        ],
+      }),
     ]);
-    const members = memberRows.map(memberView);
+    const members = memberRows.map((row) => memberView(row, platformOwners));
     const groups = groupRows.map((row) => groupView(row, groupMembershipRows));
     const publishedRevisionIds = new Set(
       guideRows.guides
@@ -583,7 +659,7 @@ export class BootstrapService {
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
-    const guides = hydrateGuides(
+    const { guides, deletedGuides } = hydrateGuides(
       identity,
       access,
       guideRows,
@@ -689,18 +765,43 @@ export class BootstrapService {
         completedAt: firstPublishedAt,
       },
     ];
-    const onboardingCompletedAt = onboardingSteps.every(
-      (step) => step.completed,
-    )
-      ? (onboardingSteps
+    // Onboarding is finished when the workspace has done the thing it exists
+    // to do — a guide made, and a guide shared. The rest of the list is
+    // scaffolding: confirming a policy, pinning a toolbar icon and inviting
+    // somebody are steps toward that, not evidence of it, and counting them
+    // equally is how a workspace could complete its onboarding without anyone
+    // ever reading a procedure.
+    const ACTIVATION_STEPS = new Set(["first_capture", "first_guide", "first_publication"]);
+    const activationSteps = onboardingSteps.filter((step) =>
+      ACTIVATION_STEPS.has(step.id),
+    );
+    const onboardingCompletedAt = activationSteps.every((step) => step.completed)
+      ? (activationSteps
           .map((step) => step.completedAt!)
           .sort()
           .at(-1) ?? null)
       : null;
 
+    // The delivery row keyed to each invitation, so the list can report what
+    // actually happened to the email instead of assuming it left.
+    // Retrying a delivery queues a second row against the same invitation, so
+    // the latest attempt is the one that describes where things stand — an
+    // older failure next to a newer success would otherwise be reported as the
+    // outcome.
+    const deliveryBySubject = new Map<string, StoredRecord<RecordData>>();
+    for (const row of deliveryRows) {
+      const subject = stringValue(row.subject_id);
+      if (!subject) continue;
+      const held = deliveryBySubject.get(subject);
+      if (!held || stringValue(row.$createdAt) > stringValue(held.$createdAt)) {
+        deliveryBySubject.set(subject, row);
+      }
+    }
     const invitations: Invitation[] = isAdmin
       ? invitationRows.map((row) => {
           const details = decodePayload<Partial<Invitation>>(row, {});
+          const delivery = deliveryBySubject.get(row.$id);
+          const deliveryStatus = stringValue(delivery?.status);
           return {
             id: row.$id,
             label: details.label ?? "Invitation",
@@ -710,6 +811,17 @@ export class BootstrapService {
             useCount: numberValue(details.useCount),
             revokedAt: row.status === "revoked" ? row.$updatedAt : null,
             createdAt: row.$createdAt,
+            delivery: {
+              state:
+                deliveryStatus === "sent"
+                  ? "sent"
+                  : deliveryStatus === "failed"
+                    ? "failed"
+                    : deliveryStatus === "queued"
+                      ? "pending"
+                      : "unknown",
+              at: delivery ? stringValue(delivery.occurred_at) || null : null,
+            },
           };
         })
       : [];
@@ -880,6 +992,7 @@ export class BootstrapService {
       members,
       groups,
       guides,
+      deletedGuides,
       invitations,
       supportRequests,
       supportGrants,
@@ -1087,7 +1200,11 @@ export class BootstrapService {
       loadGuideRows(this.store, workspaceId),
       this.store.list(TABLES.workspaceSettings, { filters, limit: 1 }),
     ]);
-    const members = memberRows.map(memberView);
+    // These members resolve author names and group audiences for the guide
+    // list; they are not the member directory, so the protection flag is not
+    // needed here. Passed explicitly because `.map(memberView)` would hand the
+    // array index to the second parameter.
+    const members = memberRows.map((row) => memberView(row));
     for (const member of members) {
       member.groupIds = groupMembershipRows
         .filter((row) => row.user_id === member.userId)
@@ -1099,13 +1216,15 @@ export class BootstrapService {
           ...decodePayload<Partial<WorkspaceSettings>>(settingRows[0], {}),
         }
       : DEFAULT_WORKSPACE_SETTINGS;
+    // This caller wants the library only; the quarantine list belongs to the
+    // workspace bundle, which is where it is acted on.
     return hydrateGuides(
       identity,
       access,
       guideRows,
       members,
       settings.requireReviewBeforePublish,
-    );
+    ).guides;
   }
 
   async bootstrap(
@@ -1222,6 +1341,7 @@ export class BootstrapService {
               canShare: false,
               canArchive: false,
               canUnpublish: false,
+              canUnsubmit: false,
               canDuplicate: false,
               canRestore: false,
               canDelete: false,

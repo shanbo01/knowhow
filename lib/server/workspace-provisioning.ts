@@ -90,9 +90,14 @@ export async function provisionWorkspaceRecords(
     ),
   );
 
+  // The person who creates a workspace is its whole team until they invite
+  // anyone, so administrator alone is not enough: that role cannot archive a
+  // guide, and it cannot publish at all once the workspace requires review.
+  // Granting the operating roles up front keeps a one-person workspace able to
+  // finish the job it was created for.
   const member: WorkspaceMemberRecord = {
     name: actor.name,
-    roles: ["administrator"],
+    roles: ["administrator", "creator", "publisher"],
     groupIds: [],
     joinedAt: createdAt,
   };

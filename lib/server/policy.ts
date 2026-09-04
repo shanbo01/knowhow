@@ -20,10 +20,13 @@ export type PolicyAction =
   | "guide.create"
   | "guide.update"
   | "guide.submit"
+  | "guide.unsubmit"
   | "guide.review"
   | "guide.publish"
   | "guide.unpublish"
   | "guide.archive"
+  | "guide.delete"
+  | "guide.undelete"
   | "guide.export"
   | "capture.create"
   | "capture.update";
@@ -38,6 +41,12 @@ export interface GuideAuthorizationFacts {
   privacyReviewed?: boolean;
   reviewApproved?: boolean;
   requireReviewBeforePublish?: boolean;
+  /**
+   * Whether the guide has ever been published. Deleting is refused to an
+   * author once their work has been live to an audience — that is a
+   * publisher's decision, because other people have come to rely on it.
+   */
+  hasBeenPublished?: boolean;
 }
 
 export interface SupportGrantFacts {
@@ -88,12 +97,36 @@ function hasAnyRole(
   return required.some((role) => roles.has(role));
 }
 
+/**
+ * The actions an unverified address must not reach.
+ *
+ * Verification proves the address belongs to the person holding it, so it
+ * gates the operations that send something outward or hand access to someone
+ * else — publishing to an audience, exporting a copy that leaves the
+ * workspace, and changing who is in it. Reading and drafting reach nobody but
+ * the author, so they do not wait on an inbox: a person who cannot try the
+ * product until they find an email mostly does not come back.
+ *
+ * Platform administration is absent because it is gated far more tightly
+ * elsewhere, and it never runs for an ordinary signup.
+ */
+const VERIFIED_IDENTITY_ACTIONS: ReadonlySet<PolicyAction> = new Set([
+  "guide.publish",
+  "guide.export",
+  "workspace.invitations.manage",
+  "workspace.members.manage",
+  "workspace.groups.manage",
+]);
+
 export function authorize(
   action: PolicyAction,
   context: AuthorizationContext,
 ): PolicyDecision {
-  if (!context.isVerifiedIdentity) {
-    return deny("EMAIL_NOT_VERIFIED", "A verified identity is required.");
+  if (!context.isVerifiedIdentity && VERIFIED_IDENTITY_ACTIONS.has(action)) {
+    return deny(
+      "EMAIL_NOT_VERIFIED",
+      "Verify your email address to do this.",
+    );
   }
 
   if (action.startsWith("platform.")) {
@@ -232,6 +265,29 @@ export function authorize(
       : deny("DRAFT_EDITOR_REQUIRED", "Only an authorized draft editor may do this.");
   }
 
+  // Submitting is the only transition with no way back: a review revision can
+  // be edited by nobody, and only an assigned reviewer can decide it. Suspend
+  // every reviewer after a submission and the revision is frozen for good.
+  // Withdrawing is the mirror of submitting, so the author may do it, and an
+  // administrator may do it for a revision whose reviewers have gone.
+  if (action === "guide.unsubmit") {
+    if (context.guide?.revisionStatus !== "review") {
+      return deny(
+        "GUIDE_REVIEW_STATE_REQUIRED",
+        "Only a revision in review may be withdrawn.",
+      );
+    }
+    if (context.guide.isAuthor && hasAnyRole(roles, "creator", "administrator")) {
+      return allow("Authors may withdraw their own submitted revision.");
+    }
+    return roles.has("administrator")
+      ? allow("Workspace administrators may withdraw a submitted revision.")
+      : deny(
+          "DRAFT_EDITOR_REQUIRED",
+          "Only the author or a workspace administrator may withdraw this revision.",
+        );
+  }
+
   if (action === "guide.review") {
     const mayReview =
       roles.has("reviewer") && context.guide?.isAssignedReviewer === true;
@@ -294,10 +350,61 @@ export function authorize(
     return deny("PUBLISHER_REQUIRED", "Publisher access is required.");
   }
 
+  // Retiring a guide follows the same line as deleting one: a publisher may
+  // retire anything, and an author may retire their own work up until the
+  // point other people were told to rely on it.
   if (action === "guide.archive") {
-    return roles.has("publisher")
-      ? allow("Publishers may archive guide revisions.")
-      : deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+    if (roles.has("publisher")) {
+      return allow("Publishers may archive guide revisions.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may archive their own guide before it goes live.");
+    }
+    return deny("PUBLISHER_REQUIRED", "Publisher access is required.");
+  }
+
+  // Deletion had no entry here at all: the rule was hand-written in the
+  // command layer and again in the bootstrap view, so it also skipped the
+  // membership, lifecycle and support-grant checks above. Same rule, stated
+  // once, in the place that already knows the rest of the context.
+  if (action === "guide.delete") {
+    if (roles.has("publisher")) {
+      return allow("Publishers may delete guides.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may delete their own guide before it goes live.");
+    }
+    return deny("GUIDE_DELETE_FORBIDDEN", "You cannot delete this guide.");
+  }
+
+  // Taking a deletion back is granted to whoever could have done it, so a
+  // mistake is undone by the person who made it rather than escalated. It is
+  // deliberately not wider than that: a guide in quarantine was removed on
+  // purpose, and anyone who could not have removed it has no business
+  // returning it to the library.
+  if (action === "guide.undelete") {
+    if (roles.has("publisher")) {
+      return allow("Publishers may restore a deleted guide.");
+    }
+    const guide = context.guide;
+    if (
+      guide?.isAuthor === true &&
+      hasAnyRole(roles, "creator", "administrator") &&
+      guide.hasBeenPublished !== true
+    ) {
+      return allow("Authors may restore a guide they deleted.");
+    }
+    return deny("GUIDE_DELETE_FORBIDDEN", "You cannot restore this guide.");
   }
 
   if (action === "guide.export") {

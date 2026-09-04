@@ -10,14 +10,45 @@ const baseContext: AuthorizationContext = {
   roles: ["viewer"],
 };
 
-test("authorize - unverified identity", () => {
-  const ctx: AuthorizationContext = { ...baseContext, isVerifiedIdentity: false };
-  const res = authorize("workspace.read", ctx);
-  assert.deepEqual(res, {
-    allowed: false,
-    code: "EMAIL_NOT_VERIFIED",
-    reason: "A verified identity is required.",
-  });
+// Verification gates the actions that reach somebody else, not the product.
+// An unverified person reads, captures and drafts; they cannot publish to an
+// audience, export a copy out, or change who is in the workspace.
+test("authorize - unverified identity gates only outbound actions", () => {
+  const ctx: AuthorizationContext = {
+    ...baseContext,
+    isVerifiedIdentity: false,
+    roles: ["administrator", "creator", "publisher"],
+  };
+
+  assert.equal(authorize("workspace.read", ctx).allowed, true);
+  assert.equal(authorize("guide.list", ctx).allowed, true);
+  assert.equal(authorize("guide.create", ctx).allowed, true);
+  assert.equal(authorize("capture.create", ctx).allowed, true);
+  assert.equal(
+    authorize("guide.update", {
+      ...ctx,
+      guide: { revisionStatus: "draft", isAuthor: true },
+    }).allowed,
+    true,
+  );
+
+  for (const action of [
+    "guide.publish",
+    "guide.export",
+    "workspace.invitations.manage",
+    "workspace.members.manage",
+    "workspace.groups.manage",
+  ] as const) {
+    assert.deepEqual(
+      authorize(action, ctx),
+      {
+        allowed: false,
+        code: "EMAIL_NOT_VERIFIED",
+        reason: "Verify your email address to do this.",
+      },
+      `${action} must wait for a verified address`,
+    );
+  }
 });
 
 test("authorize - platform actions", () => {
@@ -428,7 +459,197 @@ test("authorize - guide.export", () => {
 
 test("requireAuthorized - throws HttpError on deny", () => {
   assert.throws(
-    () => requireAuthorized("workspace.read", { ...baseContext, isVerifiedIdentity: false }),
+    () =>
+      requireAuthorized("workspace.invitations.manage", {
+        ...baseContext,
+        roles: ["administrator"],
+        isVerifiedIdentity: false,
+      }),
     (err) => err instanceof HttpError && err.status === 403 && err.code === "EMAIL_NOT_VERIFIED",
+  );
+});
+
+test("authorize - guide.unsubmit rescues a stranded review", () => {
+  const review = { revisionStatus: "review" as const };
+
+  // The author changing their mind is the ordinary case.
+  assert.equal(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { ...review, isAuthor: true },
+    }).allowed,
+    true,
+  );
+
+  // An administrator can recover a revision whose reviewers have all been
+  // suspended, which is the deadlock this action exists for.
+  assert.equal(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["administrator"],
+      guide: { ...review, isAuthor: false },
+    }).allowed,
+    true,
+  );
+
+  // Nobody else, including the publisher who would eventually release it.
+  for (const roles of [["publisher"], ["reviewer"], ["viewer"]] as const) {
+    assert.equal(
+      authorize("guide.unsubmit", {
+        ...baseContext,
+        roles: [...roles],
+        guide: { ...review, isAuthor: false },
+      }).allowed,
+      false,
+    );
+  }
+
+  // A draft was never submitted, so there is nothing to withdraw.
+  assert.deepEqual(
+    authorize("guide.unsubmit", {
+      ...baseContext,
+      roles: ["administrator"],
+      guide: { revisionStatus: "draft", isAuthor: true },
+    }),
+    {
+      allowed: false,
+      code: "GUIDE_REVIEW_STATE_REQUIRED",
+      reason: "Only a revision in review may be withdrawn.",
+    },
+  );
+});
+
+test("authorize - guide.delete is a policy decision, not an inline rule", () => {
+  const unpublished = { isAuthor: true, hasBeenPublished: false };
+
+  // A publisher may delete anything in the library.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+
+  // An author may delete their own work right up until it went live.
+  assert.equal(
+    authorize("guide.delete", { ...baseContext, roles: ["creator"], guide: unpublished }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: true },
+    }).allowed,
+    false,
+  );
+
+  // Somebody else's draft is not theirs to remove.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: false, hasBeenPublished: false },
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    authorize("guide.delete", { ...baseContext, roles: ["viewer"], guide: unpublished }).allowed,
+    false,
+  );
+
+  // Routing it through the engine is what gives deletion the lifecycle and
+  // membership checks it never ran when the rule was written out by hand.
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      membershipStatus: "suspended",
+      guide: unpublished,
+    }).code,
+    "MEMBERSHIP_REQUIRED",
+  );
+  assert.equal(
+    authorize("guide.delete", {
+      ...baseContext,
+      roles: ["publisher"],
+      lifecycleAccess: "read_only",
+      guide: unpublished,
+    }).code,
+    "SUBSCRIPTION_READ_ONLY",
+  );
+});
+
+test("authorize - guide.archive follows the same line as delete", () => {
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+  // An author may retire their own guide until other people were told to
+  // rely on it; after that it is a publisher's call.
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: false },
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.archive", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: true, hasBeenPublished: true },
+    }).allowed,
+    false,
+  );
+});
+
+test("authorize - guide.undelete mirrors who could delete", () => {
+  const own = { isAuthor: true, hasBeenPublished: false };
+
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["publisher"],
+      guide: { isAuthor: false, hasBeenPublished: true },
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    authorize("guide.undelete", { ...baseContext, roles: ["creator"], guide: own }).allowed,
+    true,
+  );
+
+  // Anyone who could not have deleted it has no business restoring it.
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["creator"],
+      guide: { isAuthor: false, hasBeenPublished: false },
+    }).allowed,
+    false,
+  );
+  assert.equal(
+    authorize("guide.undelete", { ...baseContext, roles: ["viewer"], guide: own }).allowed,
+    false,
+  );
+
+  // Restoring is a change, so a read-only subscription refuses it.
+  assert.equal(
+    authorize("guide.undelete", {
+      ...baseContext,
+      roles: ["publisher"],
+      lifecycleAccess: "read_only",
+      guide: own,
+    }).code,
+    "SUBSCRIPTION_READ_ONLY",
   );
 });
